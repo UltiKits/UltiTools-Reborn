@@ -2729,9 +2729,15 @@ public class PluginManager {
      * this method builds one {@code TransactionManager} per plugin container from it and
      * registers a {@code TransactionInterceptor} advisor for that manager, for the two JDBC
      * backends (SQLite, MySQL). Issues #195 and #196 are both addressed for the JDBC backends.
-     * The JSON backend has its own {@code TransactionManager} instead (02-05, D-03): a per-plugin
-     * snapshot manager that rolls back every JSON operator a {@code @Transactional} method
-     * touched, obtained from {@code JsonStore} when {@code getDataSource(DataScope)} throws. Only
+     * The JSON backend is served by the per-plugin JSON transaction manager instead (02-05, D-03),
+     * obtained from {@code JsonStore} when {@code getDataSource(DataScope)} throws. As of 6.3.0 it
+     * stages each transaction's writes apart from committed data, isolates them with table locks,
+     * and commits them atomically and durably through the plugin's journal, so the writes a
+     * {@code @Transactional} method makes to several of the plugin's tables commit or roll back
+     * as one unit, with the propagation rules of the JDBC backends. One difference is documented:
+     * table locks belong to the thread, so a same-thread {@code REQUIRES_NEW} or
+     * {@code NOT_SUPPORTED} body does not wait for the locks of its suspended caller, and when it
+     * writes a key the caller has staged, the caller's later commit is the value that stays. Only
      * a {@code DataStore} that can supply neither a {@code DataSource} nor its own
      * {@code TransactionManager} still declares {@code @Transactional} unavailable.
      * <p>
@@ -2745,8 +2751,9 @@ public class PluginManager {
      * proxied: a ByteBuddy proxy is the bean itself in this framework's design, and it cannot be
      * retrofitted onto an object the caller already constructed. Unlike the first three,
      * {@code @Configuration} classes and {@code @Bean} methods are written by module authors rather
-     * than the framework, and they are also constructed before {@code wireAop} runs in
-     * {@code initializePlugin}, an independent second reason they can never be proxied.
+     * than the framework. As of 6.3.0 they are no longer constructed before {@code wireAop} runs:
+     * {@code assemblePluginContainer} wires AOP before the component scan (P-06). They are still
+     * never proxied, because they reach the container through {@code registerSingleton}.
      * <p>
      * As of 6.3.0, {@code registerSingleton} itself refuses to register an instance whose class
      * carries {@code @Transactional} or {@code @ExceptionCatch} — method-level or class-level — for
@@ -2820,10 +2827,11 @@ public class PluginManager {
      * advisor is bound to a {@link DataSourceTransactionManager} -- resolved via {@link
      * #resolveJdbcTransactionManager}, which for these two shipped backends is the SAME instance
      * the store itself wires onto the {@code DataOperator}s it hands out (02-09, T-02-TAM-11), not
-     * an independent second one. For the JSON backend, it is bound to a per-plugin snapshot
-     * {@code JsonTransactionManager} instead (02-05, D-03), obtained from the store itself. A
-     * {@code DataStore} that can supply neither still declares the annotation unavailable, naming
-     * the configured backend.
+     * an independent second one. For the JSON backend, it is bound to the per-plugin
+     * {@code JsonTransactionManager} instead (02-05, D-03), obtained from the store itself, which
+     * stages writes per transaction, isolates them with table locks, and commits them atomically
+     * and durably through a journal. A {@code DataStore} that can supply neither still declares
+     * the annotation unavailable, naming the configured backend.
      *
      * @param context  the plugin container, before refresh
      * @param scope    the identity token used to resolve the plugin's {@code DataSource}
@@ -2850,7 +2858,7 @@ public class PluginManager {
             resolver.addUnavailableAnnotation(Transactional.class,
                     "@Transactional needs a TransactionManager. The configured datasource.type ("
                             + dataStore.getStoreType() + ") does not expose a DataSource or a "
-                            + "snapshot-based TransactionManager of its own. Until then use "
+                            + "TransactionManager of its own. Until then use "
                             + "DataOperator.transaction(Callable) explicitly.");
             return;
         }
@@ -2928,6 +2936,14 @@ public class PluginManager {
      * Builds and registers the {@code @Transactional} advisor for a plugin container backed by
      * the JSON store, once {@link #wireTransactional} has determined {@code dataStore} cannot
      * supply a JDBC {@code DataSource} but is a {@link JsonStore} (02-05, D-03).
+     * <p>
+     * The advisor is bound to the store's {@link JsonTransactionManager} for this plugin, the JSON
+     * transaction engine: it stages a transaction's writes per operator, locks each table the
+     * transaction writes against other writers until it ends, and, at a commit that changed
+     * something, forces one journal record to disk before it makes every staged write visible at
+     * once. The same manager serves every operator the store hands out for the plugin, so a
+     * {@code @Transactional} method's writes to several of the plugin's tables form one
+     * transaction.
      *
      * @param context   the plugin container, before refresh
      * @param scope     the identity token used to resolve the manager
@@ -3041,13 +3057,39 @@ public class PluginManager {
     }
 
     /**
-     * Assemble a plugin's container: type registration, component scan, the plugin's own
-     * singleton registration, config-entity beans, the static instance field, {@link DataScope}
-     * minting plus entity ownership, AOP wiring, {@code refresh()}, and (after {@code refresh()})
-     * {@code @ContextEntry} bean registration with {@code autowireBean}. Both {@link
-     * #register(UltiToolsPlugin)} and {@link #initializePlugin} route through this one method now,
-     * so a capability added to either path is never silently missing from the other (WIRE-05,
-     * WIRE-06, #203/#326).
+     * Assemble a plugin's container. Both {@link #register(UltiToolsPlugin)} and {@link
+     * #initializePlugin} route through this one method, so a capability added to either path is
+     * never silently missing from the other (WIRE-05, WIRE-06, #203/#326).
+     * <p>
+     * First-assembly order (decision P-06):
+     * <ol>
+     *   <li>container setup: {@code setContext}, display name, parent, shutdown hook, class
+     *       loader;</li>
+     *   <li>{@code registerType(UltiToolsPlugin)}, which the component scan's conditional
+     *       evaluation reads;</li>
+     *   <li>mint the {@link DataScope} and hand it to the plugin, then {@link #wireAop};</li>
+     *   <li>open the load scopes and, inside them: the config entities made resolvable by type,
+     *       the component scan, the config entities assembled and registered by name, the
+     *       plugin's own singleton registration, the static instance field, the global
+     *       entity-ownership record, {@code refresh()}, and {@code @ContextEntry} bean
+     *       registration with {@code autowireBean}; then close the load scopes;</li>
+     *   <li>the command-executor contract and config-binding validations.</li>
+     * </ol>
+     * Why this order: registering a config entity, the component scan, registering the plugin
+     * singleton and {@code refresh()} can each create beans -- {@code registerSingleton} fully
+     * assembles its argument (D-14), and autowiring creates whatever it injects. So the data scope,
+     * AOP and the load scopes are in place before the first of them runs, and the config entities
+     * are resolvable by type before the scan, so a configuration class or {@code @Bean} product the
+     * scan creates can inject them. A config entity itself is assembled (autowired,
+     * {@code @PostConstruct}) only after the scan, once every definition of the module exists, so
+     * it can inject the module's own services, as it could in 6.2.5. A bean created before
+     * {@code wireAop} could never be proxied afterwards (C08); one created before the config
+     * entities or the data scope could not see them (C09); a
+     * registration made outside the load scopes, the {@code @ContextEntry} bean's included, would
+     * not be released with this module instance (C62). The static
+     * instance field and the global entity-ownership record keep their place after the scan and
+     * the plugin singleton and before {@code refresh()}, so the window in which a refused module
+     * leaves them behind is not widened.
      *
      * @param pluginContext a freshly created, not-yet-refreshed container
      * @param plugin        the plugin instance
@@ -3086,76 +3128,100 @@ public class PluginManager {
         // move.
         pluginContext.registerType(UltiToolsPlugin.class, plugin);
 
-        // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
-        String[] scanPackages = getPluginScanPackages(pluginClass);
-        if (scanPackages.length > 0) {
-            pluginContext.scanComponents(scanPackages);
-        }
-
-        // Register the plugin instance itself by name AFTER scanComponents, not before:
-        // registerSingleton now fully assembles its argument unconditionally (D-14), so
-        // registering the plugin instance before any @Service bean exists would attempt to
-        // autowire it against an empty bean graph -- an unresolvable
-        // @Autowired(required = true) field on the plugin's own class would then throw, turning a
-        // working module into one that cannot load. This is the exact ordering bug T-03-27 fixed
-        // in initializePlugin and WR-03 fixed in register(UltiToolsPlugin) -- now a single call
-        // site fixes both.
-        pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
-
-        // Register config entities as beans for @Autowired injection
-        java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
-            UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
-        if (configMap != null) {
-            for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configMap.values()) {
-                String beanName = config.getClass().getSimpleName();
-                beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
-                pluginContext.registerSingleton(beanName, config);
-            }
-        }
-
-        // Set the static instance field before refresh() so @PostConstruct methods
-        // can call Xxx.getInstance().getDataOperator() etc.
-        setPluginStaticInstance(pluginClass, plugin);
-
+        // P-06 (C08, C09): the data scope and AOP are ready before anything below can create a
+        // bean. Registering a config entity, the component scan, registering the plugin singleton
+        // and refresh() can each create beans (registerSingleton fully assembles its argument,
+        // D-14, and autowiring creates whatever it injects). The resolver only takes part in bean
+        // creation, so a bean created before wireAop stays unproxied for good, and a
+        // @PostConstruct that asks the plugin for a data operator needs the scope already set.
         DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
-        registerEntityOwnership(scope);
         plugin.setDataScope(scope);
         wireAop(pluginContext, scope);
-        // T-05-24 / D-08: attribute any TabCompletionManager.register(...) call made during
-        // this plugin's own @PostConstruct (which runs synchronously inside refresh()) to this
-        // plugin, so unregister(UltiToolsPlugin) can sweep it on unload without pinning the
-        // module's ClassLoader. ClassLoader-derived ownership does not work here: every internal
-        // module shares ONE URLClassLoader (see init(ClassLoader) and validateAdditionalEntity's
-        // identical D-19 finding above) -- an explicit scope is the only mechanism that still
-        // separates two modules' completers.
+
+        // T-05-24 / D-08: attribute any TabCompletionManager.register(...) call made while the
+        // framework assembles this module -- from the @PostConstruct of a config entity, a
+        // configuration class, a @Bean product, the plugin itself, any bean refresh() creates or
+        // the @ContextEntry bean -- to this plugin, so unregister(UltiToolsPlugin) can sweep it on
+        // unload without pinning the module's ClassLoader. ClassLoader-derived ownership does not
+        // work here: every internal module shares ONE URLClassLoader (see init(ClassLoader) and
+        // validateAdditionalEntity's identical D-19 finding above) -- an explicit scope is the
+        // only mechanism that still separates two modules' completers.
         // #506: the instance as well as the name, so unloading a superseded copy of this module
         // later releases this copy's registrations and not its replacement's. The same scope, in
         // all three registries, is opened around registerSelf() in attemptPluginRegistration.
         beginLoadScopes(plugin);
         try {
+            // Config entities, in two steps around the scan. Before it, each is resolvable by its
+            // own type (registerType assembles nothing), so a configuration class or @Bean product
+            // the scan creates can inject it (C09). After it, each is fully assembled and
+            // registered by name, so its own @Autowired fields can name the module's scanned
+            // services, whose definitions exist only once the scan has run (6.2.5 registered config
+            // entities after the scan, and such a module loaded there).
+            java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
+                UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
+            List<com.ultikits.ultitools.abstracts.AbstractConfigEntity> configEntities = configMap == null
+                    ? Collections.<com.ultikits.ultitools.abstracts.AbstractConfigEntity>emptyList()
+                    : new ArrayList<>(configMap.values());
+            for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configEntities) {
+                registerByOwnType(pluginContext, config);
+            }
+
+            // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
+            String[] scanPackages = getPluginScanPackages(pluginClass);
+            if (scanPackages.length > 0) {
+                pluginContext.scanComponents(scanPackages);
+            }
+
+            for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configEntities) {
+                String beanName = config.getClass().getSimpleName();
+                beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
+                pluginContext.registerSingleton(beanName, config);
+            }
+
+            // Register the plugin instance itself by name AFTER scanComponents, not before:
+            // registerSingleton now fully assembles its argument unconditionally (D-14), so
+            // registering the plugin instance before any @Service bean exists would attempt to
+            // autowire it against an empty bean graph -- an unresolvable
+            // @Autowired(required = true) field on the plugin's own class would then throw,
+            // turning a working module into one that cannot load. This is the exact ordering bug
+            // T-03-27 fixed in initializePlugin and WR-03 fixed in register(UltiToolsPlugin) --
+            // now a single call site fixes both.
+            pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
+
+            // Set the static instance field before refresh() so @PostConstruct methods of the
+            // beans refresh() creates can call Xxx.getInstance().getDataOperator() etc. It and the
+            // global entity-ownership record below keep their place after the scan and the plugin
+            // singleton and before refresh() (P-06): moving them earlier would widen the window
+            // in which a refused module leaves them behind.
+            setPluginStaticInstance(pluginClass, plugin);
+            registerEntityOwnership(scope);
+
             pluginContext.refresh();
+
+            // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton
+            // already fully assembles its argument unconditionally (D-14), so there is nothing
+            // left for a second refresh() to do; the refresh() just above already
+            // pre-instantiated every non-lazy singleton definition this container knows about.
+            // Still inside the load scopes (C62): what the context entry's @PostConstruct
+            // registers is recorded against this module instance, so a refusal or an unload
+            // releases it.
+            if (pluginClass.isAnnotationPresent(ContextEntry.class)) {
+                ContextEntry contextEntry = pluginClass.getAnnotation(ContextEntry.class);
+                Class<?> clazz = contextEntry.value();
+                // Register the context entry class as a bean
+                try {
+                    Object contextBean = clazz.getDeclaredConstructor().newInstance();
+                    pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
+                } catch (Exception e) {
+                    Bukkit.getLogger().log(
+                            Level.WARNING,
+                            String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
+                    );
+                }
+                pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
+            }
         } finally {
             endLoadScopes();
-        }
-
-        // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton above
-        // already fully assembles its argument unconditionally (D-14), so there is nothing left
-        // for a second refresh() to do; the refresh() just above already pre-instantiated every
-        // non-lazy singleton definition this container knows about.
-        if (pluginClass.isAnnotationPresent(ContextEntry.class)) {
-            ContextEntry contextEntry = pluginClass.getAnnotation(ContextEntry.class);
-            Class<?> clazz = contextEntry.value();
-            // Register the context entry class as a bean
-            try {
-                Object contextBean = clazz.getDeclaredConstructor().newInstance();
-                pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
-            } catch (Exception e) {
-                Bukkit.getLogger().log(
-                        Level.WARNING,
-                        String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
-                );
-            }
-            pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
         }
 
         // SILENT-11 half 2 (D-01, D-04): every CommandExecutor bean this container just fully
@@ -3171,6 +3237,15 @@ public class PluginManager {
         // module granularity, before onPluginRegistered() schedules anything or registerBukkit()
         // hands a command to Bukkit. This also resolves each bound @CmdCD into its validator.
         validateConfigBindings(plugin, pluginContext);
+    }
+
+    /**
+     * Binds {@code instance} to its own class in {@code context}'s type registry, without assembling
+     * it, so {@code getBean(Class)} and by-type {@code @Autowired} resolve it.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> void registerByOwnType(SimpleContainer context, T instance) {
+        context.registerType((Class<T>) instance.getClass(), instance);
     }
 
     /**

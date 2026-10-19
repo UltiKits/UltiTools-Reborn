@@ -22,6 +22,9 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.logging.Logger;
@@ -530,6 +533,142 @@ class TransactionFailurePathsTest {
     }
 
     @Nested
+    @DisplayName("a commit that throws is not followed by a second rollback (review round 1)")
+    class NoRollbackAfterAFailedCommit {
+
+        @Test
+        @DisplayName("relational: a marked transaction's commit throws UnexpectedRollbackException with no 'Rollback called but no active' WARNING")
+        void relationalMarkedCommitLogsNoStrayRollbackWarning() throws Exception {
+            for (Backend backend : backends(false)) {
+                try (ManagerLog log = ManagerLog.capture(DataSourceTransactionManager.class)) {
+                    Throwable thrown = catchThrowable(() -> backend.operator.transaction((Callable<Object>) () -> {
+                        backend.operator.insert(new Row("outer", "outer"));
+                        catchThrowable(() -> backend.operator.transaction((Callable<Object>) () -> {
+                            throw new IllegalStateException("inner failed");
+                        }));
+                        return null;
+                    }));
+
+                    assertThat(thrown).as(backend.label).isInstanceOf(UnexpectedRollbackException.class);
+                    assertThat(log.strayRollbackWarnings()).as("%s: stray rollback WARNINGs", backend.label).isEmpty();
+                }
+                assertThat(backend.rows()).as(backend.label).isZero();
+                assertThat(backend.manager.hasActiveTransaction()).as(backend.label).isFalse();
+            }
+        }
+
+        @Test
+        @DisplayName("relational: a commit that fails logs no 'Rollback called but no active' WARNING and stores nothing")
+        void relationalFailedCommitLogsNoStrayRollbackWarning() throws Exception {
+            for (Backend backend : backends(false)) {
+                backend.faulty.faults.commitFailures.set(1);
+                try (ManagerLog log = ManagerLog.capture(DataSourceTransactionManager.class)) {
+                    Throwable thrown = catchThrowable(() -> backend.operator.transaction((Callable<Object>) () -> {
+                        backend.operator.insert(new Row("r1", "written"));
+                        return null;
+                    }));
+
+                    assertThat(thrown).as(backend.label).isInstanceOf(DataAccessException.class);
+                    assertThat(log.strayRollbackWarnings()).as("%s: stray rollback WARNINGs", backend.label).isEmpty();
+                }
+                assertThat(backend.rows()).as(backend.label).isZero();
+                assertThat(backend.manager.hasActiveTransaction()).as(backend.label).isFalse();
+            }
+        }
+
+        @Test
+        @DisplayName("JSON: a marked transaction's commit throws UnexpectedRollbackException with no 'Rollback called but no active' WARNING")
+        void jsonMarkedCommitLogsNoStrayRollbackWarning() throws Exception {
+            SimpleJsonDataOperator<Row> operator = new SimpleJsonDataOperator<>(
+                    tempDir.resolve("json-marked").resolve("rows").toString(), Row.class);
+            try (ManagerLog log = ManagerLog.capture(com.ultikits.ultitools.manager.JsonTransactionManager.class)) {
+                Throwable thrown = catchThrowable(() -> operator.transaction((Callable<Object>) () -> {
+                    operator.insert(new Row("outer", "outer"));
+                    catchThrowable(() -> operator.transaction((Callable<Object>) () -> {
+                        throw new IllegalStateException("inner failed");
+                    }));
+                    return null;
+                }));
+
+                assertThat(thrown).isInstanceOf(UnexpectedRollbackException.class);
+                assertThat(log.strayRollbackWarnings()).as("stray rollback WARNINGs").isEmpty();
+            }
+            assertThat(operator.getById("outer")).as("the marked transaction's write").isNull();
+        }
+
+        @Test
+        @DisplayName("control: an action that fails is still rolled back, on both backends")
+        void failingActionIsStillRolledBack() throws Exception {
+            for (Backend backend : backends(false)) {
+                Throwable thrown = catchThrowable(() -> backend.operator.transaction((Callable<Object>) () -> {
+                    backend.operator.insert(new Row("r1", "written"));
+                    throw new IllegalStateException("action failed");
+                }));
+                assertThat(thrown).as(backend.label).isInstanceOf(IllegalStateException.class);
+                assertThat(backend.rows()).as(backend.label).isZero();
+                assertThat(backend.manager.hasActiveTransaction()).as(backend.label).isFalse();
+            }
+            SimpleJsonDataOperator<Row> operator = new SimpleJsonDataOperator<>(
+                    tempDir.resolve("json-failing").resolve("rows").toString(), Row.class);
+            Throwable thrown = catchThrowable(() -> operator.transaction((Callable<Object>) () -> {
+                operator.insert(new Row("r1", "written"));
+                throw new IllegalStateException("action failed");
+            }));
+            assertThat(thrown).isInstanceOf(IllegalStateException.class);
+            assertThat(operator.getById("r1")).isNull();
+        }
+    }
+
+    /** Captures a transaction manager's logger while open. */
+    static final class ManagerLog implements AutoCloseable {
+        private final java.util.logging.Logger logger;
+        private final List<java.util.logging.LogRecord> records = new CopyOnWriteArrayList<>();
+        private final java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void flush() {
+                // Nothing buffered.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+
+        private ManagerLog(Class<?> manager) {
+            logger = java.util.logging.Logger.getLogger(manager.getName());
+        }
+
+        static ManagerLog capture(Class<?> manager) {
+            ManagerLog log = new ManagerLog(manager);
+            log.logger.addHandler(log.handler);
+            return log;
+        }
+
+        /** WARNING records saying a rollback found no active transaction. */
+        List<String> strayRollbackWarnings() {
+            List<String> stray = new ArrayList<>();
+            for (java.util.logging.LogRecord record : records) {
+                if (record.getLevel().intValue() >= java.util.logging.Level.WARNING.intValue()
+                        && record.getMessage() != null && record.getMessage().startsWith("Rollback called but no active")) {
+                    stray.add(record.getMessage());
+                }
+            }
+            return stray;
+        }
+
+        @Override
+        public void close() {
+            logger.removeHandler(handler);
+        }
+    }
+
+    @Nested
     @DisplayName("an Error inside transaction(...) on the relational operators")
     class ErrorOnRelational {
 
@@ -612,8 +751,8 @@ class TransactionFailurePathsTest {
     class ErrorOnJson {
 
         @Test
-        @DisplayName("restores the snapshot and rethrows the same Error, on both overloads")
-        void jsonRestoresTheSnapshot() {
+        @DisplayName("discards the staged writes, rethrows the same Error and leaves no transaction on the thread, on both overloads")
+        void jsonDiscardsTheStagedWrites() throws Exception {
             SimpleJsonDataOperator<Row> operator = new SimpleJsonDataOperator<>(
                     tempDir.resolve("json").toString(), Row.class);
             operator.insert(new Row("kept", "kept"));
@@ -633,6 +772,17 @@ class TransactionFailurePathsTest {
             assertThat(fromRunnable).isSameAs(error);
             assertThat(operator.getById("written")).as("entry written before the Error (Runnable)").isNull();
             assertThat(operator.getById("kept")).isNotNull();
+
+            // No transaction is left on this thread: a plain insert now is applied at once, so
+            // another thread reads it (a write inside a leftover transaction would stay staged).
+            operator.insert(new Row("after", "after"));
+            ExecutorService reader = Executors.newSingleThreadExecutor();
+            try {
+                assertThat(reader.submit(() -> operator.getById("after")).get(10, TimeUnit.SECONDS))
+                        .as("a plain insert after the Error is committed").isNotNull();
+            } finally {
+                reader.shutdown();
+            }
         }
     }
 

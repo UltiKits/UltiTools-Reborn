@@ -7,8 +7,8 @@ import java.sql.Connection;
  * <p>
  * Carries the three members that only make sense against a JDBC {@link javax.sql.DataSource} -
  * raw {@link Connection} access and the two connection-level knobs a transaction can tune before
- * any statement runs. A non-JDBC backend (a JSON snapshot manager, for instance) implements
- * {@link TransactionManager} directly and never has to answer these three, instead of inheriting
+ * any statement runs. A non-JDBC backend (the JSON backend's {@code JsonTransactionManager}, for
+ * instance) implements {@link TransactionManager} directly and never has to answer these three, instead of inheriting
  * abstract methods it can only lie about (D-04).
  * <p>
  * Framework internals that genuinely need a {@link Connection} - {@code TransactionAwareDataSource},

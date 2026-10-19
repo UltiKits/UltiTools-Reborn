@@ -1,10 +1,17 @@
 package com.ultikits.ultitools.context;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
+import java.util.Collection;
+
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.testfixtures.beanalias.BeanAliasFixtures;
+import com.ultikits.testfixtures.beanalias.BeanAliasFixtures.AliasedLifecycleBean;
 import com.ultikits.testfixtures.crosspackagededup.pkga.PkgPrivateInitBase;
 import com.ultikits.testfixtures.crosspackagededup.pkgb.PkgPrivateInitChild;
 import com.ultikits.ultitools.annotations.PostConstruct;
@@ -153,5 +160,92 @@ class SimpleContainerLifecycleDedupTest {
         container.close();
 
         assertEquals(1, BaseBean.destroyCount);
+    }
+
+    /**
+     * C50: a {@code @Bean(name = {primary, alias})} product is one object bound under two names.
+     * Both names must keep resolving to it, but every per-instance consumer -- the singleton view
+     * {@code PluginManager} iterates for scheduling, player caches and module event handlers, and
+     * {@code close()}'s {@code @PreDestroy} pass -- must see it once.
+     */
+    @Nested
+    @DisplayName("C50: an aliased @Bean is one instance to every per-instance consumer")
+    class AliasIdentityTests {
+
+        @BeforeEach
+        void resetCounters() {
+            AliasedLifecycleBean.resetCounters();
+        }
+
+        private SimpleContainer scanAliasFixtures() {
+            SimpleContainer container = new SimpleContainer();
+            container.setClassLoader(SimpleContainerLifecycleDedupTest.class.getClassLoader());
+            new ComponentScanner(container).scanPackage("com.ultikits.testfixtures.beanalias");
+            return container;
+        }
+
+        private int countByIdentity(Collection<Object> values, Object target) {
+            int count = 0;
+            for (Object value : values) {
+                if (value == target) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        @Test
+        @DisplayName("both names resolve to the one instance, which getSingletonValues holds once")
+        void aliasedBeanAppearsOnceInSingletonValues() {
+            SimpleContainer container = scanAliasFixtures();
+
+            Object primary = container.getBean(BeanAliasFixtures.PRIMARY_NAME);
+            Object alias = container.getBean(BeanAliasFixtures.ALIAS_NAME);
+
+            assertSame(primary, alias, "both declared names must keep resolving to one instance");
+            assertEquals(1, countByIdentity(container.getSingletonValues(), primary),
+                    "an alias is another name for the same object, so the per-instance view must "
+                            + "hold that object once, not once per name");
+        }
+
+        @Test
+        @DisplayName("close() runs the aliased bean's @PreDestroy once")
+        void closeRunsPreDestroyOnceForAliasedBean() {
+            SimpleContainer container = scanAliasFixtures();
+
+            container.close();
+
+            assertEquals(1, AliasedLifecycleBean.preDestroyCount,
+                    "@PreDestroy must run once per object, however many names bind it");
+        }
+
+        @Test
+        @DisplayName("two distinct instances that are equal() are both kept (identity, not equality)")
+        void distinctEqualInstancesUnderTwoNamesAreBothKept() {
+            SimpleContainer container = new SimpleContainer();
+            AlwaysEqual first = new AlwaysEqual();
+            AlwaysEqual second = new AlwaysEqual();
+            container.registerSingleton("first", first);
+            container.registerSingleton("second", second);
+
+            Collection<Object> values = container.getSingletonValues();
+
+            assertEquals(1, countByIdentity(values, first));
+            assertEquals(1, countByIdentity(values, second),
+                    "two distinct objects are two instances even when equals() says otherwise");
+        }
+    }
+
+    /** Equal to every other instance of itself, so only reference identity tells two apart. */
+    public static class AlwaysEqual {
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof AlwaysEqual;
+        }
+
+        @Override
+        public int hashCode() {
+            return 1;
+        }
     }
 }

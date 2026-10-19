@@ -2,7 +2,8 @@ package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Iterator;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -48,10 +49,18 @@ public class JsonStore implements DataStore {
     /**
      * Per-identity {@link JsonTransactionManager}, one per requesting identity -- the same
      * identity {@link #dataOperatorMap} already keys by -- shared by every {@link
-     * SimpleJsonDataOperator} this store hands out for that identity (02-05, D-03). Not static,
-     * same reasoning as {@link #dataOperatorMap}.
+     * SimpleJsonDataOperator} this store hands out for that identity (02-05, D-03). Each manager
+     * holds the identity's {@link JsonIdentity}: its journal, commit gate and operators. Not
+     * static, same reasoning as {@link #dataOperatorMap}.
      */
     private final Map<String, JsonTransactionManager> transactionManagers = new ConcurrentHashMap<>();
+
+    /**
+     * The table write locks of every operator this store hands out, across every identity: one
+     * lock table, so a thread waiting for one plugin's table while holding another's is visible to
+     * the same wait bookkeeping.
+     */
+    private final JsonLockTable lockTable = new JsonLockTable();
 
     /**
      * Initialize the flush scheduler. Called lazily when first JsonStore is created.
@@ -86,13 +95,36 @@ public class JsonStore implements DataStore {
     }
 
     /**
-     * Flush all cached data operators.
-     * This method is extracted from BukkitRunnable for testability.
+     * The periodic flush: runs one checkpoint per identity ({@link JsonIdentity#checkpoint()}),
+     * writing every entry of that plugin changed since its last checkpoint through one checkpoint
+     * record, then {@code gc()} on each of the identity's operators. An identity whose checkpoint
+     * fails keeps its changed entries pending and does not stop the others; the first failure is
+     * rethrown afterwards with the rest suppressed. Extracted from the {@code BukkitRunnable} for
+     * testability.
      */
     void flushAllCaches() {
-        for (Cached cached : dataOperatorMap.values()) {
-            cached.flush();
-            cached.gc();
+        checkpointEveryIdentity();
+    }
+
+    private void checkpointEveryIdentity() {
+        RuntimeException failure = null;
+        for (JsonTransactionManager manager : transactionManagers.values()) {
+            JsonIdentity identity = manager.journalIdentity();
+            try {
+                identity.checkpoint();
+                for (SimpleJsonDataOperator<?> operator : identity.operators()) {
+                    operator.gc();
+                }
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
@@ -101,6 +133,16 @@ public class JsonStore implements DataStore {
      */
     int getDataOperatorCount() {
         return dataOperatorMap.size();
+    }
+
+    /**
+     * Test seam: sets the default upper bound of one table-lock wait for every operator of this
+     * store (5 seconds unless set).
+     *
+     * @param millis the bound in milliseconds
+     */
+    void setLockWaitBoundMillis(long millis) {
+        lockTable.setDefaultWaitMillis(millis);
     }
 
     /**
@@ -121,7 +163,8 @@ public class JsonStore implements DataStore {
         checkOwnership(plugin, dataEntity);
         ensureTableAnnotation(dataEntity);
         String identity = plugin.getPluginName();
-        return getOperatorForIdentity(identity, internalLocation(identity, dataEntity), dataEntity);
+        return getOperatorForIdentity(identity, internalRoot(identity), internalLocation(identity, dataEntity),
+                dataEntity);
     }
 
     @Override
@@ -129,7 +172,8 @@ public class JsonStore implements DataStore {
         checkOwnership(dataFolder, dataEntity);
         ensureTableAnnotation(dataEntity);
         String identity = canonicalPath(dataFolder);
-        return getOperatorForIdentity(identity, externalLocation(dataFolder, dataEntity), dataEntity);
+        return getOperatorForIdentity(identity, externalRoot(dataFolder), externalLocation(dataFolder, dataEntity),
+                dataEntity);
     }
 
     /**
@@ -147,11 +191,13 @@ public class JsonStore implements DataStore {
         ensureTableAnnotation(dataEntity);
         if (isInternalScope(scope)) {
             String identity = scope.getPluginName();
-            return getOperatorForIdentity(identity, internalLocation(identity, dataEntity), dataEntity);
+            return getOperatorForIdentity(identity, internalRoot(identity), internalLocation(identity, dataEntity),
+                    dataEntity);
         }
         File dataFolder = scope.getDataFolder();
         String identity = canonicalPath(dataFolder);
-        return getOperatorForIdentity(identity, externalLocation(dataFolder, dataEntity), dataEntity);
+        return getOperatorForIdentity(identity, externalRoot(dataFolder), externalLocation(dataFolder, dataEntity),
+                dataEntity);
     }
 
     /**
@@ -159,21 +205,36 @@ public class JsonStore implements DataStore {
      * {@code @Table} annotation have already been established by whichever one of them was
      * called. Single-sourced so the operator cache (keyed by (identity, entity)) and the {@code
      * transactionManagerFor(...)} wiring are each written in exactly one place.
+     * <p>
+     * Recovers the identity's journal before its first operator is constructed, so no table of
+     * the identity is ever read before its committed records are applied. A refused recovery (a
+     * damaged record, question 8 option A) fails this request and every later one for the same
+     * identity, until a request finds the journal recoverable; other identities are unaffected.
      */
     @SuppressWarnings("unchecked")
     private <T extends BaseDataEntity<String>> DataOperator<T> getOperatorForIdentity(
-            String identity, String location, Class<T> dataEntity) {
+            String identity, Path root, String location, Class<T> dataEntity) {
+        JsonTransactionManager manager = transactionManagerFor(identity, root);
+        manager.journalIdentity().recoverOnce();
         Cached cached = dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
-                key -> new SimpleJsonDataOperator<>(location, dataEntity));
-        SimpleJsonDataOperator<T> operator = (SimpleJsonDataOperator<T>) cached;
-        operator.bindTransactionManager(transactionManagerFor(identity));
-        return operator;
+                key -> new SimpleJsonDataOperator<>(location, dataEntity, manager, lockTable));
+        return (SimpleJsonDataOperator<T>) cached;
     }
 
     private static void ensureTableAnnotation(Class<?> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
         }
+    }
+
+    /** The identity root of an internal plugin: {@code <store location>/<plugin name>}. */
+    private Path internalRoot(String identity) {
+        return Paths.get(storeLocation, identity);
+    }
+
+    /** The identity root of an external plugin: {@code <plugin's own data folder>/data}. */
+    private static Path externalRoot(File dataFolder) {
+        return Paths.get(dataFolder.getAbsolutePath(), "data");
     }
 
     /**
@@ -216,22 +277,30 @@ public class JsonStore implements DataStore {
      * so {@code @Transactional} is no longer refused on {@code datasource.type: json} (02-05,
      * D-03). Called by {@code PluginManager.wireAop}'s JSON branch, a different package -- public
      * for that reason, even though it is not part of the officially-extensible {@link DataStore}
-     * contract; the actual snapshot mechanics it drives stay package-private on {@link
-     * SimpleJsonDataOperator}, reached only from inside this class.
+     * contract; the staging, table locking and journaling it drives stay package-private in this
+     * package, on {@link SimpleJsonDataOperator}, {@link JsonTransaction}, {@link JsonIdentity} and
+     * this store's lock table.
      * <p>
      * Shares one instance with every {@link SimpleJsonDataOperator} {@link #getOperator} hands
      * out for the same identity, so a single {@code @Transactional} method's writes across
-     * several of that plugin's entities are governed by the same transaction.
+     * several of that plugin's entities are governed by the same transaction: staged until the
+     * outermost commit and invisible to other threads until then; made durable at commit by one
+     * journal record, forced to disk before the commit returns; then applied to every table so
+     * other threads see them at one instant. Each table a transaction writes is locked against
+     * other writers until it ends. The record is replayed at the next start if the server stops
+     * before the next flush, before any of the plugin's tables is read.
      *
      * @param scope the identity token minted for the caller
      * @return this store's manager for that caller's identity
      */
     public JsonTransactionManager transactionManagerFor(DataScope scope) {
-        return transactionManagerFor(identityOf(scope));
+        Path root = isInternalScope(scope) ? internalRoot(scope.getPluginName()) : externalRoot(scope.getDataFolder());
+        return transactionManagerFor(identityOf(scope), root);
     }
 
-    private JsonTransactionManager transactionManagerFor(String identity) {
-        return transactionManagers.computeIfAbsent(identity, JsonTransactionManager::new);
+    private JsonTransactionManager transactionManagerFor(String identity, Path root) {
+        return transactionManagers.computeIfAbsent(identity,
+                key -> new JsonTransactionManager(JsonIdentity.atRoot(key, root)));
     }
 
     /**
@@ -262,13 +331,15 @@ public class JsonStore implements DataStore {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Runs one final checkpoint per identity, then {@code gc()} on its operators, as
+     * {@link #flushAllCaches()} does.
+     */
     @Override
     public void destroyAllOperators() {
-        Iterator<Cached> iterator = dataOperatorMap.values().iterator();
-        iterator.forEachRemaining(each -> {
-            each.flush();
-            each.gc();
-        });
+        checkpointEveryIdentity();
     }
 
     @Override

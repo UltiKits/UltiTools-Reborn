@@ -14,9 +14,11 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.annotations.AliasFor;
+import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.annotations.I18n;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -306,5 +308,465 @@ class MergedAnnotationResolverTest {
         assertTrue(thrown.getMessage().contains(MutualAlias.class.getName()), thrown.getMessage());
         assertTrue(thrown.getMessage().contains("foo"), thrown.getMessage());
         assertTrue(thrown.getMessage().contains("bar"), thrown.getMessage());
+    }
+
+    // ===== C45 fixtures: a directly declared target beside @UltiToolsModule, in both orders =====
+    // Declared here, not inside the @Nested group: with -source 1.8 an inner class cannot
+    // declare static member types.
+
+    @UltiToolsModule
+    @ComponentScan("other.pkg")
+    static class ModuleThenDirectScanFixture {
+    }
+
+    @ComponentScan("other.pkg")
+    @UltiToolsModule
+    static class DirectScanThenModuleFixture {
+    }
+
+    @UltiToolsModule
+    @EnableAutoRegister(cmdExecutor = false)
+    static class ModuleThenDirectSwitchFixture {
+    }
+
+    @EnableAutoRegister(cmdExecutor = false)
+    @UltiToolsModule
+    static class DirectSwitchThenModuleFixture {
+    }
+
+    // Both declared (question 4 of 20.4-DECISIONS.md, option A): the direct one hides the
+    // meta-present one completely.
+
+    @UltiToolsModule(scanBasePackages = "a")
+    @ComponentScan("b")
+    static class BothScanModuleFirstFixture {
+    }
+
+    @ComponentScan("b")
+    @UltiToolsModule(scanBasePackages = "a")
+    static class BothScanDirectFirstFixture {
+    }
+
+    @UltiToolsModule(cmdExecutor = false)
+    @EnableAutoRegister
+    static class BothSwitchModuleFirstFixture {
+    }
+
+    @EnableAutoRegister
+    @UltiToolsModule(cmdExecutor = false)
+    static class BothSwitchDirectFirstFixture {
+    }
+
+    @UltiToolsModule(scanBasePackages = "x")
+    static class ModuleOnlyScanFixture {
+    }
+
+    // Nearest selection across meta distance: @FarScan reaches @ComponentScan at distance 2,
+    // @NearScan at distance 1.
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @ComponentScan("far")
+    @interface FarScanInner {
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @FarScanInner
+    @interface FarScan {
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @ComponentScan("near")
+    @interface NearScan {
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @ComponentScan("near-second")
+    @interface NearScanSecond {
+    }
+
+    @FarScan
+    @NearScan
+    static class FarDeclaredBeforeNearFixture {
+    }
+
+    @NearScanSecond
+    @NearScan
+    static class EqualDistanceFixture {
+    }
+
+    // Superclass fallback: the subclass's own trees reach @ComponentScan at distance 2, the
+    // superclass declares one directly.
+
+    @ComponentScan("super")
+    static class DirectScanSuperFixture {
+    }
+
+    @FarScan
+    static class DeepScanSubFixture extends DirectScanSuperFixture {
+    }
+
+    static class UnannotatedSubFixture extends DirectScanSuperFixture {
+    }
+
+    /**
+     * C45 (decision P-10): the nearest declaration of the target wins. A directly declared
+     * annotation (distance 0) wins over a meta-present one whatever the declaration order, the
+     * meta graph is searched breadth-first with declaration order breaking ties, and the
+     * superclass is consulted only after the class's own annotation trees hold no occurrence.
+     */
+    @Nested
+    @DisplayName("C45: a directly declared annotation wins over a meta-present one")
+    class DirectDeclarationPrecedenceTests {
+
+        @Test
+        @DisplayName("@UltiToolsModule then direct @ComponentScan: the direct value is used")
+        void moduleThenDirectComponentScanResolvesDirectValue() {
+            ComponentScan merged = MergedAnnotationResolver.find(ModuleThenDirectScanFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"other.pkg"}, merged.value(),
+                    "a directly declared @ComponentScan must not be hidden by @UltiToolsModule's meta default");
+        }
+
+        @Test
+        @DisplayName("Direct @ComponentScan then @UltiToolsModule: the direct value is used")
+        void directComponentScanThenModuleResolvesDirectValue() {
+            ComponentScan merged = MergedAnnotationResolver.find(DirectScanThenModuleFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"other.pkg"}, merged.value());
+        }
+
+        @Test
+        @DisplayName("@UltiToolsModule then direct @EnableAutoRegister(cmdExecutor = false): the direct switch is used")
+        void moduleThenDirectEnableAutoRegisterResolvesDirectSwitch() {
+            EnableAutoRegister merged =
+                    MergedAnnotationResolver.find(ModuleThenDirectSwitchFixture.class, EnableAutoRegister.class);
+
+            assertNotNull(merged);
+            assertFalse(merged.cmdExecutor(),
+                    "a directly declared @EnableAutoRegister must not be hidden by @UltiToolsModule's meta default");
+        }
+
+        @Test
+        @DisplayName("Direct @EnableAutoRegister(cmdExecutor = false) then @UltiToolsModule: the direct switch is used")
+        void directEnableAutoRegisterThenModuleResolvesDirectSwitch() {
+            EnableAutoRegister merged =
+                    MergedAnnotationResolver.find(DirectSwitchThenModuleFixture.class, EnableAutoRegister.class);
+
+            assertNotNull(merged);
+            assertFalse(merged.cmdExecutor());
+        }
+
+        @Test
+        @DisplayName("Both declared, @UltiToolsModule(scanBasePackages = a) first: only the direct @ComponentScan(b) applies")
+        void bothDeclaredModuleFirstDirectComponentScanHidesModulePackages() {
+            ComponentScan merged = MergedAnnotationResolver.find(BothScanModuleFirstFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"b"}, merged.value());
+            assertArrayEquals(new String[0], merged.basePackages(),
+                    "the meta-present scanBasePackages must be hidden, not combined (question 4, option A)");
+        }
+
+        @Test
+        @DisplayName("Both declared, direct @ComponentScan(b) first: only the direct one applies")
+        void bothDeclaredDirectFirstComponentScanHidesModulePackages() {
+            ComponentScan merged = MergedAnnotationResolver.find(BothScanDirectFirstFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"b"}, merged.value());
+            assertArrayEquals(new String[0], merged.basePackages());
+        }
+
+        @Test
+        @DisplayName("Both declared, @UltiToolsModule(cmdExecutor = false) first: the direct default @EnableAutoRegister applies")
+        void bothDeclaredModuleFirstDirectEnableAutoRegisterHidesModuleSwitch() {
+            EnableAutoRegister merged =
+                    MergedAnnotationResolver.find(BothSwitchModuleFirstFixture.class, EnableAutoRegister.class);
+
+            assertNotNull(merged);
+            assertTrue(merged.cmdExecutor(),
+                    "the direct @EnableAutoRegister hides @UltiToolsModule's cmdExecutor = false (question 4, option A)");
+        }
+
+        @Test
+        @DisplayName("Both declared, direct default @EnableAutoRegister first: it applies")
+        void bothDeclaredDirectFirstDirectEnableAutoRegisterHidesModuleSwitch() {
+            EnableAutoRegister merged =
+                    MergedAnnotationResolver.find(BothSwitchDirectFirstFixture.class, EnableAutoRegister.class);
+
+            assertNotNull(merged);
+            assertTrue(merged.cmdExecutor());
+        }
+
+        @Test
+        @DisplayName("Control: a class with only @UltiToolsModule(scanBasePackages = x) still resolves basePackages x")
+        void moduleOnlyStillResolvesScanBasePackages() {
+            ComponentScan merged = MergedAnnotationResolver.find(ModuleOnlyScanFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"x"}, merged.basePackages());
+            assertArrayEquals(new String[0], merged.value());
+        }
+
+        @Test
+        @DisplayName("A meta occurrence at distance 1 wins over one at distance 2 declared earlier")
+        void nearerMetaOccurrenceWinsOverDeeperOneDeclaredFirst() {
+            ComponentScan merged = MergedAnnotationResolver.find(FarDeclaredBeforeNearFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"near"}, merged.value());
+        }
+
+        @Test
+        @DisplayName("At equal meta distance, declaration order breaks the tie")
+        void equalDistanceOccurrencesResolveInDeclarationOrder() {
+            ComponentScan merged = MergedAnnotationResolver.find(EqualDistanceFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"near-second"}, merged.value());
+        }
+
+        @Test
+        @DisplayName("The superclass is consulted only after the class's own annotation trees are exhausted")
+        void ownMetaOccurrenceWinsOverSuperclassDirectOne() {
+            ComponentScan own = MergedAnnotationResolver.find(DeepScanSubFixture.class, ComponentScan.class);
+            ComponentScan inherited = MergedAnnotationResolver.find(UnannotatedSubFixture.class, ComponentScan.class);
+
+            assertNotNull(own);
+            assertArrayEquals(new String[] {"far"}, own.value(),
+                    "the class's own distance-2 occurrence must win over the superclass's direct one");
+            assertNotNull(inherited);
+            assertArrayEquals(new String[] {"super"}, inherited.value());
+        }
+    }
+
+    // ===== C46 fixtures: composed annotations whose attributes alias @UltiToolsModule's =====
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @UltiToolsModule
+    @interface ComposedModule {
+        @AliasFor(annotation = UltiToolsModule.class, attribute = "scanBasePackages")
+        String[] packages() default {};
+
+        @AliasFor(annotation = UltiToolsModule.class, attribute = "cmdExecutor")
+        boolean commands() default true;
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @ComposedModule
+    @interface OuterComposedModule {
+        @AliasFor(annotation = ComposedModule.class, attribute = "packages")
+        String[] outerPackages() default {};
+    }
+
+    @ComposedModule(packages = "x.y")
+    static class ComposedPackagesFixture {
+    }
+
+    @ComposedModule(commands = false)
+    static class ComposedCommandsOffFixture {
+    }
+
+    @OuterComposedModule(outerPackages = "deep.pkg")
+    static class TwoLevelPackagesFixture {
+    }
+
+    /**
+     * C46 (decision P-10 merge): a value set on a composed annotation travels through every
+     * intermediate {@code @AliasFor} to the annotation finally requested, at any depth -- an
+     * attribute aliasing {@code @UltiToolsModule.scanBasePackages} must reach
+     * {@code @ComponentScan.basePackages}, because {@code scanBasePackages} itself aliases it.
+     */
+    @Nested
+    @DisplayName("C46: alias values travel through intermediate annotations to the final target")
+    class AliasChainPropagationTests {
+
+        @Test
+        @DisplayName("A composed attribute aliasing scanBasePackages reaches @ComponentScan.basePackages")
+        void composedAliasReachesComponentScan() {
+            ComponentScan merged = MergedAnnotationResolver.find(ComposedPackagesFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"x.y"}, merged.basePackages(),
+                    "the value must be forwarded through @UltiToolsModule.scanBasePackages, not dropped");
+        }
+
+        @Test
+        @DisplayName("Control: the same composed attribute reaches @UltiToolsModule.scanBasePackages")
+        void composedAliasReachesUltiToolsModule() {
+            UltiToolsModule merged = MergedAnnotationResolver.find(ComposedPackagesFixture.class, UltiToolsModule.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"x.y"}, merged.scanBasePackages());
+        }
+
+        @Test
+        @DisplayName("A composed boolean aliasing cmdExecutor reaches @EnableAutoRegister.cmdExecutor")
+        void composedBooleanAliasReachesEnableAutoRegister() {
+            EnableAutoRegister merged =
+                    MergedAnnotationResolver.find(ComposedCommandsOffFixture.class, EnableAutoRegister.class);
+
+            assertNotNull(merged);
+            assertFalse(merged.cmdExecutor(),
+                    "commands = false must be forwarded through @UltiToolsModule.cmdExecutor");
+            assertTrue(merged.eventListener(), "the sibling switch stays at its default");
+        }
+
+        @Test
+        @DisplayName("A two-level composition reaches @ComponentScan.basePackages")
+        void twoLevelCompositionReachesComponentScan() {
+            ComponentScan merged = MergedAnnotationResolver.find(TwoLevelPackagesFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"deep.pkg"}, merged.basePackages());
+        }
+
+        @Test
+        @DisplayName("A two-level composition reaches @UltiToolsModule.scanBasePackages")
+        void twoLevelCompositionReachesUltiToolsModule() {
+            UltiToolsModule merged = MergedAnnotationResolver.find(TwoLevelPackagesFixture.class, UltiToolsModule.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"deep.pkg"}, merged.scanBasePackages());
+        }
+
+        @Test
+        @DisplayName("Control: a two-level composition reaches the inner composed annotation")
+        void twoLevelCompositionReachesInnerComposedAnnotation() {
+            ComposedModule merged = MergedAnnotationResolver.find(TwoLevelPackagesFixture.class, ComposedModule.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"deep.pkg"}, merged.packages());
+        }
+
+        @Test
+        @DisplayName("Control: the composed fixture annotations pass structural validation")
+        void composedAnnotationsPassValidation() {
+            assertDoesNotThrow(() -> MergedAnnotationResolver.validateAliases(ComposedModule.class));
+            assertDoesNotThrow(() -> MergedAnnotationResolver.validateAliases(OuterComposedModule.class));
+        }
+    }
+
+    // ===== C47 fixtures: an outer override over an inner declared meta value =====
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @UltiToolsModule(scanBasePackages = "defaults")
+    @interface DefaultsScanModule {
+        @AliasFor(annotation = ComponentScan.class, attribute = "basePackages")
+        String[] packages() default {};
+    }
+
+    @DefaultsScanModule(packages = "other")
+    static class OuterOverrideFixture {
+    }
+
+    @DefaultsScanModule
+    static class InnerDefaultFixture {
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @UltiToolsModule(scanBasePackages = "defaults")
+    @interface DefaultsViaModule {
+        @AliasFor(annotation = UltiToolsModule.class, attribute = "scanBasePackages")
+        String[] packages() default {};
+    }
+
+    @DefaultsViaModule(packages = "other")
+    static class OuterOverrideViaModuleFixture {
+    }
+
+    // One instance reaching ComponentScan.basePackages by two routes: directly, and through
+    // UltiToolsModule.scanBasePackages.
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @UltiToolsModule
+    @interface TwoRoutesModule {
+        @AliasFor(annotation = ComponentScan.class, attribute = "basePackages")
+        String[] direct() default {};
+
+        @AliasFor(annotation = UltiToolsModule.class, attribute = "scanBasePackages")
+        String[] viaModule() default {};
+    }
+
+    @TwoRoutesModule(direct = "p", viaModule = "q")
+    static class SelfContradictionFixture {
+    }
+
+    @TwoRoutesModule(direct = "p", viaModule = "p")
+    static class SelfAgreementFixture {
+    }
+
+    /**
+     * C47 (decision P-10 merge): a value set on an outer annotation overrides the value an inner
+     * meta-annotation declares -- values from different annotation instances never conflict, the
+     * one nearest the class wins (Spring {@code @AliasFor}: the lower level, closer to the
+     * annotated element, wins). Only one annotation instance supplying two different values for
+     * the same final attribute is refused.
+     */
+    @Nested
+    @DisplayName("C47: an outer override beats an inner declared value; one instance contradicting itself is refused")
+    class CrossLevelOverrideTests {
+
+        @Test
+        @DisplayName("An outer attribute aliasing ComponentScan.basePackages overrides the inner @UltiToolsModule(scanBasePackages)")
+        void outerOverrideBeatsInnerDeclaredValue() {
+            ComponentScan merged = MergedAnnotationResolver.find(OuterOverrideFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"other"}, merged.basePackages(),
+                    "values from two different annotation instances are not a conflict; the outer one wins");
+        }
+
+        @Test
+        @DisplayName("Control: with the outer attribute left at its default, the inner declared value applies")
+        void innerDeclaredValueAppliesWhenOuterLeftAtDefault() {
+            ComponentScan merged = MergedAnnotationResolver.find(InnerDefaultFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"defaults"}, merged.basePackages());
+        }
+
+        @Test
+        @DisplayName("An outer attribute aliasing scanBasePackages overrides the inner declared scanBasePackages, at both levels")
+        void outerOverrideThroughIntermediateBeatsInnerDeclaredValue() {
+            UltiToolsModule module = MergedAnnotationResolver.find(OuterOverrideViaModuleFixture.class, UltiToolsModule.class);
+            ComponentScan scan = MergedAnnotationResolver.find(OuterOverrideViaModuleFixture.class, ComponentScan.class);
+
+            assertNotNull(module);
+            assertArrayEquals(new String[] {"other"}, module.scanBasePackages());
+            assertNotNull(scan);
+            assertArrayEquals(new String[] {"other"}, scan.basePackages());
+        }
+
+        @Test
+        @DisplayName("One instance sending two different values to ComponentScan.basePackages is refused, naming that annotation")
+        void oneInstanceContradictingItselfIsRefused() {
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> MergedAnnotationResolver.find(SelfContradictionFixture.class, ComponentScan.class));
+
+            assertTrue(thrown.getMessage().contains(TwoRoutesModule.class.getName()), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("basePackages"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("direct"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("viaModule"), thrown.getMessage());
+        }
+
+        @Test
+        @DisplayName("Control: one instance sending the same value by both routes is accepted")
+        void oneInstanceAgreeingWithItselfIsAccepted() {
+            ComponentScan merged = MergedAnnotationResolver.find(SelfAgreementFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"p"}, merged.basePackages());
+        }
     }
 }

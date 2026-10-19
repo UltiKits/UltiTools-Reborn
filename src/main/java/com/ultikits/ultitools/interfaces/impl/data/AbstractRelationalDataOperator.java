@@ -1021,8 +1021,10 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * transaction back and is rethrown as the same instance, so the thread's transaction context is
      * gone afterwards and the next {@code transaction(...)} on that thread starts its own. When the
      * rollback itself throws, the action's throwable still reaches the caller and the rollback
-     * failure is attached to it as suppressed. A commit or rollback that fails never ends in an
-     * implicit commit: see {@code DataSourceTransactionManager}.
+     * failure is attached to it as suppressed. A commit that throws (a failed commit, or
+     * {@code UnexpectedRollbackException} for a transaction marked rollback-only) has already ended
+     * the transaction and is not followed by a rollback. A commit or rollback that fails never ends
+     * in an implicit commit: see {@code DataSourceTransactionManager}.
      */
     // PMD.AvoidCatchingThrowable: an Error must roll the transaction back too (#634); it is
     // rethrown unchanged, never swallowed.
@@ -1033,10 +1035,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             return action.call();
         }
         transactionManager.begin();
+        R result;
         try {
-            R result = action.call();
-            transactionManager.commit();
-            return result;
+            result = action.call();
         } catch (Throwable failure) {
             try {
                 transactionManager.rollback();
@@ -1045,6 +1046,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             }
             throw failure;
         }
+        // Outside the catch, as in TransactionInterceptor: a commit that throws has already ended
+        // the transaction (the manager discards it whether or not the commit succeeds), so there
+        // is nothing left to roll back, and a second rollback() would only log that no
+        // transaction is active.
+        transactionManager.commit();
+        return result;
     }
 
     @Override

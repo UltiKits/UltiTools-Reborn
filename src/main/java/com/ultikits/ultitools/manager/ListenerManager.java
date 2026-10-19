@@ -31,13 +31,19 @@ public class ListenerManager {
 
     /**
      * Register all listeners in the UltiTools plugin class base package.
+     * <p>
+     * Beans are enumerated by name, so a listener bound under several names (a
+     * {@code @Bean(name = {primary, alias})} product) is reached once per name; it is registered
+     * with Bukkit once, on the first name (C50).
      *
      * @param plugin UltiTools plugin instance
      */
     public void registerAll(UltiToolsPlugin plugin) {
+        Set<Listener> handled = Collections.newSetFromMap(new IdentityHashMap<>());
         for (String listenerBean : plugin.getContext().getBeanNamesForType(Listener.class)) {
             Listener listener = plugin.getContext().getBean(listenerBean, Listener.class);
             if (listener == null) continue;
+            if (!handled.add(listener)) continue; // same instance under another name (C50)
             EventListener annotation = MergedAnnotationResolver.find(listener.getClass(), EventListener.class);
             if (annotation == null || annotation.manualRegister()) continue;
             registerListener(plugin, listener);
@@ -95,15 +101,19 @@ public class ListenerManager {
 
     /**
      * Register all @EventListener listeners from an external plugin's IoC container.
+     * A listener bound under several names is registered once (C50), as in
+     * {@link #registerAll(UltiToolsPlugin)}.
      *
      * @param adapter the external plugin adapter
      * @since 6.2.2
      */
     public void registerAllExternal(ExternalPluginAdapter adapter) {
         if (adapter.getContext() == null) return;
+        Set<Listener> handled = Collections.newSetFromMap(new IdentityHashMap<>());
         for (String listenerBean : adapter.getContext().getBeanNamesForType(Listener.class)) {
             Listener listener = adapter.getContext().getBean(listenerBean, Listener.class);
             if (listener == null) continue;
+            if (!handled.add(listener)) continue; // same instance under another name (C50)
             EventListener annotation = MergedAnnotationResolver.find(listener.getClass(), EventListener.class);
             if (annotation == null || annotation.manualRegister()) continue;
             Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());

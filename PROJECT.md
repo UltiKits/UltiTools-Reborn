@@ -160,8 +160,10 @@ If it is tracked, `git rm --cached data.json` and rebase onto the current defaul
    `registerAll(plugin)` overload, which resolves commands as `CommandExecutor` beans and does not cast.
 4. **Bukkit thread safety.** Anything reaching Bukkit from an async context must go through
    `Bukkit.getScheduler().runTask()`, or Paper's AsyncCatcher rejects it.
-5. **AOP uses ByteBuddy subclass proxies only.** `final` classes and methods cannot be proxied, and
-   self-invocation (`this.method()`) bypasses the interceptor chain.
+5. **AOP uses ByteBuddy subclass proxies only.** `final` classes and methods cannot be proxied.
+   Self-invocation, a call a bean makes to its own method (`this.method()`), is intercepted like an
+   external call, because the proxy is the bean itself, so an inner `REQUIRES_NEW` call opens its own
+   transaction.
 6. **Event listeners need the framework's `@EventListener`**, not just Bukkit's `Listener` interface.
 
 ## Related Docs

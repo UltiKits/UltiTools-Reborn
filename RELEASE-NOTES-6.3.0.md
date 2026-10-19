@@ -131,7 +131,19 @@ worked before/after examples, and measurement evidence for every item below are 
 - `@Transactional` moves from silently doing nothing to being wired end to end on all three
   storage backends. `rollbackFor`/`noRollbackFor` now resolve by shallowest-inheritance-depth
   match instead of `noRollbackFor` winning unconditionally. `REQUIRES_NEW`/`NOT_SUPPORTED` now
-  genuinely suspend the outer transaction.
+  genuinely suspend the outer transaction. On `datasource.type: json`, transactions
+  (`DataOperator#transaction(...)` and `@Transactional`) are now staged per transaction, visible to
+  other threads only at commit and at one instant across a plugin's tables, atomic across those tables
+  and across a crash, and durable once `commit` returns; a plain JSON write can wait up to 5 seconds
+  for a transaction's table lock; a transaction begun by `DataOperator#transaction(...)` locks each
+  table at its first read, as 6.2.5 ran each callback alone per operator, so a read inside it can wait
+  too; and a `@Transactional` method that computes a write from a value it read uses `updateIf`
+  or `REPEATABLE_READ`. On every backend, a `@Transactional` method that joins an active transaction
+  and throws an exception its rollback rules accept marks the whole transaction rollback-only even if
+  the caller catches it, and the outermost commit rolls back and throws `UnexpectedRollbackException`.
+  Server operators: the JSON storage guidance in `COMPATIBILITY.md` ("JSON transactions (6.3.0)") covers
+  backing up the `.ultitools-journal` folder with the tables, running one server per data folder, and
+  what "durable once `commit` returns" means on Linux, Windows and macOS.
 - `@ExceptionCatch` can now refuse to load a module: a `final` bean class fails if anything asks
   to intercept it, including an inherited `@ExceptionCatch` method.
 - A `final` bean carrying an AOP annotation it merely inherits, and an unresolvable required

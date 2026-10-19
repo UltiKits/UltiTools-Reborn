@@ -13,7 +13,42 @@ import com.ultikits.ultitools.interfaces.TransactionManager;
  * AOP interceptor that implements declarative transaction management.
  * <p>
  * This interceptor processes @Transactional annotations and manages
- * transaction boundaries accordingly.
+ * transaction boundaries accordingly. Each propagation is handled as follows:
+ * <ul>
+ *   <li>{@code REQUIRED}: begins a new transaction when none is active; otherwise joins the
+ *       active one as a participant (below).</li>
+ *   <li>{@code REQUIRES_NEW}: suspends whatever is active, runs in a new, independent transaction,
+ *       and resumes the suspended one afterwards.</li>
+ *   <li>{@code SUPPORTS}: joins an active transaction as a participant; without one, the method
+ *       runs with no transaction.</li>
+ *   <li>{@code MANDATORY}: joins an active transaction as a participant; without one, it throws
+ *       {@link IllegalStateException} and the method does not run.</li>
+ *   <li>{@code NOT_SUPPORTED}: suspends whatever is active, runs with no transaction, and resumes
+ *       the suspended one afterwards.</li>
+ *   <li>{@code NEVER}: throws {@link IllegalStateException} when a transaction is active;
+ *       otherwise runs with no transaction.</li>
+ * </ul>
+ * <p>
+ * A joined {@code REQUIRED}, {@code SUPPORTS} or {@code MANDATORY} method runs in a participation
+ * scope: {@code begin()}, then {@code commit()} when it returns, or {@code rollback()} when it
+ * throws an exception its own {@code rollbackFor}/{@code noRollbackFor} rules accept (otherwise
+ * {@code commit()}); its exception is rethrown unchanged. This relies on the
+ * {@link TransactionManager} nesting contract both built-in managers implement:
+ * {@code begin()} on an active transaction joins it, {@code rollback()} at a nested depth marks the
+ * transaction rollback-only without ending it, and the outermost {@code commit()} of a marked
+ * transaction rolls back and throws
+ * {@link com.ultikits.ultitools.exceptions.UnexpectedRollbackException}. So a joined method's
+ * failure that its caller catches still rolls the whole transaction back, as Spring does by default
+ * ({@code AbstractPlatformTransactionManager}'s {@code globalRollbackOnParticipationFailure = true};
+ * the participant's rollback-or-commit choice follows {@code TransactionAspectSupport}'s
+ * {@code completeTransactionAfterThrowing}). A joined method's isolation, read-only and timeout
+ * settings are not applied; they belong to the transaction that began it.
+ * <p>
+ * For a new transaction, the commit after a normal return runs after, not inside, the body's
+ * failure handler ({@code TransactionAspectSupport}'s {@code invokeWithinTransaction} shape), so the
+ * transaction is completed once: a failing commit reaches the caller as it is, and when the
+ * method's rules commit despite its exception and that commit fails, the body's exception is kept
+ * on the commit failure as suppressed.
  *
  * @author wisdomme
  * @since 6.2.0
@@ -78,7 +113,7 @@ public class TransactionInterceptor implements MethodInterceptor {
                 if (!existingTx) {
                     return executeInNewTransaction(invocation, tx);
                 }
-                return invocation.proceed();
+                return executeAsParticipant(invocation, tx);
 
             case REQUIRES_NEW: {
                 // D-09: always suspend whatever is active (a no-op returning null if nothing is),
@@ -93,7 +128,10 @@ public class TransactionInterceptor implements MethodInterceptor {
             }
 
             case SUPPORTS:
-                // Execute with or without transaction
+                // Participates in an active transaction like REQUIRED; without one, runs without.
+                if (existingTx) {
+                    return executeAsParticipant(invocation, tx);
+                }
                 return invocation.proceed();
 
             case MANDATORY:
@@ -102,7 +140,7 @@ public class TransactionInterceptor implements MethodInterceptor {
                             "No existing transaction found for MANDATORY propagation on method: " +
                                     invocation.getMethod().getName());
                 }
-                return invocation.proceed();
+                return executeAsParticipant(invocation, tx);
 
             case NOT_SUPPORTED: {
                 // D-09: same suspend/resume shape as REQUIRES_NEW, minus the inner begin() - the
@@ -130,7 +168,20 @@ public class TransactionInterceptor implements MethodInterceptor {
 
     /**
      * Executes the invocation in a new transaction.
+     * <p>
+     * Only the body runs inside the {@code try} whose handler completes the transaction after a
+     * failure; the commit after a normal return runs after that handler, so a failing commit
+     * ({@code UnexpectedRollbackException} included) reaches the caller as it is and is never
+     * followed by a second completion call. When the body's exception does not call for a rollback
+     * and the commit then fails, the commit failure is thrown with the body's exception attached as
+     * suppressed.
      */
+    // PMD.AvoidCatchingThrowable: an Error raised by the body must complete the transaction too,
+    // and a failing commit-despite-exception must not lose the body's exception; both are rethrown
+    // or attached, never swallowed.
+    // PMD.CompareObjectsWithEquals: deliberate reference identity - addSuppressed rejects the very
+    // same instance (self-suppression), and that rejection would replace the commit failure.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CompareObjectsWithEquals"})
     private Object executeInNewTransaction(MethodInvocation invocation, Transactional tx) throws Throwable {
         String methodName = invocation.getMethod().getDeclaringClass().getSimpleName() + "." +
                 invocation.getMethod().getName();
@@ -139,34 +190,135 @@ public class TransactionInterceptor implements MethodInterceptor {
 
         transactionManager.begin();
 
-        // Apply transaction settings
-        Isolation isolation = tx.isolation();
-        if (isolation != Isolation.DEFAULT) {
-            transactionManager.setIsolationLevel(isolation.getLevel());
-        }
+        // Settings run after begin(), because a JDBC setting needs the connection begin() opened,
+        // and inside the cleanup scope of the transaction begin() started: a failing setting must
+        // not strand it on this thread.
+        applySettings(tx, methodName);
 
-        if (tx.readOnly()) {
-            transactionManager.setReadOnly(true);
-        }
-
-        if (tx.timeout() > 0) {
-            transactionManager.setTimeout(tx.timeout());
-        }
-
+        Object result;
         try {
-            Object result = invocation.proceed();
-            transactionManager.commit();
-            LOGGER.fine("Transaction committed for: " + methodName);
-            return result;
+            result = invocation.proceed();
         } catch (Throwable e) {
             if (shouldRollback(e, tx)) {
                 LOGGER.log(Level.FINE, "Rolling back transaction for: " + methodName + " due to: " + e.getMessage());
                 transactionManager.rollback();
             } else {
                 LOGGER.fine("Committing transaction despite exception for: " + methodName);
-                transactionManager.commit();
+                try {
+                    transactionManager.commit();
+                } catch (Throwable commitFailure) {
+                    if (commitFailure != e) {
+                        commitFailure.addSuppressed(e);
+                    }
+                    throw commitFailure;
+                }
             }
             throw e;
+        }
+        // Outside the handler above (Spring's invokeWithinTransaction shape): a commit that fails
+        // has already ended the transaction, so no rollback() may follow it.
+        transactionManager.commit();
+        LOGGER.fine("Transaction committed for: " + methodName);
+        return result;
+    }
+
+    /**
+     * Executes the invocation as a participant in the transaction already active on this thread.
+     * <p>
+     * {@code begin()} joins the active transaction (one more nesting level). When the body returns,
+     * {@code commit()} leaves that level. When the body throws an exception the method's own rules
+     * accept ({@link #shouldRollback}), {@code rollback()} at the nested level marks the whole
+     * transaction rollback-only without ending it; any other exception leaves it with {@code
+     * commit()}. The body's exception is always rethrown unchanged, with a failure of that
+     * completion call attached as suppressed. The method's isolation, read-only and timeout
+     * settings are not applied: they belong to the transaction that began it.
+     */
+    // PMD.AvoidCatchingThrowable: an Error raised by the body must leave the participation level
+    // too, and a failure of that completion call must not replace the body's failure; both are
+    // rethrown or attached, never swallowed.
+    // PMD.CompareObjectsWithEquals: deliberate reference identity - addSuppressed rejects the very
+    // same instance (self-suppression), and that rejection would replace the body's failure.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CompareObjectsWithEquals"})
+    private Object executeAsParticipant(MethodInvocation invocation, Transactional tx) throws Throwable {
+        String methodName = invocation.getMethod().getDeclaringClass().getSimpleName() + "." +
+                invocation.getMethod().getName();
+
+        LOGGER.fine("Joining the active transaction for: " + methodName);
+
+        transactionManager.begin();
+
+        Object result;
+        try {
+            result = invocation.proceed();
+        } catch (Throwable e) {
+            try {
+                if (shouldRollback(e, tx)) {
+                    LOGGER.log(Level.FINE, "Marking the joined transaction rollback-only for: " + methodName
+                            + " due to: " + e.getMessage());
+                    transactionManager.rollback();
+                } else {
+                    LOGGER.fine("Leaving the joined transaction committable despite exception for: " + methodName);
+                    transactionManager.commit();
+                }
+            } catch (Throwable completionFailure) {
+                if (completionFailure != e) {
+                    e.addSuppressed(completionFailure);
+                }
+            }
+            throw e;
+        }
+        transactionManager.commit();
+        LOGGER.fine("Left the joined transaction for: " + methodName);
+        return result;
+    }
+
+    /**
+     * Applies the isolation, read-only and timeout settings of {@code tx} to the transaction this
+     * invocation has just begun.
+     * <p>
+     * When applying a setting fails, the transaction this invocation began is rolled back once,
+     * so its connection is released and no active context is left on the thread for the next
+     * call to join; any failure of that rollback is attached to the settings failure with
+     * {@link Throwable#addSuppressed(Throwable)}, and the settings failure itself is rethrown
+     * unchanged. The method body never runs. A {@code REQUIRES_NEW} caller still resumes the
+     * suspended outer transaction in its own {@code finally}. This mirrors Spring's
+     * {@code DataSourceTransactionManager.doBegin}, which applies these settings inside its
+     * {@code try} and releases the connection before rethrowing.
+     *
+     * @param tx         the transaction attributes of the invoked method
+     * @param methodName the qualified method name, for logging
+     */
+    // PMD.AvoidCatchingThrowable: an Error raised by a setting must roll back the transaction
+    // this invocation began too, and a rollback failure of any kind must not replace the settings
+    // failure; both are rethrown or attached, never swallowed.
+    // PMD.CompareObjectsWithEquals: deliberate reference identity - addSuppressed rejects the very
+    // same instance (self-suppression), and that rejection would replace the settings failure.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CompareObjectsWithEquals"})
+    private void applySettings(Transactional tx, String methodName) {
+        try {
+            Isolation isolation = tx.isolation();
+            if (isolation != Isolation.DEFAULT) {
+                transactionManager.setIsolationLevel(isolation.getLevel());
+            }
+
+            if (tx.readOnly()) {
+                transactionManager.setReadOnly(true);
+            }
+
+            if (tx.timeout() > 0) {
+                transactionManager.setTimeout(tx.timeout());
+            }
+        } catch (Throwable settingsFailure) {
+            LOGGER.log(Level.FINE, "Rolling back transaction for: " + methodName
+                    + " because a transaction setting failed: " + settingsFailure.getMessage());
+            try {
+                transactionManager.rollback();
+            } catch (Throwable rollbackFailure) {
+                if (rollbackFailure != settingsFailure) {
+                    settingsFailure.addSuppressed(rollbackFailure);
+                }
+            }
+            throw settingsFailure;
         }
     }
 

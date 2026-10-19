@@ -234,8 +234,26 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
 
     /**
      * Execute operations within a transaction. All operations commit together
-     * or roll back on exception. For SQL backends, uses database transactions.
-     * For JSON, uses snapshot-based rollback.
+     * or roll back on exception.
+     * <p>
+     * Every backend this framework ships (SQLite, MySQL, JSON) runs the action in a
+     * transaction: it joins the transaction already active on the calling thread, if any,
+     * and any {@link Throwable} the action throws rolls it back and is rethrown. SQLite and
+     * MySQL use a database transaction. On JSON, the action's writes are staged until commit
+     * and are invisible to other threads until then; the commit applies them together, so
+     * other threads see all of them at once; a rollback discards them.
+     * <p>
+     * On JSON, a transaction this method begins locks each table at its first read or write and
+     * holds the lock until it commits or rolls back, so a read-modify-write inside the action
+     * cannot lose an update, as in 6.2.5, where each JSON {@code transaction(...)} callback ran
+     * alone per operator. A read inside the action can therefore wait for another transaction
+     * that holds the table: at most 5 seconds, then it fails with a
+     * {@link com.ultikits.ultitools.exceptions.DataAccessException} and the transaction rolls
+     * back. A call that joins an active transaction keeps that transaction's isolation: inside a
+     * {@code @Transactional} method at the default isolation, JSON reads take no table lock.
+     * <p>
+     * This default implementation, used only by a third-party operator that does not override
+     * it, runs the action directly without a transaction.
      *
      * @param action the operations to execute
      * @param <R> the return type
@@ -247,7 +265,12 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     }
 
     /**
-     * Execute operations within a transaction (void variant).
+     * Execute operations within a transaction (void variant), with the same guarantees as
+     * {@link #transaction(Callable)} on every shipped backend, including the JSON backend's table
+     * lock at the first read of a transaction this method begins.
+     * <p>
+     * This default implementation, used only by a third-party operator that does not override
+     * it, runs the action directly without a transaction.
      *
      * @param action the operations to execute
      */
@@ -256,7 +279,9 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     }
 
     /**
-     * Insert multiple entities atomically. Uses JDBC batch for SQL backends.
+     * Insert multiple entities atomically: on every shipped backend either all of them are
+     * stored or, if one fails, none is. Uses JDBC batch for SQL backends; on JSON the batch is
+     * one transaction. Inside an active transaction the batch joins it.
      *
      * @param entities the entities to insert
      */
@@ -269,7 +294,12 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     }
 
     /**
-     * Update multiple entities atomically. Uses JDBC batch for SQL backends.
+     * Update multiple entities atomically: on every shipped backend either all of them are
+     * updated or, if one fails, none is. Uses JDBC batch for SQL backends; on JSON the batch is
+     * one transaction. Inside an active transaction the batch joins it.
+     * <p>
+     * This default implementation, used only by a third-party operator that does not override
+     * it, updates the entities one by one without a transaction.
      *
      * @param entities the entities to update
      * @throws IllegalAccessException if field access fails

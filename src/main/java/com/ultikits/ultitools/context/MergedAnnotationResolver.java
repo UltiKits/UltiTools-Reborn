@@ -9,7 +9,9 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,8 +20,19 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * General merged-annotation resolution: a recursive walk of the whole annotation tree, with
- * explicit meta-annotation attribute override via {@link AliasFor}.
+ * General merged-annotation resolution: a search of the whole annotation tree, with explicit
+ * meta-annotation attribute override via {@link AliasFor}.
+ * <p>
+ * <b>Nearest selection (decision P-10).</b> The occurrence of the requested annotation nearest
+ * the class is the one resolved: a directly declared annotation (distance 0) wins over any
+ * meta-present one, then meta-annotations are searched breadth-first by distance with declaration
+ * order breaking ties, and a superclass is consulted only when the class's own annotation trees
+ * hold no occurrence. This follows Spring's {@code @ComponentScan} javadoc: "Locally declared
+ * {@code @ComponentScan} annotations always take precedence over and effectively hide
+ * {@code @ComponentScan} meta-annotations, which allows explicit local configuration to override
+ * configuration that is meta-present." A module that declares both {@code @UltiToolsModule} and a
+ * direct {@code @ComponentScan} (or {@code @EnableAutoRegister}) therefore gets the direct one,
+ * whatever order the two are written in (C45).
  * <p>
  * {@link com.ultikits.ultitools.utils.AnnotationUtils#findAnnotation} only walks one
  * meta-annotation level and never inspects {@link AliasFor} at all, which is why
@@ -56,7 +69,11 @@ public final class MergedAnnotationResolver {
      * Find an annotation on a class, or on any of its (meta-)annotations, or on its superclass
      * hierarchy -- generalizing {@code AnnotationUtils.findAnnotation} from one meta-annotation
      * level to the whole annotation tree, and merging in any {@code @AliasFor} override found
-     * along the way.
+     * along the path to the selected occurrence.
+     * <p>
+     * The occurrence nearest the class is selected (see the class javadoc): a directly declared
+     * {@code annotationType} hides every meta-present one, and the class's own annotations are
+     * exhausted before its superclass is searched.
      *
      * @param clazz          the class to search
      * @param annotationType the annotation type to find
@@ -164,7 +181,7 @@ public final class MergedAnnotationResolver {
     /**
      * Whether {@code target} is present, directly or transitively, on {@code declaring}'s own
      * meta-annotation graph -- Spring's "meta-present" requirement for an explicit
-     * {@code @AliasFor(annotation = ...)}. Cycle-guarded the same way {@link #search} is.
+     * {@code @AliasFor(annotation = ...)}. Cycle-guarded the same way {@link #findNearest} is.
      */
     private static boolean isMetaPresent(Class<? extends Annotation> declaring, Class<? extends Annotation> target) {
         return isMetaPresent(declaring, target, new HashSet<>());
@@ -187,63 +204,127 @@ public final class MergedAnnotationResolver {
         return false;
     }
 
+    /**
+     * Nearest selection over the class hierarchy (decision P-10): the class's own annotation
+     * trees are searched completely before its superclass is consulted. {@code visited} is shared
+     * across the whole {@link #find} call so each annotation type is entered at most once; a type
+     * already entered on a subclass cannot lead to the target on the superclass either, because
+     * its whole subtree was already searched.
+     */
     private static <A extends Annotation> A findOnClassHierarchy(Class<?> clazz, Class<A> annotationType,
             Set<Class<? extends Annotation>> visited) {
-        if (clazz == null) {
-            return null;
-        }
-        for (Annotation direct : clazz.getAnnotations()) {
-            A found = search(direct, annotationType, visited, new ArrayList<>());
-            if (found != null) {
-                return found;
+        for (Class<?> current = clazz; current != null; current = current.getSuperclass()) {
+            Occurrence occurrence = findNearest(current, annotationType, visited);
+            if (occurrence != null) {
+                return merge(occurrence.annotation, annotationType, occurrence.ancestors());
             }
         }
-        return findOnClassHierarchy(clazz.getSuperclass(), annotationType, visited);
+        return null;
     }
 
     /**
-     * Depth-first walk of one annotation's own meta-annotation tree. {@code visited} is shared
-     * across the whole {@link #find} call (not reset per branch) so a cyclic meta-annotation
-     * graph terminates instead of overflowing the stack (T-03-03) -- once an annotation type has
-     * been visited anywhere in this call, it is never walked into again.
+     * Breadth-first search of one class's annotation graph for the occurrence of
+     * {@code annotationType} nearest the class: its directly declared annotations are distance 0,
+     * their meta-annotations distance 1, and so on; at equal distance, declaration order breaks
+     * the tie. A directly declared target therefore always wins over a meta-present one, whatever
+     * order the annotations are written in -- Spring's rule that a locally declared annotation
+     * "always take[s] precedence over and effectively hide[s]" a meta-present one
+     * ({@code @ComponentScan} javadoc).
+     * <p>
+     * {@code visited} is shared across the whole {@link #find} call (not reset per branch) so a
+     * cyclic meta-annotation graph terminates (T-03-03): once an annotation type has been
+     * enqueued anywhere in this call, it is never enqueued again. Every annotation type the
+     * search enters is passed to {@link #validateAliases}, as the depth-first walk did.
+     *
+     * @return the nearest occurrence with its parent chain, or {@code null} if this class's own
+     *         annotation graph holds none
      */
-    private static <A extends Annotation> A search(Annotation current, Class<A> annotationType,
-            Set<Class<? extends Annotation>> visited, List<Annotation> ancestors) {
-        Class<? extends Annotation> currentType = current.annotationType();
-        if (isJavaLangAnnotation(currentType) || !visited.add(currentType)) {
-            return null;
+    private static Occurrence findNearest(Class<?> clazz, Class<? extends Annotation> annotationType,
+            Set<Class<? extends Annotation>> visited) {
+        Deque<Occurrence> queue = new ArrayDeque<>();
+        for (Annotation direct : clazz.getAnnotations()) {
+            enqueue(queue, direct, null, visited);
         }
-        validateAliases(currentType);
-        if (currentType.equals(annotationType)) {
-            return merge(current, annotationType, ancestors);
-        }
-        ancestors.add(current);
-        try {
-            for (Annotation meta : currentType.getAnnotations()) {
-                A found = search(meta, annotationType, visited, ancestors);
-                if (found != null) {
-                    return found;
-                }
+        while (!queue.isEmpty()) {
+            Occurrence occurrence = queue.removeFirst();
+            Class<? extends Annotation> type = occurrence.annotation.annotationType();
+            validateAliases(type);
+            if (type.equals(annotationType)) {
+                return occurrence;
             }
-            return null;
-        } finally {
-            ancestors.remove(ancestors.size() - 1);
+            for (Annotation meta : type.getAnnotations()) {
+                enqueue(queue, meta, occurrence, visited);
+            }
+        }
+        return null;
+    }
+
+    private static void enqueue(Deque<Occurrence> queue, Annotation annotation, Occurrence parent,
+            Set<Class<? extends Annotation>> visited) {
+        Class<? extends Annotation> type = annotation.annotationType();
+        if (isJavaLangAnnotation(type) || !visited.add(type)) {
+            return;
+        }
+        queue.addLast(new Occurrence(annotation, parent));
+    }
+
+    /** One annotation instance reached by {@link #findNearest}, linked to the one it was found on. */
+    private static final class Occurrence {
+        private final Annotation annotation;
+        private final Occurrence parent;
+
+        private Occurrence(Annotation annotation, Occurrence parent) {
+            this.annotation = annotation;
+            this.parent = parent;
+        }
+
+        /**
+         * The annotations on the path from the class down to (excluding) this occurrence,
+         * outermost (declared on the class) first.
+         */
+        private List<Annotation> ancestors() {
+            List<Annotation> path = new ArrayList<>();
+            for (Occurrence current = parent; current != null; current = current.parent) {
+                path.add(0, current.annotation);
+            }
+            return path;
         }
     }
 
     /**
      * Compute the merged attribute view of {@code found} (the located instance of
-     * {@code annotationType}), applying any {@code @AliasFor} override declared by an annotation
-     * on the path from the scanned class down to {@code found} -- including {@code found} itself,
-     * for a within-annotation mutual alias.
+     * {@code annotationType}) by walking the selected path top-down (decision P-10): from the
+     * annotation declared on the class, through every intermediate meta-annotation, down to
+     * {@code found}. Each level's candidate values are computed by
+     * {@link #collectOverrideCandidates} from the levels above it, so a value set on an outer
+     * annotation travels through every intermediate {@code @AliasFor} to the final target (C46):
+     * an attribute aliasing {@code @UltiToolsModule.scanBasePackages} reaches
+     * {@code @ComponentScan.basePackages}, because {@code scanBasePackages} itself aliases it.
+     * <p>
+     * Every candidate records the annotation instance that declared it and that instance's
+     * distance from the class. For each attribute of {@code found} the rule is (C47):
+     * <ul>
+     * <li>if one annotation instance supplies two different values -- through a mutual alias, or
+     * through two routes that reach the same final attribute -- the declaration contradicts
+     * itself and is refused with a {@link ContainerException} naming that instance's annotation;</li>
+     * <li>otherwise the value declared by the instance nearest the class wins. Values from
+     * different instances never conflict: an outer override beats a value an inner
+     * meta-annotation declares.</li>
+     * </ul>
+     * This is Spring's {@code @AliasFor} contract: an explicit meta-annotation attribute override
+     * wins over the meta-annotation's own value, the lower level (closer to the annotated element)
+     * wins, and only an attribute and its alias declared with different values in one annotation
+     * is an error.
      */
     private static <A extends Annotation> A merge(Annotation found, Class<A> annotationType,
             List<Annotation> ancestors) {
-        Map<String, List<Candidate>> candidatesByAttribute = new LinkedHashMap<>();
-        for (Annotation ancestor : ancestors) {
-            collectOverrideCandidates(ancestor, annotationType, candidatesByAttribute);
+        List<Annotation> path = new ArrayList<>(ancestors);
+        path.add(found);
+        List<Map<String, List<Candidate>>> levels = new ArrayList<>(path.size());
+        for (int level = 0; level < path.size(); level++) {
+            levels.add(collectOverrideCandidates(path, level, levels));
         }
-        collectOverrideCandidates(found, annotationType, candidatesByAttribute);
+        Map<String, List<Candidate>> candidatesByAttribute = levels.get(levels.size() - 1);
 
         A typed = annotationType.cast(found);
         if (candidatesByAttribute.isEmpty()) {
@@ -252,79 +333,136 @@ public final class MergedAnnotationResolver {
 
         Map<String, Object> overrides = new LinkedHashMap<>();
         for (Map.Entry<String, List<Candidate>> entry : candidatesByAttribute.entrySet()) {
-            List<Candidate> candidates = entry.getValue();
-            Object agreedValue = candidates.get(0).value;
-            for (Candidate candidate : candidates) {
-                if (!Objects.deepEquals(candidate.value, agreedValue)) {
-                    String sourceAttributes = candidates.stream()
-                            .map(c -> c.sourceMethodName)
-                            .distinct()
-                            .reduce((a, b) -> a + "', '" + b)
-                            .orElse("");
-                    throw ContainerException.malformedAliasFor(annotationType, entry.getKey(),
-                            "conflicting @AliasFor values for target attribute '" + entry.getKey()
-                                    + "' from '" + sourceAttributes + "' on a single concrete instance");
-                }
+            Object value = resolveNearest(annotationType, entry.getKey(), entry.getValue());
+            if (value != null) { // never null for a non-empty list; an attribute is never overridden to null
+                overrides.put(entry.getKey(), value);
             }
-            overrides.put(entry.getKey(), agreedValue);
         }
         return createProxy(typed, annotationType, overrides);
     }
 
     /**
-     * Collect every attribute-value override {@code dInstance} contributes towards
-     * {@code target}'s merged view: for each of {@code dInstance}'s own attribute methods
-     * carrying {@code @AliasFor}, if the alias points at {@code target} (explicitly, or via the
-     * {@code Annotation.class} default meaning "within this same annotation") and the method's
-     * value on {@code dInstance} differs from that method's own declared default, it is a
-     * candidate override for the aliased attribute name on {@code target}.
-     * <p>
-     * When {@code dInstance} IS an instance of {@code target} itself, any attribute that
-     * participates in a within-annotation mutual alias also contributes its OWN declared value
-     * as a second candidate for its own attribute name -- otherwise a conflicting pair
-     * ({@code foo=x} aliased to {@code bar}, {@code bar=y} aliased to {@code foo}) would only
-     * ever compare "the other side's value" against itself, and the conflict between {@code x}
-     * and {@code y} would never surface as more than one candidate for the same attribute.
+     * Apply the per-instance conflict rule and nearest-wins rule (see {@link #merge}) to one
+     * attribute's candidates. Each level of the path is exactly one annotation instance, so the
+     * candidates' distance identifies their declaring instance.
      */
-    private static <A extends Annotation> void collectOverrideCandidates(Annotation dInstance, Class<A> target,
-            Map<String, List<Candidate>> out) {
-        Class<? extends Annotation> dType = dInstance.annotationType();
-        Set<String> withinSelfParticipants = new HashSet<>();
+    private static Object resolveNearest(Class<? extends Annotation> annotationType, String attribute,
+            List<Candidate> candidates) {
+        Candidate nearest = null;
+        for (Candidate candidate : candidates) {
+            for (Candidate other : candidates) {
+                if (other.distance == candidate.distance && !Objects.deepEquals(other.value, candidate.value)) {
+                    throw selfContradiction(annotationType, attribute, candidate, candidates);
+                }
+            }
+            if (nearest == null || candidate.distance < nearest.distance) {
+                nearest = candidate;
+            }
+        }
+        return nearest == null ? null : nearest.value;
+    }
 
-        for (Method method : dType.getDeclaredMethods()) {
+    private static ContainerException selfContradiction(Class<? extends Annotation> annotationType,
+            String attribute, Candidate conflicting, List<Candidate> candidates) {
+        String sourceAttributes = candidates.stream()
+                .filter(c -> c.distance == conflicting.distance)
+                .map(c -> c.sourceMethodName)
+                .distinct()
+                .reduce((a, b) -> a + "', '" + b)
+                .orElse("");
+        return ContainerException.malformedAliasFor(conflicting.origin.annotationType(),
+                conflicting.sourceMethodName,
+                "conflicting @AliasFor values for target attribute '" + attribute + "' of "
+                        + annotationType.getName() + " from '" + sourceAttributes
+                        + "' on a single concrete instance");
+    }
+
+    /**
+     * Collect the candidate values for every attribute of the annotation at {@code path[level]},
+     * given the already-computed candidates of every level above it ({@code outerLevels}, indexed
+     * by distance from the class):
+     * <ol>
+     * <li><b>Forwarded.</b> For each outer level, each attribute declaring
+     * {@code @AliasFor(annotation = <this level's type>)} forwards all of its own candidates to
+     * the aliased attribute here. A forwarded candidate keeps the instance that originally
+     * declared it -- an intermediate annotation only relays it.</li>
+     * <li><b>Own.</b> Each of this annotation's attributes that declares {@code @AliasFor} and
+     * whose value differs from its declared default is a candidate for itself, declared by this
+     * instance. (Attributes taking part in no alias never need a candidate: the merged view falls
+     * back to the found instance for them.)</li>
+     * <li><b>Mirrored.</b> Two attributes of this annotation that alias each other (a
+     * within-annotation mutual alias) share one candidate list, so {@code foo=x} with
+     * {@code bar=y} surfaces as two different values for the same attribute.</li>
+     * </ol>
+     * Candidates are only collected here, never reconciled: a list may hold values from several
+     * instances. {@link #merge} applies the rule once, at the found annotation -- two different
+     * values from one instance are refused, otherwise the instance nearest the class wins --
+     * which is Spring's {@code @AliasFor} contract (explicit meta-annotation overrides,
+     * transitive aliases, lower level wins, same-annotation contradiction is an error).
+     */
+    private static Map<String, List<Candidate>> collectOverrideCandidates(List<Annotation> path, int level,
+            List<Map<String, List<Candidate>>> outerLevels) {
+        Annotation instance = path.get(level);
+        Class<? extends Annotation> type = instance.annotationType();
+        Map<String, List<Candidate>> out = new LinkedHashMap<>();
+
+        for (int outer = 0; outer < level; outer++) {
+            Map<String, List<Candidate>> outerCandidates = outerLevels.get(outer);
+            for (Method method : path.get(outer).annotationType().getDeclaredMethods()) {
+                AliasFor aliasFor = method.getAnnotation(AliasFor.class);
+                List<Candidate> forwarded = outerCandidates.get(method.getName());
+                if (aliasFor == null || forwarded == null || !type.equals(aliasFor.annotation())) {
+                    continue;
+                }
+                addAllDistinct(out.computeIfAbsent(resolveAttributeName(aliasFor, method), key -> new ArrayList<>()),
+                        forwarded);
+            }
+        }
+
+        List<String[]> mirrors = new ArrayList<>();
+        for (Method method : type.getDeclaredMethods()) {
             AliasFor aliasFor = method.getAnnotation(AliasFor.class);
             if (aliasFor == null) {
                 continue;
             }
+            addCandidateIfNonDefault(out, method, instance, level);
             Class<? extends Annotation> aliasTargetType =
-                    aliasFor.annotation() == Annotation.class ? dType : aliasFor.annotation();
-            if (!aliasTargetType.equals(target)) {
-                continue;
-            }
-            String targetAttribute = resolveAttributeName(aliasFor, method);
-            addCandidateIfNonDefault(out, targetAttribute, method, dInstance, dType);
-            if (dType.equals(target)) {
-                withinSelfParticipants.add(targetAttribute);
-                withinSelfParticipants.add(method.getName());
+                    aliasFor.annotation() == Annotation.class ? type : aliasFor.annotation();
+            if (aliasTargetType.equals(type)) {
+                mirrors.add(new String[] {method.getName(), resolveAttributeName(aliasFor, method)});
             }
         }
 
-        if (dType.equals(target) && !withinSelfParticipants.isEmpty()) {
-            for (Method method : dType.getDeclaredMethods()) {
-                if (withinSelfParticipants.contains(method.getName())) {
-                    addCandidateIfNonDefault(out, method.getName(), method, dInstance, dType);
-                }
+        for (String[] mirror : mirrors) {
+            List<Candidate> shared = new ArrayList<>();
+            addAllDistinct(shared, out.get(mirror[0]));
+            addAllDistinct(shared, out.get(mirror[1]));
+            if (!shared.isEmpty()) {
+                out.put(mirror[0], shared);
+                out.put(mirror[1], new ArrayList<>(shared));
+            }
+        }
+        return out;
+    }
+
+    private static void addAllDistinct(List<Candidate> target, List<Candidate> source) {
+        if (source == null) {
+            return;
+        }
+        for (Candidate candidate : source) {
+            if (!target.contains(candidate)) {
+                target.add(candidate);
             }
         }
     }
 
-    private static void addCandidateIfNonDefault(Map<String, List<Candidate>> out, String attributeName,
-            Method sourceMethod, Annotation sourceInstance, Class<? extends Annotation> sourceType) {
+    private static void addCandidateIfNonDefault(Map<String, List<Candidate>> out, Method sourceMethod,
+            Annotation sourceInstance, int distance) {
         Object value = invokeAttribute(sourceMethod, sourceInstance);
         Object defaultValue = sourceMethod.getDefaultValue();
         if (!Objects.deepEquals(value, defaultValue)) {
-            out.computeIfAbsent(attributeName, key -> new ArrayList<>())
-                    .add(new Candidate(value, sourceType, sourceMethod.getName()));
+            out.computeIfAbsent(sourceMethod.getName(), key -> new ArrayList<>())
+                    .add(new Candidate(value, sourceInstance, distance, sourceMethod.getName()));
         }
     }
 
@@ -387,15 +525,22 @@ public final class MergedAnnotationResolver {
                 new Class<?>[] {annotationType}, handler);
     }
 
-    /** One candidate value for a target attribute, plus where it came from (for conflict messages). */
+    /**
+     * One candidate value for an attribute, with the annotation instance that declared it, that
+     * instance's distance from the class (0 = declared on the class), and the declaring attribute's
+     * name (for conflict messages). A value forwarded through intermediate aliases keeps its
+     * original declaring instance, distance and attribute name.
+     */
     private static final class Candidate {
         private final Object value;
-        private final Class<? extends Annotation> sourceType;
+        private final Annotation origin;
+        private final int distance;
         private final String sourceMethodName;
 
-        private Candidate(Object value, Class<? extends Annotation> sourceType, String sourceMethodName) {
+        private Candidate(Object value, Annotation origin, int distance, String sourceMethodName) {
             this.value = value;
-            this.sourceType = sourceType;
+            this.origin = origin;
+            this.distance = distance;
             this.sourceMethodName = sourceMethodName;
         }
     }

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.JarURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.List;
@@ -31,6 +32,28 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Component scanner to find and register components.
+ * <p>
+ * A scan runs in two phases (decision P-07). The discovery phase walks every requested package,
+ * registers a bean definition for each component class, and only collects {@code @Configuration}
+ * classes, in discovery order. The assembly phase then instantiates each collected configuration
+ * class and its {@code @Bean} products. So no configuration class or {@code @Bean} product is
+ * created before the last definition of the requested packages is registered, and a product that
+ * needs a {@code @Service} loads whatever order the JAR or directory lists the two classes in
+ * (C51). This mirrors Spring, which registers every bean definition, {@code @Bean} methods
+ * included, before it creates singletons. Between two {@code @Bean} products the order is still
+ * the discovery order: one product that needs another product declared later is a documented
+ * limitation of {@code registerSingleton} (WR-02), unchanged here.
+ * <p>
+ * A configuration class that fails to link while the assembly phase creates it (a
+ * {@link LinkageError}: a failing static initializer, a {@code @Bean} signature naming a class of a
+ * missing optional plugin) is skipped exactly like a class that fails to load during discovery: a
+ * {@code WARNING} naming it, and the class counted in the package's one {@code SEVERE} summary,
+ * which is therefore emitted after the assembly phase. The rest of the module still loads.
+ * <p>
+ * A configuration class the container already created when the assembly phase reaches it (a
+ * configuration class assembled before it needed it, or the same class discovered through two
+ * overlapping requested packages) is reused, not constructed again; its {@code @Bean} methods run
+ * once.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // IoC container invokes @Bean factory methods -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
@@ -44,22 +67,55 @@ public class ComponentScanner {
     }
 
     /**
-     * Scan packages for components.
+     * Scan packages for components: first discover every requested package, registering the
+     * component definitions it holds, then create the {@code @Configuration} classes found, in
+     * discovery order, together with their {@code @Bean} products.
      *
      * @param basePackages packages to scan
      */
     public void scanPackages(String... basePackages) {
-        for (String basePackage : basePackages) {
-            scanPackage(basePackage);
+        List<Class<?>> configurationClasses = new ArrayList<>();
+        // The package each configuration class was discovered in, by index: its diagnostics name.
+        List<String> configurationPackages = new ArrayList<>();
+        List<String> discovered = new ArrayList<>();
+        try {
+            for (String basePackage : basePackages) {
+                discovered.add(basePackage);
+                discoverPackage(basePackage, configurationClasses);
+                while (configurationPackages.size() < configurationClasses.size()) {
+                    configurationPackages.add(basePackage);
+                }
+            }
+            for (int i = 0; i < configurationClasses.size(); i++) {
+                assembleConfiguration(configurationClasses.get(i), configurationPackages.get(i));
+            }
+        } finally {
+            // D-19: one SEVERE summary per requested package, if (and only if) a class of it was
+            // skipped, in discovery or in assembly. A healthy scan never invokes the emitter at
+            // all -- see ModuleScanDiagnostics' own class javadoc.
+            for (String basePackage : discovered) {
+                ModuleScanDiagnostics.emitSummary(basePackage);
+            }
         }
     }
 
     /**
-     * Scan a single package for components.
+     * Scan a single package for components; the same two phases as {@link #scanPackages}.
      *
      * @param basePackage package to scan
      */
     public void scanPackage(String basePackage) {
+        scanPackages(basePackage);
+    }
+
+    /**
+     * The discovery phase for one package: registers its component definitions and appends its
+     * {@code @Configuration} classes to {@code configurationClasses}, creating none of them.
+     *
+     * @param basePackage          package to scan
+     * @param configurationClasses collects the configuration classes found, in discovery order
+     */
+    private void discoverPackage(String basePackage, List<Class<?>> configurationClasses) {
         try {
             ClassLoader classLoader = container.getClassLoader() != null ?
                 container.getClassLoader() : UltiTools.getJavaPluginClassLoader();
@@ -73,11 +129,11 @@ public class ComponentScanner {
                     // Classes on disk (development mode)
                     File directory = new File(resource.getFile());
                     if (directory.exists()) {
-                        scanDirectory(directory, basePackage, classLoader, basePackage);
+                        scanDirectory(directory, basePackage, classLoader, basePackage, configurationClasses);
                     }
                 } else if ("jar".equals(protocol)) {
                     // Classes inside a JAR file (production mode)
-                    scanJar(resource, basePackage, classLoader);
+                    scanJar(resource, basePackage, classLoader, configurationClasses);
                 }
             }
         } catch (ContainerException | ConfigurationException e) {
@@ -92,18 +148,16 @@ public class ComponentScanner {
             // failure - logged at WARNING and never forwarded to the UltiPanel dashboard
             // (D-24).
             LOGGER.log(Level.WARNING, "Failed to scan package: " + basePackage, e);
-        } finally {
-            // D-19: one SEVERE summary for this basePackage's scan, if (and only if) either
-            // catch block below recorded a skipped class into the accumulator. A healthy scan
-            // never invokes the emitter at all -- see ModuleScanDiagnostics' own class javadoc.
-            ModuleScanDiagnostics.emitSummary(basePackage);
         }
+        // The D-19 summary for this package is emitted by scanPackages, after the assembly phase,
+        // so a configuration class skipped there is counted in the same one summary.
     }
 
     /**
      * Scan inside a JAR file for class files.
      */
-    private void scanJar(URL resource, String basePackage, ClassLoader classLoader) {
+    private void scanJar(URL resource, String basePackage, ClassLoader classLoader,
+            List<Class<?>> configurationClasses) {
         try {
             JarURLConnection jarConnection = (JarURLConnection) resource.openConnection();
             JarFile jarFile = jarConnection.getJarFile();
@@ -120,7 +174,7 @@ public class ComponentScanner {
                             .replace(".class", "");
                     try {
                         Class<?> clazz = classLoader.loadClass(className);
-                        processClass(clazz);
+                        processClass(clazz, configurationClasses);
                     } catch (ClassNotFoundException | LinkageError e) {
                         // Skip-and-continue: the rest of the package still registers (D-25,
                         // D-26). LinkageError covers NoClassDefFoundError,
@@ -129,7 +183,7 @@ public class ComponentScanner {
                         // class behaves identically on both scan modes. D-19 escalates the
                         // diagnostics without overturning D-25/D-26's skip-and-continue: the
                         // WARNING stays exactly as it was, and this class is also accumulated so
-                        // scanPackage's finally block can emit one loud, named summary for the
+                        // scanPackages' finally block can emit one loud, named summary for the
                         // whole module once its scan finishes.
                         ModuleScanDiagnostics.recordSkippedClass(basePackage, className, e);
                         LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
@@ -152,20 +206,23 @@ public class ComponentScanner {
      * @param moduleName  the D-19 diagnostic identifier for this scan -- fixed at the original
      *                    {@code basePackage} for the whole recursion, deliberately NOT the
      *                    per-recursion {@code packageName} above, so a class three subdirectories
-     *                    deep is still attributed to the same module {@code scanPackage}'s
+     *                    deep is still attributed to the same module {@code scanPackages}'
      *                    {@code finally} block will emit a summary for
+     * @param configurationClasses collects the configuration classes found, in discovery order
      */
-    private void scanDirectory(File directory, String packageName, ClassLoader classLoader, String moduleName) {
+    private void scanDirectory(File directory, String packageName, ClassLoader classLoader, String moduleName,
+            List<Class<?>> configurationClasses) {
         File[] files = directory.listFiles();
         if (files != null) {
             for (File file : files) {
                 if (file.isDirectory()) {
-                    scanDirectory(file, packageName + "." + file.getName(), classLoader, moduleName);
+                    scanDirectory(file, packageName + "." + file.getName(), classLoader, moduleName,
+                            configurationClasses);
                 } else if (file.getName().endsWith(".class")) {
                     String className = packageName + "." + file.getName().substring(0, file.getName().length() - 6);
                     try {
                         Class<?> clazz = classLoader.loadClass(className);
-                        processClass(clazz);
+                        processClass(clazz, configurationClasses);
                     } catch (ClassNotFoundException | LinkageError e) {
                         // Skip-and-continue: the rest of the package still registers (D-25,
                         // D-26). Same union as scanJar's per-class catch above - the same
@@ -193,8 +250,15 @@ public class ComponentScanner {
      * throws today are the {@code @Final} contract violation below and a malformed
      * {@code @AliasFor} declaration surfaced by {@link MergedAnnotationResolver} during the same
      * scan; neither may ever be caught by a blanket handler.
+     * <p>
+     * A {@code @Configuration} class is only collected here; {@link #scanPackages} creates it and
+     * its {@code @Bean} products after every requested package has been discovered (P-07). A
+     * {@link ContainerException} from that later step still aborts the scan the same way.
+     *
+     * @param clazz                the discovered class
+     * @param configurationClasses collects the configuration classes found, in discovery order
      */
-    private void processClass(Class<?> clazz) {
+    private void processClass(Class<?> clazz, List<Class<?>> configurationClasses) {
         // The @Final contract is checked before anything else, including @ConditionalOnConfig:
         // extending a sealed type is a violation whether or not this particular class ends up
         // registered. See issue #190.
@@ -217,9 +281,9 @@ public class ComponentScanner {
             registerComponent(clazz);
         }
 
-        // Check for configuration annotations
+        // Configuration classes are created after discovery, in discovery order (P-07)
         if (clazz.isAnnotationPresent(Configuration.class)) {
-            registerConfiguration(clazz);
+            configurationClasses.add(clazz);
         }
     }
 
@@ -263,9 +327,10 @@ public class ComponentScanner {
      * regardless of what its annotation tree resolves to. {@code @UltiToolsModule} composes
      * {@code @Configuration}, which is itself meta-annotated {@code @Component} -- so an
      * unqualified whole-tree walk would also match every module's own main class. That class is
-     * already constructed and registered as a singleton by {@code PluginManager} *before* this
-     * scan ever runs (its `plugin.yml` metadata has to be read first), under its raw
-     * {@code Class.getSimpleName()} as the bean name. {@code ComponentScanner}'s own bean-naming
+     * already constructed by {@code PluginManager} *before* this scan runs (its `plugin.yml`
+     * metadata has to be read first), and {@code PluginManager} registers it as a singleton right
+     * *after* the scan, under its raw {@code Class.getSimpleName()} as the bean name.
+     * {@code ComponentScanner}'s own bean-naming
      * convention decapitalizes that same name, so the two registrations never collide, and
      * treating the module main class as a scannable {@code @Component} would register a *second*
      * bean definition for it under the decapitalized name -- which {@code preInstantiateSingletons}
@@ -316,13 +381,55 @@ public class ComponentScanner {
     }
 
     /**
-     * Register a configuration class.
+     * The assembly phase for one configuration class: {@link #registerConfiguration(Class)}, with
+     * the per-class isolation the discovery walk gives a class that fails to load (D-25, D-26). A
+     * {@link LinkageError} skips this class only: the same {@code WARNING}, and the class recorded
+     * for its package's D-19 summary. Any other failure keeps its existing handling.
+     *
+     * @param configurationClass the configuration class to create
+     * @param basePackage        the requested package it was discovered in
+     */
+    private void assembleConfiguration(Class<?> configurationClass, String basePackage) {
+        try {
+            registerConfiguration(configurationClass);
+        } catch (LinkageError e) {
+            String className = configurationClass.getName();
+            ModuleScanDiagnostics.recordSkippedClass(basePackage, className, e);
+            LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
+        }
+    }
+
+    /**
+     * Register a configuration class: create it and run its {@code @Bean} methods, or reuse the
+     * instance the container already holds.
+     * <p>
+     * A {@code @Configuration} class is also a component definition, so the container can create it
+     * before the assembly phase reaches it: when a configuration class assembled earlier needs it,
+     * directly or through a service. A class discovered once per requested package, when the
+     * packages overlap, reaches this method twice. In both cases the instance the container
+     * already holds under the class's bean name is the one every holder has and the one closed
+     * with the container, so it is reused: constructing another would run the constructor and
+     * {@code @PostConstruct} again, replace the instance its earlier holders keep, and leave the
+     * first one never destroyed. Its {@code @Bean} methods run once per instance, recorded by the
+     * container.
      */
     private void registerConfiguration(Class<?> clazz) {
         try {
             String beanName = getBeanName(clazz);
-            Object configInstance = clazz.getDeclaredConstructor().newInstance();
-            container.registerSingleton(beanName, configInstance);
+            Object configInstance = container.getSingleton(beanName, false);
+            if (!clazz.isInstance(configInstance)) {
+                configInstance = clazz.getDeclaredConstructor().newInstance();
+                container.registerSingleton(beanName, configInstance);
+                Object registered = container.getSingleton(beanName, false);
+                if (registered != null && registered != configInstance) {
+                    // A BeanPostProcessor substituted the instance; it is the one a later
+                    // discovery of this class finds.
+                    container.markConfigurationAssembled(registered);
+                }
+            }
+            if (!container.markConfigurationAssembled(configInstance)) {
+                return;
+            }
 
             // Process @Bean methods
             for (Method method : clazz.getDeclaredMethods()) {
