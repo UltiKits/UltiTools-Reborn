@@ -17,6 +17,13 @@
 #   bash module-release.sh --repo UltiKits/<Module> --identify-string <exact catalogue identity> \
 #     --default-branch master --maintainer <login> --jar-prefix <ArtifactId> --helper-sha256 <hex>
 #
+# GitHub and the UltiCloud catalogue are reconciled independently. An identical draft is published; an
+# identical release that is already published (its tag at the accepted commit) is left alone; a missing
+# catalogue version is uploaded from the same staged JAR; these exact bytes already served at level 630 are
+# left alone. Different bytes on either side, a served version that is not lower than this one, a moved
+# default branch, a changed draft or a concurrent run refuse. A transport, authentication or server error is
+# an error, never evidence that something is absent. The CLI is installed only when an upload is needed.
+#
 # The accepted JAR is <jar-prefix>-<version>.jar exactly; its manifest is
 # <jar-prefix>-<version>-release-manifest.json. Environment: the GitHub Actions runner variables, GH_TOKEN
 # (the job token, contents: write) and ULTIKITS_TOKEN (the existing catalogue secret).
@@ -38,7 +45,7 @@ INSTALLED="none" OBSERVED_METADATA="" NO_LEVEL_BEFORE="" NO_LEVEL_AFTER="" LEVEL
 IN_INPUTS_SHA256="" IN_SOURCE_HEAD="" IN_VERSION="" IN_DRAFT_RELEASE_ID="" IN_MANIFEST_SHA256=""
 IN_ARTIFACT_SHA256="" IN_PACKAGE_METADATA_SHA256="" IN_INSTALLATION_ID="" IN_RUN_ID="" IN_RUN_ATTEMPT=""
 IN_EVENT="" IN_TRIGGERING_ACTOR=""
-WORK=""
+WORK="" LOCK=""
 
 usage() {
     echo "usage: module-release.sh --repo OWNER/NAME --identify-string ID --default-branch BRANCH" \
@@ -87,6 +94,8 @@ write_receipt() {
 finish() {
     local status=$?
     write_receipt
+    echo "RESULT=$RESULT RELEASE_OUTCOME=$RELEASE_OUTCOME CATALOGUE_OUTCOME=$CATALOGUE_OUTCOME"
+    [ -z "$LOCK" ] || rmdir "$LOCK" 2>/dev/null
     [ -z "$WORK" ] || rm -rf "$WORK"
     exit "$status"
 }
@@ -166,6 +175,16 @@ echo "installation $IN_INSTALLATION_ID, run $IN_RUN_ID attempt $IN_RUN_ATTEMPT"
 JAR_NAME="$JAR_PREFIX-$IN_VERSION.jar"
 MANIFEST_NAME="$JAR_PREFIX-$IN_VERSION-release-manifest.json"
 
+# One publication per repository and version on this runner; the workflow's concurrency group serializes
+# runs across runners, and every write is preceded by a fresh remote comparison.
+lock_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ultitools-module-release-locks"
+mkdir -p "$lock_root" || refuse workspace "no lock directory"
+if mkdir "$lock_root/${REPO//\//_}-$IN_VERSION.lock" 2>/dev/null; then
+    LOCK="$lock_root/${REPO//\//_}-$IN_VERSION.lock"
+else
+    refuse concurrent_run "another publication of $REPO $IN_VERSION is in progress"
+fi
+
 # The checked-out default branch must carry exactly the accepted product tree.
 head_sha="$(git -C "$CHECKOUT" rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" || refuse checkout_unreadable "no checkout"
 [ -z "${GITHUB_SHA:-}" ] || [ "$GITHUB_SHA" = "$head_sha" ] || refuse checkout_not_run_head "the checkout is not the run commit"
@@ -178,14 +197,38 @@ head_tree="$(git -C "$CHECKOUT" rev-parse --verify 'HEAD^{tree}' 2>/dev/null)"
 [ -n "$source_tree" ] && [ "$source_tree" = "$head_tree" ] \
     || refuse product_tree_differs "the default branch tree is not the accepted product tree"
 
-# The dispatched draft release and its two staged assets.
-gh api "repos/$REPO/releases/$IN_DRAFT_RELEASE_ID" > "$WORK/release.json" 2>/dev/null \
-    || refuse github_unavailable "the dispatched release could not be read"
-helper module-release-state --release-json "$WORK/release.json" --draft-release-id "$IN_DRAFT_RELEASE_ID" \
-    --source-head "$IN_SOURCE_HEAD" --version "$IN_VERSION" --jar-name "$JAR_NAME" > "$WORK/release.env" \
-    || refuse release_state "the dispatched release is not the accepted draft"
-read_kv "$WORK/release.env"
+# Observe the remote state; the same reads run again immediately before each write.
+observe_github() {  # $1: suffix for the scratch files
+    gh api "repos/$REPO/releases/$IN_DRAFT_RELEASE_ID" > "$WORK/release$1.json" 2>/dev/null \
+        || refuse github_unavailable "the dispatched release could not be read"
+    helper module-release-state --release-json "$WORK/release$1.json" --draft-release-id "$IN_DRAFT_RELEASE_ID" \
+        --source-head "$IN_SOURCE_HEAD" --version "$IN_VERSION" --jar-name "$JAR_NAME" > "$WORK/release$1.env" \
+        || refuse release_state "the dispatched release is not the accepted draft"
+    gh api "repos/$REPO/git/matching-refs/tags/v$IN_VERSION" > "$WORK/tags$1.json" 2>/dev/null \
+        || refuse github_unavailable "tags could not be read"
+    helper module-ref-sha --refs-json "$WORK/tags$1.json" --ref "refs/tags/v$IN_VERSION" --allow-absent \
+        > "$WORK/tag$1.env" || refuse tag_unreadable "the version tag does not resolve to one commit"
+    gh api "repos/$REPO/git/ref/heads/$DEFAULT_BRANCH" > "$WORK/head$1.json" 2>/dev/null \
+        || refuse github_unavailable "the default branch could not be read"
+    helper module-ref-sha --refs-json "$WORK/head$1.json" --ref "refs/heads/$DEFAULT_BRANCH" > "$WORK/head$1.env" \
+        || refuse github_unavailable "the default branch does not resolve"
+    read_kv "$WORK/head$1.env"
+    [ "$IN_SHA" = "$head_sha" ] || refuse stale_default_head "the default branch moved after this run started"
+    read_kv "$WORK/tag$1.env"
+    TAG_SHA="$IN_SHA"
+    read_kv "$WORK/release$1.env"
+}
+
+# The dispatched draft release, its tag and the default branch; then its two staged assets.
+observe_github ""
 RELEASE_BEFORE="$IN_RELEASE_STATE"
+if [ "$TAG_SHA" != "absent" ] && [ "$TAG_SHA" != "$IN_SOURCE_HEAD" ]; then
+    refuse tag_elsewhere "tag v$IN_VERSION already names another commit"
+fi
+if [ "$RELEASE_BEFORE" = "published" ] && [ "$TAG_SHA" != "$IN_SOURCE_HEAD" ]; then
+    refuse tag_elsewhere "the published release's tag does not resolve to the accepted commit"
+fi
+first_assets_view="$(grep -v '^RELEASE_STATE=' "$WORK/release.env")"
 for pair in "$IN_JAR_ASSET_ID:$JAR_NAME" "$IN_MANIFEST_ASSET_ID:$MANIFEST_NAME"; do
     gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/${pair%%:*}" \
         > "$WORK/assets/${pair#*:}" 2>/dev/null || refuse github_unavailable "a staged asset could not be downloaded"
@@ -197,76 +240,93 @@ helper module-verify-assets --assets-dir "$WORK/assets" --jar-name "$JAR_NAME" -
 read_kv "$WORK/assets.env"
 [ "$IN_PRODUCT_TREE" = "$source_tree" ] || refuse product_tree_mismatch "the manifest names another product tree"
 
-gh api "repos/$REPO/git/matching-refs/tags/v$IN_VERSION" > "$WORK/tags.json" 2>/dev/null \
-    || refuse github_unavailable "tags could not be read"
-helper module-ref-sha --refs-json "$WORK/tags.json" --ref "refs/tags/v$IN_VERSION" --allow-absent > "$WORK/tag.env" \
-    || refuse tag_unreadable "the version tag does not resolve to one commit"
-read_kv "$WORK/tag.env"
-if [ "$IN_SHA" != "absent" ] && [ "$IN_SHA" != "$IN_SOURCE_HEAD" ]; then
-    refuse tag_elsewhere "tag v$IN_VERSION already names another commit"
-fi
-if [ "$RELEASE_BEFORE" = "published" ]; then
-    refuse release_already_published "the dispatched release is no longer a draft"
-fi
 
-gh api "repos/$REPO/git/ref/heads/$DEFAULT_BRANCH" > "$WORK/head.json" 2>/dev/null \
-    || refuse github_unavailable "the default branch could not be read"
-helper module-ref-sha --refs-json "$WORK/head.json" --ref "refs/heads/$DEFAULT_BRANCH" > "$WORK/head.env" \
-    || refuse github_unavailable "the default branch does not resolve"
-read_kv "$WORK/head.env"
-[ "$IN_SHA" = "$head_sha" ] || refuse stale_default_head "the default branch moved after this run started"
-
-# The catalogue: the version must be absent and greater than every served version.
-helper catalogue-state --identify-string "$IDENTIFY" --version "$IN_VERSION" \
-    --artifact-sha256 "$IN_ARTIFACT_SHA256" > "$WORK/catalogue.env" || refuse catalogue_state "the catalogue refuses this version"
-read_kv "$WORK/catalogue.env"
+observe_catalogue() {  # $1: suffix
+    helper catalogue-state --identify-string "$IDENTIFY" --version "$IN_VERSION" \
+        --artifact-sha256 "$IN_ARTIFACT_SHA256" > "$WORK/catalogue$1.env" \
+        || refuse catalogue_state "the catalogue refuses this version"
+    read_kv "$WORK/catalogue$1.env"
+}
+observe_catalogue ""
 CATALOGUE_BEFORE="$IN_CATALOGUE_STATE"
 NO_LEVEL_BEFORE="$IN_NO_LEVEL_LATEST"
-[ -n "${ULTIKITS_TOKEN:-}" ] || refuse catalogue_token_missing "ULTIKITS_TOKEN is not set"
+NO_LEVEL_AFTER="$IN_NO_LEVEL_LATEST"
+LEVEL630_AFTER="$IN_LEVEL630_LATEST"
 
-# Fresh exact metadata immediately before the single installation.
-OBSERVED_METADATA="$(helper package-metadata digest)" || refuse registry_unavailable "registry metadata could not be read"
-[[ "$OBSERVED_METADATA" =~ ^[0-9a-f]{64}$ ]] || refuse registry_unavailable "registry metadata digest is malformed"
-[ "$OBSERVED_METADATA" = "$IN_PACKAGE_METADATA_SHA256" ] \
-    || refuse package_metadata_changed "fresh $PACKAGE_SPEC metadata differs from the verified snapshot"
-npm install --global --ignore-scripts --no-audit --no-fund "$PACKAGE_SPEC" > /dev/null 2>&1 \
-    || refuse cli_install_failed "the pinned CLI did not install"
-INSTALLED="$PACKAGE_SPEC"
-[ "$(ultikits --version 2>/dev/null)" = "$PACKAGE_VERSION" ] || refuse cli_version_mismatch "the installed CLI is not $PACKAGE_VERSION"
-cli_help="$(ultikits publish --help 2>/dev/null)" || refuse cli_flags_unknown "the CLI publish help is unavailable"
-[[ "$cli_help" == *"--module-version"* && "$cli_help" == *"--id "* ]] \
-    || refuse cli_flags_unknown "the installed CLI does not document --id and --module-version"
+need_release=0 need_catalogue=0
+[ "$RELEASE_BEFORE" = "draft" ] && need_release=1
+[ "$CATALOGUE_BEFORE" = "absent" ] && need_catalogue=1
+[ "$need_release" -eq 1 ] || RELEASE_OUTCOME="already-published"
+[ "$need_catalogue" -eq 1 ] || CATALOGUE_OUTCOME="already-served"
+echo "github: $RELEASE_BEFORE; catalogue: $CATALOGUE_BEFORE"
+
+if [ "$need_catalogue" -eq 1 ]; then
+    [ -n "${ULTIKITS_TOKEN:-}" ] || refuse catalogue_token_missing "ULTIKITS_TOKEN is not set"
+    # Fresh exact metadata immediately before the single installation.
+    OBSERVED_METADATA="$(helper package-metadata digest)" || refuse registry_unavailable "registry metadata could not be read"
+    [[ "$OBSERVED_METADATA" =~ ^[0-9a-f]{64}$ ]] || refuse registry_unavailable "registry metadata digest is malformed"
+    [ "$OBSERVED_METADATA" = "$IN_PACKAGE_METADATA_SHA256" ] \
+        || refuse package_metadata_changed "fresh $PACKAGE_SPEC metadata differs from the verified snapshot"
+    npm install --global --ignore-scripts --no-audit --no-fund "$PACKAGE_SPEC" > /dev/null 2>&1 \
+        || refuse cli_install_failed "the pinned CLI did not install"
+    INSTALLED="$PACKAGE_SPEC"
+    [ "$(ultikits --version 2>/dev/null)" = "$PACKAGE_VERSION" ] || refuse cli_version_mismatch "the installed CLI is not $PACKAGE_VERSION"
+    cli_help="$(ultikits publish --help 2>/dev/null)" || refuse cli_flags_unknown "the CLI publish help is unavailable"
+    [[ "$cli_help" == *"--module-version"* && "$cli_help" == *"--id "* ]] \
+        || refuse cli_flags_unknown "the installed CLI does not document --id and --module-version"
+fi
+
+# Compare the remote again immediately before a write: the same release assets in the expected state,
+# the tag absent or at the accepted commit, and the default head unchanged.
+recheck_github() {  # $1: label, $2: expected release state
+    observe_github "-$1"
+    [ "$(grep -v '^RELEASE_STATE=' "$WORK/release-$1.env")" = "$first_assets_view" ] \
+        || refuse remote_changed "the release assets changed since they were verified"
+    [ "$IN_RELEASE_STATE" = "$2" ] || refuse remote_changed "the release is no longer $2"
+    [ "$TAG_SHA" = "absent" ] || [ "$TAG_SHA" = "$IN_SOURCE_HEAD" ] \
+        || refuse tag_elsewhere "tag v$IN_VERSION now names another commit"
+}
 
 # ------------------------------------------------------------------------------------- writes
 
-WROTE=1
-gh api -X PATCH "repos/$REPO/releases/$IN_DRAFT_RELEASE_ID" -F draft=false > "$WORK/published.json" 2>/dev/null \
-    || { RELEASE_OUTCOME="error"; refuse release_publish_failed "the draft could not be published"; }
-gh api "repos/$REPO/releases/$IN_DRAFT_RELEASE_ID" > "$WORK/release-after.json" 2>/dev/null \
-    || { RELEASE_OUTCOME="error"; refuse github_unavailable "the published release could not be read back"; }
-helper module-release-state --release-json "$WORK/release-after.json" --draft-release-id "$IN_DRAFT_RELEASE_ID" \
-    --source-head "$IN_SOURCE_HEAD" --version "$IN_VERSION" --jar-name "$JAR_NAME" > "$WORK/release-after.env" \
-    || { RELEASE_OUTCOME="error"; refuse release_readback "the published release differs"; }
-read_kv "$WORK/release-after.env"
-[ "$IN_RELEASE_STATE" = "published" ] || { RELEASE_OUTCOME="error"; refuse release_readback "the release is still a draft"; }
-RELEASE_OUTCOME="published"
-echo "github: release v$IN_VERSION published from the accepted draft"
-
-changelog_args=()
-if [ -n "$CHANGELOG_FILE" ]; then
-    changelog_args=(--changelog "$(cat -- "$CHANGELOG_FILE")")
+if [ "$need_release" -eq 1 ]; then
+    recheck_github before-release draft
+    WROTE=1
+    gh api -X PATCH "repos/$REPO/releases/$IN_DRAFT_RELEASE_ID" -F draft=false > "$WORK/published.json" 2>/dev/null \
+        || { RELEASE_OUTCOME="error"; refuse release_publish_failed "the draft could not be published"; }
+    observe_github "-after"
+    if [ "$IN_RELEASE_STATE" != "published" ] || [ "$TAG_SHA" != "$IN_SOURCE_HEAD" ]; then
+        RELEASE_OUTCOME="error"
+        refuse release_readback "the release is not published at the accepted commit"
+    fi
+    RELEASE_OUTCOME="published"
+    echo "github: release v$IN_VERSION published from the accepted draft"
 fi
-( cd "$CHECKOUT" && ultikits publish "$WORK/assets/$JAR_NAME" --id "$IDENTIFY" --module-version "$IN_VERSION" \
-    --yes "${changelog_args[@]}" > /dev/null 2>&1 ) \
-    || { CATALOGUE_OUTCOME="error"; refuse catalogue_upload_failed "the catalogue upload failed"; }
-helper catalogue-readback --identify-string "$IDENTIFY" --version "$IN_VERSION" \
-    --artifact-sha256 "$IN_ARTIFACT_SHA256" --no-level-before "$NO_LEVEL_BEFORE" > "$WORK/readback.env" \
-    || { CATALOGUE_OUTCOME="error"; refuse catalogue_readback "the catalogue does not serve the accepted bytes"; }
-read_kv "$WORK/readback.env"
-LEVEL630_AFTER="$IN_LEVEL630_LATEST"
-NO_LEVEL_AFTER="$IN_NO_LEVEL_LATEST"
-CATALOGUE_OUTCOME="uploaded"
-echo "catalogue: $IDENTIFY $IN_VERSION served at level 630; no-level latest unchanged"
+
+if [ "$need_catalogue" -eq 1 ]; then
+    recheck_github before-catalogue "$([ "$need_release" -eq 1 ] && echo published || echo "$RELEASE_BEFORE")"
+    observe_catalogue "-before-upload"
+    if [ "$IN_CATALOGUE_STATE" = "absent" ]; then
+        changelog_args=()
+        if [ -n "$CHANGELOG_FILE" ]; then
+            changelog_args=(--changelog "$(cat -- "$CHANGELOG_FILE")")
+        fi
+        WROTE=1
+        ( cd "$CHECKOUT" && ultikits publish "$WORK/assets/$JAR_NAME" --id "$IDENTIFY" \
+            --module-version "$IN_VERSION" --yes "${changelog_args[@]}" > /dev/null 2>&1 ) \
+            || { CATALOGUE_OUTCOME="error"; refuse catalogue_upload_failed "the catalogue upload failed"; }
+        CATALOGUE_OUTCOME="uploaded"
+    else
+        CATALOGUE_OUTCOME="already-served"
+    fi
+    helper catalogue-readback --identify-string "$IDENTIFY" --version "$IN_VERSION" \
+        --artifact-sha256 "$IN_ARTIFACT_SHA256" --no-level-before "$NO_LEVEL_BEFORE" > "$WORK/readback.env" \
+        || { CATALOGUE_OUTCOME="error"; refuse catalogue_readback "the catalogue does not serve the accepted bytes"; }
+    read_kv "$WORK/readback.env"
+    LEVEL630_AFTER="$IN_LEVEL630_LATEST"
+    NO_LEVEL_AFTER="$IN_NO_LEVEL_LATEST"
+    echo "catalogue: $IDENTIFY $IN_VERSION served at level 630; no-level latest unchanged"
+fi
 
 RESULT="complete"
 exit 0

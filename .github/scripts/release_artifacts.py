@@ -1240,9 +1240,16 @@ def cmd_catalogue_state(args):
                 sys.stderr.write("refused: catalogue_version_not_comparable: a served version cannot be ordered\n")
                 return 1
             if served == args.version:
-                sys.stderr.write("refused: catalogue_version_occupied: %s is already served\n" % args.version)
-                return 1
-            if parsed >= target:
+                # An equal version is never permission to overwrite. It is accepted only as the recovery of a
+                # completed upload: these exact accepted bytes already served at level 630.
+                status, link = catalogue_call("/plugin/%d/%s/download?apiLevel=630&minApiLevel=630"
+                                              % (plugin_id, urllib.parse.quote(args.version, safe="")))
+                if status != 200 or download_sha256(link) != args.artifact_sha256:
+                    sys.stderr.write("refused: catalogue_version_occupied: %s is served with other bytes or at "
+                                     "another level\n" % args.version)
+                    return 1
+                state = "identical"
+            elif parsed >= target:
                 sys.stderr.write("refused: version_not_greater: a served version is not below %s\n" % args.version)
                 return 1
         no_level = catalogue_latest(plugin_id, False)
