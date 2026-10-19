@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -38,6 +39,7 @@ import com.ultikits.ultitools.annotations.Isolation;
 import com.ultikits.ultitools.annotations.Propagation;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.ultikits.ultitools.manager.DataSourceTransactionManager;
 import com.zaxxer.hikari.HikariConfig;
@@ -653,10 +655,10 @@ class TransactionInterceptorTest {
         }
 
         @Test
-        @DisplayName("Should join existing transaction if present")
+        @DisplayName("Should join an existing transaction in a participation scope: begin(), proceed(), commit() "
+                + "(Question 9 A)")
         void shouldJoinExistingTransactionIfPresent() throws Throwable {
             Method method = PropagationService.class.getMethod("supports");
-            Object target = new PropagationService();
 
             when(mockInvocation.getMethod()).thenReturn(method);
             when(mockInvocation.proceed()).thenReturn("supports");
@@ -665,7 +667,11 @@ class TransactionInterceptorTest {
             Object result = interceptor.invoke(mockInvocation);
 
             assertEquals("supports", result);
-            verify(transactionManager, never()).begin();
+            InOrder order = inOrder(transactionManager, mockInvocation);
+            order.verify(transactionManager).begin();
+            order.verify(mockInvocation).proceed();
+            order.verify(transactionManager).commit();
+            verify(transactionManager, never()).rollback();
         }
     }
 
@@ -688,10 +694,10 @@ class TransactionInterceptorTest {
         }
 
         @Test
-        @DisplayName("Should proceed when transaction exists")
+        @DisplayName("Should proceed when transaction exists, in a participation scope: begin(), proceed(), "
+                + "commit() (Question 9 A)")
         void shouldProceedWhenTransactionExists() throws Throwable {
             Method method = PropagationService.class.getMethod("mandatory");
-            Object target = new PropagationService();
 
             when(mockInvocation.getMethod()).thenReturn(method);
             when(mockInvocation.proceed()).thenReturn("mandatory");
@@ -700,6 +706,161 @@ class TransactionInterceptorTest {
             Object result = interceptor.invoke(mockInvocation);
 
             assertEquals("mandatory", result);
+            InOrder order = inOrder(transactionManager, mockInvocation);
+            order.verify(transactionManager).begin();
+            order.verify(mockInvocation).proceed();
+            order.verify(transactionManager).commit();
+            verify(transactionManager, never()).rollback();
+        }
+    }
+
+    /**
+     * Spring's regular participation (20.4-DECISIONS.md Question 9 A): REQUIRED, SUPPORTS and
+     * MANDATORY inside an active transaction run in a begin/commit-or-rollback scope; the joined
+     * method's own rules decide between rollback() (the mark) and commit().
+     */
+    @Nested
+    @DisplayName("Participation in an existing transaction (20.4-13)")
+    class ParticipationTests {
+
+        @Test
+        @DisplayName("A joined SUPPORTS failure calls rollback() once and never commit()")
+        void joinedSupportsFailureMarksTheTransaction() throws Throwable {
+            Method method = PropagationService.class.getMethod("supports");
+            IllegalStateException failure = new IllegalStateException("joined SUPPORTS body fails");
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenThrow(failure);
+            when(transactionManager.hasActiveTransaction()).thenReturn(true);
+
+            Throwable thrown = assertThrows(IllegalStateException.class, () -> interceptor.invoke(mockInvocation));
+
+            assertSame(failure, thrown);
+            verify(transactionManager, times(1)).rollback();
+            verify(transactionManager, never()).commit();
+        }
+
+        @Test
+        @DisplayName("A joined MANDATORY failure calls rollback() once and never commit()")
+        void joinedMandatoryFailureMarksTheTransaction() throws Throwable {
+            Method method = PropagationService.class.getMethod("mandatory");
+            IllegalStateException failure = new IllegalStateException("joined MANDATORY body fails");
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenThrow(failure);
+            when(transactionManager.hasActiveTransaction()).thenReturn(true);
+
+            Throwable thrown = assertThrows(IllegalStateException.class, () -> interceptor.invoke(mockInvocation));
+
+            assertSame(failure, thrown);
+            verify(transactionManager, times(1)).rollback();
+            verify(transactionManager, never()).commit();
+        }
+
+        @Test
+        @DisplayName("A joined failure its rules do not accept (noRollbackFor) calls commit() once, never rollback(), "
+                + "and rethrows the same instance")
+        void joinedFailureItsRulesDoNotAcceptLeavesTheTransactionCommittable() throws Throwable {
+            Method method = RollbackService.class.getMethod("noRollbackFor");
+            IllegalStateException failure = new IllegalStateException("joined body fails with a noRollbackFor type");
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenThrow(failure);
+            when(transactionManager.hasActiveTransaction()).thenReturn(true);
+
+            Throwable thrown = assertThrows(IllegalStateException.class, () -> interceptor.invoke(mockInvocation));
+
+            assertSame(failure, thrown);
+            verify(transactionManager, times(1)).commit();
+            verify(transactionManager, never()).rollback();
+        }
+
+        @Test
+        @DisplayName("A participating rollback() that throws leaves the body's exception rethrown, with the rollback "
+                + "failure as suppressed")
+        void participatingRollbackFailureIsSuppressedOnTheBodyException() throws Throwable {
+            Method method = PropagationService.class.getMethod("required");
+            IllegalStateException failure = new IllegalStateException("joined body fails");
+            IllegalStateException rollbackFailure = new IllegalStateException("rollback fails");
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenThrow(failure);
+            when(transactionManager.hasActiveTransaction()).thenReturn(true);
+            doThrow(rollbackFailure).when(transactionManager).rollback();
+
+            Throwable thrown = assertThrows(IllegalStateException.class, () -> interceptor.invoke(mockInvocation));
+
+            assertSame(failure, thrown);
+            assertThat(thrown.getSuppressed()).containsExactly(rollbackFailure);
+        }
+
+        @Test
+        @DisplayName("A joined method's isolation, read-only and timeout settings are not applied")
+        void joinedMethodSettingsAreNotApplied() throws Throwable {
+            Method method = TransactionSettingsService.class.getMethod("withAllSettings");
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenReturn("all_settings");
+            when(transactionManager.hasActiveTransaction()).thenReturn(true);
+
+            Object result = interceptor.invoke(mockInvocation);
+
+            assertEquals("all_settings", result);
+            verify(transactionManager, never()).setIsolationLevel(anyInt());
+            verify(transactionManager, never()).setReadOnly(anyBoolean());
+            verify(transactionManager, never()).setTimeout(anyInt());
+        }
+    }
+
+    /**
+     * The outermost commit runs after the body's failure handler, as in Spring's
+     * {@code TransactionAspectSupport.invokeWithinTransaction}: a failing commit is never followed by
+     * a second completion call, and an application exception it overrides stays attached as
+     * suppressed (20.4-13).
+     */
+    @Nested
+    @DisplayName("A new transaction completes once (20.4-13)")
+    class SingleCompletionTests {
+
+        @Test
+        @DisplayName("A commit() that throws UnexpectedRollbackException reaches the caller; commit() ran once and "
+                + "rollback() never")
+        void failingCommitIsNotFollowedByARollback() throws Throwable {
+            Method method = PropagationService.class.getMethod("required");
+            UnexpectedRollbackException commitFailure = UnexpectedRollbackException.markedBy("a test scope");
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenReturn("required");
+            when(transactionManager.hasActiveTransaction()).thenReturn(false);
+            doThrow(commitFailure).when(transactionManager).commit();
+
+            Throwable thrown = assertThrows(UnexpectedRollbackException.class,
+                    () -> interceptor.invoke(mockInvocation));
+
+            assertSame(commitFailure, thrown);
+            verify(transactionManager, times(1)).commit();
+            verify(transactionManager, never()).rollback();
+        }
+
+        @Test
+        @DisplayName("A commit-despite-exception whose commit() throws reaches the caller as the commit failure, "
+                + "carrying the body's exception as suppressed; rollback() never runs")
+        void commitDespiteExceptionFailureKeepsTheBodyExceptionAsSuppressed() throws Throwable {
+            Method method = RollbackService.class.getMethod("noRollbackFor");
+            IllegalStateException bodyFailure = new IllegalStateException("body fails with a noRollbackFor type");
+            UnexpectedRollbackException commitFailure = UnexpectedRollbackException.markedBy("a test scope");
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenThrow(bodyFailure);
+            when(transactionManager.hasActiveTransaction()).thenReturn(false);
+            doThrow(commitFailure).when(transactionManager).commit();
+
+            Throwable thrown = assertThrows(UnexpectedRollbackException.class,
+                    () -> interceptor.invoke(mockInvocation));
+
+            assertSame(commitFailure, thrown);
+            assertThat(thrown.getSuppressed()).containsExactly(bodyFailure);
+            verify(transactionManager, never()).rollback();
         }
     }
 

@@ -15,6 +15,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -35,6 +39,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
+import com.ultikits.ultitools.annotations.Propagation;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -130,6 +135,164 @@ class JdbcTransactionalParticipationTest {
         assertNoTransactionLeft(backend);
     }
 
+    // ===== SUPPORTS and MANDATORY participate like REQUIRED =====
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("A joined SUPPORTS method's failure caught by the outer marks the transaction: UnexpectedRollbackException, nothing stored")
+    void joinedSupportsFailureCaughtByTheOuterMarksIt(String backendName) {
+        Backend backend = backend(backendName);
+
+        Throwable thrown = catchThrowable(backend.bean::outerCatchesAJoinedSupportsFailure);
+
+        assertThat(thrown).as("%s: the outer call", backend.label)
+                .isInstanceOf(UnexpectedRollbackException.class);
+        assertStored(backend, 0, 0);
+        assertNoTransactionLeft(backend);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("A joined MANDATORY method's failure caught by the outer marks the transaction: UnexpectedRollbackException, nothing stored")
+    void joinedMandatoryFailureCaughtByTheOuterMarksIt(String backendName) {
+        Backend backend = backend(backendName);
+
+        Throwable thrown = catchThrowable(backend.bean::outerCatchesAJoinedMandatoryFailure);
+
+        assertThat(thrown).as("%s: the outer call", backend.label)
+                .isInstanceOf(UnexpectedRollbackException.class);
+        assertStored(backend, 0, 0);
+        assertNoTransactionLeft(backend);
+    }
+
+    // ===== The joined method's own rules decide the mark =====
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("A joined failure matching the inner method's rollbackFor (a checked exception) marks the transaction: UnexpectedRollbackException, nothing stored")
+    void joinedFailureMatchingTheInnerRollbackForMarksIt(String backendName) {
+        Backend backend = backend(backendName);
+
+        Throwable thrown = catchThrowable(backend.bean::outerCatchesAMatchingRollbackForFailure);
+
+        assertThat(thrown).as("%s: the outer call", backend.label)
+                .isInstanceOf(UnexpectedRollbackException.class);
+        assertStored(backend, 0, 0);
+        assertNoTransactionLeft(backend);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("A joined checked failure under the default rules leaves the transaction committable: both writes stored")
+    void joinedCheckedFailureUnderDefaultRulesLeavesItCommittable(String backendName) {
+        Backend backend = backend(backendName);
+
+        backend.bean.outerCatchesACheckedFailureUnderDefaultRules();
+
+        assertStored(backend, 1, 1);
+        assertNoTransactionLeft(backend);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("A joined failure listed in the inner method's noRollbackFor leaves the transaction committable: both writes stored")
+    void joinedFailureInTheInnerNoRollbackForLeavesItCommittable(String backendName) {
+        Backend backend = backend(backendName);
+
+        backend.bean.outerCatchesANoRollbackForFailure();
+
+        assertStored(backend, 1, 1);
+        assertNoTransactionLeft(backend);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("A joined failure that leaves the outer method rolls everything back and reaches the caller as the original exception instance")
+    void joinedFailureLeavingTheOuterRollsBackWithTheOriginalException(String backendName) {
+        Backend backend = backend(backendName);
+
+        Throwable thrown = catchThrowable(backend.bean::outerLetsAJoinedFailureLeave);
+
+        assertThat(thrown).as("%s: the caller receives the inner method's exception itself", backend.label)
+                .isNotNull().isSameAs(backend.bean.lastInnerFailure);
+        assertStored(backend, 0, 0);
+        assertNoTransactionLeft(backend);
+    }
+
+    // ===== The outermost commit completes once =====
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("The outer commit of a marked transaction completes it once: no 'no active transaction' WARNING after a joined failure or a failed nested transaction(...) scope")
+    void outerCommitOfAMarkedTransactionCompletesOnce(String backendName) {
+        Backend backend = backend(backendName);
+
+        List<String> afterJoinedFailure = warningsDuring(
+                () -> catchThrowable(backend.bean::outerCatchesAJoinedRequiredFailure));
+        assertThat(afterJoinedFailure).as("%s: manager WARNINGs after a joined failure", backend.label)
+                .noneMatch(message -> message.contains("no active"));
+        assertStored(backend, 0, 0);
+        assertNoTransactionLeft(backend);
+
+        Throwable[] nested = new Throwable[1];
+        List<String> afterNestedScope = warningsDuring(
+                () -> nested[0] = catchThrowable(backend.bean::outerSwallowsAFailedNestedScope));
+        assertThat(nested[0]).as("%s: the outer call after a failed nested scope", backend.label)
+                .isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(afterNestedScope).as("%s: manager WARNINGs after a failed nested scope", backend.label)
+                .noneMatch(message -> message.contains("no active"));
+        assertStored(backend, 0, 0);
+        assertNoTransactionLeft(backend);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("An outer method whose own noRollbackFor commits despite its exception after a mark: the caller receives UnexpectedRollbackException with that exception as suppressed")
+    void outerThatCommitsDespiteItsOwnExceptionAfterAMarkThrowsUnexpectedRollback(String backendName) {
+        Backend backend = backend(backendName);
+
+        Throwable thrown = catchThrowable(backend.bean::outerCommitsDespiteItsOwnExceptionAfterAMark);
+
+        assertThat(thrown).as("%s: the outer call", backend.label)
+                .isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(thrown.getSuppressed()).as("%s: the outer method's own exception, kept as suppressed", backend.label)
+                .containsExactly(backend.bean.lastOuterFailure);
+        assertStored(backend, 0, 0);
+        assertNoTransactionLeft(backend);
+    }
+
+    // ===== Without a transaction =====
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("SUPPORTS without a transaction marks nothing: its write stays and a following REQUIRED call commits normally")
+    void supportsWithoutATransactionMarksNothing(String backendName) {
+        Backend backend = backend(backendName);
+
+        Throwable thrown = catchThrowable(backend.bean::innerSupportsWritesThenFails);
+        assertThat(thrown).as("%s: the SUPPORTS method's own failure", backend.label)
+                .isInstanceOf(IllegalStateException.class);
+
+        backend.bean.requiredWritesAlone();
+
+        assertStored(backend, 1, 1);
+        assertNoTransactionLeft(backend);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {SQLITE, MYSQL})
+    @DisplayName("MANDATORY without a transaction is still refused and does not run")
+    void mandatoryWithoutATransactionIsRefused(String backendName) {
+        Backend backend = backend(backendName);
+
+        Throwable thrown = catchThrowable(backend.bean::innerMandatoryWritesThenFails);
+
+        assertThat(thrown).as("%s: the refusal", backend.label)
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("MANDATORY");
+        assertStored(backend, 0, 0);
+        assertNoTransactionLeft(backend);
+    }
+
     // ===== Helpers =====
 
     /**
@@ -161,6 +324,44 @@ class JdbcTransactionalParticipationTest {
                 .as("%s: a transaction is still active on the test thread", backend.label).isFalse();
         assertThat(backend.manager.getTransactionDepth())
                 .as("%s: the test thread's transaction depth", backend.label).isZero();
+    }
+
+    /**
+     * Runs {@code action} while a handler on {@link DataSourceTransactionManager}'s logger records
+     * the messages of WARNING and more severe records; the handler is removed afterwards.
+     */
+    private static List<String> warningsDuring(Runnable action) {
+        Logger logger = Logger.getLogger(DataSourceTransactionManager.class.getName());
+        WarningRecorder recorder = new WarningRecorder();
+        logger.addHandler(recorder);
+        try {
+            action.run();
+        } finally {
+            logger.removeHandler(recorder);
+        }
+        return recorder.messages;
+    }
+
+    /** Records the messages of WARNING and more severe log records. */
+    static final class WarningRecorder extends Handler {
+        final List<String> messages = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void publish(LogRecord logRecord) {
+            if (logRecord.getLevel().intValue() >= Level.WARNING.intValue()) {
+                messages.add(String.valueOf(logRecord.getMessage()));
+            }
+        }
+
+        @Override
+        public void flush() {
+            // nothing buffered
+        }
+
+        @Override
+        public void close() {
+            // nothing to release
+        }
     }
 
     private static <T extends BaseDataEntity<String>> AbstractRelationalDataOperator<T> operator(
@@ -289,6 +490,15 @@ class JdbcTransactionalParticipationTest {
         }
     }
 
+    /** A checked exception the fixtures throw. */
+    public static class CheckedTestException extends Exception {
+        private static final long serialVersionUID = 1L;
+
+        public CheckedTestException(String message) {
+            super(message);
+        }
+    }
+
     /**
      * The participation fixture. Declared at the top level of the test (not inside a
      * {@code @Nested} class) for the Java 8 reason {@code TransactionInterceptorTest} documents on
@@ -298,6 +508,8 @@ class JdbcTransactionalParticipationTest {
     public static class ParticipationBean {
         volatile DataOperator<ParticipationRow> rows;
         volatile DataOperator<ParticipationOther> others;
+        volatile RuntimeException lastInnerFailure;
+        volatile IllegalArgumentException lastOuterFailure;
 
         // --- REQUIRED ---
 
@@ -326,6 +538,139 @@ class JdbcTransactionalParticipationTest {
         @Transactional
         public void innerRequiredWrites() {
             others.insert(new ParticipationOther(INNER_ID, "inner"));
+        }
+
+        @Transactional
+        public void requiredWritesAlone() {
+            rows.insert(new ParticipationRow(OUTER_ID, "alone"));
+        }
+
+        // --- SUPPORTS and MANDATORY ---
+
+        @Transactional
+        public void outerCatchesAJoinedSupportsFailure() {
+            rows.insert(new ParticipationRow(OUTER_ID, "outer"));
+            try {
+                innerSupportsWritesThenFails();
+            } catch (IllegalStateException expected) {
+                // The joined SUPPORTS method's failure has marked the transaction rollback-only.
+            }
+        }
+
+        @Transactional(propagation = Propagation.SUPPORTS)
+        public void innerSupportsWritesThenFails() {
+            others.insert(new ParticipationOther(INNER_ID, "inner"));
+            throw new IllegalStateException("the SUPPORTS method fails");
+        }
+
+        @Transactional
+        public void outerCatchesAJoinedMandatoryFailure() {
+            rows.insert(new ParticipationRow(OUTER_ID, "outer"));
+            try {
+                innerMandatoryWritesThenFails();
+            } catch (IllegalStateException expected) {
+                // The joined MANDATORY method's failure has marked the transaction rollback-only.
+            }
+        }
+
+        @Transactional(propagation = Propagation.MANDATORY)
+        public void innerMandatoryWritesThenFails() {
+            others.insert(new ParticipationOther(INNER_ID, "inner"));
+            throw new IllegalStateException("the MANDATORY method fails");
+        }
+
+        // --- The joined method's own rules ---
+
+        @Transactional
+        public void outerCatchesAMatchingRollbackForFailure() {
+            rows.insert(new ParticipationRow(OUTER_ID, "outer"));
+            try {
+                innerRollbackForWritesThenFails();
+            } catch (CheckedTestException expected) {
+                // rollbackFor accepts it: the transaction is marked rollback-only.
+            }
+        }
+
+        @Transactional(rollbackFor = CheckedTestException.class)
+        public void innerRollbackForWritesThenFails() throws CheckedTestException {
+            others.insert(new ParticipationOther(INNER_ID, "inner"));
+            throw new CheckedTestException("the joined method fails with a rollbackFor type");
+        }
+
+        @Transactional
+        public void outerCatchesACheckedFailureUnderDefaultRules() {
+            rows.insert(new ParticipationRow(OUTER_ID, "outer"));
+            try {
+                innerDefaultRulesWritesThenFailsChecked();
+            } catch (CheckedTestException expected) {
+                // The default rules do not accept a checked exception: the transaction stays committable.
+            }
+        }
+
+        @Transactional
+        public void innerDefaultRulesWritesThenFailsChecked() throws CheckedTestException {
+            others.insert(new ParticipationOther(INNER_ID, "inner"));
+            throw new CheckedTestException("the joined method fails with a checked exception");
+        }
+
+        @Transactional
+        public void outerCatchesANoRollbackForFailure() {
+            rows.insert(new ParticipationRow(OUTER_ID, "outer"));
+            try {
+                innerNoRollbackForWritesThenFails();
+            } catch (IllegalStateException expected) {
+                // noRollbackFor lists it: the transaction stays committable.
+            }
+        }
+
+        @Transactional(noRollbackFor = IllegalStateException.class)
+        public void innerNoRollbackForWritesThenFails() {
+            others.insert(new ParticipationOther(INNER_ID, "inner"));
+            throw new IllegalStateException("the joined method fails with a noRollbackFor type");
+        }
+
+        // --- A failure that leaves the outer method ---
+
+        @Transactional
+        public void outerLetsAJoinedFailureLeave() {
+            rows.insert(new ParticipationRow(OUTER_ID, "outer"));
+            innerRequiredWritesThenFailsRemembered();
+        }
+
+        @Transactional
+        public void innerRequiredWritesThenFailsRemembered() {
+            others.insert(new ParticipationOther(INNER_ID, "inner"));
+            IllegalStateException failure = new IllegalStateException("the joined method fails and its caller does not catch");
+            lastInnerFailure = failure;
+            throw failure;
+        }
+
+        // --- The outermost commit ---
+
+        @Transactional
+        public void outerSwallowsAFailedNestedScope() {
+            rows.insert(new ParticipationRow(OUTER_ID, "outer"));
+            try {
+                rows.transaction((Runnable) () -> {
+                    others.insert(new ParticipationOther(INNER_ID, "inner"));
+                    throw new IllegalStateException("the nested transaction(...) scope fails");
+                });
+            } catch (IllegalStateException expected) {
+                // The nested scope's rollback has marked the transaction rollback-only.
+            }
+        }
+
+        @Transactional(noRollbackFor = IllegalArgumentException.class)
+        public void outerCommitsDespiteItsOwnExceptionAfterAMark() {
+            rows.insert(new ParticipationRow(OUTER_ID, "outer"));
+            try {
+                innerRequiredWritesThenFails();
+            } catch (IllegalStateException expected) {
+                // The joined method's failure has marked the transaction rollback-only.
+            }
+            IllegalArgumentException failure = new IllegalArgumentException("the outer method fails after the mark");
+            lastOuterFailure = failure;
+            throw failure;
         }
     }
 }

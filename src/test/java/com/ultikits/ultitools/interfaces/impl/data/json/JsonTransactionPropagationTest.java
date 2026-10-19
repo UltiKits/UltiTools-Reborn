@@ -18,6 +18,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -334,6 +337,149 @@ class JsonTransactionPropagationTest {
         }
     }
 
+    // ===== The participant rule (20.4-13) =====
+
+    /**
+     * 20.4-DECISIONS.md Question 9, answer A: every propagation that joins an active transaction
+     * (REQUIRED, SUPPORTS, MANDATORY) participates the way Spring's does by default
+     * ({@code globalRollbackOnParticipationFailure = true}). The joined method's own rollback rules
+     * decide whether its exception marks the transaction rollback-only; the outermost commit then
+     * rolls back once and throws {@link UnexpectedRollbackException}.
+     */
+    @Nested
+    @DisplayName("The participant rule: a joined method's failure its rules accept marks the whole transaction (20.4-13)")
+    class ParticipationRuleTests {
+
+        @Test
+        @DisplayName("A joined SUPPORTS method's failure caught by the outer marks the transaction: UnexpectedRollbackException, nothing applied")
+        void joinedSupportsFailureCaughtByTheOuterMarksIt() {
+            Throwable thrown = catchThrowable(bean::prOuterCatchesAJoinedSupportsFailure);
+
+            assertThat(thrown).as("the outer commit").isInstanceOf(UnexpectedRollbackException.class);
+            assertThat(rows.getById("pr-sup-outer")).as("the outer method's write").isNull();
+            assertThat(others.getById("pr-sup-inner")).as("the failed SUPPORTS method's write").isNull();
+            assertThat(commitRecords()).isZero();
+            assertNothingLeftBehind();
+        }
+
+        @Test
+        @DisplayName("A joined MANDATORY method's failure caught by the outer marks the transaction: UnexpectedRollbackException, nothing applied")
+        void joinedMandatoryFailureCaughtByTheOuterMarksIt() {
+            Throwable thrown = catchThrowable(bean::prOuterCatchesAJoinedMandatoryFailure);
+
+            assertThat(thrown).as("the outer commit").isInstanceOf(UnexpectedRollbackException.class);
+            assertThat(rows.getById("pr-man-outer")).as("the outer method's write").isNull();
+            assertThat(others.getById("pr-man-inner")).as("the failed MANDATORY method's write").isNull();
+            assertThat(commitRecords()).isZero();
+            assertNothingLeftBehind();
+        }
+
+        @Test
+        @DisplayName("A joined failure matching the inner method's rollbackFor (a checked exception) marks the transaction: UnexpectedRollbackException, nothing applied")
+        void joinedFailureMatchingTheInnerRollbackForMarksIt() {
+            Throwable thrown = catchThrowable(bean::prOuterCatchesAMatchingRollbackForFailure);
+
+            assertThat(thrown).as("the outer commit").isInstanceOf(UnexpectedRollbackException.class);
+            assertThat(rows.getById("pr-rbf-outer")).as("the outer method's write").isNull();
+            assertThat(others.getById("pr-rbf-inner")).as("the failed joined method's write").isNull();
+            assertThat(commitRecords()).isZero();
+            assertNothingLeftBehind();
+        }
+
+        @Test
+        @DisplayName("A joined checked failure under the default rules leaves the transaction committable: both writes applied")
+        void joinedCheckedFailureUnderDefaultRulesLeavesItCommittable() {
+            bean.prOuterCatchesACheckedFailureUnderDefaultRules();
+
+            assertThat(name(rows.getById("pr-chk-outer"))).isEqualTo("outer");
+            assertThat(label(others.getById("pr-chk-inner"))).isEqualTo("inner");
+            assertThat(commitRecords()).isEqualTo(1);
+            assertNothingLeftBehind();
+        }
+
+        @Test
+        @DisplayName("A joined failure listed in the inner method's noRollbackFor leaves the transaction committable: both writes applied")
+        void joinedFailureInTheInnerNoRollbackForLeavesItCommittable() {
+            bean.prOuterCatchesANoRollbackForFailure();
+
+            assertThat(name(rows.getById("pr-nrf-outer"))).isEqualTo("outer");
+            assertThat(label(others.getById("pr-nrf-inner"))).isEqualTo("inner");
+            assertThat(commitRecords()).isEqualTo(1);
+            assertNothingLeftBehind();
+        }
+
+        @Test
+        @DisplayName("A joined failure that leaves the outer method rolls everything back and reaches the caller as the original exception instance")
+        void joinedFailureLeavingTheOuterRollsBackWithTheOriginalException() {
+            Throwable thrown = catchThrowable(bean::prOuterLetsAJoinedFailureLeave);
+
+            assertThat(thrown).as("the caller receives the inner method's exception itself")
+                    .isNotNull().isSameAs(bean.lastInnerFailure);
+            assertThat(rows.getById("pr-leave-outer")).as("the outer method's write").isNull();
+            assertThat(others.getById("pr-leave-inner")).as("the failed joined method's write").isNull();
+            assertThat(commitRecords()).isZero();
+            assertNothingLeftBehind();
+        }
+
+        @Test
+        @DisplayName("The outer commit of a marked transaction completes it once: no 'no active' WARNING after a joined failure or a failed nested transaction(...) scope")
+        void outerCommitOfAMarkedTransactionCompletesOnce() {
+            Throwable[] joined = new Throwable[1];
+            List<String> afterJoinedFailure = warningsDuring(
+                    () -> joined[0] = catchThrowable(bean::prOuterCatchesAJoinedRequiredFailure));
+            assertThat(joined[0]).as("the outer call after a joined failure")
+                    .isInstanceOf(UnexpectedRollbackException.class);
+            assertThat(afterJoinedFailure).as("JSON manager WARNINGs after a joined failure")
+                    .noneMatch(message -> message.contains("no active"));
+            assertNothingLeftBehind();
+
+            Throwable[] nested = new Throwable[1];
+            List<String> afterNestedScope = warningsDuring(
+                    () -> nested[0] = catchThrowable(bean::prOuterSwallowsAFailedNestedScope));
+            assertThat(nested[0]).as("the outer call after a failed nested scope")
+                    .isInstanceOf(UnexpectedRollbackException.class);
+            assertThat(afterNestedScope).as("JSON manager WARNINGs after a failed nested scope")
+                    .noneMatch(message -> message.contains("no active"));
+
+            assertThat(rows.getById("pr-once-joined-outer")).isNull();
+            assertThat(others.getById("pr-once-joined-inner")).isNull();
+            assertThat(rows.getById("pr-once-scope-outer")).isNull();
+            assertThat(others.getById("pr-once-scope-inner")).isNull();
+            assertThat(commitRecords()).isZero();
+            assertNothingLeftBehind();
+        }
+
+        @Test
+        @DisplayName("An outer method whose own noRollbackFor commits despite its exception after a mark: the caller receives UnexpectedRollbackException with that exception as suppressed")
+        void outerThatCommitsDespiteItsOwnExceptionAfterAMarkThrowsUnexpectedRollback() {
+            Throwable thrown = catchThrowable(bean::prOuterCommitsDespiteItsOwnExceptionAfterAMark);
+
+            assertThat(thrown).as("the outer call").isInstanceOf(UnexpectedRollbackException.class);
+            assertThat(thrown.getSuppressed()).as("the outer method's own exception, kept as suppressed")
+                    .containsExactly(bean.lastOuterFailure);
+            assertThat(rows.getById("pr-own-outer")).as("the outer method's write").isNull();
+            assertThat(others.getById("pr-own-inner")).as("the failed joined method's write").isNull();
+            assertThat(commitRecords()).isZero();
+            assertNothingLeftBehind();
+        }
+
+        /**
+         * Runs {@code action} while a handler on {@link JsonTransactionManager}'s logger records
+         * the messages of WARNING and more severe records; the handler is removed afterwards.
+         */
+        private List<String> warningsDuring(Runnable action) {
+            Logger logger = Logger.getLogger(JsonTransactionManager.class.getName());
+            WarningRecorder recorder = new WarningRecorder();
+            logger.addHandler(recorder);
+            try {
+                action.run();
+            } finally {
+                logger.removeHandler(recorder);
+            }
+            return recorder.messages;
+        }
+    }
+
     // ===== Class-level @Transactional =====
 
     @Nested
@@ -406,6 +552,28 @@ class JsonTransactionPropagationTest {
     }
 
     // ===== Helpers =====
+
+    /** Records the messages of WARNING and more severe log records. */
+    static final class WarningRecorder extends Handler {
+        final List<String> messages = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void publish(LogRecord logRecord) {
+            if (logRecord.getLevel().intValue() >= Level.WARNING.intValue()) {
+                messages.add(String.valueOf(logRecord.getMessage()));
+            }
+        }
+
+        @Override
+        public void flush() {
+            // nothing buffered
+        }
+
+        @Override
+        public void close() {
+            // nothing to release
+        }
+    }
 
     /** What a worker thread observed after running an outer method. */
     private final class WorkerResult {
@@ -587,6 +755,15 @@ class JsonTransactionPropagationTest {
         }
     }
 
+    /** A checked exception the participant-rule fixtures throw. */
+    public static class CheckedTestException extends Exception {
+        private static final long serialVersionUID = 1L;
+
+        public CheckedTestException(String message) {
+            super(message);
+        }
+    }
+
     /**
      * The propagation fixture. Every outer method calls its inner method on itself; the proxy is
      * the bean's subclass, so the call is intercepted. The inner methods record what they saw.
@@ -601,6 +778,8 @@ class JsonTransactionPropagationTest {
         volatile JsonTransaction innerTransaction;
         volatile JsonTransaction transactionAfterInner;
         volatile Boolean activeInInner;
+        volatile RuntimeException lastInnerFailure;
+        volatile IllegalArgumentException lastOuterFailure;
 
         private void recordOuter() {
             outerTransaction = manager.currentTransaction();
@@ -659,6 +838,138 @@ class JsonTransactionPropagationTest {
         public void innerRequiredWritesThenFails() {
             others.insert(new PropOther("jf-inner", "inner"));
             throw new IllegalStateException("the joined REQUIRED method fails");
+        }
+
+        // --- The participant rule (20.4-13); every id starts with "pr-" ---
+
+        @Transactional
+        public void prOuterCatchesAJoinedSupportsFailure() {
+            rows.insert(new PropRow("pr-sup-outer", "outer"));
+            try {
+                prInnerSupportsWritesThenFails("pr-sup-inner");
+            } catch (IllegalStateException expected) {
+                // The joined SUPPORTS method's failure has marked the transaction rollback-only.
+            }
+        }
+
+        @Transactional(propagation = Propagation.SUPPORTS)
+        public void prInnerSupportsWritesThenFails(String id) {
+            others.insert(new PropOther(id, "inner"));
+            throw new IllegalStateException("the joined SUPPORTS method fails");
+        }
+
+        @Transactional
+        public void prOuterCatchesAJoinedMandatoryFailure() {
+            rows.insert(new PropRow("pr-man-outer", "outer"));
+            try {
+                prInnerMandatoryWritesThenFails("pr-man-inner");
+            } catch (IllegalStateException expected) {
+                // The joined MANDATORY method's failure has marked the transaction rollback-only.
+            }
+        }
+
+        @Transactional(propagation = Propagation.MANDATORY)
+        public void prInnerMandatoryWritesThenFails(String id) {
+            others.insert(new PropOther(id, "inner"));
+            throw new IllegalStateException("the joined MANDATORY method fails");
+        }
+
+        @Transactional
+        public void prOuterCatchesAMatchingRollbackForFailure() {
+            rows.insert(new PropRow("pr-rbf-outer", "outer"));
+            try {
+                prInnerRollbackForWritesThenFails("pr-rbf-inner");
+            } catch (CheckedTestException expected) {
+                // rollbackFor accepts it: the transaction is marked rollback-only.
+            }
+        }
+
+        @Transactional(rollbackFor = CheckedTestException.class)
+        public void prInnerRollbackForWritesThenFails(String id) throws CheckedTestException {
+            others.insert(new PropOther(id, "inner"));
+            throw new CheckedTestException("the joined method fails with a rollbackFor type");
+        }
+
+        @Transactional
+        public void prOuterCatchesACheckedFailureUnderDefaultRules() {
+            rows.insert(new PropRow("pr-chk-outer", "outer"));
+            try {
+                prInnerDefaultRulesWritesThenFailsChecked("pr-chk-inner");
+            } catch (CheckedTestException expected) {
+                // The default rules do not accept a checked exception: the transaction stays committable.
+            }
+        }
+
+        @Transactional
+        public void prInnerDefaultRulesWritesThenFailsChecked(String id) throws CheckedTestException {
+            others.insert(new PropOther(id, "inner"));
+            throw new CheckedTestException("the joined method fails with a checked exception");
+        }
+
+        @Transactional
+        public void prOuterCatchesANoRollbackForFailure() {
+            rows.insert(new PropRow("pr-nrf-outer", "outer"));
+            try {
+                prInnerNoRollbackForWritesThenFails("pr-nrf-inner");
+            } catch (IllegalStateException expected) {
+                // noRollbackFor lists it: the transaction stays committable.
+            }
+        }
+
+        @Transactional(noRollbackFor = IllegalStateException.class)
+        public void prInnerNoRollbackForWritesThenFails(String id) {
+            others.insert(new PropOther(id, "inner"));
+            throw new IllegalStateException("the joined method fails with a noRollbackFor type");
+        }
+
+        @Transactional
+        public void prOuterLetsAJoinedFailureLeave() {
+            rows.insert(new PropRow("pr-leave-outer", "outer"));
+            prInnerRequiredWritesThenFails("pr-leave-inner");
+        }
+
+        @Transactional
+        public void prOuterCatchesAJoinedRequiredFailure() {
+            rows.insert(new PropRow("pr-once-joined-outer", "outer"));
+            try {
+                prInnerRequiredWritesThenFails("pr-once-joined-inner");
+            } catch (IllegalStateException expected) {
+                // The joined method's failure has marked the transaction rollback-only.
+            }
+        }
+
+        @Transactional
+        public void prInnerRequiredWritesThenFails(String id) {
+            others.insert(new PropOther(id, "inner"));
+            IllegalStateException failure = new IllegalStateException("the joined REQUIRED method fails");
+            lastInnerFailure = failure;
+            throw failure;
+        }
+
+        @Transactional
+        public void prOuterSwallowsAFailedNestedScope() {
+            rows.insert(new PropRow("pr-once-scope-outer", "outer"));
+            try {
+                rows.transaction((Runnable) () -> {
+                    others.insert(new PropOther("pr-once-scope-inner", "inner"));
+                    throw new IllegalStateException("the nested transaction(...) scope fails");
+                });
+            } catch (IllegalStateException expected) {
+                // The nested scope's rollback has marked the transaction rollback-only.
+            }
+        }
+
+        @Transactional(noRollbackFor = IllegalArgumentException.class)
+        public void prOuterCommitsDespiteItsOwnExceptionAfterAMark() {
+            rows.insert(new PropRow("pr-own-outer", "outer"));
+            try {
+                prInnerRequiredWritesThenFails("pr-own-inner");
+            } catch (IllegalStateException expected) {
+                // The joined method's failure has marked the transaction rollback-only.
+            }
+            IllegalArgumentException failure = new IllegalArgumentException("the outer method fails after the mark");
+            lastOuterFailure = failure;
+            throw failure;
         }
 
         // --- REQUIRES_NEW ---
