@@ -57,8 +57,19 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
      * that double ({@code 0.100000001490116}). The text reads back as exactly {@code 0.1f}, but
      * compared with the bound value it is smaller, so {@code LESS 0.1f} would select the row holding
      * {@code 0.1f}. Passing both sides through the same conversion to text compares them the way Java
-     * compares the values as they read back: two different floats differ well before the 15th
-     * significant digit, so the conversion keeps their order and never makes them equal. The inner
+     * compares the values as they read back: two different finite floats differ well before the 15th
+     * significant digit, so the conversion keeps their order and never makes them equal. The
+     * conversion is applied to the value only when it is a number whose {@code double} value is finite
+     * (see {@link #orderedComparisonPlaceholder(Class, Object)}): SQLite writes an infinite value as
+     * the text {@code Inf}, which converts back to 0, and converts text that is not a number to 0. Every
+     * other value (an infinity, NaN, a {@code BigDecimal} or {@code BigInteger} beyond the range of a
+     * double, or any text) is bound as it is and compared with the converted column, as before the
+     * conversion existed. A finite number of another type is converted too, so a whole number or an
+     * exact decimal equal to a stored float, such as 2^60 as a {@code Long}, compares as equal to it.
+     * One case stays approximate: a {@code double} value that agrees with a stored float to 15
+     * significant digits but differs after them compares as equal to it, in a default column and also
+     * in a column declared {@code REAL}, where the stored value is exact but the conversion still
+     * rounds it to 15 digits. The inner
      * {@code REAL} cast changes nothing on SQLite, whose {@code REAL} is 64-bit; on the H2 stand-in,
      * where {@code REAL} is single precision, it first rounds the stored or bound value to the float
      * it holds. A {@code double} field keeps the plain bound value: the value it reads back is the
@@ -85,15 +96,26 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
      * Passes the value of a {@code GREATER} or {@code LESS} condition on a {@code float} field (or
      * its wrapper) through the same conversion as the column,
      * {@code CAST(CAST(CAST(? AS REAL) AS VARCHAR) AS DOUBLE)}, so both sides keep the same 15
-     * significant digits (see {@link #orderedComparisonOperand(String, Class)}). Every other type
-     * binds the value unchanged.
+     * significant digits (see {@link #orderedComparisonOperand(String, Class)}), when the value is a
+     * {@link Number} whose {@code double} value is finite. Any other value on a {@code float} field,
+     * and every value on a field of another type, is bound unchanged: the conversion would turn an
+     * infinity, a number beyond the range of a double, or text that is not a number into 0.
      *
      * @since 6.3.0
      */
     @Override
     @ApiStatus.Internal
-    protected String orderedComparisonPlaceholder(Class<?> fieldType) {
-        return isFloat(fieldType) ? throughStoredFloatText("?") : "?";
+    protected String orderedComparisonPlaceholder(Class<?> fieldType, Object value) {
+        return isFloat(fieldType) && isFiniteNumber(value) ? throughStoredFloatText("?") : "?";
+    }
+
+    /** Whether {@code value} is a number whose {@code double} value is finite (not infinite, not NaN). */
+    private static boolean isFiniteNumber(Object value) {
+        if (!(value instanceof Number)) {
+            return false;
+        }
+        double asDouble = ((Number) value).doubleValue();
+        return !Double.isInfinite(asDouble) && !Double.isNaN(asDouble);
     }
 
     /** The float conversion both sides share; {@code operand} is a column name or {@code ?}. */

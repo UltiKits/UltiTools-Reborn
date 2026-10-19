@@ -683,20 +683,24 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * around it. The default returns {@code ?}, so the database compares the value as bound. A dialect
      * overrides it, together with {@link #orderedComparisonOperand(String, Class)}, when both sides
      * must pass through the same conversion to compare the way the stored value reads back, for
-     * example a {@code float} field whose stored text keeps fewer digits than the bound value.
+     * example a {@code float} field whose stored text keeps fewer digits than the bound value. The
+     * value is passed so an override can apply that conversion only to values it keeps the order of,
+     * for example a number whose {@code double} value is finite.
      * <p>
      * {@link #appendConditions} calls it only for {@code GREATER} and {@code LESS}, after
      * {@link #validateColumn(String)} has accepted the column, and binds the condition's value to
      * the result's one placeholder. Its result is concatenated into the SQL text, so an override must
      * return exactly one {@code ?} and build the rest only from constants, never from a condition's
-     * value or any other caller text.
+     * value or any other caller text; it may only use the value to choose between such constant
+     * operands.
      *
      * @param fieldType the Java type of the field the condition compares
+     * @param value     the condition's value, which is bound to the placeholder; may be {@code null}
      * @return the SQL operand holding exactly one {@code ?}, e.g. {@code ?} or a cast of it
      * @since 6.3.0
      */
     @ApiStatus.Internal
-    protected String orderedComparisonPlaceholder(Class<?> fieldType) {
+    protected String orderedComparisonPlaceholder(Class<?> fieldType, Object value) {
         return "?";
     }
 
@@ -760,7 +764,8 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             if (comparison == Comparison.GREATER || comparison == Comparison.LESS) {
                 Class<?> fieldType = columnTypes.get(condition.getColumn());
                 sql.append(orderedComparisonOperand(condition.getColumn(), fieldType));
-                sql.append(sqlOperatorFor(comparison, orderedComparisonPlaceholder(fieldType)));
+                sql.append(sqlOperatorFor(comparison,
+                        orderedComparisonPlaceholder(fieldType, condition.getValue())));
             } else {
                 sql.append(condition.getColumn());
                 sql.append(sqlOperatorFor(comparison, "?"));
