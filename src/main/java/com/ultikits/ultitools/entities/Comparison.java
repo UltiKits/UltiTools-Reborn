@@ -27,7 +27,9 @@ public enum Comparison {
      * On SQLite the comparison holds also in a column left on the default {@code VARCHAR(255)} type,
      * with 64-bit integer precision, and compares a stored value the way it reads back: a
      * {@code float} such as {@code 0.1f} is neither greater nor less than the same value, and a
-     * {@code double} that needs 16 or 17 significant digits is stored and compared with 15. That holds
+     * {@code double} that needs 16 or 17 significant digits is stored and compared with 15. A number that
+     * agrees with a stored {@code float} to 15 significant digits but differs after them compares as
+     * equal to it; pass a {@code float} value for a {@code float} field. That holds
      * for a value that is a finite number; an infinite value, a number beyond the range of a
      * {@code double} and text are compared as bound, and a NaN value matches no row. On MySQL
      * such a default text column is compared the way MySQL compares text with a number, in double

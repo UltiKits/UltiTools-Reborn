@@ -1879,11 +1879,14 @@ This section governs the third kind.
   `double` that needs 16 or 17 significant digits (`1/3.0`) is stored in a default column with 15
   (`0.333333333333333`) and reads back and compares as that value, so `LESS 1/3.0` selects a row
   written as `1/3.0`, where JSON, which keeps every digit, does not; declare the column
-  `type = "DOUBLE"` to keep every digit. On SQLite a `double` value that agrees with a stored `float`
-  to 15 significant digits but differs after them (`Math.nextDown((double) 0.1f)`) compares as equal
-  to it, so `GREATER` that value does not select the row holding `0.1f`; this holds in a default
+  `type = "DOUBLE"` to keep every digit. On SQLite a number that agrees with a stored `float`
+  to 15 significant digits but differs after them (for example `Math.nextDown((double) 0.1f)`, a whole
+  number of 10^15 or more such as `(1L << 53) + 1`, or a decimal with 16 or more significant digits)
+  compares as equal to it, so `GREATER` that value does not select the row holding `0.1f`; this holds in a default
   column and also in a column declared `REAL`, which earlier 6.3.0 snapshots compared exactly. Pass a
-  `float` value for a `float` field. A numeric field's column that holds non-numeric text,
+  `float` value for a `float` field. On SQLite a NaN comparison value is bound as NULL, so a condition
+  holding it matches no row and an `updateIf` with it never applies; do not retry `updateIf` on a NaN
+  threshold. A numeric field's column that holds non-numeric text,
   written by hand or by another program, compares on SQLite as its leading number (`'abc'` as 0,
   `'12abc'` as 12), while JSON compares that row as text. See `ultitools.storage.where-comparisons`
   in `FEATURES.md`.
@@ -1910,9 +1913,9 @@ This section governs the third kind.
   构建方法、`getLike` 或 `LikeType`（其中 13 个文件使用 `WhereCondition`，都用默认的 `EQUAL`），因此没有已发布模块的行为发生变化。
   已知限制（只写文档，不改代码）：在 SQLite 上，需要 16 或 17 位有效数字的 `double`（如 `1/3.0`）在默认列中只保存 15 位
   （`0.333333333333333`），读回和比较都按这个值，因此 `LESS 1/3.0` 会选中写入时为 `1/3.0` 的行，而保留全部数字的 JSON 不会；
-  要保留全部数字，请把该列声明为 `type = "DOUBLE"`。在 SQLite 上，与所存 `float` 前 15 位有效数字相同、之后才不同的 `double` 值
-  （`Math.nextDown((double) 0.1f)`）会被视为与它相等，因此 `GREATER` 该值不会选中保存 `0.1f` 的行；默认列如此，声明为 `REAL`
-  的列也如此，而本周期较早的 6.3.0 快照在 `REAL` 列上是精确比较的。对 `float` 字段请传 `float` 值。数值字段的列中若有手工或其他程序写入的非数字文本，在 SQLite 上按其开头的数字比较
+  要保留全部数字，请把该列声明为 `type = "DOUBLE"`。在 SQLite 上，与所存 `float` 前 15 位有效数字相同、之后才不同的任何数值
+  （例如 `Math.nextDown((double) 0.1f)`、10^15 及以上的整数如 `(1L << 53) + 1`，或有 16 位及以上有效数字的小数）会被视为与它相等，因此 `GREATER` 该值不会选中保存 `0.1f` 的行；默认列如此，声明为 `REAL`
+  的列也如此，而本周期较早的 6.3.0 快照在 `REAL` 列上是精确比较的。对 `float` 字段请传 `float` 值。在 SQLite 上，NaN 比较值会被绑定为 NULL，因此含它的条件不匹配任何行，带它的 `updateIf` 也永远不会生效；请勿对 NaN 阈值重试 `updateIf`。数值字段的列中若有手工或其他程序写入的非数字文本，在 SQLite 上按其开头的数字比较
   （`'abc'` 为 0，`'12abc'` 为 12），JSON 则对该行按文本比较。见 `FEATURES.md` 中的 `ultitools.storage.where-comparisons`。
 
 - `PluginManager#getPluginList()` returning an unmodifiable snapshot, and

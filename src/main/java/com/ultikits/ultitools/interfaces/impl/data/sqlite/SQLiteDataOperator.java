@@ -66,8 +66,9 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
      * double, or any text) is bound as it is and compared with the converted column, as before the
      * conversion existed. A finite number of another type is converted too, so a whole number or an
      * exact decimal equal to a stored float, such as 2^60 as a {@code Long}, compares as equal to it.
-     * One case stays approximate: a {@code double} value that agrees with a stored float to 15
-     * significant digits but differs after them compares as equal to it, in a default column and also
+     * One case stays approximate: a number (not only a {@code double}) that agrees with a stored float to 15
+     * significant digits but differs after them, such as a whole number of 10^15 or more like
+     * {@code (1L << 53) + 1} or a decimal with 16 or more significant digits, compares as equal to it, in a default column and also
      * in a column declared {@code REAL}, where the stored value is exact but the conversion still
      * rounds it to 15 digits. The inner
      * {@code REAL} cast changes nothing on SQLite, whose {@code REAL} is 64-bit; on the H2 stand-in,
