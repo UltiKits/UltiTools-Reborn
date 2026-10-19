@@ -1,14 +1,68 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
 /**
- * The redo journal that makes a multi-file JSON commit crash consistent (skeleton).
+ * The redo journal that makes a multi-file JSON commit crash consistent (20.4-RESEARCH.md
+ * section 12.7). One journal serves one identity: the directory whose sub-directories are that
+ * identity's tables, each holding one {@code <key>.json} file per entity.
+ * <p>
+ * <b>Records.</b> A record lists entity after-images (or deletes) for any number of tables. It is
+ * written to {@code <seq>.tmp} in the journal directory, forced to disk, and renamed atomically to
+ * {@code <seq>.commit}; <b>the rename is the commit point</b>. A crash before it leaves only the
+ * temporary record, which recovery deletes without applying; a crash after it leaves a committed
+ * record, which recovery applies whole. Line 1 of a record is its JSON, line 2 the SHA-256 of
+ * line 1; the file name is the zero-padded sequence number.
+ * <p>
+ * <b>Temporary files never enter a table directory.</b> An operator loads every file of its table
+ * directory as an entity, so entity files are written in the journal's own {@code tmp/} directory,
+ * forced, and moved into place with an atomic rename. Recovery empties that directory first.
+ * <p>
+ * <b>Recovery</b> deletes temporary records and files, applies the committed records in ascending
+ * order, forces the touched table directories, then deletes the applied records in ascending
+ * order. Every record carries full after-images and every entity file is replaced atomically, so a
+ * recovery interrupted at any step and run again ends at the same files.
+ * <p>
+ * Directory forces are best effort: supported on Linux, not on Windows; a failure is logged once
+ * at {@code FINE} and never fails the operation.
+ * <p>
+ * This class is not thread-safe beyond {@link #nextSequence()}; its caller serializes record
+ * writes, checkpoints and recovery of one identity.
  *
  * @since 6.3.0
  */
@@ -23,13 +77,21 @@ final class JsonJournal {
     static final String COMMITTED_SUFFIX = ".commit";
     static final String TEMPORARY_SUFFIX = ".tmp";
 
+    /** Version written into every record's first line. */
+    static final int FORMAT_VERSION = 1;
+
+    /** Entity-file phase of {@link #recover()}. */
     static final String PHASE_RECOVERY = "recovery";
+    /** Entity-file phase of a checkpoint. */
     static final String PHASE_CHECKPOINT = "checkpoint";
 
+    /** Record steps, prefixed with the record kind's label. */
     static final String RECORD_WRITTEN = ".recordWritten";
     static final String RECORD_FORCED = ".recordForced";
     static final String RENAMED = ".renamed";
     static final String DIRECTORY_FORCED = ".directoryForced";
+
+    /** Entity-file steps, prefixed with the phase. */
     static final String ENTITY_TEMP_WRITTEN = ".entityTempWritten";
     static final String BETWEEN_ENTITY_FILES = ".betweenEntityFiles";
     static final String TABLE_DIRS_FORCED = ".tableDirsForced";
@@ -40,18 +102,44 @@ final class JsonJournal {
     static final String RECOVERY_BETWEEN_DELETIONS = "recovery.betweenDeletions";
     static final String CHECKPOINT_BETWEEN_TRUNCATIONS = "checkpoint.betweenTruncations";
 
-    private static final StepHook NO_STEP_HOOK = step -> { };
-    private static final DirectoryForcer DEFAULT_DIRECTORY_FORCER = directory -> { };
+    private static final Logger LOGGER = Logger.getLogger(JsonJournal.class.getName());
 
+    private static final Pattern RECORD_NAME = Pattern.compile("(\\d{1,19})(\\.commit|\\.tmp)");
+
+    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+
+    private static final StepHook NO_STEP_HOOK = step -> { };
+
+    private static final DirectoryForcer DEFAULT_DIRECTORY_FORCER = JsonJournal::forceDirectoryChannel;
+
+    /**
+     * Test seam: called with a step name at the points named above. A no-op in production; a test
+     * installs a callback that pauses, fails or simulates a crash at one step and resets it
+     * afterwards.
+     */
     private static volatile StepHook stepHook = NO_STEP_HOOK;
+
+    /** Test seam for the directory force; the default opens the directory and forces it. */
     private static volatile DirectoryForcer directoryForcer = DEFAULT_DIRECTORY_FORCER;
 
     private final Path identityRoot;
     private final Path directory;
+    private final Path tempDirectory;
 
+    private final AtomicBoolean directoryForceFailureLogged = new AtomicBoolean();
+    private final AtomicBoolean atomicMoveFallbackLogged = new AtomicBoolean();
+
+    /** The next sequence number to hand out; {@code 0} until seeded from the journal directory. */
+    private long next;
+
+    /**
+     * @param identityRoot the directory whose sub-directories are the identity's tables
+     * @param directory    the journal directory; created by the first record write
+     */
     JsonJournal(Path identityRoot, Path directory) {
         this.identityRoot = Objects.requireNonNull(identityRoot, "identityRoot");
         this.directory = Objects.requireNonNull(directory, "directory");
+        this.tempDirectory = directory.resolve(TEMP_DIRECTORY_NAME);
     }
 
     Path identityRoot() {
@@ -62,24 +150,405 @@ final class JsonJournal {
         return directory;
     }
 
-    long nextSequence() throws IOException {
-        return 0L;
+    /**
+     * Hands out the next sequence number. The first call seeds the counter from the highest record
+     * number in the journal directory (temporary or committed) plus one, so numbers keep increasing
+     * across a reopen while records remain. Writing a record is separate (see
+     * {@link #writeRecord(long, Kind, List)}).
+     *
+     * @return a number greater than every number handed out or on disk before
+     * @throws IOException if the journal directory cannot be listed
+     */
+    synchronized long nextSequence() throws IOException {
+        if (next == 0L) {
+            long highest = 0L;
+            for (RecordFile file : listRecordFiles()) {
+                highest = Math.max(highest, file.sequence);
+            }
+            next = highest + 1L;
+        }
+        return next++;
     }
 
+    /**
+     * Writes and commits one record: {@code <seq>.tmp}, forced, then renamed atomically to
+     * {@code <seq>.commit} (the commit point), then the journal directory forced (best effort).
+     * Creates the journal directory if it is missing.
+     * <p>
+     * An {@link IOException} before the rename deletes the temporary record and propagates: nothing
+     * was committed. Any other throwable propagates and leaves the temporary record for recovery,
+     * as a crash would.
+     *
+     * @param sequence the record's number, from {@link #nextSequence()}
+     * @param kind     what the record stands for; its label prefixes the record steps
+     * @param entries  the record's changes, in the order they are to be applied
+     * @throws IOException if the record could not be committed
+     */
     void writeRecord(long sequence, Kind kind, List<Entry> entries) throws IOException {
-        // skeleton
+        Objects.requireNonNull(kind, "kind");
+        byte[] bytes = encode(sequence, kind, entries);
+        Files.createDirectories(directory);
+        Path committed = directory.resolve(recordFileName(sequence, COMMITTED_SUFFIX));
+        if (Files.exists(committed)) {
+            throw new FileAlreadyExistsException(committed.toString(), null,
+                    "a committed journal record with this number already exists");
+        }
+        Path temporary = directory.resolve(recordFileName(sequence, TEMPORARY_SUFFIX));
+        try {
+            try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                writeFully(channel, bytes);
+                fire(kind.label + RECORD_WRITTEN);
+                channel.force(true);
+                fire(kind.label + RECORD_FORCED);
+            }
+            move(temporary, committed);
+        } catch (IOException failure) {
+            try {
+                Files.deleteIfExists(temporary);
+            } catch (IOException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+        fire(kind.label + RENAMED);
+        forceDirectory(directory);
+        fire(kind.label + DIRECTORY_FORCED);
     }
 
+    /**
+     * Reads every committed record in ascending sequence order, verifying each.
+     *
+     * @return the committed records, oldest first; empty if the journal directory is missing
+     * @throws DataAccessException if a record is damaged; the message names the file
+     * @throws IOException         if a record cannot be read
+     */
     List<Record> listCommitted() throws IOException {
-        return Collections.emptyList();
+        List<Record> records = new ArrayList<>();
+        for (RecordFile file : listRecordFiles()) {
+            if (!file.temporary) {
+                records.add(decode(file));
+            }
+        }
+        return records;
     }
 
+    /**
+     * Brings the identity's table files to the state of its committed records: empties the
+     * journal's {@code tmp/} directory and deletes temporary records, applies the committed
+     * records in ascending order through the entity-file writer, then deletes the applied records
+     * in ascending order. A missing journal directory is an empty journal; nothing is created.
+     *
+     * @throws DataAccessException if a committed record is damaged; the message names the file
+     * @throws IOException         if a file cannot be read, written, moved or deleted
+     */
     void recover() throws IOException {
-        // skeleton
+        if (!Files.isDirectory(directory)) {
+            return;
+        }
+        deleteTemporaries();
+        fire(RECOVERY_TEMPS_DELETED);
+        List<RecordFile> committed = new ArrayList<>();
+        for (RecordFile file : listRecordFiles()) {
+            if (!file.temporary) {
+                committed.add(file);
+            }
+        }
+        for (int i = 0; i < committed.size(); i++) {
+            Record record = decode(committed.get(i));
+            writeEntityFiles(PHASE_RECOVERY, record.entries());
+            if (i < committed.size() - 1) {
+                fire(RECOVERY_BETWEEN_RECORDS);
+            }
+        }
+        fire(RECOVERY_RECORDS_APPLIED);
+        for (int i = 0; i < committed.size(); i++) {
+            Files.deleteIfExists(committed.get(i).path);
+            if (i < committed.size() - 1) {
+                fire(RECOVERY_BETWEEN_DELETIONS);
+            }
+        }
+        forceDirectory(directory);
     }
 
+    /**
+     * Applies entries to the table files, in order: a put writes {@code <table>/<key>.json} by
+     * writing and forcing a file in the journal's {@code tmp/} directory and moving it into place
+     * atomically, replacing the old file; a delete removes the file if present. Then forces every
+     * touched table directory (best effort). No file other than {@code <key>.json} is ever created
+     * in a table directory.
+     *
+     * @param phase   {@link #PHASE_RECOVERY} or {@link #PHASE_CHECKPOINT}; prefixes the steps
+     * @param entries the changes to apply
+     * @throws IOException if a file cannot be written, moved or deleted
+     */
     void writeEntityFiles(String phase, List<Entry> entries) throws IOException {
-        // skeleton
+        Set<Path> touched = new LinkedHashSet<>();
+        for (int i = 0; i < entries.size(); i++) {
+            Entry entry = entries.get(i);
+            Path tableDirectory = identityRoot.resolve(entry.table());
+            Path target = tableDirectory.resolve(entry.key() + ".json");
+            if (entry.isDelete()) {
+                Files.deleteIfExists(target);
+            } else {
+                Path temporary = writeTemporaryEntityFile(entry.afterImage());
+                try {
+                    fire(phase + ENTITY_TEMP_WRITTEN);
+                    Files.createDirectories(tableDirectory);
+                    moveReplacing(temporary, target);
+                } catch (IOException failure) {
+                    try {
+                        Files.deleteIfExists(temporary);
+                    } catch (IOException cleanupFailure) {
+                        failure.addSuppressed(cleanupFailure);
+                    }
+                    throw failure;
+                }
+            }
+            touched.add(tableDirectory);
+            if (i < entries.size() - 1) {
+                fire(phase + BETWEEN_ENTITY_FILES);
+            }
+        }
+        for (Path tableDirectory : touched) {
+            if (Files.isDirectory(tableDirectory)) {
+                forceDirectory(tableDirectory);
+            }
+        }
+        fire(phase + TABLE_DIRS_FORCED);
+    }
+
+    // ===== Internals =====
+
+    private Path writeTemporaryEntityFile(String afterImage) throws IOException {
+        Files.createDirectories(tempDirectory);
+        Path temporary = tempDirectory.resolve("entity-" + UUID.randomUUID() + ".part");
+        try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE)) {
+            writeFully(channel, afterImage.getBytes(StandardCharsets.UTF_8));
+            channel.force(true);
+        } catch (IOException failure) {
+            try {
+                Files.deleteIfExists(temporary);
+            } catch (IOException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+        return temporary;
+    }
+
+    /** Deletes every file in the journal's {@code tmp/} directory and every temporary record. */
+    private void deleteTemporaries() throws IOException {
+        if (Files.isDirectory(tempDirectory)) {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(tempDirectory)) {
+                for (Path path : stream) {
+                    if (Files.isRegularFile(path)) {
+                        Files.deleteIfExists(path);
+                    }
+                }
+            }
+        }
+        for (RecordFile file : listRecordFiles()) {
+            if (file.temporary) {
+                Files.deleteIfExists(file.path);
+            }
+        }
+    }
+
+    /**
+     * The journal's record files in ascending order of number, a temporary record before a
+     * committed one of the same number; empty if the journal directory is missing.
+     */
+    List<RecordFile> listRecordFiles() throws IOException {
+        List<RecordFile> files = new ArrayList<>();
+        if (!Files.isDirectory(directory)) {
+            return files;
+        }
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
+            for (Path path : stream) {
+                Matcher matcher = RECORD_NAME.matcher(path.getFileName().toString());
+                if (matcher.matches() && Files.isRegularFile(path)) {
+                    files.add(new RecordFile(Long.parseLong(matcher.group(1)),
+                            TEMPORARY_SUFFIX.equals(matcher.group(2)), path));
+                }
+            }
+        }
+        files.sort(Comparator.comparingLong((RecordFile file) -> file.sequence)
+                .thenComparing(file -> !file.temporary));
+        return files;
+    }
+
+    static String recordFileName(long sequence, String suffix) {
+        return String.format("%019d", sequence) + suffix;
+    }
+
+    private static byte[] encode(long sequence, Kind kind, List<Entry> entries) {
+        JsonObject record = new JsonObject();
+        record.addProperty("format", FORMAT_VERSION);
+        record.addProperty("sequence", sequence);
+        record.addProperty("kind", kind.label);
+        JsonArray array = new JsonArray();
+        for (Entry entry : entries) {
+            JsonObject item = new JsonObject();
+            item.addProperty("table", entry.table());
+            item.addProperty("key", entry.key());
+            item.addProperty("op", entry.isDelete() ? "delete" : "put");
+            if (!entry.isDelete()) {
+                item.addProperty("afterImage", entry.afterImage());
+            }
+            array.add(item);
+        }
+        record.add("entries", array);
+        byte[] line = GSON.toJson(record).getBytes(StandardCharsets.UTF_8);
+        byte[] checksum = sha256Hex(line).getBytes(StandardCharsets.US_ASCII);
+        ByteBuffer buffer = ByteBuffer.allocate(line.length + 1 + checksum.length + 1);
+        buffer.put(line).put((byte) '\n').put(checksum).put((byte) '\n');
+        return buffer.array();
+    }
+
+    /** Reads and verifies one committed record; any defect is reported as a damaged record. */
+    private Record decode(RecordFile file) throws IOException {
+        byte[] bytes = Files.readAllBytes(file.path);
+        int newline = indexOf(bytes, (byte) '\n', 0);
+        if (newline < 0) {
+            throw damaged(file.path, "it has no checksum line", null);
+        }
+        byte[] line = new byte[newline];
+        System.arraycopy(bytes, 0, line, 0, newline);
+        int end = bytes.length;
+        if (end > newline + 1 && bytes[end - 1] == '\n') {
+            end--;
+        }
+        String checksum = new String(bytes, newline + 1, end - newline - 1, StandardCharsets.US_ASCII);
+        if (!MessageDigest.isEqual(sha256Hex(line).getBytes(StandardCharsets.US_ASCII),
+                checksum.getBytes(StandardCharsets.US_ASCII))) {
+            throw damaged(file.path, "its checksum does not match its content", null);
+        }
+        try {
+            JsonObject record = JsonParser.parseString(new String(line, StandardCharsets.UTF_8)).getAsJsonObject();
+            if (member(record, "format").getAsInt() != FORMAT_VERSION) {
+                throw damaged(file.path, "its format version is not " + FORMAT_VERSION, null);
+            }
+            if (member(record, "sequence").getAsLong() != file.sequence) {
+                throw damaged(file.path, "its sequence number does not match its file name", null);
+            }
+            Kind kind = Kind.of(member(record, "kind").getAsString());
+            List<Entry> entries = new ArrayList<>();
+            for (JsonElement element : member(record, "entries").getAsJsonArray()) {
+                JsonObject item = element.getAsJsonObject();
+                String table = member(item, "table").getAsString();
+                String key = member(item, "key").getAsString();
+                String op = member(item, "op").getAsString();
+                if ("put".equals(op)) {
+                    entries.add(Entry.put(table, key, member(item, "afterImage").getAsString()));
+                } else if ("delete".equals(op)) {
+                    entries.add(Entry.delete(table, key));
+                } else {
+                    throw damaged(file.path, "an entry has the unknown operation " + op, null);
+                }
+            }
+            return new Record(file.sequence, kind, entries, file.path);
+        } catch (JsonParseException | IllegalStateException | IllegalArgumentException unreadable) {
+            throw damaged(file.path, "its content cannot be read as a journal record", unreadable);
+        }
+    }
+
+    /** A required member of a record object; a missing or null member makes the record unreadable. */
+    private static JsonElement member(JsonObject object, String name) {
+        JsonElement value = object.get(name);
+        if (value == null || value.isJsonNull()) {
+            throw new IllegalStateException("missing member " + name);
+        }
+        return value;
+    }
+
+    private DataAccessException damaged(Path file, String reason, Throwable cause) {
+        return new DataAccessException(ErrorCode.DATA_INTEGRITY_VIOLATION,
+                "The JSON journal record " + file.toAbsolutePath() + " is damaged: " + reason
+                        + ". No table file was changed. This plugin's JSON data stays closed until the file"
+                        + " is moved out of " + directory.toAbsolutePath() + ".", cause);
+    }
+
+    private static int indexOf(byte[] bytes, byte value, int from) {
+        for (int i = from; i < bytes.length; i++) {
+            if (bytes[i] == value) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static void writeFully(FileChannel channel, byte[] bytes) throws IOException {
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        while (buffer.hasRemaining()) {
+            channel.write(buffer);
+        }
+    }
+
+    /** Renames a record atomically; falls back to a plain move only if the platform refuses. */
+    private void move(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException unsupported) {
+            logAtomicMoveFallback(unsupported);
+            Files.move(source, target);
+        }
+    }
+
+    /** Moves an entity file into place atomically, replacing the old one. */
+    private void moveReplacing(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException unsupported) {
+            logAtomicMoveFallback(unsupported);
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private void logAtomicMoveFallback(AtomicMoveNotSupportedException unsupported) {
+        if (atomicMoveFallbackLogged.compareAndSet(false, true)) {
+            LOGGER.log(Level.WARNING, "The file system under " + directory.toAbsolutePath()
+                    + " does not support atomic moves; JSON journal files are moved without that guarantee.",
+                    unsupported);
+        }
+    }
+
+    /** Forces a directory's entries to disk; a failure is logged once at FINE and never fatal. */
+    private void forceDirectory(Path target) {
+        try {
+            directoryForcer.force(target);
+        } catch (IOException | UnsupportedOperationException failure) {
+            if (directoryForceFailureLogged.compareAndSet(false, true)) {
+                LOGGER.log(Level.FINE, "Could not force the directory " + target.toAbsolutePath()
+                        + " to disk; this platform may not support it. Further failures are not logged.", failure);
+            }
+        }
+    }
+
+    private static void forceDirectoryChannel(Path target) throws IOException {
+        try (FileChannel channel = FileChannel.open(target, StandardOpenOption.READ)) {
+            channel.force(true);
+        }
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException missing) {
+            throw new IllegalStateException("SHA-256 is required of every Java platform", missing);
+        }
+        byte[] hash = digest.digest(bytes);
+        StringBuilder hex = new StringBuilder(hash.length * 2);
+        for (byte b : hash) {
+            hex.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
+        }
+        return hex.toString();
+    }
+
+    private static void fire(String step) throws IOException {
+        stepHook.onStep(step);
     }
 
     static void installStepHook(StepHook hook) {
@@ -122,26 +591,78 @@ final class JsonJournal {
         String label() {
             return label;
         }
+
+        static Kind of(String label) {
+            for (Kind kind : values()) {
+                if (kind.label.equals(label)) {
+                    return kind;
+                }
+            }
+            throw new IllegalArgumentException("unknown record kind " + label);
+        }
     }
 
-    /** One change of a record: an entity file to write with its after-image, or to delete. */
+    /** A record file found in the journal directory. */
+    static final class RecordFile {
+        final long sequence;
+        final boolean temporary;
+        final Path path;
+
+        RecordFile(long sequence, boolean temporary, Path path) {
+            this.sequence = sequence;
+            this.temporary = temporary;
+            this.path = path;
+        }
+    }
+
+    /**
+     * One change of a record: an entity file to write with its after-image, or to delete. The
+     * table name and the key are single path segments, so the entity file is always
+     * {@code <identity root>/<table>/<key>.json} and nothing is written outside that directory.
+     */
     static final class Entry {
         private final String table;
         private final String key;
         private final String afterImage;
 
         private Entry(String table, String key, String afterImage) {
-            this.table = table;
-            this.key = key;
+            this.table = checkTable(table);
+            this.key = checkKey(key);
             this.afterImage = afterImage;
         }
 
+        /**
+         * @param table      the table directory's name
+         * @param key        the entity's key; a non-string key is written in its string form
+         * @param afterImage the entity's JSON, written to the file as is
+         */
         static Entry put(String table, Object key, String afterImage) {
-            return new Entry(table, String.valueOf(key), Objects.requireNonNull(afterImage, "afterImage"));
+            return new Entry(table, String.valueOf(Objects.requireNonNull(key, "key")),
+                    Objects.requireNonNull(afterImage, "afterImage"));
         }
 
         static Entry delete(String table, Object key) {
-            return new Entry(table, String.valueOf(key), null);
+            return new Entry(table, String.valueOf(Objects.requireNonNull(key, "key")), null);
+        }
+
+        private static String checkTable(String table) {
+            Objects.requireNonNull(table, "table");
+            if (".".equals(table) || "..".equals(table)) {
+                throw new IllegalArgumentException("A JSON journal table name cannot be '" + table + "'");
+            }
+            return checkSegment("table name", table);
+        }
+
+        private static String checkKey(String key) {
+            return checkSegment("key", key);
+        }
+
+        private static String checkSegment(String what, String value) {
+            if (value.isEmpty() || value.indexOf('/') >= 0 || value.indexOf('\\') >= 0 || value.indexOf('\0') >= 0) {
+                throw new IllegalArgumentException("A JSON journal " + what + " must be one non-empty path segment: '"
+                        + value + "'");
+            }
+            return value;
         }
 
         String table() {
@@ -152,6 +673,7 @@ final class JsonJournal {
             return key;
         }
 
+        /** The entity's JSON for a put; {@code null} for a delete. */
         String afterImage() {
             return afterImage;
         }
