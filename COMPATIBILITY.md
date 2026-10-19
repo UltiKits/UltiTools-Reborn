@@ -1794,8 +1794,22 @@ This section governs the third kind.
   a nested scope marked rollback-only — so rows the caller was told were not written could be
   stored. As of 6.3.0 auto-commit is restored only after a commit or rollback that succeeded;
   otherwise the connection is discarded (a HikariCP pool evicts it, so it is never handed out
-  again with the transaction still open; any other connection is closed), nothing of the
-  transaction is stored, and the caller still gets the original exception. The startup id backfill
+  again with the transaction still open; any other connection is closed), and the framework issues
+  no further commit for that transaction and never retries one. What is stored afterwards depends
+  on where the failure happened. When the action fails and the rollback succeeds, nothing is
+  stored. When a SQLite or MySQL rollback fails, including the real rollback an outer commit
+  performs for a rollback-only transaction, the connection is discarded and the framework issues no
+  commit. When the commit throws `UnexpectedRollbackException` because the transaction was marked
+  rollback-only, the transaction was rolled back and none of its writes is stored, on SQLite, MySQL
+  and JSON alike. When a SQLite or MySQL commit itself fails (`DataAccessException`,
+  `TRANSACTION_FAILED`), the outcome is unknown: the database may have applied the commit before
+  its acknowledgement was lost (for example, a dropped MySQL connection), discarding the connection
+  cannot undo that, and the framework does not retry the commit. Code that must not apply a write
+  twice (payments, rewards) therefore re-reads the data, or uses a conditional write such as
+  `DataOperator#updateIf`, before trying again. On JSON, a commit that fails commits nothing (see
+  [JSON transactions](#json-transactions-630--staged-atomic-and-durable)). The caller gets the
+  original exception, or `UnexpectedRollbackException` when the transaction was marked
+  rollback-only. The startup id backfill
   of SQLite tables follows the same rule. `DataOperator#transaction(...)` also rolls back on an
   `Error` (it caught `Exception` only, so an `Error` skipped both the commit and the rollback and
   left the thread's transaction open, and the next transaction on that thread nested into it): the
@@ -1813,8 +1827,15 @@ This section governs the third kind.
   中文补充：事务自身的失败路径再失败时，不再隐式提交（#634）。JDBC 在打开自动提交时会提交尚未结束的事务，而框架的事务管理器
   在每个事务结束后都会打开自动提交——包括回滚失败、提交失败，以及外层提交为被嵌套作用域标记为仅回滚的事务执行真正回滚却失败之后——
   因此调用方被告知“未写入”的行可能已被保存。自 6.3.0 起，只有提交或回滚成功后才恢复自动提交；否则丢弃该连接（HikariCP 连接池
-  会将其剔除，不会把仍处于事务中的连接再交给别人；其他连接直接关闭），事务中的内容一律不保存，调用方仍收到原来的异常。SQLite
-  表启动时的 id 补全遵循同一规则。`DataOperator#transaction(...)` 遇到 `Error` 时也会回滚（此前只捕获 `Exception`，`Error`
+  会将其剔除，不会把仍处于事务中的连接再交给别人；其他连接直接关闭），框架不会再为该事务发出提交，也不会重试提交。之后保存了什么，
+  取决于失败发生在哪里：操作失败且回滚成功时，未保存任何写入；SQLite 或 MySQL 的回滚失败时（包括外层提交为仅回滚的事务执行的
+  真正回滚），连接被丢弃，框架不发出提交；提交因事务已被标记为仅回滚而抛出 `UnexpectedRollbackException` 时，事务已回滚，
+  其写入均未保存，SQLite、MySQL 和 JSON 都是如此；SQLite 或 MySQL 的提交本身失败（`DataAccessException`，
+  `TRANSACTION_FAILED`）时，结果未知：数据库可能在确认丢失之前已经应用了该提交（例如 MySQL 连接断开），丢弃连接无法撤销它，
+  框架也不会重试提交。因此不能重复写入的代码（支付、奖励）在重试前应先重新读取数据，或使用条件写入（如
+  `DataOperator#updateIf`）。在 JSON 上，失败的提交不会提交任何内容（见
+  [JSON transactions](#json-transactions-630--staged-atomic-and-durable)）。调用方收到原来的异常；事务被标记为仅回滚时收到
+  `UnexpectedRollbackException`。SQLite 表启动时的 id 补全遵循同一规则。`DataOperator#transaction(...)` 遇到 `Error` 时也会回滚（此前只捕获 `Exception`，`Error`
   会跳过提交和回滚，使线程上的事务保持打开，该线程的下一个事务会嵌套进去）：关系型实现回滚后原样抛出同一个 `Error`，JSON 引擎
   丢弃该事务暂存的写入后原样抛出同一个实例；回滚本身抛出的异常作为 suppressed 附在原异常上，而不是替换它。`@Transactional` 本就会在
   `Error` 时回滚，保持不变；嵌套、仅回滚标记、传播、隔离级别和超时均不变（这句话只针对本次修复；6.3.0 随后对失败的加入方方法和失败的
