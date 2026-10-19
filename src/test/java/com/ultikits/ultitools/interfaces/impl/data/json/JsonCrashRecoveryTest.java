@@ -254,6 +254,103 @@ class JsonCrashRecoveryTest {
         assertThat(reopened.getById("s1").getName()).isEqualTo("alone");
     }
 
+    @Test
+    @DisplayName("A directly constructed operator recovers its sibling journal before it loads, and its table directory holds only entity files")
+    void standaloneOperatorRecoversBeforeLoading() throws Exception {
+        Path parent = Files.createDirectories(tempDir.resolve("standalone-recover"));
+        Path table = parent.resolve("rows-dir");
+        Path sibling = parent.resolve("rows-dir" + JsonJournal.DIRECTORY_NAME);
+        SimpleJsonDataOperator<CrashRow> operator = new SimpleJsonDataOperator<>(table.toString(), CrashRow.class);
+        operator.insert(new CrashRow("kept", "before"));
+        operator.flush();
+
+        installCrashAt("commit.renamed");
+        Throwable crash = runOnOwnThread(() -> operator.transaction(() -> {
+            operator.insert(new CrashRow("r1", "committed"));
+            operator.update(new CrashRow("kept", "after"));
+        }));
+        assertThat(crash).as("the commit crashed after its rename").isInstanceOf(SimulatedCrash.class);
+        assertThat(crash.getMessage()).isEqualTo("commit.renamed");
+        resetStepHooks();
+        assertThat(recordNames(sibling)).as("the committed record is on disk").hasSize(1);
+
+        SimpleJsonDataOperator<CrashRow> reopened = new SimpleJsonDataOperator<>(table.toString(), CrashRow.class);
+
+        assertThat(reopened.getById("r1")).as("the record's insert, applied before the load").isNotNull();
+        assertThat(reopened.getById("r1").getName()).isEqualTo("committed");
+        assertThat(reopened.getById("kept").getName()).as("the record's update").isEqualTo("after");
+        assertThat(reopened.getAll()).as("no phantom or corrupt entry").hasSize(2);
+        assertThat(recordNames(sibling)).as("the applied record is removed").isEmpty();
+        assertThat(names(table)).as("only entity files in the table directory").containsExactly("kept.json", "r1.json");
+    }
+
+    // ===== Damaged committed record (question 8 option A) =====
+
+    @Test
+    @DisplayName("A directly constructed operator refuses a damaged record naming the file, changes nothing, and recovers once it is moved aside")
+    void standaloneConstructorRefusesADamagedRecordUntilMovedAside() throws Exception {
+        Path parent = Files.createDirectories(tempDir.resolve("standalone-damaged"));
+        Path table = Files.createDirectories(parent.resolve("rows-dir"));
+        Path sibling = parent.resolve("rows-dir" + JsonJournal.DIRECTORY_NAME);
+        Files.write(table.resolve("a.json"), "{\"id\":\"a\",\"name\":\"zero\"}".getBytes(StandardCharsets.UTF_8));
+        JsonJournal journal = new JsonJournal(parent, sibling);
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(
+                Entry.put("rows-dir", "a", "{\"id\":\"a\",\"name\":\"one\"}")));
+        journal.writeRecord(2L, Kind.COMMIT, Collections.singletonList(
+                Entry.put("rows-dir", "b", "{\"id\":\"b\",\"name\":\"two\"}")));
+        Path damaged = sibling.resolve(JsonJournal.recordFileName(2L, JsonJournal.COMMITTED_SUFFIX));
+        damage(damaged);
+        java.util.Map<String, String> before = snapshot(parent);
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            Throwable thrown = catchThrowable(() -> new SimpleJsonDataOperator<>(table.toString(), CrashRow.class));
+            assertThat(thrown).as("construction attempt %d is refused", attempt).isInstanceOf(DataAccessException.class);
+            assertThat(thrown.getMessage()).as("the error names the damaged file").contains(damaged.getFileName().toString());
+            assertThat(snapshot(parent)).as("no table file or record changed (attempt %d)", attempt).isEqualTo(before);
+        }
+
+        Files.move(damaged, parent.resolve("moved-aside.commit"));
+        SimpleJsonDataOperator<CrashRow> operator = new SimpleJsonDataOperator<>(table.toString(), CrashRow.class);
+        assertThat(operator.getById("a").getName()).as("record 1 applied once the damaged one is gone").isEqualTo("one");
+        assertThat(operator.getById("b")).as("the moved-aside record is not applied").isNull();
+        assertThat(recordNames(sibling)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Through JsonStore, a damaged record refuses every request of its own plugin only, until it is moved aside")
+    void damagedRecordRefusesOnlyItsIdentityUntilMovedAside() throws Exception {
+        Site damagedSite = new Site("damaged-store");
+        Files.createDirectories(damagedSite.root().resolve(ROWS));
+        Files.write(damagedSite.root().resolve(ROWS).resolve("r0.json"),
+                "{\"id\":\"r0\",\"name\":\"zero\"}".getBytes(StandardCharsets.UTF_8));
+        JsonJournal journal = new JsonJournal(damagedSite.root(), damagedSite.journal());
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(
+                Entry.put(ROWS, "r1", "{\"id\":\"r1\",\"name\":\"one\"}")));
+        Path damaged = damagedSite.journal().resolve(JsonJournal.recordFileName(1L, JsonJournal.COMMITTED_SUFFIX));
+        damage(damaged);
+        java.util.Map<String, String> before = snapshot(damagedSite.root());
+        File healthyFolder = Files.createDirectories(damagedSite.base.resolve("healthy-plugin")).toFile();
+        DataScope healthyScope = newDataScope("json-crash-healthy", healthyFolder, CrashRow.class);
+        JsonStore store = new JsonStore(damagedSite.base.resolve("store").toString());
+
+        for (Class<? extends BaseDataEntity<String>> entity : Arrays.<Class<? extends BaseDataEntity<String>>>asList(
+                CrashRow.class, CrashOther.class, CrashRow.class)) {
+            Throwable thrown = catchThrowable(() -> store.getOperator(damagedSite.scope, entity));
+            assertThat(thrown).as("request for %s is refused", entity.getSimpleName()).isInstanceOf(DataAccessException.class);
+            assertThat(thrown.getMessage()).as("the error names the damaged file").contains(damaged.getFileName().toString());
+        }
+        assertThat(snapshot(damagedSite.root())).as("no table file or record changed").isEqualTo(before);
+
+        DataOperator<CrashRow> healthy = store.getOperator(healthyScope, CrashRow.class);
+        healthy.insert(new CrashRow("h1", "fine"));
+        assertThat(healthy.getById("h1")).as("another plugin of the same store is unaffected").isNotNull();
+
+        Files.move(damaged, damagedSite.base.resolve("moved-aside.commit"));
+        DataOperator<CrashRow> recovered = store.getOperator(damagedSite.scope, CrashRow.class);
+        assertThat(recovered.getById("r0")).as("the plugin opens once the file is moved aside, without a restart").isNotNull();
+        assertThat(recovered.getById("r1")).as("the moved-aside record is never applied").isNull();
+    }
+
     // ===== @Transactional =====
 
     @Test
@@ -333,6 +430,29 @@ class JsonCrashRecoveryTest {
         thread.join(TimeUnit.SECONDS.toMillis(HANDSHAKE_SECONDS));
         assertThat(thread.isAlive()).as("the crashing operation finished").isFalse();
         return thrown.get();
+    }
+
+    /** Changes one character of a record's first line without updating its checksum. */
+    static void damage(Path record) throws IOException {
+        byte[] bytes = Files.readAllBytes(record);
+        int index = new String(bytes, StandardCharsets.UTF_8).indexOf("\"kind\"");
+        assertThat(index).as("the record has a kind member").isGreaterThan(0);
+        bytes[index + 1] = (byte) 'K';
+        Files.write(record, bytes);
+    }
+
+    /** Relative path to content of every regular file under {@code root}. */
+    static java.util.Map<String, String> snapshot(Path root) throws IOException {
+        java.util.Map<String, String> files = new java.util.TreeMap<>();
+        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+            for (Path path : (Iterable<Path>) walk::iterator) {
+                if (Files.isRegularFile(path)) {
+                    files.put(root.relativize(path).toString(),
+                            new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
+                }
+            }
+        }
+        return files;
     }
 
     static List<String> recordNames(Path journal) throws IOException {

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.logging.Logger;
 
@@ -418,6 +419,110 @@ class JsonStoreTest {
             assertThat(store.getDataOperatorCount())
                     .as("a refused call must not have built an operator")
                     .isZero();
+        }
+    }
+
+    // ==================== Journal location and recovery ====================
+
+    @Nested
+    @DisplayName("Journal location and recovery before the first operator")
+    class JournalLocationTests {
+
+        private UltiToolsPlugin mockPlugin;
+
+        @BeforeEach
+        void setUp() {
+            mockPlugin = mock(UltiToolsPlugin.class);
+            when(mockPlugin.getPluginName()).thenReturn("JournalPlugin");
+            when(mockPluginManager.findOwningPlugin(org.mockito.ArgumentMatchers.any()))
+                    .thenAnswer(inv -> mockPlugin.getPluginName());
+        }
+
+        @Test
+        @DisplayName("An internal plugin journals in <store>/<plugin>/.ultitools-journal, never inside a table directory")
+        void internalIdentityJournalsUnderThePluginDirectory() throws Exception {
+            Path storeRoot = tempDir.resolve("internal-store");
+            JsonStore store = new JsonStore(storeRoot.toString());
+            DataOperator<AnnotatedTestData> operator = store.getOperator(mockPlugin, AnnotatedTestData.class);
+
+            operator.transaction(() -> operator.insert(named("j1", "journaled")));
+
+            Path journal = storeRoot.resolve("JournalPlugin").resolve(JsonJournal.DIRECTORY_NAME);
+            assertThat(commitRecords(journal)).as("one committed record in the plugin's journal").hasSize(1);
+            Path table = storeRoot.resolve("JournalPlugin").resolve("test_table");
+            if (Files.isDirectory(table)) {
+                try (java.util.stream.Stream<Path> files = Files.list(table)) {
+                    assertThat(files.map(p -> p.getFileName().toString()))
+                            .as("no journal file in the table directory").allMatch(name -> name.endsWith(".json"));
+                }
+            }
+
+            store.flushAllCaches();
+            assertThat(commitRecords(journal)).as("the flush's checkpoint truncated the journal").isEmpty();
+            assertThat(table.resolve("j1.json")).exists();
+        }
+
+        @Test
+        @DisplayName("An external plugin journals in <data folder>/data/.ultitools-journal")
+        void externalIdentityJournalsUnderTheDataFolder() throws Exception {
+            JsonStore store = new JsonStore(tempDir.resolve("external-store").toString());
+            java.io.File dataFolder = Files.createDirectories(tempDir.resolve("external-plugin")).toFile();
+            DataOperator<AnnotatedTestData> operator =
+                    store.getOperator(newDataScope("ExternalPlugin", dataFolder, AnnotatedTestData.class),
+                            AnnotatedTestData.class);
+
+            operator.transaction(() -> operator.insert(named("e1", "journaled")));
+
+            Path journal = dataFolder.toPath().resolve("data").resolve(JsonJournal.DIRECTORY_NAME);
+            assertThat(commitRecords(journal)).as("one committed record in the data folder's journal").hasSize(1);
+        }
+
+        @Test
+        @DisplayName("A committed record is applied before the identity's first operator is returned")
+        void recoveryRunsBeforeTheFirstOperator() throws Exception {
+            Path storeRoot = tempDir.resolve("recovering-store");
+            Path root = storeRoot.resolve("JournalPlugin");
+            JsonJournal journal = new JsonJournal(root, root.resolve(JsonJournal.DIRECTORY_NAME));
+            journal.writeRecord(1L, JsonJournal.Kind.COMMIT, java.util.Collections.singletonList(
+                    JsonJournal.Entry.put("test_table", "r1", "{\"id\":\"r1\",\"name\":\"recovered\"}")));
+
+            DataOperator<AnnotatedTestData> operator =
+                    new JsonStore(storeRoot.toString()).getOperator(mockPlugin, AnnotatedTestData.class);
+
+            assertThat(operator.getById("r1")).isNotNull();
+            assertThat(operator.getById("r1").getName()).isEqualTo("recovered");
+            assertThat(commitRecords(root.resolve(JsonJournal.DIRECTORY_NAME))).isEmpty();
+        }
+
+        private AnnotatedTestData named(String id, String name) {
+            AnnotatedTestData data = new AnnotatedTestData();
+            data.setId(id);
+            data.setName(name);
+            return data;
+        }
+
+        private java.util.List<String> commitRecords(Path journal) throws java.io.IOException {
+            java.util.List<String> names = new java.util.ArrayList<>();
+            if (!Files.isDirectory(journal)) {
+                return names;
+            }
+            try (java.util.stream.Stream<Path> files = Files.list(journal)) {
+                files.map(p -> p.getFileName().toString())
+                        .filter(name -> name.endsWith(JsonJournal.COMMITTED_SUFFIX))
+                        .forEach(names::add);
+            }
+            return names;
+        }
+
+        /** {@link com.ultikits.ultitools.manager.DataScope}'s constructor is package-private in another package. */
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        private com.ultikits.ultitools.manager.DataScope newDataScope(String pluginName, java.io.File dataFolder,
+                Class<?>... owned) throws ReflectiveOperationException {
+            java.lang.reflect.Constructor<com.ultikits.ultitools.manager.DataScope> ctor =
+                    com.ultikits.ultitools.manager.DataScope.class.getDeclaredConstructor(
+                            String.class, java.io.File.class, java.util.Set.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance(pluginName, dataFolder, new java.util.HashSet<>(java.util.Arrays.asList(owned)));
         }
     }
 
