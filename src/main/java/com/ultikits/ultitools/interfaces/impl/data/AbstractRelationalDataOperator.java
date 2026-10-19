@@ -705,6 +705,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         return exist(WhereCondition.builder().column("id").value(object.getId()).build());
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * JDBC drivers report {@code COUNT(*)} as an {@code Integer} or a {@code Long} (sqlite-jdbc
+     * returns an {@code Integer}), so the count is read as a Number.
+     */
     @Override
     public boolean exist(WhereCondition... whereConditions) {
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ").append(tableName);
@@ -713,8 +719,8 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             appendConditions(sql, params, whereConditions, false);
         }
         try {
-            Long count = queryRunner.query(sql.toString(), new ScalarHandler<>(), params.toArray());
-            return count != null && count > 0;
+            Number count = queryRunner.query(sql.toString(), new ScalarHandler<Number>(), params.toArray());
+            return count != null && count.longValue() > 0;
         } catch (SQLException e) {
             LOGGER.warning("Failed to check existence: " + e.getMessage());
             return false;
