@@ -271,6 +271,10 @@ final class JsonJournal {
         forceDirectory(directory);
     }
 
+    void checkpoint(long sequence, List<Entry> entries) throws IOException {
+        // skeleton
+    }
+
     /**
      * Applies entries to the table files, in order: a put writes {@code <table>/<key>.json} by
      * writing and forcing a file in the journal's {@code tmp/} directory and moving it into place

@@ -572,7 +572,308 @@ class JsonJournalTest {
         }
     }
 
+    // ===== Checkpoint =====
+
+    @Test
+    @DisplayName("A checkpoint commits its record before writing any entity file, then truncates through itself")
+    void checkpointWritesItsRecordBeforeAnyEntityFile() throws Exception {
+        Path root = tempDir.resolve("root");
+        Path users = root.resolve(USERS);
+        Files.createDirectories(users);
+        Files.write(users.resolve("x.json"), entity("x", 0).getBytes(StandardCharsets.UTF_8));
+        Files.write(users.resolve("gone.json"), entity("gone", 0).getBytes(StandardCharsets.UTF_8));
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "x", entity("x", 1))));
+        Map<String, String> initialTables = tableFiles(root);
+
+        List<String> steps = new CopyOnWriteArrayList<>();
+        Map<String, Map<String, String>> tablesAtStep = new TreeMap<>();
+        Map<String, List<String>> recordsAtStep = new TreeMap<>();
+        JsonJournal.installStepHook(step -> {
+            steps.add(step);
+            tablesAtStep.put(step, tableFiles(root));
+            recordsAtStep.put(step, recordNames(root));
+        });
+
+        journal.checkpoint(2L, Arrays.asList(
+                Entry.put(USERS, "x", entity("x", 2)),
+                Entry.put(USERS, "z", entity("z", 2)),
+                Entry.delete(USERS, "gone")));
+
+        assertThat(steps).containsExactly(
+                "checkpoint.recordWritten", "checkpoint.recordForced", "checkpoint.renamed",
+                "checkpoint.directoryForced", "checkpoint.entityTempWritten", "checkpoint.betweenEntityFiles",
+                "checkpoint.entityTempWritten", "checkpoint.betweenEntityFiles", "checkpoint.tableDirsForced",
+                "checkpoint.betweenTruncations");
+        for (String step : Arrays.asList("checkpoint.recordWritten", "checkpoint.recordForced",
+                "checkpoint.renamed", "checkpoint.directoryForced")) {
+            assertThat(tablesAtStep.get(step)).as("table files at " + step).isEqualTo(initialTables);
+        }
+        assertThat(recordsAtStep.get("checkpoint.recordWritten"))
+                .containsExactly(commitName(1), String.format("%019d.tmp", 2L));
+        assertThat(recordsAtStep.get("checkpoint.renamed")).containsExactly(commitName(1), commitName(2));
+        assertThat(recordsAtStep.get("checkpoint.betweenTruncations")).containsExactly(commitName(2));
+        assertThat(recordNames(root)).isEmpty();
+        Map<String, String> expected = new TreeMap<>();
+        expected.put("users/x.json", entity("x", 2));
+        expected.put("users/z.json", entity("z", 2));
+        assertThat(tableFiles(root)).isEqualTo(expected);
+        assertThat(names(journalDir(root).resolve("tmp"))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Truncation deletes every record at or below K in ascending order, K last, and nothing above K")
+    void truncationIsAscendingWithKLastAndLeavesRecordsAboveK() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "x", entity("x", 1))));
+        journal.writeRecord(3L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "x", entity("x", 3))));
+        journal.writeRecord(6L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "y", entity("y", 6))));
+        Files.write(journalDir(root).resolve(String.format("%019d.tmp", 2L)), new byte[] {'x'});
+        Files.write(journalDir(root).resolve(String.format("%019d.tmp", 7L)), new byte[] {'x'});
+
+        List<List<String>> recordsAtTruncation = new CopyOnWriteArrayList<>();
+        JsonJournal.installStepHook(step -> {
+            if (step.equals("checkpoint.betweenTruncations")) {
+                recordsAtTruncation.add(recordNames(root));
+            }
+        });
+
+        journal.checkpoint(4L, Collections.singletonList(Entry.put(USERS, "x", entity("x", 4))));
+
+        String tmp2 = String.format("%019d.tmp", 2L);
+        String tmp7 = String.format("%019d.tmp", 7L);
+        assertThat(recordsAtTruncation).containsExactly(
+                Arrays.asList(commitName(4), commitName(6), tmp2, commitName(3), tmp7).stream()
+                        .sorted().collect(Collectors.toList()),
+                Arrays.asList(commitName(3), commitName(4), commitName(6), tmp7).stream()
+                        .sorted().collect(Collectors.toList()),
+                Arrays.asList(commitName(4), commitName(6), tmp7).stream()
+                        .sorted().collect(Collectors.toList()));
+        assertThat(recordNames(root)).containsExactly(commitName(6), tmp7);
+        assertThat(read(root.resolve(USERS).resolve("x.json"))).isEqualTo(entity("x", 4));
+    }
+
+    @Test
+    @DisplayName("A checkpoint interrupted after its entity files but before truncation never brings an older value back")
+    void noRegressionAfterCheckpoint() throws Exception {
+        for (String step : Arrays.asList("checkpoint.tableDirsForced", "checkpoint.betweenTruncations")) {
+            Path root = tempDir.resolve("no-regression-" + step);
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "x", entity("x", 1))));
+
+            JsonJournal.installStepHook(crashAt(step, 1));
+            assertCrashedAt(runOnOwnThread(() -> journal.checkpoint(2L,
+                    Collections.singletonList(Entry.put(USERS, "x", entity("x", 2))))), step, 1);
+            JsonJournal.resetStepHook();
+            assertThat(read(root.resolve(USERS).resolve("x.json"))).as(step).isEqualTo(entity("x", 2));
+
+            journalAt(root).recover();
+            assertThat(read(root.resolve(USERS).resolve("x.json"))).as(step).isEqualTo(entity("x", 2));
+            assertThat(recordNames(root)).as(step).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("An interruption at every checkpoint step never regresses, and K's value wins once K was renamed")
+    void interruptionAtEveryCheckpointStep() throws Exception {
+        Path control = tempDir.resolve("control");
+        seedCheckpointScenario(control);
+        journalAt(control).checkpoint(2L, checkpointEntries());
+        journalAt(control).recover();
+        Map<String, String> controlFiles = allFiles(control);
+        Map<String, String> afterK = new TreeMap<>();
+        afterK.put("users/x.json", entity("x", 2));
+        afterK.put("users/z.json", entity("z", 2));
+        assertThat(tableFiles(control)).isEqualTo(afterK);
+
+        List<Object[]> cases = Arrays.asList(
+                new Object[] {"checkpoint.recordWritten", 1, false},
+                new Object[] {"checkpoint.recordForced", 1, false},
+                new Object[] {"checkpoint.renamed", 1, true},
+                new Object[] {"checkpoint.directoryForced", 1, true},
+                new Object[] {"checkpoint.entityTempWritten", 1, true},
+                new Object[] {"checkpoint.entityTempWritten", 2, true},
+                new Object[] {"checkpoint.betweenEntityFiles", 1, true},
+                new Object[] {"checkpoint.tableDirsForced", 1, true},
+                new Object[] {"checkpoint.betweenTruncations", 1, true});
+        int index = 0;
+        for (Object[] crashCase : cases) {
+            String step = (String) crashCase[0];
+            int occurrence = (Integer) crashCase[1];
+            boolean renamed = (Boolean) crashCase[2];
+            String label = step + "#" + occurrence;
+            Path root = tempDir.resolve("checkpoint-case-" + index++);
+            seedCheckpointScenario(root);
+            Map<String, String> before = tableFiles(root);
+
+            JsonJournal.installStepHook(crashAt(step, occurrence));
+            JsonJournal crashing = journalAt(root);
+            assertCrashedAt(runOnOwnThread(() -> crashing.checkpoint(2L, checkpointEntries())), step, occurrence);
+            JsonJournal.resetStepHook();
+
+            if (!renamed) {
+                assertThat(tableFiles(root)).as("no checkpoint entity file before K's rename, " + label)
+                        .isEqualTo(before);
+            }
+            if (step.equals("checkpoint.betweenTruncations")) {
+                assertThat(recordNames(root)).as(label).containsExactly(commitName(2));
+            }
+
+            journalAt(root).recover();
+            if (renamed) {
+                assertThat(allFiles(root)).as(label).isEqualTo(controlFiles);
+            } else {
+                Map<String, String> onlyJ = new TreeMap<>();
+                onlyJ.put("users/x.json", entity("x", 1));
+                assertThat(tableFiles(root)).as(label).isEqualTo(onlyJ);
+                assertThat(recordNames(root)).as(label).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("At every truncation interruption K survives and the remaining records form a suffix ending with K")
+    void betweenTruncationsLeavesASuffixEndingWithK() throws Exception {
+        for (int occurrence = 1; occurrence <= 3; occurrence++) {
+            Path root = tempDir.resolve("suffix-" + occurrence);
+            JsonJournal journal = journalAt(root);
+            for (long sequence = 1L; sequence <= 3L; sequence++) {
+                journal.writeRecord(sequence, Kind.COMMIT,
+                        Collections.singletonList(Entry.put(USERS, "x", entity("x", (int) sequence))));
+            }
+
+            JsonJournal.installStepHook(crashAt("checkpoint.betweenTruncations", occurrence));
+            assertCrashedAt(runOnOwnThread(() -> journal.checkpoint(4L,
+                    Collections.singletonList(Entry.put(USERS, "x", entity("x", 4))))),
+                    "checkpoint.betweenTruncations", occurrence);
+            JsonJournal.resetStepHook();
+
+            List<String> expected = new ArrayList<>();
+            for (long sequence = occurrence + 1L; sequence <= 4L; sequence++) {
+                expected.add(commitName(sequence));
+            }
+            assertThat(recordNames(root)).as("after deletion " + occurrence).isEqualTo(expected);
+
+            journalAt(root).recover();
+            assertThat(read(root.resolve(USERS).resolve("x.json"))).isEqualTo(entity("x", 4));
+        }
+    }
+
+    // ===== Damaged committed record (question 8 option A) =====
+
+    @Test
+    @DisplayName("A record whose checksum does not match is refused, naming the file, and nothing changes")
+    void damagedChecksumIsRefusedNamingTheFile() throws Exception {
+        Path root = tempDir.resolve("root");
+        seedDamageScenarioTables(root);
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 1))));
+        Path record = journalDir(root).resolve(commitName(1));
+        byte[] bytes = Files.readAllBytes(record);
+        int last = bytes.length - 2;
+        bytes[last] = (byte) (bytes[last] == '0' ? '1' : '0');
+        Files.write(record, bytes);
+
+        assertRefusedWithoutChange(root, record);
+    }
+
+    @Test
+    @DisplayName("A record whose first line is cut short is refused, naming the file, and nothing changes")
+    void cutShortFirstLineIsRefused() throws Exception {
+        for (boolean keepChecksumLine : new boolean[] {true, false}) {
+            Path root = tempDir.resolve("cut-" + keepChecksumLine);
+            seedDamageScenarioTables(root);
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(1L, Kind.COMMIT,
+                    Collections.singletonList(Entry.put(USERS, "a", entity("a", 1))));
+            Path record = journalDir(root).resolve(commitName(1));
+            String text = read(record);
+            int newline = text.indexOf('\n');
+            String firstHalf = text.substring(0, newline / 2);
+            String cut = keepChecksumLine ? firstHalf + text.substring(newline) : firstHalf;
+            Files.write(record, cut.getBytes(StandardCharsets.UTF_8));
+
+            assertRefusedWithoutChange(root, record);
+        }
+    }
+
+    @Test
+    @DisplayName("A damaged record after valid ones is refused before any record is applied or deleted")
+    void damagedRecordAfterValidOnesChangesNoTableFile() throws Exception {
+        Path root = tempDir.resolve("root");
+        seedDamageScenarioTables(root);
+        seedDamagedThirdRecord(root);
+
+        assertRefusedWithoutChange(root, journalDir(root).resolve(commitName(3)));
+    }
+
+    @Test
+    @DisplayName("Recovery keeps refusing until the damaged record is moved aside, then applies the rest")
+    void recoveryProceedsOnceTheDamagedRecordIsMovedAside() throws Exception {
+        Path root = tempDir.resolve("root");
+        seedDamageScenarioTables(root);
+        seedDamagedThirdRecord(root);
+        Path damaged = journalDir(root).resolve(commitName(3));
+        byte[] damagedBytes = Files.readAllBytes(damaged);
+
+        assertRefusedWithoutChange(root, damaged);
+        assertRefusedWithoutChange(root, damaged);
+
+        Path aside = tempDir.resolve("aside");
+        Files.createDirectories(aside);
+        Files.move(damaged, aside.resolve(damaged.getFileName()));
+        journalAt(root).recover();
+
+        Map<String, String> expected = new TreeMap<>();
+        expected.put("users/a.json", entity("a", 1));
+        expected.put("users/b.json", entity("b", 1));
+        assertThat(tableFiles(root)).isEqualTo(expected);
+        assertThat(recordNames(root)).isEmpty();
+        assertThat(Files.readAllBytes(aside.resolve(damaged.getFileName()))).isEqualTo(damagedBytes);
+    }
+
     // ===== Scenario and assertion helpers =====
+
+    /** users/x = 0 on disk, then committed record 1 with x = 1. */
+    private static void seedCheckpointScenario(Path root) throws IOException {
+        Files.createDirectories(root.resolve(USERS));
+        Files.write(root.resolve(USERS).resolve("x.json"), entity("x", 0).getBytes(StandardCharsets.UTF_8));
+        journalAt(root).writeRecord(1L, Kind.COMMIT,
+                Collections.singletonList(Entry.put(USERS, "x", entity("x", 1))));
+    }
+
+    /** Checkpoint K = 2: x = 2 and z = 2. */
+    private static List<Entry> checkpointEntries() {
+        return Arrays.asList(Entry.put(USERS, "x", entity("x", 2)), Entry.put(USERS, "z", entity("z", 2)));
+    }
+
+    /** users/a = 0 on disk. */
+    private static void seedDamageScenarioTables(Path root) throws IOException {
+        Files.createDirectories(root.resolve(USERS));
+        Files.write(root.resolve(USERS).resolve("a.json"), entity("a", 0).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Valid records 1 (a = 1) and 2 (b = 1), then record 3 (a = 3) with a changed first line. */
+    private static void seedDamagedThirdRecord(Path root) throws Exception {
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 1))));
+        journal.writeRecord(2L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "b", entity("b", 1))));
+        journal.writeRecord(3L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 3))));
+        tamperFirstLine(journalDir(root).resolve(commitName(3)));
+    }
+
+    /**
+     * Recovery through a new journal throws a DataAccessException naming the damaged file, and
+     * every file under the identity root, records included, is byte-identical afterwards.
+     */
+    private static void assertRefusedWithoutChange(Path root, Path damaged) throws IOException {
+        Map<String, String> before = allFiles(root);
+        assertThatThrownBy(() -> journalAt(root).recover())
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining(damaged.getFileName().toString());
+        assertThat(allFiles(root)).isEqualTo(before);
+    }
 
     /**
      * Pre-existing users/b and users/keep, then three committed records: (1) put users/a = 1 and
