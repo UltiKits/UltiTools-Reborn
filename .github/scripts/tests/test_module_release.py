@@ -281,6 +281,15 @@ if flags.get("npm_fail"):
 marker = os.path.join(STATE, "cli-installed")
 count = int(open(marker).read()) if os.path.exists(marker) else 0
 open(marker, "w").write(str(count + 1))
+side = flags.get("install_side_effect_catalogue")
+if side:
+    # Another writer occupies the version while this run installs (concurrency control).
+    cpath = os.path.join(STATE, "catalogue.json")
+    cat = json.load(open(cpath, encoding="utf-8"))
+    open(os.path.join(STATE, "catalogue-files", side["file"]), "wb").write(side["bytes"].encode("latin-1"))
+    cat["versions"].append({"version": side["version"], "level": 630, "file": side["file"],
+                            "identify": cat["module"]["identify"]})
+    json.dump(cat, open(cpath, "w", encoding="utf-8"), indent=2, sort_keys=True)
 '''
 
 FAKE_ULTIKITS = r'''#!{python} -I
@@ -329,8 +338,10 @@ data = open(jar, "rb").read()
 if flags.get("upload_corrupt"):
     data = data + b"corrupted in transit"
 open(os.path.join(STATE, "catalogue-files", name), "wb").write(data)
-cat["versions"].append({"version": opts["--module-version"], "level": 630, "file": name,
-                        "identify": opts["--id"]})
+cat["versions"].append({"version": opts["--module-version"], "level": int(flags.get("upload_level", 630)),
+                        "file": name, "identify": opts["--id"]})
+if flags.get("upload_shadows_no_level"):
+    cat["versions"].append({"version": "1.9.9", "level": 620, "file": name, "identify": opts["--id"]})
 json.dump(cat, open(cpath, "w", encoding="utf-8"), indent=2, sort_keys=True)
 print("Published %s@%s" % (opts["--id"], opts["--module-version"]))
 '''
@@ -666,7 +677,7 @@ class FixtureBase(unittest.TestCase):
         self.assertEqual(self.f.github_writes(), [], "no GitHub write may happen" + detail)
         self.assertEqual(self.f.calls("mvn"), [], "publication never builds")
         self.assertTrue(self.f.github()["releases"][DRAFT_ID]["draft"], "the draft stays unpublished")
-        self.assertEqual([v["version"] for v in self.f.catalogue()["versions"]], [PRIOR])
+        self.assertFalse((self.f.state / "cli-installed").exists(), "the CLI was never installed")
 
     def assert_refused(self, outcome, code=None):
         status, out, err = outcome
@@ -852,6 +863,343 @@ class DottedIdentityTests(unittest.TestCase):
         argv = self.f.publish_calls()[0]["argv"]
         self.assertEqual(argv[argv.index("--id") + 1], "ultikits.kits")
         self.assertEqual(self.f.catalogue()["versions"][-1]["identify"], "ultikits.kits")
+
+
+def publish_release(f):
+    """GitHub side already complete: the accepted draft was published at its source commit."""
+    def mutate(g):
+        g["releases"][DRAFT_ID]["draft"] = False
+        g["tags"]["v" + VERSION] = f.head
+    f.update_github(mutate)
+
+
+def serve_version(f, data=None, level=630):
+    """Catalogue side already holding this version (the accepted bytes unless data says otherwise)."""
+    name = "%s-%s.jar" % (f.identify, VERSION)
+    (f.state / "catalogue-files" / name).write_bytes(f.jar if data is None else data)
+    f.update_catalogue(lambda c: c["versions"].append({"version": VERSION, "level": level, "file": name,
+                                                       "identify": f.identify}))
+
+
+class RecoveryMatrixTests(FixtureBase):
+    """GitHub and the catalogue are reconciled independently; all four remote-state combinations."""
+
+    def test_draft_and_absent_catalogue_writes_both_sides(self):
+        status, out, err = self.f.run_adapter()
+        self.assertEqual(status, 0, msg=out + err)
+        receipt = self.f.receipt()
+        self.assertEqual((receipt["release_before"], receipt["release_outcome"]), ("draft", "published"))
+        self.assertEqual((receipt["catalogue_before"], receipt["catalogue_outcome"]), ("absent", "uploaded"))
+
+    def test_published_release_with_missing_catalogue_uploads_only_the_catalogue(self):
+        publish_release(self.f)
+        status, out, err = self.f.run_adapter()
+        self.assertEqual(status, 0, msg=out + err)
+        self.assertEqual(self.f.github_writes(), [], "an identical published release is left alone")
+        self.assertEqual(len(self.f.install_calls()), 1)
+        self.assertEqual(len(self.f.publish_calls()), 1)
+        receipt = self.f.receipt()
+        self.assertEqual((receipt["release_before"], receipt["release_outcome"]), ("published", "already-published"))
+        self.assertEqual(receipt["catalogue_outcome"], "uploaded")
+        self.assertEqual(self.f.calls("mvn"), [])
+
+    def test_catalogue_only_success_is_reconciled_by_publishing_the_draft(self):
+        serve_version(self.f)
+        status, out, err = self.f.run_adapter()
+        self.assertEqual(status, 0, msg=out + err)
+        self.assertEqual(self.f.install_calls(), [], "nothing to upload, so the CLI is never installed")
+        self.assertEqual(self.f.calls("ultikits"), [])
+        self.assertEqual(len(self.f.github_writes()), 1)
+        self.assertFalse(self.f.github()["releases"][DRAFT_ID]["draft"])
+        receipt = self.f.receipt()
+        self.assertEqual((receipt["catalogue_before"], receipt["catalogue_outcome"]), ("identical", "already-served"))
+        self.assertEqual(receipt["release_outcome"], "published")
+
+    def test_completed_identical_publication_is_a_no_op(self):
+        publish_release(self.f)
+        serve_version(self.f)
+        status, out, err = self.f.run_adapter()
+        self.assertEqual(status, 0, msg=out + err)
+        self.assertEqual(self.f.install_calls(), [])
+        self.assertEqual(self.f.calls("ultikits"), [])
+        self.assertEqual(self.f.github_writes(), [])
+        receipt = self.f.receipt()
+        self.assertEqual((receipt["release_outcome"], receipt["catalogue_outcome"]),
+                         ("already-published", "already-served"))
+        self.assertEqual(receipt["result"], "complete")
+
+    def test_catalogue_holding_this_version_with_different_bytes_blocks(self):
+        serve_version(self.f, data=self.f.prior_jar)
+        self.assert_refused(self.f.run_adapter(), "catalogue_version_occupied")
+
+    def test_published_release_with_different_bytes_blocks(self):
+        publish_release(self.f)
+        (self.f.state / "assets" / "11").write_bytes(self.f.prior_jar)
+        status, out, err = self.f.run_adapter()
+        self.assertEqual(status, 1, msg=out + err)
+        self.assertIn("artifact_sha256_mismatch", err)
+        self.assertEqual(self.f.install_calls(), [])
+        self.assertEqual(self.f.calls("ultikits"), [])
+
+    def test_equal_version_is_accepted_only_for_the_same_bytes_at_level_630(self):
+        serve_version(self.f, level=620)
+        self.assert_refused(self.f.run_adapter(), "catalogue_version_occupied")
+
+
+class PartialFailureTests(FixtureBase):
+    """A failed side is observable, non-zero and recoverable by a fresh dispatch without another build."""
+
+    def retry_with_new_installation(self, installation_id="inst-retry-0000000002"):
+        self.f.flags = {}
+        self.f.save_flags()
+        (self.f.runner / "module-release-receipt.json").unlink()
+        self.f.inputs = dict(self.f.inputs, installation_id=installation_id)
+        self.f.write_event(self.f.inputs)
+        return self.f.run_wrapper()
+
+    def test_github_success_with_catalogue_error_is_non_zero_and_retry_uploads_only_the_catalogue(self):
+        self.f.flags = {"upload_fail": True}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, msg=out + err)
+        receipt = self.f.receipt()
+        self.assertEqual(receipt["result"], "partial")
+        self.assertEqual((receipt["release_outcome"], receipt["catalogue_outcome"]), ("published", "error"))
+        self.assertIn("RESULT=partial", out)
+        self.assertFalse(self.f.github()["releases"][DRAFT_ID]["draft"])
+        writes_before = len(self.f.github_writes())
+        status, out, err = self.retry_with_new_installation()
+        self.assertEqual(status, 0, msg=out + err)
+        self.assertEqual(len(self.f.github_writes()), writes_before, "the retry writes nothing to GitHub")
+        self.assertEqual(len(self.f.publish_calls()), 2)
+        self.assertEqual((self.f.state / "catalogue-files" / ("%s-%s.jar" % (IDENTIFY, VERSION))).read_bytes(),
+                         self.f.jar, "the retry reuses the staged asset; nothing is rebuilt")
+        receipt = self.f.receipt()
+        self.assertEqual(receipt["installation_id"], "inst-retry-0000000002")
+        self.assertEqual((receipt["release_outcome"], receipt["catalogue_outcome"]), ("already-published", "uploaded"))
+        self.assertEqual(self.f.calls("mvn"), [])
+
+    def test_failed_release_publication_is_non_zero_and_leaves_the_catalogue_untouched(self):
+        self.f.update_github(lambda g: g.setdefault("fail", {}).update(undraft=502))
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, msg=out + err)
+        self.assertEqual(self.f.calls("ultikits")[-1]["argv"], ["publish", "--help"])
+        self.assertEqual((self.f.receipt()["release_outcome"], self.f.receipt()["catalogue_outcome"]),
+                         ("error", "not-attempted"))
+
+    def test_corrupted_catalogue_upload_is_caught_on_readback(self):
+        self.f.flags = {"upload_corrupt": True}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, msg=out + err)
+        self.assertIn("served_bytes_mismatch", err)
+        self.assertEqual(self.f.receipt()["catalogue_outcome"], "error")
+
+    def test_level_630_must_select_the_new_bytes(self):
+        self.f.flags = {"upload_level": 620}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, msg=out + err)
+        self.assertIn("level630_not_selected", err)
+
+    def test_the_no_level_answer_must_stay_on_the_prior_version(self):
+        self.f.flags = {"upload_shadows_no_level": True}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, msg=out + err)
+        self.assertIn("no_level_changed", err)
+
+    def test_a_repeat_after_completion_is_a_no_op_with_a_fresh_installation(self):
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 0, msg=out + err)
+        installs, writes = len(self.f.install_calls()), len(self.f.github_writes())
+        status, out, err = self.retry_with_new_installation()
+        self.assertEqual(status, 0, msg=out + err)
+        self.assertEqual((len(self.f.install_calls()), len(self.f.github_writes())), (installs, writes))
+        self.assertEqual(len(self.f.publish_calls()), 1, "served bytes are never uploaded or overwritten twice")
+
+
+class ConcurrencyAndStaleStateTests(FixtureBase):
+    """One publication per repository/version, and the remote is compared again immediately before writes."""
+
+    def test_concurrent_publication_of_the_same_version_is_refused(self):
+        lock = self.f.runner / "ultitools-module-release-locks" / ("UltiKits_FixtureMod-%s.lock" % VERSION)
+        lock.mkdir(parents=True)
+        self.assert_refused(self.f.run_wrapper(), "concurrent_run")
+        self.assertTrue(lock.is_dir(), "another run's lock is never removed")
+
+    def test_the_lock_is_released_after_a_run(self):
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 0, msg=out + err)
+        locks = self.f.runner / "ultitools-module-release-locks"
+        self.assertEqual(list(locks.iterdir()) if locks.exists() else [], [])
+
+    def test_default_branch_moving_before_the_first_write_blocks(self):
+        self.f.update_github(lambda g: g.update(head_sequence=[self.f.head, "d" * 40]))
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 1, msg=out + err)
+        self.assertIn("stale_default_head", err)
+        self.assertEqual(self.f.github_writes(), [])
+        self.assertEqual(self.f.publish_calls(), [])
+
+    def test_draft_changing_before_the_first_write_blocks(self):
+        self.f.update_github(lambda g: g.update(on_release_read={"2": {"target_commitish": "d" * 40}}))
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 1, msg=out + err)
+        self.assertIn("release_target_mismatch", err)
+        self.assertEqual(self.f.github_writes(), [])
+        self.assertEqual(self.f.publish_calls(), [])
+
+    def test_catalogue_occupied_by_another_writer_before_upload_blocks_without_overwrite(self):
+        self.f.flags = {"install_side_effect_catalogue": {"version": VERSION, "file": "other-writer.jar",
+                                                          "bytes": "different bytes"}}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, msg=out + err)
+        self.assertIn("catalogue_version_occupied", err)
+        self.assertEqual(self.f.publish_calls(), [], "a different served binary is never overwritten")
+        self.assertEqual((self.f.state / "catalogue-files" / "other-writer.jar").read_bytes(), b"different bytes")
+
+
+class FailClosedTests(FixtureBase):
+    """Transport, authentication and server errors are errors; every input refusal is zero-call."""
+
+    def test_catalogue_outage_or_auth_failure_is_an_error_not_absence(self):
+        for code in (503, 500, 401, 403):
+            with self.subTest(status=code):
+                self.f.flags = {"catalogue_status": code}
+                self.f.save_flags()
+                self.assert_refused(self.f.run_wrapper(), "catalogue_unavailable")
+
+    def test_registry_outage_blocks_the_installation(self):
+        self.f.flags = {"registry_status": 503}
+        self.f.save_flags()
+        self.assert_refused(self.f.run_wrapper(), "registry_unavailable")
+
+    def test_github_read_failure_blocks(self):
+        self.f.update_github(lambda g: g.setdefault("fail", {}).update(get=502))
+        self.assert_refused(self.f.run_wrapper(), "github_unavailable")
+
+    def test_changed_package_metadata_blocks_the_installation(self):
+        doc = json.loads((self.f.state / "npm-packument.json").read_text())
+        doc["versions"]["1.2.0"]["scripts"]["postinstall"] = "node payload.js"
+        PublishFixture.write_json(self.f.state / "npm-packument.json", doc)
+        self.assert_refused(self.f.run_wrapper(), "package_metadata_changed")
+
+    def test_wrong_helper_digest_blocks(self):
+        self.f.wrapper_yml = WRAPPER_YML.replace("@HELPER_SHA256@", "0" * 64)
+        self.assert_refused(self.f.run_wrapper(), "helper_digest_mismatch")
+
+    def test_a_served_version_not_below_this_one_blocks(self):
+        def mutate(c):
+            name = "%s-3.0.0.jar" % IDENTIFY
+            (self.f.state / "catalogue-files" / name).write_bytes(self.f.prior_jar)
+            c["versions"].append({"version": "3.0.0", "level": 620, "file": name, "identify": IDENTIFY})
+        self.f.update_catalogue(mutate)
+        self.assert_refused(self.f.run_wrapper(), "version_not_greater")
+
+    def test_a_served_version_that_cannot_be_ordered_blocks(self):
+        self.f.update_catalogue(lambda c: c["versions"].append({"version": "1.5-beta", "level": 620,
+                                                                "file": "x.jar", "identify": IDENTIFY}))
+        self.assert_refused(self.f.run_wrapper(), "catalogue_version_not_comparable")
+
+    def test_a_module_missing_from_the_catalogue_is_never_created(self):
+        self.f.update_catalogue(lambda c: c.update(module=None))
+        self.assert_refused(self.f.run_wrapper(), "catalogue_module_missing")
+
+    def test_missing_catalogue_token_blocks_before_installation(self):
+        self.assert_refused(self.f.run_wrapper(ULTIKITS_TOKEN=None), "catalogue_token_missing")
+
+    def test_an_extra_input_is_refused(self):
+        self.f.write_event(dict(self.f.inputs, note="publish please"))
+        self.assert_refused(self.f.run_wrapper(), "inputs_unknown_key")
+
+    def test_each_malformed_input_is_refused(self):
+        for key in INPUT_KEYS:
+            with self.subTest(key=key):
+                self.f.write_event(dict(self.f.inputs, **{key: self.f.inputs[key] + "!"}))
+                self.assert_refused(self.f.run_wrapper(), "input_format")
+
+    def test_shell_payloads_in_every_input_are_refused_and_never_executed(self):
+        canary = self.f.root / "canary"
+        payloads = ["$(touch %s)" % canary, "`touch %s`" % canary, "x; touch %s" % canary,
+                    "x' && touch %s && '" % canary, "x\ntouch %s" % canary, "%s\n" % "a"]
+        for key in INPUT_KEYS:
+            for payload in payloads:
+                with self.subTest(key=key, payload=payload):
+                    value = self.f.inputs[key] + payload if payload != "a\n" else self.f.inputs[key] + "\n"
+                    self.f.write_event(dict(self.f.inputs, **{key: value}))
+                    status, out, err = self.f.run_wrapper()
+                    self.assertNotEqual(status, 0, msg=out + err)
+                    self.assertFalse(canary.exists(), "an input was executed as shell")
+                    self.assertNotIn("touch", out + err, "raw input text never reaches the log")
+                    self.assert_nothing_installed_or_written()
+
+    def test_non_string_duplicate_and_empty_inputs_are_refused(self):
+        cases = {
+            "number": json.dumps({"inputs": dict(self.f.inputs, draft_release_id=777001)}).encode(),
+            "empty": json.dumps({"inputs": dict(self.f.inputs, installation_id="")}).encode(),
+            "duplicate": ('{"inputs": {"source_head": "%s", "source_head": "%s"}}'
+                          % (self.f.head, "e" * 40)).encode(),
+            "not json": b"\xff\xfe not json",
+            "empty file": b"",
+            "no inputs": b'{"ref": "refs/heads/master"}',
+        }
+        for label, raw in cases.items():
+            with self.subTest(case=label):
+                self.f.write_event(None, raw=raw)
+                self.assert_refused(self.f.run_wrapper())
+
+    def test_missing_or_extra_draft_assets_block(self):
+        cases = {"missing": lambda r: r["assets"].pop(),
+                 "extra": lambda r: r["assets"].append({"id": 13, "name": "notes.txt", "file": "assets/11"})}
+        for label, mutate in cases.items():
+            with self.subTest(case=label):
+                self.f.stage_github()
+                self.f.update_github(lambda g: mutate(g["releases"][DRAFT_ID]))
+                self.assert_refused(self.f.run_wrapper(), "release_assets_mismatch")
+
+    def test_a_missing_draft_blocks(self):
+        self.f.update_github(lambda g: g["releases"].pop(DRAFT_ID))
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 1, msg=out + err)
+        self.assertIn("github_unavailable", err)
+        self.assertEqual(self.f.install_calls(), [])
+
+    def test_an_installed_cli_without_the_documented_flags_writes_nothing(self):
+        self.f.flags = {"cli_help": "Usage: ultikits publish [options]\n  --version <v>\n"}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 1, msg=out + err)
+        self.assertIn("cli_flags_unknown", err)
+        self.assertEqual(self.f.github_writes(), [])
+        self.assertEqual(self.f.publish_calls(), [])
+
+    def test_changelog_text_is_passed_as_one_literal_argument(self):
+        canary = self.f.root / "changelog-canary"
+        text = "## 2.0.0\n- $(touch %s) `touch %s`\n" % (canary, canary)
+        (self.f.runner / "notes.md").write_text(text, encoding="utf-8")
+        status, out, err = self.f.run_adapter("--changelog-file", str(self.f.runner / "notes.md"))
+        self.assertEqual(status, 0, msg=out + err)
+        argv = self.f.publish_calls()[0]["argv"]
+        self.assertEqual(argv[argv.index("--changelog") + 1], text.rstrip("\n"))
+        self.assertFalse(canary.exists())
+
+
+class WrapperContractTests(unittest.TestCase):
+    """The reference wrapper adds no permission or secret and serializes publications per repository."""
+
+    def test_wrapper_keeps_contents_write_only_and_adds_no_secret(self):
+        self.assertIn("    permissions:\n      contents: write\n    concurrency:", WRAPPER_YML)
+        self.assertNotIn("actions:", WRAPPER_YML)
+        self.assertEqual(WRAPPER_YML.count("secrets."), 1, "only the existing catalogue secret")
+        self.assertIn("group: module-publish-${{ github.repository }}", WRAPPER_YML)
+
+    def test_wrapper_run_block_never_expands_dispatch_inputs(self):
+        script = wrapper_script(WRAPPER_YML)
+        self.assertNotIn("${{", script)
+        self.assertNotIn("inputs.", script)
+        self.assertNotIn("github.event", script)
 
 
 if __name__ == "__main__":
