@@ -504,8 +504,8 @@ class JsonJournalFileFailureTest {
         void recoveryStopsBeforeDeletingAppliedRecords() throws Exception {
             Path root = tempDir.resolve("tables");
             JsonJournal journal = journalAt(root);
-            journal.writeRecord(1L, Kind.COMMIT, oneUser("x", 1));
-            journal.writeRecord(2L, Kind.COMMIT, oneUser("y", 2));
+            journal.writeRecord(1L, Kind.COMMIT, Arrays.asList(
+                    Entry.put(USERS, "x", entity("x", 1)), Entry.put(USERS, "y", entity("y", 2))));
             JsonJournal.installDirectoryForcer(failingFor(root.resolve(USERS), new IOException("simulated disk error")));
 
             Throwable thrown = catchThrowable(() -> journalAt(root).recover());
@@ -513,7 +513,7 @@ class JsonJournalFileFailureTest {
             assertThat(thrown).as("recovery fails").isInstanceOf(IOException.class);
             assertThat(read(root.resolve(USERS).resolve("x.json"))).isEqualTo(entity("x", 1));
             assertThat(read(root.resolve(USERS).resolve("y.json"))).isEqualTo(entity("y", 2));
-            assertThat(recordNames(root)).as("every committed record").containsExactly(commitName(1), commitName(2));
+            assertThat(recordNames(root)).as("the committed record").containsExactly(commitName(1));
 
             JsonJournal.resetDirectoryForcer();
             Path table = tableDirectory("recovery");
