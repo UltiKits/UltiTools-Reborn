@@ -567,11 +567,13 @@ class TracerHandoffTests(HandoffTestCase):
     def test_prepare_refuses_jar_without_main_class(self):
         result = self.prepare(env={"FAKE_MVN_VARIANT": "no-main-class"})
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("main_class_missing", result.stdout.decode())
         self.assertFalse(self.retain.exists(), "nothing may be retained from a rejected build")
 
     def test_prepare_refuses_sources_jar_without_java_sources(self):
         result = self.prepare(env={"FAKE_MVN_VARIANT": "sources-without-java"})
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sources_without_java", result.stdout.decode())
         self.assertFalse(self.retain.exists())
 
     def test_publish_approved_uploads_retained_bytes_without_building(self):
