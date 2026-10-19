@@ -4,10 +4,12 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -124,6 +127,12 @@ final class JsonJournal {
 
     private static final Mover DEFAULT_MOVER = Files::move;
 
+    /**
+     * Pauses between the attempts of a retried move, in milliseconds: at most 5 attempts and
+     * 150 ms of waiting in all (20.4-DECISIONS.md question 10 A).
+     */
+    private static final long[] MOVE_RETRY_PAUSES_MILLIS = {10L, 20L, 40L, 80L};
+
     /** Whether a failed move is retried on this platform; decided once from {@code os.name}. */
     private static final boolean DEFAULT_MOVE_RETRY = retriesMovesOn(System.getProperty("os.name"));
 
@@ -149,6 +158,7 @@ final class JsonJournal {
 
     private final AtomicBoolean directoryForceFailureLogged = new AtomicBoolean();
     private final AtomicBoolean atomicMoveFallbackLogged = new AtomicBoolean();
+    private final AtomicBoolean moveRetryLogged = new AtomicBoolean();
 
     /** The next sequence number to hand out; {@code 0} until seeded from the journal directory. */
     private long next;
@@ -548,21 +558,73 @@ final class JsonJournal {
     /** Renames a record atomically; falls back to a plain move only if the platform refuses. */
     private void move(Path source, Path target) throws IOException {
         try {
-            mover.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            moveWithRetry(source, target, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException unsupported) {
             logAtomicMoveFallback(unsupported);
-            mover.move(source, target);
+            moveWithRetry(source, target);
         }
     }
 
     /** Moves an entity file into place atomically, replacing the old one. */
     private void moveReplacing(Path source, Path target) throws IOException {
         try {
-            mover.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            moveWithRetry(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (AtomicMoveNotSupportedException unsupported) {
             logAtomicMoveFallback(unsupported);
-            mover.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+            moveWithRetry(source, target, StandardCopyOption.REPLACE_EXISTING);
         }
+    }
+
+    /**
+     * Every file move the journal makes goes through here. On Windows another program (an
+     * antivirus scanner, an indexer, a backup tool) can hold a journal file open for a moment, and
+     * the move then fails with an {@link AccessDeniedException} or with a plain
+     * {@link FileSystemException} (the JDK's mapping of a sharing or lock violation). Such a move is
+     * retried: at most 5 attempts, pausing 10, 20, 40 and 80 ms between them. Every subclass of
+     * {@code FileSystemException} other than {@code AccessDeniedException} is a definite answer and
+     * is not retried, and off Windows a move is attempted once, because there an open file does not
+     * stop a rename and an access error is permanent. An interrupt during a pause stops the retries
+     * and keeps the interrupt flag. The failure thrown in the end carries the earlier ones as
+     * suppressed.
+     */
+    private void moveWithRetry(Path source, Path target, CopyOption... options) throws IOException {
+        List<IOException> earlier = new ArrayList<>();
+        for (int attempt = 0; ; attempt++) {
+            try {
+                mover.move(source, target, options);
+                return;
+            } catch (IOException failure) {
+                if (!moveRetry || !isTransientMoveFailure(failure) || attempt >= MOVE_RETRY_PAUSES_MILLIS.length) {
+                    throw withSuppressed(failure, earlier);
+                }
+                if (moveRetryLogged.compareAndSet(false, true)) {
+                    LOGGER.log(Level.FINE, "Moving the JSON journal file to " + target.toAbsolutePath()
+                            + " failed, probably because another program holds it; retrying."
+                            + " Further retries are not logged.", failure);
+                }
+                earlier.add(failure);
+                try {
+                    TimeUnit.MILLISECONDS.sleep(MOVE_RETRY_PAUSES_MILLIS[attempt]);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw withSuppressed(failure, earlier);
+                }
+            }
+        }
+    }
+
+    /** An access-denied failure, or exactly a {@link FileSystemException}: what a transient Windows lock gives. */
+    private static boolean isTransientMoveFailure(IOException failure) {
+        return failure instanceof AccessDeniedException || failure.getClass() == FileSystemException.class;
+    }
+
+    private static IOException withSuppressed(IOException last, List<IOException> earlier) {
+        for (IOException each : earlier) {
+            if (each != last) {
+                last.addSuppressed(each);
+            }
+        }
+        return last;
     }
 
     private void logAtomicMoveFallback(AtomicMoveNotSupportedException unsupported) {
@@ -650,7 +712,7 @@ final class JsonJournal {
      * @return whether a failed move is retried there
      */
     static boolean retriesMovesOn(String osName) {
-        return false;
+        return osName != null && osName.startsWith("Windows");
     }
 
     /** A test callback for the named journal steps. */
