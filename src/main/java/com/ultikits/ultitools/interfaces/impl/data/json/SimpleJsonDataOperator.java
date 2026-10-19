@@ -426,9 +426,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * Refuses a new id whose file {@code <id>.json} the insert must not create (question 12 A of
      * the Phase 20.4 decisions): a Windows device name with or without an extension, a trailing
      * dot or space, {@code .} or {@code ..}, a control character, a path separator, a file name
-     * longer than 255 UTF-8 bytes, or a name this server's file system rejects (on Windows,
-     * {@code < > : " | ? *}). See {@link JsonFileNames}. Called only for a key the insert creates,
-     * so an existing file whose name these rules would refuse keeps working.
+     * longer than 255 UTF-8 bytes, or a name this server's file system rejects or does not resolve
+     * to {@code <table directory>/<id>.json} (on Windows, {@code < > : " | ? *}, including a leading
+     * drive prefix such as {@code c:}). See {@link JsonFileNames}. Called only for a key the insert
+     * creates, so an existing file whose name these rules would refuse keeps working.
      */
     private void requireCreatableKey(Object key) {
         String id = String.valueOf(key);
@@ -436,8 +437,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         if (refusal != null) {
             throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                     "Refusing to insert into JSON table '" + tableName() + "' an entity whose id cannot name its file:"
-                            + " id '" + JsonFileNames.shown(id) + "': " + refusal + ". Use ids made of lowercase letters,"
-                            + " digits, '-' and '_'; a UUID string always works.");
+                            + " id '" + JsonFileNames.shown(id) + "': " + refusal + ". A UUID string always works;"
+                            + " otherwise use lowercase letters, digits, '-' and '_', and not a Windows device name"
+                            + " (con, nul, aux, prn, com1-com9, lpt1-lpt9). Do not use player names as ids: names"
+                            + " such as 'Con' and 'Nul' are valid player names.");
         }
     }
 
@@ -682,8 +685,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * a {@link DataAccessException} ({@code DATA_ENTITY_INVALID}) naming the id, an id that cannot
      * name a portable file: a Windows device name with or without an extension, a trailing dot or
      * space, {@code .} or {@code ..}, a control character, a path separator, a file name longer than
-     * 255 UTF-8 bytes, or a name this server's file system rejects (on Windows,
-     * {@code < > : " | ? *}); see {@code JsonFileNames}. An insert of an id that already has an
+     * 255 UTF-8 bytes, or a name this server's file system rejects or does not resolve to
+     * {@code <table directory>/<id>.json} (on Windows, {@code < > : " | ? *}, including a leading
+     * drive prefix such as {@code c:}); see {@code JsonFileNames}. An insert of an id that already has an
      * entry changes nothing and is never refused, so a file whose name these rules would refuse
      * keeps working. A refusal does not mark the transaction rollback-only.
      */

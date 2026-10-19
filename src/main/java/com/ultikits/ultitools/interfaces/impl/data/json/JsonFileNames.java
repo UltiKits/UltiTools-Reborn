@@ -10,13 +10,16 @@ import java.util.regex.Pattern;
  * The file an entity id names in a JSON table directory, {@code <table directory>/<id>.json}, and
  * the rules an id must meet before an insert creates that file (question 12 A of the Phase 20.4
  * decisions). Every path the JSON backend builds from an id goes through
- * {@link #entityFile(Path, String)}.
+ * {@link #entityFile(Path, String)}, which refuses any result that is not exactly a file named
+ * {@code <id>.json} directly in the table directory, whatever the file system's path parser made of
+ * the name.
  * <p>
  * <b>Refused on every operating system</b> ({@link #creationRefusal(Path, String)}), because a
  * common file system cannot hold the name, or Windows treats it as something else:
  * <ul>
  *   <li>a Windows device name ({@code CON}, {@code PRN}, {@code AUX}, {@code NUL},
- *       {@code COM1}-{@code COM9}, {@code LPT1}-{@code LPT9}, in any letter case), with or without
+ *       {@code COM1}-{@code COM9}, {@code LPT1}-{@code LPT9}, and {@code COM} or {@code LPT}
+ *       followed by a superscript one, two or three, in any letter case), with or without
  *       an extension: the part before the first dot is checked, since {@code con.json} is still the
  *       console device on Windows (the rule of sanitize-filename, filename-reserved-regex and
  *       Mercurial's store encoding);</li>
@@ -28,10 +31,12 @@ import java.util.regex.Pattern;
  *       and APFS.</li>
  * </ul>
  * <b>Refused only where the server's file system rejects it:</b> any other name that
- * {@link Path#resolve(String)} cannot turn into a path. On Windows that is a name holding
- * {@code < > : " | ? *}; on Linux {@code :} stays accepted, so UltiRemoteBag's
- * {@code <uuid>:<page>} ids keep working there. A JSON data folder created on Linux with such ids
- * cannot be copied to Windows.
+ * {@link Path#resolve(String)} cannot turn into a path, or turns into a path other than
+ * {@code <table directory>/<id>.json}. On Windows that is a name holding {@code < > : " | ? *},
+ * including one that starts with a letter and a colon ({@code c:foo}, {@code p:<uuid>}), which
+ * Windows reads as a drive prefix instead of rejecting; on Linux {@code :} stays accepted, so
+ * UltiRemoteBag's {@code <uuid>:<page>} ids keep working there. A JSON data folder created on
+ * Linux with such ids cannot be copied to Windows.
  * <p>
  * These rules apply only when an insert creates a new id. A file that already exists is never
  * renamed or rewritten because of them: it loads, and updates and deletes of its id keep working.
@@ -46,8 +51,13 @@ final class JsonFileNames {
     /** The longest entity file name accepted at insert, in UTF-8 bytes. */
     static final int MAX_FILE_NAME_BYTES = 255;
 
-    /** Windows device names, matched against the part of an id before its first dot. */
-    private static final Pattern WINDOWS_DEVICE_NAME = Pattern.compile("(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])");
+    /**
+     * Windows device names, matched against the upper-cased part of an id before its first dot.
+     * Windows also reserves {@code COM} and {@code LPT} followed by a superscript one, two or three
+     * (U+00B9, U+00B2, U+00B3).
+     */
+    private static final Pattern WINDOWS_DEVICE_NAME =
+            Pattern.compile("(?:CON|PRN|AUX|NUL|COM[1-9\u00b9\u00b2\u00b3]|LPT[1-9\u00b9\u00b2\u00b3])");
 
     /** The default resolution: the file system of the table directory decides. */
     private static final Resolver DEFAULT_RESOLVER = Path::resolve;
@@ -64,14 +74,35 @@ final class JsonFileNames {
 
     /**
      * The entity file of {@code key} in {@code tableDirectory}.
+     * <p>
+     * The result is checked, not trusted: its parent must be {@code tableDirectory} (both
+     * normalized, on the same file system) and its file name must be exactly {@code <key>.json}.
+     * A path parser that does not reject a name may still reinterpret it: Windows reads
+     * {@code c:foo.json} as a drive-relative path, which resolves to {@code <table>/foo.json} (the
+     * file of another id) or to a file on another drive, and any parser reads a separator or a
+     * {@code ..} segment as a path step. Each of these is refused here, so insert, checkpoint and
+     * recovery refuse it the same way they refuse a name the parser rejects.
      *
      * @param tableDirectory the table directory
      * @param key            the entity's key
      * @return {@code <tableDirectory>/<key>.json}
-     * @throws InvalidPathException if the file system cannot name that file
+     * @throws InvalidPathException if the file system cannot name that file, or the name does not
+     *                              resolve to a file named {@code <key>.json} directly in
+     *                              {@code tableDirectory}
      */
     static Path entityFile(Path tableDirectory, String key) {
-        return resolver.resolve(tableDirectory, key + EXTENSION);
+        String fileName = key + EXTENSION;
+        Path file = resolver.resolve(tableDirectory, fileName);
+        Path parent = file.getParent();
+        Path name = file.getFileName();
+        if (parent == null || name == null
+                || parent.getFileSystem() != tableDirectory.getFileSystem()
+                || !parent.normalize().equals(tableDirectory.normalize())
+                || !fileName.equals(name.toString())) {
+            throw new InvalidPathException(fileName, "it resolves to " + file + ", not to a file of that name directly in"
+                    + " the table directory");
+        }
+        return file;
     }
 
     /**
@@ -105,8 +136,8 @@ final class JsonFileNames {
         int dot = key.indexOf('.');
         String stem = dot < 0 ? key : key.substring(0, dot);
         if (WINDOWS_DEVICE_NAME.matcher(stem.toUpperCase(Locale.ROOT)).matches()) {
-            return "'" + stem + "' is a Windows device name (CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9), which Windows"
-                    + " reserves with or without an extension";
+            return "'" + stem + "' is a Windows device name (CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9, or COM or LPT"
+                    + " followed by a superscript digit), which Windows reserves with or without an extension";
         }
         int bytes = (key + EXTENSION).getBytes(StandardCharsets.UTF_8).length;
         if (bytes > MAX_FILE_NAME_BYTES) {

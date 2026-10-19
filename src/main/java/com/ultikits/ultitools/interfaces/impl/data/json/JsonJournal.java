@@ -525,7 +525,9 @@ final class JsonJournal {
     /**
      * The entity file {@code <identity root>/<table>/<key>.json} of {@code entry}.
      *
-     * @throws InvalidPathException if this file system cannot name it
+     * @throws InvalidPathException if this file system cannot name it, or the name does not resolve
+     *                              to a file named {@code <key>.json} directly in the table
+     *                              directory (see {@link JsonFileNames#entityFile(Path, String)})
      */
     private Path entityFileOf(Entry entry) {
         return JsonFileNames.entityFile(identityRoot.resolve(entry.table()), entry.key());
