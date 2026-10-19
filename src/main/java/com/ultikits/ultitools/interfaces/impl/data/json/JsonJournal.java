@@ -19,12 +19,15 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -69,7 +72,14 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * so no interruption lets a replay bring an older value back over a newer one.
  * <p>
  * <b>Directory forces.</b> After a rename or a deletion the journal forces the directory that holds
- * it, so the change survives a power loss. A failed force has one of three outcomes:
+ * it, so the change survives a power loss. A directory the journal creates (the journal directory,
+ * a table directory, and any missing parent of either) exists on disk only once the directory
+ * holding its entry is forced, so the journal remembers each one and forces its parent at the same
+ * points: after a record's rename, and before a checkpoint or recovery relies on its table files.
+ * One whose parent force fails stays remembered and is forced again at the next of those points.
+ * The journal's own {@code tmp/} directory is not remembered: its files only ever move into a
+ * table directory, and the forced table directory is what keeps them. A failed force has one of
+ * three outcomes:
  * <ul>
  *   <li>a directory that cannot be opened for a force ({@link AccessDeniedException}, which
  *       Windows gives, or {@link UnsupportedOperationException}) is skipped, logged once at
@@ -174,6 +184,12 @@ final class JsonJournal {
     private final Path directory;
     private final Path tempDirectory;
 
+    /**
+     * Directories this journal created whose entry in their parent directory is not yet known to be
+     * on disk. Also the lock that makes creating a directory and remembering it one step.
+     */
+    private final Set<Path> unforcedNewDirectories = ConcurrentHashMap.newKeySet();
+
     private final AtomicBoolean directoryCannotBeOpenedLogged = new AtomicBoolean();
     private final AtomicBoolean atomicMoveFallbackLogged = new AtomicBoolean();
     private final AtomicBoolean moveRetryLogged = new AtomicBoolean();
@@ -221,12 +237,13 @@ final class JsonJournal {
 
     /**
      * Writes and commits one record: {@code <seq>.tmp}, forced, then renamed atomically to
-     * {@code <seq>.commit} (the commit point), then the journal directory forced. Creates the
-     * journal directory if it is missing.
+     * {@code <seq>.commit} (the commit point), then the journal directory forced, together with the
+     * parent of every directory the journal created and has not yet forced into its parent. Creates
+     * the journal directory if it is missing.
      * <p>
      * An {@link IOException} before the rename deletes the temporary record and propagates: nothing
      * was committed. Any other throwable propagates and leaves the temporary record for recovery,
-     * as a crash would. A real failure of the directory force after the rename is logged at
+     * as a crash would. A real failure of any of these directory forces after the rename is logged at
      * {@code WARNING}; for a {@link Kind#COMMIT} record this method still returns, because the
      * record is committed, and for a {@link Kind#CHECKPOINT} record the failure propagates, so the
      * checkpoint writes no entity file.
@@ -240,7 +257,7 @@ final class JsonJournal {
     void writeRecord(long sequence, Kind kind, List<Entry> entries) throws IOException {
         Objects.requireNonNull(kind, "kind");
         byte[] bytes = encode(sequence, kind, entries);
-        Files.createDirectories(directory);
+        createDirectories(directory);
         Path committed = directory.resolve(recordFileName(sequence, COMMITTED_SUFFIX));
         if (Files.exists(committed)) {
             throw new FileAlreadyExistsException(committed.toString(), null,
@@ -266,11 +283,15 @@ final class JsonJournal {
         }
         fire(kind.label + RENAMED);
         if (kind == Kind.COMMIT) {
-            forceDirectory(directory, "The JSON transaction is committed and survives a server crash, but it may not"
-                    + " survive a power loss or operating-system crash until the next checkpoint completes.");
+            String consequence = "The JSON transaction is committed and survives a server crash, but it may not"
+                    + " survive a power loss or operating-system crash until the next checkpoint completes.";
+            forceDirectory(directory, consequence);
+            forceNewDirectoryParents(consequence);
         } else {
-            requireDirectoryForced(directory, "The checkpoint stops before writing its entity files; the changed"
-                    + " entries stay pending and the next flush writes them again.");
+            String consequence = "The checkpoint stops before writing its entity files; the changed"
+                    + " entries stay pending and the next flush writes them again.";
+            requireDirectoryForced(directory, consequence);
+            requireNewDirectoryParentsForced(consequence);
         }
         fire(kind.label + DIRECTORY_FORCED);
     }
@@ -385,10 +406,11 @@ final class JsonJournal {
     /**
      * Applies entries to the table files, in order: a put writes {@code <table>/<key>.json} by
      * writing and forcing a file in the journal's {@code tmp/} directory and moving it into place
-     * atomically, replacing the old file; a delete removes the file if present. Then forces every
-     * touched table directory; a real failure to force one propagates, after the files are in
-     * place, so the caller deletes no journal record. No file other than {@code <key>.json} is
-     * ever created in a table directory.
+     * atomically, replacing the old file; a delete removes the file if present. Then forces the
+     * parent of every directory the journal created and has not yet forced into its parent (a new
+     * table directory and its new parents among them), and every touched table directory; a real
+     * failure to force one propagates, after the files are in place, so the caller deletes no
+     * journal record. No file other than {@code <key>.json} is ever created in a table directory.
      *
      * @param phase   {@link #PHASE_RECOVERY} or {@link #PHASE_CHECKPOINT}; prefixes the steps
      * @param entries the changes to apply
@@ -407,7 +429,7 @@ final class JsonJournal {
                 Path temporary = writeTemporaryEntityFile(entry.afterImage());
                 try {
                     fire(phase + ENTITY_TEMP_WRITTEN);
-                    Files.createDirectories(tableDirectory);
+                    createDirectories(tableDirectory);
                     moveReplacing(temporary, target);
                 } catch (IOException failure) {
                     try {
@@ -428,6 +450,7 @@ final class JsonJournal {
                         + " request runs recovery again."
                 : "The checkpoint stops before truncating the journal; the changed entries stay pending and the next"
                         + " flush writes them again.";
+        requireNewDirectoryParentsForced(consequence);
         for (Path tableDirectory : touched) {
             if (Files.isDirectory(tableDirectory)) {
                 requireDirectoryForced(tableDirectory, consequence);
@@ -439,6 +462,8 @@ final class JsonJournal {
     // ===== Internals =====
 
     private Path writeTemporaryEntityFile(String afterImage) throws IOException {
+        // Not remembered for a parent force: a temporary file only ever moves into a table
+        // directory, and the forced table directory is what keeps it (see the class javadoc).
         Files.createDirectories(tempDirectory);
         Path temporary = tempDirectory.resolve("entity-" + UUID.randomUUID() + ".part");
         try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.CREATE_NEW,
@@ -719,6 +744,68 @@ final class JsonJournal {
     /** {@link #forceDirectory(Path, String)}, throwing a real failure. */
     private void requireDirectoryForced(Path target, String consequence) throws IOException {
         IOException failure = forceDirectory(target, consequence);
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * Creates {@code target} and every missing parent, as {@link Files#createDirectories} does, and
+     * remembers each directory it created for {@link #forceNewDirectoryParents(String)}. Creating
+     * and remembering are one step under a lock, so a caller that finds {@code target} already
+     * present also finds it remembered while its parent is still unforced, and forces that parent
+     * before it relies on the directory.
+     */
+    private void createDirectories(Path target) throws IOException {
+        synchronized (unforcedNewDirectories) {
+            if (Files.isDirectory(target)) {
+                return;
+            }
+            List<Path> missing = new ArrayList<>();
+            for (Path each = target.toAbsolutePath(); each != null && !Files.exists(each); each = each.getParent()) {
+                missing.add(each);
+            }
+            Files.createDirectories(target);
+            unforcedNewDirectories.addAll(missing);
+        }
+    }
+
+    /**
+     * Forces, once each, the parent of every directory in {@link #unforcedNewDirectories} and
+     * forgets the directories whose parent was forced or cannot be opened for a force. A real
+     * failure is classified and logged as {@link #forceDirectory(Path, String)} does; the
+     * directories under that parent stay remembered and are forced again at the next call.
+     *
+     * @return the first real failure, or {@code null}
+     */
+    private IOException forceNewDirectoryParents(String consequence) {
+        if (unforcedNewDirectories.isEmpty()) {
+            return null;
+        }
+        Map<Path, List<Path>> byParent = new LinkedHashMap<>();
+        for (Path created : new ArrayList<>(unforcedNewDirectories)) {
+            Path parent = created.getParent();
+            if (parent == null) {
+                unforcedNewDirectories.remove(created);
+            } else {
+                byParent.computeIfAbsent(parent, key -> new ArrayList<>()).add(created);
+            }
+        }
+        IOException first = null;
+        for (Map.Entry<Path, List<Path>> entry : byParent.entrySet()) {
+            IOException failure = forceDirectory(entry.getKey(), consequence);
+            if (failure == null) {
+                unforcedNewDirectories.removeAll(entry.getValue());
+            } else if (first == null) {
+                first = failure;
+            }
+        }
+        return first;
+    }
+
+    /** {@link #forceNewDirectoryParents(String)}, throwing the first real failure. */
+    private void requireNewDirectoryParentsForced(String consequence) throws IOException {
+        IOException failure = forceNewDirectoryParents(consequence);
         if (failure != null) {
             throw failure;
         }
