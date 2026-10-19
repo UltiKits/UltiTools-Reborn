@@ -104,10 +104,14 @@ jobs:
         if [ "$BEFORE" = "STATE=absent" ]; then
           SETTINGS="$RUNNER_TEMP/github-packages-settings.xml"
           ( umask 077 && printf '<settings><servers><server><id>github</id><username>${env.GITHUB_ACTOR}</username><password>${env.GITHUB_TOKEN}</password></server></servers></settings>' > "$SETTINGS" )
-          ( cd "$RUNNER_TEMP" && mvn -B deploy:deploy-file -s "$SETTINGS" \
+          (
+            # Outside the checkout, so no project POM is read.
+            cd "$RUNNER_TEMP"
+            mvn -B deploy:deploy-file -s "$SETTINGS" \
               -DgroupId=com.ultikits -DartifactId=ultitools-api -Dversion="$VERSION" -Dpackaging=jar \
               -Dfile="$INPUTS/${BASE}.jar" -DpomFile="$INPUTS/${BASE}.pom" -DgeneratePom=false \
-              -DrepositoryId=github -Durl="$REPOSITORY" )
+              -DrepositoryId=github -Durl="$REPOSITORY"
+          )
           echo "result=published" >> "$GITHUB_OUTPUT"
         elif [ "$BEFORE" = "STATE=identical" ]; then
           echo "GitHub Packages already serves these exact bytes; nothing is deployed."
