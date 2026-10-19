@@ -2063,7 +2063,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * cases apart, so this refuses the module and names every missing entity instead of guessing.
      * <p>
      * A directory-backed entity is the exception to the path comparison. Auto-registration expands
-     * a {@code configFilePath} that names a directory under {@link #getResourceFolderPath()} (the
+     * a {@code configFilePath} that names a directory under {@code getResourceFolderPath()} (the
      * same {@code isDirectory()} test {@code ConfigManager#register} applies) into one registration
      * per file inside it, and registers nothing for an empty directory, so the unexpanded path is
      * never a registered key. Such an override entity counts as found when its class is among the
