@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import java.sql.Connection;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
@@ -12,6 +13,7 @@ import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonIdentity;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonTransaction;
 
 /**
@@ -71,6 +73,12 @@ public class JsonTransactionManager implements TransactionManager {
     private final String identity;
 
     /**
+     * The identity's durable state: its journal, commit gate and operators. A commit writes its
+     * journal record through it before the commit returns.
+     */
+    private final JsonIdentity journalIdentity;
+
+    /**
      * Instance-scoped {@link ThreadLocal}, matching the FOUND-04 reasoning already documented on
      * {@link DataSourceTransactionManager#contextHolder}: one manager per identity, built once by
      * {@code JsonStore}, so two identities can never cross transaction state.
@@ -103,12 +111,24 @@ public class JsonTransactionManager implements TransactionManager {
     /**
      * Constructed by {@code JsonStore} (a different package, hence {@code public}) when it first
      * resolves a manager for a given identity, and by a {@code SimpleJsonDataOperator} that was
-     * constructed directly and never bound to one.
+     * constructed directly, for its own standalone identity.
      *
-     * @param identity the requesting identity this manager governs, used only for diagnostics
+     * @param journalIdentity the identity this manager governs; its name is used in messages
      */
-    public JsonTransactionManager(String identity) {
-        this.identity = identity;
+    public JsonTransactionManager(JsonIdentity journalIdentity) {
+        this.journalIdentity = Objects.requireNonNull(journalIdentity, "journalIdentity");
+        this.identity = journalIdentity.name();
+    }
+
+    /**
+     * The identity whose journal, commit gate and operators this manager's transactions use.
+     * Public because the JSON operators live in another package; not part of the supported API.
+     *
+     * @return this manager's identity
+     */
+    @ApiStatus.Internal
+    public JsonIdentity journalIdentity() {
+        return journalIdentity;
     }
 
     @Override

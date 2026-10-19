@@ -2,6 +2,8 @@ package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
@@ -48,8 +50,9 @@ public class JsonStore implements DataStore {
     /**
      * Per-identity {@link JsonTransactionManager}, one per requesting identity -- the same
      * identity {@link #dataOperatorMap} already keys by -- shared by every {@link
-     * SimpleJsonDataOperator} this store hands out for that identity (02-05, D-03). Not static,
-     * same reasoning as {@link #dataOperatorMap}.
+     * SimpleJsonDataOperator} this store hands out for that identity (02-05, D-03). Each manager
+     * holds the identity's {@link JsonIdentity}: its journal, commit gate and operators. Not
+     * static, same reasoning as {@link #dataOperatorMap}.
      */
     private final Map<String, JsonTransactionManager> transactionManagers = new ConcurrentHashMap<>();
 
@@ -138,7 +141,8 @@ public class JsonStore implements DataStore {
         checkOwnership(plugin, dataEntity);
         ensureTableAnnotation(dataEntity);
         String identity = plugin.getPluginName();
-        return getOperatorForIdentity(identity, internalLocation(identity, dataEntity), dataEntity);
+        return getOperatorForIdentity(identity, internalRoot(identity), internalLocation(identity, dataEntity),
+                dataEntity);
     }
 
     @Override
@@ -146,7 +150,8 @@ public class JsonStore implements DataStore {
         checkOwnership(dataFolder, dataEntity);
         ensureTableAnnotation(dataEntity);
         String identity = canonicalPath(dataFolder);
-        return getOperatorForIdentity(identity, externalLocation(dataFolder, dataEntity), dataEntity);
+        return getOperatorForIdentity(identity, externalRoot(dataFolder), externalLocation(dataFolder, dataEntity),
+                dataEntity);
     }
 
     /**
@@ -164,11 +169,13 @@ public class JsonStore implements DataStore {
         ensureTableAnnotation(dataEntity);
         if (isInternalScope(scope)) {
             String identity = scope.getPluginName();
-            return getOperatorForIdentity(identity, internalLocation(identity, dataEntity), dataEntity);
+            return getOperatorForIdentity(identity, internalRoot(identity), internalLocation(identity, dataEntity),
+                    dataEntity);
         }
         File dataFolder = scope.getDataFolder();
         String identity = canonicalPath(dataFolder);
-        return getOperatorForIdentity(identity, externalLocation(dataFolder, dataEntity), dataEntity);
+        return getOperatorForIdentity(identity, externalRoot(dataFolder), externalLocation(dataFolder, dataEntity),
+                dataEntity);
     }
 
     /**
@@ -176,22 +183,36 @@ public class JsonStore implements DataStore {
      * {@code @Table} annotation have already been established by whichever one of them was
      * called. Single-sourced so the operator cache (keyed by (identity, entity)) and the {@code
      * transactionManagerFor(...)} wiring are each written in exactly one place.
+     * <p>
+     * Recovers the identity's journal before its first operator is constructed, so no table of
+     * the identity is ever read before its committed records are applied. A refused recovery (a
+     * damaged record, question 8 option A) fails this request and every later one for the same
+     * identity, until a request finds the journal recoverable; other identities are unaffected.
      */
     @SuppressWarnings("unchecked")
     private <T extends BaseDataEntity<String>> DataOperator<T> getOperatorForIdentity(
-            String identity, String location, Class<T> dataEntity) {
+            String identity, Path root, String location, Class<T> dataEntity) {
+        JsonTransactionManager manager = transactionManagerFor(identity, root);
+        manager.journalIdentity().recoverOnce();
         Cached cached = dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
-                key -> new SimpleJsonDataOperator<>(location, dataEntity));
-        SimpleJsonDataOperator<T> operator = (SimpleJsonDataOperator<T>) cached;
-        operator.bindLockTable(lockTable);
-        operator.bindTransactionManager(transactionManagerFor(identity));
-        return operator;
+                key -> new SimpleJsonDataOperator<>(location, dataEntity, manager, lockTable));
+        return (SimpleJsonDataOperator<T>) cached;
     }
 
     private static void ensureTableAnnotation(Class<?> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
         }
+    }
+
+    /** The identity root of an internal plugin: {@code <store location>/<plugin name>}. */
+    private Path internalRoot(String identity) {
+        return Paths.get(storeLocation, identity);
+    }
+
+    /** The identity root of an external plugin: {@code <plugin's own data folder>/data}. */
+    private static Path externalRoot(File dataFolder) {
+        return Paths.get(dataFolder.getAbsolutePath(), "data");
     }
 
     /**
@@ -245,11 +266,13 @@ public class JsonStore implements DataStore {
      * @return this store's manager for that caller's identity
      */
     public JsonTransactionManager transactionManagerFor(DataScope scope) {
-        return transactionManagerFor(identityOf(scope));
+        Path root = isInternalScope(scope) ? internalRoot(scope.getPluginName()) : externalRoot(scope.getDataFolder());
+        return transactionManagerFor(identityOf(scope), root);
     }
 
-    private JsonTransactionManager transactionManagerFor(String identity) {
-        return transactionManagers.computeIfAbsent(identity, JsonTransactionManager::new);
+    private JsonTransactionManager transactionManagerFor(String identity, Path root) {
+        return transactionManagers.computeIfAbsent(identity,
+                key -> new JsonTransactionManager(JsonIdentity.atRoot(key, root)));
     }
 
     /**

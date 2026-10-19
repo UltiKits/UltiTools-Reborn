@@ -1,11 +1,13 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 
 import org.jetbrains.annotations.ApiStatus;
@@ -22,9 +24,14 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  * A write made inside the transaction is staged here instead of reaching the operator's
  * committed entries. The operator merges the overlay into every read the same transaction makes,
  * so the transaction sees its own writes; every other thread reads the committed entries only.
- * {@link #commit()} applies every overlay to its operator's committed entries while holding the
- * identity's visibility write lock once, from before the first operator to after the last, so
- * another thread's read sees all of a commit's changes on every table or none of them.
+ * {@link #commit()} first makes the transaction durable: it writes every staged change to one
+ * record of the identity's journal ({@link JsonJournal}), forced to disk and renamed into place;
+ * <b>the rename is the commit point</b>. It then applies every overlay to its operator's committed
+ * entries while holding the identity's visibility write lock once, from before the first operator
+ * to after the last, so another thread's read sees all of a commit's changes on every table or none
+ * of them, and marks every changed key dirty for the next checkpoint. The identity's commit gate is
+ * held, read side, from the record's sequence number to the end of the apply. A transaction that
+ * staged nothing writes no record, forces nothing and takes no gate.
  * {@link #rollback()} drops the overlays; it never touches committed entries, so it cannot undo a
  * write another caller made.
  * <p>
@@ -62,7 +69,7 @@ public final class JsonTransaction {
     /** Fired inside the visibility write lock, after one operator's overlay is applied and before the next. */
     static final String STEP_APPLY_BETWEEN_OPERATORS = "commit.applyBetweenOperators";
 
-    /** Fired after the whole apply, once the visibility write lock is released, before the table locks are. */
+    /** Fired after the whole apply, once the visibility write lock is released, before the commit gate and the table locks are. */
     static final String STEP_APPLIED = "commit.applied";
 
     private static final StepHook NO_STEP_HOOK = step -> { };
@@ -215,17 +222,84 @@ public final class JsonTransaction {
     }
 
     /**
-     * Applies every overlay to its operator's committed entries, under the identity's visibility
-     * write lock held once across all operators, then discards the overlays and releases the table
-     * locks this transaction holds, whether or not the apply succeeded. A transaction that staged
-     * nothing takes no visibility lock.
+     * Commits: with the identity's commit gate held (read side), allocates a sequence number,
+     * writes the journal record of every staged change, forced and renamed into place (the commit
+     * point), then applies every overlay to its operator's committed entries under the visibility
+     * write lock held once across all operators and marks each changed key dirty. Releases the
+     * gate, then the table locks. The overlays are discarded and the table locks released whether
+     * or not the commit succeeded. A transaction that staged nothing writes no record and takes
+     * neither the gate nor the visibility lock.
+     *
+     * @throws DataAccessException ({@code TRANSACTION_FAILED}) if the journal record could not be
+     *         written; nothing was committed, and the transaction is rolled back
      */
     public void commit() {
         try {
-            applyOverlays();
+            if (!hasAnyStagedWrite()) {
+                return;
+            }
+            JsonIdentity identity = manager.journalIdentity();
+            List<JsonJournal.Entry> record = buildRecord();
+            ReentrantReadWriteLock.ReadLock gate = identity.commitGate().readLock();
+            gate.lock();
+            try {
+                writeRecord(identity, record);
+                applyOverlays();
+                stepHook.onStep(STEP_APPLIED);
+            } finally {
+                gate.unlock();
+            }
         } finally {
             overlays.clear();
             releaseLocks();
+        }
+    }
+
+    private boolean hasAnyStagedWrite() {
+        for (Overlay<?> overlay : overlays.values()) {
+            if (!overlay.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The journal entries of every staged write, operators in first-touch order and each
+     * operator's writes in staging order.
+     *
+     * @throws DataAccessException ({@code TRANSACTION_FAILED}) if a staged key cannot name an
+     *         entity file (it is not one path segment); nothing was committed
+     */
+    private List<JsonJournal.Entry> buildRecord() {
+        List<JsonJournal.Entry> record = new ArrayList<>();
+        for (Map.Entry<SimpleJsonDataOperator<?>, Overlay<?>> entry : overlays.entrySet()) {
+            try {
+                addEntries(entry.getKey(), entry.getValue(), record);
+            } catch (IllegalArgumentException invalid) {
+                throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
+                        "JSON transaction not committed: a write to table '" + entry.getKey().tableName()
+                                + "' cannot be stored as a file (" + invalid.getMessage() + ").", invalid);
+            }
+        }
+        return record;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends BaseDataEntity<String>> void addEntries(SimpleJsonDataOperator<?> operator,
+            Overlay<?> overlay, List<JsonJournal.Entry> record) {
+        ((SimpleJsonDataOperator<T>) operator).journalEntries((Overlay<T>) overlay, record);
+    }
+
+    /** Allocates the record's number and writes the record; its rename is the commit point. */
+    private static void writeRecord(JsonIdentity identity, List<JsonJournal.Entry> record) {
+        JsonJournal journal = identity.journal();
+        try {
+            journal.writeRecord(journal.nextSequence(), JsonJournal.Kind.COMMIT, record);
+        } catch (IOException e) {
+            throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
+                    "JSON transaction of " + identity.name() + " not committed: its journal record could not be"
+                            + " written to " + journal.directory() + ". Nothing was changed.", e);
         }
     }
 
@@ -236,9 +310,6 @@ public final class JsonTransaction {
     }
 
     private void applyOverlays() {
-        if (overlays.isEmpty()) {
-            return;
-        }
         manager.publishUnderVisibilityLock(() -> {
             Iterator<Map.Entry<SimpleJsonDataOperator<?>, Overlay<?>>> iterator = overlays.entrySet().iterator();
             while (iterator.hasNext()) {
@@ -250,7 +321,6 @@ public final class JsonTransaction {
             }
             return null;
         });
-        stepHook.onStep(STEP_APPLIED);
     }
 
     /**

@@ -21,8 +21,9 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -99,28 +100,68 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     /**
      * The {@link JsonTransactionManager} every read and write of this operator goes through: the
-     * identity's manager, which {@code JsonStore} binds before any caller receives this operator,
-     * or, for an operator constructed directly, a standalone manager this operator creates on
-     * first use (see {@link #transactionManager()}). One atomic reference, so this operator's
-     * readers and committers always use the same manager, and therefore the same transaction
-     * contexts and the same visibility lock.
+     * identity's manager, which {@code JsonStore} passes in, or, for an operator constructed
+     * directly, the manager of a standalone identity of its own (see
+     * {@link #SimpleJsonDataOperator(String, Class)}). Fixed at construction, so this operator's
+     * readers and committers always use the same transaction contexts, the same visibility lock
+     * and the same journal.
      */
-    private final AtomicReference<JsonTransactionManager> transactionManager = new AtomicReference<>();
+    private final JsonTransactionManager transactionManager;
 
     /**
      * The table write locks this operator's writes take: {@code JsonStore}'s shared lock table,
-     * bound before any caller receives this operator, or, for an operator constructed directly,
-     * a lock table of its own.
+     * or, for an operator constructed directly, a lock table of its own.
      */
-    private volatile JsonLockTable lockTable = new JsonLockTable();
+    private final JsonLockTable lockTable;
+
+    /** This table's name in journal records: its directory's path relative to the identity root. */
+    private final String journalTable;
+
+    /**
+     * Keys whose committed value (or absence) has changed since the last checkpoint that captured
+     * them, each with the generation of its latest change. Written under the commit gate's read
+     * side and the visibility write side; a checkpoint captures it under the gate's write side.
+     */
+    private final Map<Object, Long> dirty = new ConcurrentHashMap<>();
 
     /** Keeps two {@link #flush()} calls from writing the same files at the same time. */
     private final Object flushMonitor = new Object();
 
+    /**
+     * An operator over the table directory {@code storeLocation}, with an identity of its own: its
+     * transactions journal in {@code <storeLocation>.ultitools-journal}, a sibling of the table
+     * directory, and it has its own table locks. Servers reach JSON data through {@code JsonStore},
+     * whose operators share their plugin's identity; this constructor serves code that builds an
+     * operator directly.
+     *
+     * @param storeLocation the table directory, one {@code <key>.json} file per entity
+     * @param type          the entity type
+     */
     public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
+        this(storeLocation, type,
+                new JsonTransactionManager(JsonIdentity.forStandaloneTable(storeLocation)), new JsonLockTable());
+    }
+
+    /**
+     * An operator of an identity {@code JsonStore} manages: it uses that identity's manager (and so
+     * its journal, commit gate and visibility lock) and the store's lock table, and registers with
+     * the identity so the identity's checkpoints capture its changes. The caller has recovered the
+     * identity before calling this, so the table files read here already include every committed
+     * record.
+     *
+     * @param storeLocation      the table directory, a direct child of the identity root
+     * @param type               the entity type
+     * @param transactionManager the identity's manager
+     * @param lockTable          the store's lock table
+     */
+    SimpleJsonDataOperator(String storeLocation, Class<T> type, JsonTransactionManager transactionManager,
+            JsonLockTable lockTable) {
         this.storeLocation = storeLocation;
         this.type = type;
         this.columnToFieldName = buildColumnToFieldName(type);
+        this.transactionManager = transactionManager;
+        this.lockTable = lockTable;
+        this.journalTable = transactionManager.journalIdentity().tableName(storeLocation);
         File file = new File(storeLocation);
         File[] files = file.listFiles();
         if (files != null) {
@@ -133,49 +174,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                 }
             });
         }
+        transactionManager.journalIdentity().register(this);
     }
 
     /**
-     * Binds the {@link JsonTransactionManager} this operator participates in (02-05, D-03).
-     * <p>
-     * Package-private: called only by {@code JsonStore}, right after it constructs or retrieves
-     * this operator from its cache and before it hands the operator to any caller, with the
-     * manager it resolves for the same identity. Every operator of that identity then stages into
-     * the same transaction and publishes under the same visibility lock. Not part of this class's
-     * public API.
-     *
-     * @param transactionManager the manager governing the plugin (or external caller) this
-     *                           operator belongs to
-     */
-    void bindTransactionManager(JsonTransactionManager transactionManager) {
-        this.transactionManager.set(transactionManager);
-    }
-
-    /**
-     * The manager this operator uses: the bound one, or, for an operator constructed directly, a
-     * standalone manager created on first use (its diagnostic identity is the table directory).
-     * Both a reader and a committer reach it through the same atomic reference.
+     * The manager this operator uses, fixed at construction.
      *
      * @return this operator's transaction manager, never {@code null}
      */
     JsonTransactionManager transactionManager() {
-        JsonTransactionManager manager = transactionManager.get();
-        if (manager == null) {
-            transactionManager.compareAndSet(null, new JsonTransactionManager(storeLocation));
-            manager = transactionManager.get();
-        }
-        return manager;
-    }
-
-    /**
-     * Binds the lock table this operator's writes lock in. Package-private: called only by
-     * {@code JsonStore}, with its one shared lock table, before it hands this operator to any
-     * caller.
-     *
-     * @param lockTable the store's lock table
-     */
-    void bindLockTable(JsonLockTable lockTable) {
-        this.lockTable = lockTable;
+        return transactionManager;
     }
 
     /** The lock table this operator's writes lock in. */
@@ -292,23 +300,49 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     /**
      * Stores {@code detachedValue} under {@code key}: staged in the calling thread's transaction,
-     * or, outside one, put into the committed entries in one step under the visibility write
-     * side.
+     * or, outside one, put into the committed entries in one step (see
+     * {@link #publishPlainWrite(Supplier)}).
      */
     private void store(Object key, T detachedValue) {
-        JsonTransactionManager manager = transactionManager();
-        JsonTransaction transaction = manager.currentTransaction();
+        JsonTransaction transaction = transactionManager().currentTransaction();
         if (transaction != null) {
             transaction.overlayForWrite(this).put(key, detachedValue);
             return;
         }
-        manager.publishUnderVisibilityLock(() -> cache.put(key, detachedValue));
+        publishPlainWrite(() -> {
+            cache.put(key, detachedValue);
+            markDirty(key);
+            return null;
+        });
     }
 
     /**
-     * Applies one transaction's staged writes for this operator to the committed entries. Called
-     * only by {@link JsonTransaction#commit()}, which holds this table's write lock and the
-     * visibility write side. Takes no lock of its own, so a commit holding the write side never
+     * Applies a write made outside any transaction: with the identity's commit gate held (read
+     * side), then the visibility write side, so a checkpoint's capture sees it whole or not at all
+     * and every reader sees it at one instant. The caller holds this table's write lock. Plain
+     * writes are not journaled: they reach disk at the next checkpoint, as before 6.3.0.
+     * {@code apply} updates in-memory maps only and marks every key it changes dirty.
+     */
+    private <R> R publishPlainWrite(Supplier<R> apply) {
+        ReentrantReadWriteLock.ReadLock gate = transactionManager.journalIdentity().commitGate().readLock();
+        gate.lock();
+        try {
+            return transactionManager.publishUnderVisibilityLock(apply);
+        } finally {
+            gate.unlock();
+        }
+    }
+
+    /** Marks {@code key} changed since the last checkpoint, with a fresh generation. */
+    private void markDirty(Object key) {
+        dirty.put(key, transactionManager.journalIdentity().nextGeneration());
+    }
+
+    /**
+     * Applies one transaction's staged writes for this operator to the committed entries and marks
+     * each key dirty. Called only by {@link JsonTransaction#commit()}, after the transaction's
+     * journal record is committed, holding this table's write lock, the commit gate's read side and
+     * the visibility write side. Takes no lock of its own, so a commit holding the write side never
      * waits for anything.
      *
      * @param overlay the staged writes; a {@code null} value is a staged delete
@@ -320,7 +354,21 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             } else {
                 cache.put(key, value);
             }
+            markDirty(key);
         });
+    }
+
+    /**
+     * Adds the journal entries of one transaction's staged writes for this operator to
+     * {@code record}, in staging order: the entity's JSON for a put (the form a checkpoint writes to
+     * its file), a delete for a staged delete.
+     *
+     * @throws IllegalArgumentException if a key is not one path segment
+     */
+    void journalEntries(JsonTransaction.Overlay<T> overlay, List<JsonJournal.Entry> record) {
+        overlay.forEach((key, value) -> record.add(value == null
+                ? JsonJournal.Entry.delete(journalTable, key)
+                : JsonJournal.Entry.put(journalTable, key, GSON.toJson(value))));
     }
 
     /**
@@ -586,7 +634,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         T stored = detach(obj);
         Object key = obj.getId();
         if (transaction == null) {
-            transactionManager().publishUnderVisibilityLock(() -> cache.putIfAbsent(key, stored));
+            publishPlainWrite(() -> {
+                if (cache.putIfAbsent(key, stored) == null) {
+                    markDirty(key);
+                }
+                return null;
+            });
             return;
         }
         // Put-if-absent against what this transaction sees: a key it has staged a delete for is
@@ -674,9 +727,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             }
             return;
         }
-        transactionManager().publishUnderVisibilityLock(() -> {
+        publishPlainWrite(() -> {
             for (Map.Entry<Object, T> each : results) {
-                cache.remove(each.getKey(), each.getValue());
+                if (cache.remove(each.getKey(), each.getValue())) {
+                    markDirty(each.getKey());
+                }
             }
             return null;
         });
@@ -715,7 +770,13 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                 detach(entity).onDelete();
             }
             if (transaction == null) {
-                return transactionManager().publishUnderVisibilityLock(() -> cache.remove(id) != null ? 1 : 0);
+                return publishPlainWrite(() -> {
+                    if (cache.remove(id) == null) {
+                        return 0;
+                    }
+                    markDirty(id);
+                    return 1;
+                });
             }
             if (entity == null) {
                 return 0;
