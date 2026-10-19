@@ -2728,9 +2728,15 @@ public class PluginManager {
      * this method builds one {@code TransactionManager} per plugin container from it and
      * registers a {@code TransactionInterceptor} advisor for that manager, for the two JDBC
      * backends (SQLite, MySQL). Issues #195 and #196 are both addressed for the JDBC backends.
-     * The JSON backend has its own {@code TransactionManager} instead (02-05, D-03): a per-plugin
-     * snapshot manager that rolls back every JSON operator a {@code @Transactional} method
-     * touched, obtained from {@code JsonStore} when {@code getDataSource(DataScope)} throws. Only
+     * The JSON backend is served by the per-plugin JSON transaction manager instead (02-05, D-03),
+     * obtained from {@code JsonStore} when {@code getDataSource(DataScope)} throws. As of 6.3.0 it
+     * stages each transaction's writes apart from committed data, isolates them with table locks,
+     * and commits them atomically and durably through the plugin's journal, so the writes a
+     * {@code @Transactional} method makes to several of the plugin's tables commit or roll back
+     * as one unit, with the propagation rules of the JDBC backends. One difference is documented:
+     * table locks belong to the thread, so a same-thread {@code REQUIRES_NEW} or
+     * {@code NOT_SUPPORTED} body does not wait for the locks of its suspended caller, and when it
+     * writes a key the caller has staged, the caller's later commit is the value that stays. Only
      * a {@code DataStore} that can supply neither a {@code DataSource} nor its own
      * {@code TransactionManager} still declares {@code @Transactional} unavailable.
      * <p>
@@ -2820,10 +2826,11 @@ public class PluginManager {
      * advisor is bound to a {@link DataSourceTransactionManager} -- resolved via {@link
      * #resolveJdbcTransactionManager}, which for these two shipped backends is the SAME instance
      * the store itself wires onto the {@code DataOperator}s it hands out (02-09, T-02-TAM-11), not
-     * an independent second one. For the JSON backend, it is bound to a per-plugin snapshot
-     * {@code JsonTransactionManager} instead (02-05, D-03), obtained from the store itself. A
-     * {@code DataStore} that can supply neither still declares the annotation unavailable, naming
-     * the configured backend.
+     * an independent second one. For the JSON backend, it is bound to the per-plugin
+     * {@code JsonTransactionManager} instead (02-05, D-03), obtained from the store itself, which
+     * stages writes per transaction, isolates them with table locks, and commits them atomically
+     * and durably through a journal. A {@code DataStore} that can supply neither still declares
+     * the annotation unavailable, naming the configured backend.
      *
      * @param context  the plugin container, before refresh
      * @param scope    the identity token used to resolve the plugin's {@code DataSource}
@@ -2850,7 +2857,7 @@ public class PluginManager {
             resolver.addUnavailableAnnotation(Transactional.class,
                     "@Transactional needs a TransactionManager. The configured datasource.type ("
                             + dataStore.getStoreType() + ") does not expose a DataSource or a "
-                            + "snapshot-based TransactionManager of its own. Until then use "
+                            + "TransactionManager of its own. Until then use "
                             + "DataOperator.transaction(Callable) explicitly.");
             return;
         }
@@ -2928,6 +2935,14 @@ public class PluginManager {
      * Builds and registers the {@code @Transactional} advisor for a plugin container backed by
      * the JSON store, once {@link #wireTransactional} has determined {@code dataStore} cannot
      * supply a JDBC {@code DataSource} but is a {@link JsonStore} (02-05, D-03).
+     * <p>
+     * The advisor is bound to the store's {@link JsonTransactionManager} for this plugin, the JSON
+     * transaction engine: it stages a transaction's writes per operator, locks each table the
+     * transaction writes against other writers until it ends, and, at a commit that changed
+     * something, forces one journal record to disk before it makes every staged write visible at
+     * once. The same manager serves every operator the store hands out for the plugin, so a
+     * {@code @Transactional} method's writes to several of the plugin's tables form one
+     * transaction.
      *
      * @param context   the plugin container, before refresh
      * @param scope     the identity token used to resolve the manager
