@@ -37,9 +37,11 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
     /**
      * Compares {@code GREATER} and {@code LESS} as numbers of the field's Java type: a
      * {@code byte}, {@code short}, {@code int} or {@code long} field (or its wrapper) as a 64-bit
-     * integer through {@code CAST(column AS BIGINT)}, a {@code float} or {@code double} field (or its
-     * wrapper) as a 64-bit floating-point number through {@code CAST(column AS DOUBLE)}. Every other
-     * type is compared as stored.
+     * integer through {@code CAST(column AS BIGINT)}, a {@code double} field (or its wrapper) as a
+     * 64-bit floating-point number through {@code CAST(column AS DOUBLE)}, and a {@code float} field
+     * (or its wrapper) through {@code CAST(CAST(CAST(column AS REAL) AS VARCHAR) AS DOUBLE)}, which
+     * {@link #orderedComparisonPlaceholder(Class)} applies to the value as well. Every other type is
+     * compared as stored.
      * <p>
      * A field left on the default {@code @Column} type is a {@code VARCHAR(255)} column, which SQLite
      * gives TEXT affinity, so without the cast it compares a number as text and {@code 2 > 10} is
@@ -49,6 +51,18 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
      * {@code BIGINT} and {@code DOUBLE} are also 64-bit types on the H2 stand-in, whose
      * {@code INTEGER} is 32-bit and {@code REAL} single precision. Integral and floating fields get
      * separate casts because a single {@code REAL} cast would lose whole numbers beyond 2^53.
+     * <p>
+     * A {@code float} value is bound as the {@code double} it widens to ({@code 0.1f} as
+     * {@code 0.10000000149011612}), and a default column keeps SQLite's 15-significant-digit text of
+     * that double ({@code 0.100000001490116}). The text reads back as exactly {@code 0.1f}, but
+     * compared with the bound value it is smaller, so {@code LESS 0.1f} would select the row holding
+     * {@code 0.1f}. Passing both sides through the same conversion to text compares them the way Java
+     * compares the values as they read back: two different floats differ well before the 15th
+     * significant digit, so the conversion keeps their order and never makes them equal. The inner
+     * {@code REAL} cast changes nothing on SQLite, whose {@code REAL} is 64-bit; on the H2 stand-in,
+     * where {@code REAL} is single precision, it first rounds the stored or bound value to the float
+     * it holds. A {@code double} field keeps the plain bound value: the value it reads back is the
+     * stored text read as a {@code double}, which is what {@code CAST(column AS DOUBLE)} compares.
      *
      * @since 6.3.0
      */
@@ -58,10 +72,33 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
         if (isIntegral(fieldType)) {
             return "CAST(" + column + " AS BIGINT)";
         }
-        if (isFloating(fieldType)) {
+        if (isFloat(fieldType)) {
+            return throughStoredFloatText(column);
+        }
+        if (isDouble(fieldType)) {
             return "CAST(" + column + " AS DOUBLE)";
         }
         return column;
+    }
+
+    /**
+     * Passes the value of a {@code GREATER} or {@code LESS} condition on a {@code float} field (or
+     * its wrapper) through the same conversion as the column,
+     * {@code CAST(CAST(CAST(? AS REAL) AS VARCHAR) AS DOUBLE)}, so both sides keep the same 15
+     * significant digits (see {@link #orderedComparisonOperand(String, Class)}). Every other type
+     * binds the value unchanged.
+     *
+     * @since 6.3.0
+     */
+    @Override
+    @ApiStatus.Internal
+    protected String orderedComparisonPlaceholder(Class<?> fieldType) {
+        return isFloat(fieldType) ? throughStoredFloatText("?") : "?";
+    }
+
+    /** The float conversion both sides share; {@code operand} is a column name or {@code ?}. */
+    private static String throughStoredFloatText(String operand) {
+        return "CAST(CAST(CAST(" + operand + " AS REAL) AS VARCHAR) AS DOUBLE)";
     }
 
     private static boolean isIntegral(Class<?> type) {
@@ -69,8 +106,12 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
                 || type == int.class || type == Integer.class || type == long.class || type == Long.class;
     }
 
-    private static boolean isFloating(Class<?> type) {
-        return type == float.class || type == Float.class || type == double.class || type == Double.class;
+    private static boolean isFloat(Class<?> type) {
+        return type == float.class || type == Float.class;
+    }
+
+    private static boolean isDouble(Class<?> type) {
+        return type == double.class || type == Double.class;
     }
 
     @Override

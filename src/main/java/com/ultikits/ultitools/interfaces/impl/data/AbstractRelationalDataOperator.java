@@ -586,19 +586,23 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * exclamation mark means the same thing on SQLite, MySQL in either mode, and H2. No caller text
      * enters the SQL. {@link #getLike} and {@code Query#like} are separate pattern operators and are
      * not affected; {@code EQUAL}, {@code GREATER} and {@code LESS} are unchanged here (the column
-     * side of {@code GREATER} and {@code LESS} goes through {@link #orderedComparisonOperand}).
+     * side of {@code GREATER} and {@code LESS} goes through {@link #orderedComparisonOperand}, and
+     * their parameter side is {@code orderedPlaceholder}, which {@link #appendConditions} takes from
+     * {@link #orderedComparisonPlaceholder}).
      *
-     * @param comparison the comparison operator
+     * @param comparison         the comparison operator
+     * @param orderedPlaceholder the parameter operand of {@code GREATER} and {@code LESS}; the other
+     *                           comparisons always use a plain {@code ?}
      * @return the SQL fragment, e.g. {@code " > ?"}
      */
-    private String sqlOperatorFor(Comparison comparison) {
+    private String sqlOperatorFor(Comparison comparison, String orderedPlaceholder) {
         switch (comparison) {
             case EQUAL:
                 return " = ?";
             case GREATER:
-                return " > ?";
+                return " > " + orderedPlaceholder;
             case LESS:
-                return " < ?";
+                return " < " + orderedPlaceholder;
             case INCLUDE:
             case STARTSWITH:
             case ENDSWITH:
@@ -674,6 +678,29 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     }
 
     /**
+     * Returns the SQL operand that a {@code GREATER} or {@code LESS} condition compares on the
+     * parameter side: the placeholder {@code ?} the condition's value is bound to, or an expression
+     * around it. The default returns {@code ?}, so the database compares the value as bound. A dialect
+     * overrides it, together with {@link #orderedComparisonOperand(String, Class)}, when both sides
+     * must pass through the same conversion to compare the way the stored value reads back, for
+     * example a {@code float} field whose stored text keeps fewer digits than the bound value.
+     * <p>
+     * {@link #appendConditions} calls it only for {@code GREATER} and {@code LESS}, after
+     * {@link #validateColumn(String)} has accepted the column, and binds the condition's value to
+     * the result's one placeholder. Its result is concatenated into the SQL text, so an override must
+     * return exactly one {@code ?} and build the rest only from constants, never from a condition's
+     * value or any other caller text.
+     *
+     * @param fieldType the Java type of the field the condition compares
+     * @return the SQL operand holding exactly one {@code ?}, e.g. {@code ?} or a cast of it
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    protected String orderedComparisonPlaceholder(Class<?> fieldType) {
+        return "?";
+    }
+
+    /**
      * Appends a {@code WHERE} clause built from {@code conditions} to {@code sql} and their
      * bound values to {@code params}, routing every column through {@link #sqlOperatorFor} so
      * the four relational builders cannot diverge in how they honor a {@link Comparison} again.
@@ -731,11 +758,13 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             }
             Comparison comparison = condition.getComparison();
             if (comparison == Comparison.GREATER || comparison == Comparison.LESS) {
-                sql.append(orderedComparisonOperand(condition.getColumn(), columnTypes.get(condition.getColumn())));
+                Class<?> fieldType = columnTypes.get(condition.getColumn());
+                sql.append(orderedComparisonOperand(condition.getColumn(), fieldType));
+                sql.append(sqlOperatorFor(comparison, orderedComparisonPlaceholder(fieldType)));
             } else {
                 sql.append(condition.getColumn());
+                sql.append(sqlOperatorFor(comparison, "?"));
             }
-            sql.append(sqlOperatorFor(comparison));
             params.add(likeWrappedValue(condition));
         }
     }
