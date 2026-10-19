@@ -93,7 +93,10 @@ public class TransactionInterceptor implements MethodInterceptor {
             }
 
             case SUPPORTS:
-                // Execute with or without transaction
+                // Participates in an active transaction like REQUIRED; without one, runs without.
+                if (existingTx) {
+                    return executeAsParticipant(invocation, tx);
+                }
                 return invocation.proceed();
 
             case MANDATORY:
@@ -102,7 +105,7 @@ public class TransactionInterceptor implements MethodInterceptor {
                             "No existing transaction found for MANDATORY propagation on method: " +
                                     invocation.getMethod().getName());
                 }
-                return invocation.proceed();
+                return executeAsParticipant(invocation, tx);
 
             case NOT_SUPPORTED: {
                 // D-09: same suspend/resume shape as REQUIRES_NEW, minus the inner begin() - the
@@ -130,7 +133,20 @@ public class TransactionInterceptor implements MethodInterceptor {
 
     /**
      * Executes the invocation in a new transaction.
+     * <p>
+     * Only the body runs inside the {@code try} whose handler completes the transaction after a
+     * failure; the commit after a normal return runs after that handler, so a failing commit
+     * ({@code UnexpectedRollbackException} included) reaches the caller as it is and is never
+     * followed by a second completion call. When the body's exception does not call for a rollback
+     * and the commit then fails, the commit failure is thrown with the body's exception attached as
+     * suppressed.
      */
+    // PMD.AvoidCatchingThrowable: an Error raised by the body must complete the transaction too,
+    // and a failing commit-despite-exception must not lose the body's exception; both are rethrown
+    // or attached, never swallowed.
+    // PMD.CompareObjectsWithEquals: deliberate reference identity - addSuppressed rejects the very
+    // same instance (self-suppression), and that rejection would replace the commit failure.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CompareObjectsWithEquals"})
     private Object executeInNewTransaction(MethodInvocation invocation, Transactional tx) throws Throwable {
         String methodName = invocation.getMethod().getDeclaringClass().getSimpleName() + "." +
                 invocation.getMethod().getName();
@@ -144,21 +160,31 @@ public class TransactionInterceptor implements MethodInterceptor {
         // not strand it on this thread.
         applySettings(tx, methodName);
 
+        Object result;
         try {
-            Object result = invocation.proceed();
-            transactionManager.commit();
-            LOGGER.fine("Transaction committed for: " + methodName);
-            return result;
+            result = invocation.proceed();
         } catch (Throwable e) {
             if (shouldRollback(e, tx)) {
                 LOGGER.log(Level.FINE, "Rolling back transaction for: " + methodName + " due to: " + e.getMessage());
                 transactionManager.rollback();
             } else {
                 LOGGER.fine("Committing transaction despite exception for: " + methodName);
-                transactionManager.commit();
+                try {
+                    transactionManager.commit();
+                } catch (Throwable commitFailure) {
+                    if (commitFailure != e) {
+                        commitFailure.addSuppressed(e);
+                    }
+                    throw commitFailure;
+                }
             }
             throw e;
         }
+        // Outside the handler above (Spring's invokeWithinTransaction shape): a commit that fails
+        // has already ended the transaction, so no rollback() may follow it.
+        transactionManager.commit();
+        LOGGER.fine("Transaction committed for: " + methodName);
+        return result;
     }
 
     /**
