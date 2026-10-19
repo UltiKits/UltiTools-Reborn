@@ -35,10 +35,16 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonTransaction;
  *       disk and renames it into place; the rename is the commit point. Only then does it apply the
  *       changes, holding this manager's visibility write lock once across all of the identity's
  *       operators, so another thread's read sees all of a commit's changes, on every table, or
- *       none of them. Once {@code commit()} has returned, the transaction survives a crash. A
- *       transaction that changed nothing writes no record and costs no disk access. A record that
- *       cannot be written fails the commit with a {@code DataAccessException}
- *       ({@code TRANSACTION_FAILED}) and rolls the transaction back.</li>
+ *       none of them. Once {@code commit()} has returned, the transaction survives a crash. One
+ *       exception: when forcing the journal directory to disk after the record's rename fails with
+ *       a real I/O error, {@code commit()} still returns, because the transaction is committed and
+ *       visible, and a {@code WARNING} is logged; the transaction then survives a server crash, but
+ *       survives a power loss or operating-system crash only once the next checkpoint has
+ *       completed. A transaction that changed nothing writes no record and costs no disk access. A
+ *       record that cannot be written fails the commit with a {@code DataAccessException}
+ *       ({@code TRANSACTION_FAILED}) and rolls the transaction back. On Windows, a journal file
+ *       move that another program (an antivirus scanner, an indexer, a backup tool) briefly holds
+ *       is retried for at most 150 ms before the commit fails.</li>
  *   <li><b>Rollback.</b> {@link #rollback()} at depth 1 discards the staged writes and touches
  *       nothing that was committed, by this transaction's own inner {@code REQUIRES_NEW} scope or
  *       by any other caller. At depth greater than 1 it marks the transaction rollback-only

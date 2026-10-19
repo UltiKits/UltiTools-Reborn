@@ -167,7 +167,9 @@ public final class JsonIdentity {
      * @throws DataAccessException naming the file if a committed record is damaged
      *                             ({@code DATA_INTEGRITY_VIOLATION}, question 8 option A), or
      *                             {@code DATA_PERSISTENCE_FAILED} if a journal or table file cannot
-     *                             be read, written or deleted; either way the identity stays closed
+     *                             be read, written or deleted, or a table or journal directory
+     *                             cannot be forced to disk; either way the identity stays closed
+     *                             and the next request runs recovery again
      */
     synchronized void recoverOnce() {
         if (recovered) {
@@ -203,8 +205,8 @@ public final class JsonIdentity {
      * truncation never drops a commit.
      *
      * @throws DataAccessException ({@code DATA_PERSISTENCE_FAILED}) if a record or entity file
-     *         cannot be written, moved or deleted; the dirty marks stay, so the next checkpoint
-     *         writes the same entries again
+     *         cannot be written, moved or deleted, or a journal or table directory cannot be forced
+     *         to disk; the dirty marks stay, so the next checkpoint writes the same entries again
      */
     void checkpoint() {
         checkpointMutex.lock();
