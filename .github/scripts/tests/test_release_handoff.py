@@ -174,6 +174,24 @@ if "--clobber" in rest:
 releases = state["releases"]
 rel = releases.get(tag)
 assets = state_dir / "assets" / tag
+move_to = os.environ.get("FAKE_GH_VIEW_MOVE_MAIN_TO")
+marker = state_dir / "moved-main"
+if verb == "view" and move_to and not marker.exists():
+    # Another actor moves origin/main while this run is between its checks and its write.
+    marker.write_text(move_to)
+    subprocess.run([os.environ["REAL_GIT"], "--git-dir", os.environ["FAKE_ORIGIN"], "update-ref", "refs/heads/main",
+                    move_to], check=True)
+
+
+def store(path, name):
+    shutil.copyfile(path, str(assets / name))
+    if os.environ.get("FAKE_GH_CORRUPT_UPLOAD") == name:
+        with open(str(assets / name), "r+b") as handle:
+            first = handle.read(1)
+            handle.seek(0)
+            handle.write(bytes([first[0] ^ 0xFF]))
+
+
 if verb == "view":
     if rel is None:
         fail("release not found")
@@ -200,7 +218,7 @@ if verb == "create":
     for index, path in enumerate(files):
         if limit is not None and index >= int(limit):
             fail("simulated interruption after %s assets" % limit)
-        shutil.copyfile(path, str(assets / Path(path).name))
+        store(path, Path(path).name)
         rel["assets"].append(Path(path).name)
         save()
     if not values.get("--draft"):
@@ -217,7 +235,7 @@ if verb == "upload":
         name = Path(path).name
         if name in rel["assets"]:
             fail("asset %s already exists" % name)
-        shutil.copyfile(path, str(assets / name))
+        store(path, name)
         rel["assets"].append(name)
         save()
     sys.exit(0)
@@ -609,6 +627,330 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertEqual(self.fx.gh_writes(), [])
         self.assertIn("not acceptance evidence", output)
         self.assertFalse(self.retain.exists())
+
+
+def rewrite_manifest(path, mutate):
+    """Rewrite a retained manifest canonically after applying mutate(data)."""
+    path = Path(path)
+    path.chmod(0o644)
+    data = json.loads(path.read_text())
+    mutate(data)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
+    return path
+
+
+def flip_last_byte(path):
+    path = Path(path)
+    path.chmod(0o644)
+    data = bytearray(path.read_bytes())
+    data[-1] ^= 0x01
+    path.write_bytes(bytes(data))
+
+
+def lock_path(fx):
+    return Path(fx.git_raw("rev-parse", "--absolute-git-dir")) / ("ultitools-release-%s.lock" % VERSION)
+
+
+class EdgeHandoffTests(HandoffTestCase):
+    """Task 2: mutation, stale authorization, collisions and interrupted repeats all block or reconcile."""
+
+    def approved(self):
+        manifest = self.prepared()
+        authority, uat = self.fx.write_receipts(manifest)
+        self.fx.log.write_text("")
+        return manifest, authority, uat
+
+    def expected_assets(self):
+        return {name: sha256_file(self.retain / name) for name in PAYLOADS + (MANIFEST,)}
+
+    # ------------------------------------------------------------------- empty
+
+    def test_empty_manifest_blocks_publication(self):
+        manifest, authority, uat = self.approved()
+        manifest.chmod(0o644)
+        manifest.write_bytes(b"")
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "record_empty")
+        self.assert_no_build()
+
+    def test_empty_artifact_list_blocks_publication(self):
+        manifest, _, _ = self.approved()
+        rewrite_manifest(manifest, lambda m: m.update(artifacts=[]))
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "artifacts_empty")
+
+    def test_missing_receipts_block_publication(self):
+        manifest, authority, _ = self.approved()
+        result = self.fx.run_release("--publish-approved", str(manifest), "--authority-receipt", str(authority),
+                                     "--yes", env={"FAKE_MVN_FORBID": "1"})
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.fx.gh_writes(), [])
+        missing = self.fx.receipts / "absent.json"
+        result = self.publish(manifest, authority, missing)
+        self.assert_blocked_without_writes(result, "file_missing")
+
+    # ------------------------------------------------------------ byte mutation
+
+    def test_one_flipped_byte_in_the_primary_jar_blocks(self):
+        manifest, authority, uat = self.approved()
+        flip_last_byte(self.retain / PRIMARY)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "sha256_mismatch")
+
+    def test_pom_byte_mutation_blocks(self):
+        manifest, authority, uat = self.approved()
+        pom = self.retain / POM
+        pom.chmod(0o644)
+        pom.write_bytes(pom.read_bytes().replace(b"<packaging>jar</packaging>", b"<packaging>jar</packaging> "))
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "sha256_mismatch")
+
+    def test_pom_rewritten_consistently_still_differs_from_source(self):
+        manifest, _, _ = self.approved()
+        pom = self.retain / POM
+        pom.chmod(0o644)
+        changed = pom.read_bytes().replace(b"<modelVersion>", b"<!-- edited --><modelVersion>")
+        pom.write_bytes(changed)
+
+        def mutate(m):
+            for artifact in m["artifacts"]:
+                if artifact["role"] == "pom":
+                    artifact["bytes"] = len(changed)
+                    artifact["sha256"] = sha256_bytes(changed)
+        rewrite_manifest(manifest, mutate)
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "pom_not_source_bytes")
+
+    def test_detached_signature_may_be_added_but_payloads_stay_exact(self):
+        manifest, authority, uat = self.approved()
+        (self.retain / (PRIMARY + ".asc")).write_text("detached signature\n")
+        result = self.publish(manifest, authority, uat)
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assertEqual(self.fx.release_assets(), self.expected_assets())
+
+    # ------------------------------------------------------------ names and source
+
+    def test_wrong_exact_filename_blocks(self):
+        manifest, _, _ = self.approved()
+        lower = PRIMARY.lower()
+        (self.retain / PRIMARY).rename(self.retain / lower)
+
+        def mutate(m):
+            m["filename"] = lower
+            for artifact in m["artifacts"]:
+                if artifact["role"] == "primary":
+                    artifact["filename"] = lower
+            m["artifacts"].sort(key=lambda a: a["filename"])
+        rewrite_manifest(manifest, mutate)
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "artifact_filename")
+
+    def test_wrong_source_tree_blocks(self):
+        manifest, _, _ = self.approved()
+        rewrite_manifest(manifest, lambda m: m.update(product_tree="0" * 40))
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "product_tree_mismatch")
+
+    def test_moving_remote_head_after_preparation_blocks(self):
+        manifest, authority, uat = self.approved()
+        self.fx.advance_origin()
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat))
+
+    def test_remote_head_moving_just_before_the_write_blocks(self):
+        manifest, authority, uat = self.approved()
+        side = self.fx.root / "side"
+        self.fx.git_raw("clone", "-q", str(self.fx.origin), str(side), cwd=self.fx.root)
+        (side / "NOTICE").write_text("side\n")
+        self.fx.git_raw("add", "NOTICE", cwd=side)
+        self.fx.git_raw("commit", "-q", "-m", "side", cwd=side)
+        self.fx.git_raw("push", "-q", "origin", "HEAD:refs/heads/side", cwd=side)
+        side_sha = self.fx.git_raw("rev-parse", "HEAD", cwd=side)
+        result = self.publish(manifest, authority, uat, env={"FAKE_GH_VIEW_MOVE_MAIN_TO": side_sha})
+        self.assert_blocked_without_writes(result, "moved")
+
+    # ---------------------------------------------------------- ordering/canonical
+
+    def test_unsorted_or_noncanonical_manifest_blocks(self):
+        manifest, _, _ = self.approved()
+        rewrite_manifest(manifest, lambda m: m["artifacts"].reverse())
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "artifacts_not_sorted")
+        data = json.loads(manifest.read_text())
+        data["artifacts"].sort(key=lambda a: a["filename"])
+        manifest.write_text(json.dumps(data, sort_keys=True))
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "manifest_not_canonical")
+
+    def test_manifest_cannot_carry_permission_data_or_private_paths(self):
+        manifest, _, _ = self.approved()
+        rewrite_manifest(manifest, lambda m: m.update(authority_receipt=str(self.fx.receipts / "framework-publish.json")))
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "manifest_unknown_field")
+
+    # -------------------------------------------------------------- stale authority
+
+    def test_stale_or_insufficient_authority_blocks(self):
+        cases = {
+            "other manifest digest": ({}, {"manifest_sha256": "f" * 64}, None, "authority_stale"),
+            "hold": ({"decision": "hold"}, {}, None, "authority_not_publish"),
+            "boolean approval": ({"approved": True}, {}, None, "boolean_approval_rejected"),
+            "tag not granted": ({}, {"allowed_actions": ["central-publish", "release"]}, None, "authority_actions"),
+            "quote not in response": ({"response_decision_quote": "ship anything"}, {}, None,
+                                      "decision_not_in_response"),
+            "other source": ({}, {"source_head": "1" * 40}, None, "authority_stale"),
+        }
+        manifest, _, _ = self.approved()
+        for label, (top, scope, text, code) in cases.items():
+            with self.subTest(label):
+                self.fx.log.write_text("")
+                authority, uat = self.fx.write_receipts(manifest, authority_overrides=top, scope_overrides=scope,
+                                                        response_text=text)
+                self.assert_blocked_without_writes(self.publish(manifest, authority, uat), code)
+
+    def test_tampered_retained_response_blocks(self):
+        manifest, authority, uat = self.approved()
+        (self.fx.receipts / "response-framework-publish.txt").write_text("Answer: publish these exact four files. "
+                                                                         "Also anything else.\n")
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "evidence_sha256_mismatch")
+
+    def test_stale_or_incomplete_uat_blocks(self):
+        cases = {
+            "uat on other bytes": ({}, {"uat": {"artifact_sha256": "e" * 64}}, "uat_stale"),
+            "uat missing": ({}, {"uat": None}, "uat_gate_missing"),
+            "uat saw review": ({}, {"uat": {"saw_review_output": True}}, "uat_not_independent"),
+            "ci pending": ({}, {"ci": {"status": "pending"}}, "uat_gate_not_passed"),
+            "other manifest": ({"manifest_sha256": "d" * 64}, {}, "uat_stale"),
+        }
+        manifest, _, _ = self.approved()
+        for label, (top, gates, code) in cases.items():
+            with self.subTest(label):
+                self.fx.log.write_text("")
+                authority, uat = self.fx.write_receipts(manifest, uat_overrides=top, gate_overrides=gates)
+                self.assert_blocked_without_writes(self.publish(manifest, authority, uat), code)
+
+    # ------------------------------------------------------------- adjacency
+
+    def test_equal_served_version_is_a_collision(self):
+        manifest, _, _ = self.approved()
+        rewrite_manifest(manifest, lambda m: m.update(prior_served_version=VERSION))
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "version_collision")
+
+    def test_prepare_refuses_an_occupied_version(self):
+        self.fx.tag_origin(TAG, self.fx.git_raw("rev-parse", "HEAD~1"))
+        result = self.prepare()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.retain.exists())
+        self.assertEqual([argv for argv in self.fx.calls("mvn") if "verify" in argv], [])
+
+    def test_tag_at_another_commit_blocks_publication(self):
+        manifest, authority, uat = self.approved()
+        self.fx.tag_origin(TAG, self.fx.git_raw("rev-parse", "HEAD~1"))
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), TAG)
+
+    def test_existing_release_with_different_bytes_is_never_replaced(self):
+        manifest, authority, uat = self.approved()
+        head = self.fx.head()
+        other = (self.retain / PRIMARY).read_bytes() + b"different build"
+        self.fx.add_release(TAG, head, {PRIMARY: other})
+        before = self.fx.release_assets()
+        result = self.publish(manifest, authority, uat)
+        self.assert_blocked_without_writes(result, "mismatch")
+        self.assertEqual(self.fx.release_assets(), before)
+
+    def test_existing_release_on_another_target_is_refused(self):
+        manifest, authority, uat = self.approved()
+        self.fx.add_release(TAG, self.fx.git_raw("rev-parse", "HEAD~1"), {}, draft=True)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "target")
+
+    def test_existing_release_with_an_unexpected_asset_is_refused(self):
+        manifest, authority, uat = self.approved()
+        self.fx.add_release(TAG, self.fx.head(), {"extra.jar": b"PK"}, draft=True)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "unexpected")
+
+    # ---------------------------------------------------------- idempotency
+
+    def test_interrupted_publication_is_reconciled_without_replacement(self):
+        manifest, authority, uat = self.approved()
+        first = self.publish(manifest, authority, uat, env={"FAKE_GH_FAIL_AFTER_ASSETS": "2"})
+        self.assertNotEqual(first.returncode, 0)
+        partial = self.fx.release_assets()
+        self.assertEqual(len(partial), 2)
+        self.assertTrue(self.fx.gh_state_data()["releases"][TAG]["draft"])
+        self.fx.log.write_text("")
+        second = self.publish(manifest, authority, uat)
+        output = second.stdout.decode()
+        self.assertEqual(second.returncode, 0, output)
+        self.assert_no_build()
+        gh = self.fx.calls("gh")
+        self.assertEqual([a for a in gh if a[:2] == ["release", "create"]], [], "a retry never creates twice")
+        uploads = [a for a in gh if a[:2] == ["release", "upload"]]
+        self.assertEqual(len(uploads), 1, output)
+        uploaded = sorted(Path(p).name for p in uploads[0][3:])
+        self.assertEqual(uploaded, sorted(set(self.expected_assets()) - set(partial)))
+        self.assertEqual(self.fx.release_assets(), self.expected_assets())
+        self.assertFalse(self.fx.gh_state_data()["releases"][TAG]["draft"])
+        self.assertEqual(self.fx.git_raw("--git-dir", str(self.fx.origin), "rev-parse", TAG + "^{commit}",
+                                         cwd=self.fx.root), self.fx.head())
+        self.assertFalse(any("--clobber" in a for a in gh))
+
+    def test_repeat_after_success_changes_nothing(self):
+        manifest, authority, uat = self.approved()
+        self.assertEqual(self.publish(manifest, authority, uat).returncode, 0)
+        published = self.fx.release_assets()
+        self.fx.log.write_text("")
+        again = self.publish(manifest, authority, uat)
+        self.assertEqual(again.returncode, 0, again.stdout.decode())
+        self.assertEqual(self.fx.gh_writes(), [])
+        self.assertEqual(self.fx.release_assets(), published)
+        self.assertIn("already published", again.stdout.decode())
+
+    def test_readback_detects_a_corrupted_upload(self):
+        manifest, authority, uat = self.approved()
+        result = self.publish(manifest, authority, uat, env={"FAKE_GH_CORRUPT_UPLOAD": PRIMARY})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("readback", result.stdout.decode())
+
+    # ---------------------------------------------------------- concurrency
+
+    def test_concurrent_operation_on_the_same_version_is_rejected(self):
+        manifest, authority, uat = self.approved()
+        lock = lock_path(self.fx)
+        lock.mkdir()
+        result = self.publish(manifest, authority, uat)
+        self.assert_blocked_without_writes(result, "in progress")
+        self.assertTrue(lock.exists(), "a run must never remove a lock it did not take")
+        lock.rmdir()
+        self.assertEqual(self.publish(manifest, authority, uat).returncode, 0)
+        self.assertFalse(lock.exists(), "the lock is released after the run")
+
+    def test_prepare_is_rejected_while_the_version_is_locked(self):
+        lock = lock_path(self.fx)
+        lock.mkdir()
+        result = self.prepare()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("in progress", result.stdout.decode())
+        self.assertFalse(self.retain.exists())
+
+    # ------------------------------------------------------------- helper model
+
+    def test_compare_classifies_remote_assets(self):
+        manifest = self.prepared()
+        remote = self.fx.root / "remote"
+        remote.mkdir()
+        result = self.fx.run_helper("compare", "--manifest", str(manifest), "--remote-dir", str(remote))
+        self.assertEqual(result.returncode, 3, result.stderr.decode())
+        self.assertEqual(json.loads(result.stdout.decode())["status"], "absent")
+        shutil.copyfile(str(self.retain / PRIMARY), str(remote / PRIMARY))
+        result = self.fx.run_helper("compare", "--manifest", str(manifest), "--remote-dir", str(remote))
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(json.loads(result.stdout.decode())["status"], "partial")
+        for name in PAYLOADS + (MANIFEST,):
+            shutil.copyfile(str(self.retain / name), str(remote / name))
+        result = self.fx.run_helper("compare", "--manifest", str(manifest), "--remote-dir", str(remote))
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout.decode())["status"], "identical")
+        flip_last_byte(remote / SOURCES)
+        result = self.fx.run_helper("compare", "--manifest", str(manifest), "--remote-dir", str(remote))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout.decode())["mismatched"], [SOURCES])
 
 
 if __name__ == "__main__":
