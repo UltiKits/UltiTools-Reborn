@@ -2,6 +2,7 @@ package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -44,6 +45,7 @@ import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
 import com.ultikits.ultitools.manager.DataScope;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.manager.PluginManager;
@@ -745,6 +747,311 @@ class JsonTransactionLockingTest {
         after.finish();
     }
 
+    // ===== A lock failure marks its transaction rollback-only (question 7 A) =====
+
+    @Test
+    @DisplayName("A caught lock-wait timeout marks the transaction rollback-only: its commit rolls back everything and "
+            + "throws UnexpectedRollbackException; the holder commits")
+    void caughtLockWaitTimeoutMarksTheTransactionRollbackOnly() throws Exception {
+        store.setLockWaitBoundMillis(200);
+        rows.insert(new LockRow("x", "0"));
+        CountDownLatch aWrote = new CountDownLatch(1);
+        CountDownLatch bDone = new CountDownLatch(1);
+        AtomicReference<DataAccessException> caught = new AtomicReference<>();
+        AtomicReference<RuntimeException> commitFailure = new AtomicReference<>();
+        AtomicBoolean bContextLeft = new AtomicBoolean(true);
+
+        Worker a = Worker.start("lock-a", () -> inTransaction(() -> {
+            update(rows, new LockRow("x", "a"));
+            aWrote.countDown();
+            awaitHandshake(bDone, "thread B never finished");
+        }));
+        Worker b = Worker.start("lock-b", () -> {
+            try {
+                awaitHandshake(aWrote, "thread A never wrote");
+                manager.begin();
+                others.insert(new LockOther("y", "written before the wait"));
+                try {
+                    update(rows, new LockRow("x", "b"));
+                } catch (DataAccessException e) {
+                    caught.set(e);
+                }
+                others.insert(new LockOther("z", "written after the caught failure"));
+                try {
+                    manager.commit();
+                } catch (RuntimeException e) {
+                    commitFailure.set(e);
+                }
+            } finally {
+                rollbackIfStillActive();
+                bContextLeft.set(manager.hasActiveTransaction());
+                bDone.countDown();
+            }
+        });
+        a.finish();
+        b.finish();
+
+        assertThat(caught.get()).as("the waiting write fails with a lock-wait timeout")
+                .hasMessageContaining("lock-wait timeout");
+        assertThat(commitFailure.get())
+                .as("catching the failure does not save the transaction: its commit rolls back")
+                .isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(others.getById("y")).as("the write before the failure is rolled back").isNull();
+        assertThat(others.getById("z")).as("the write after the caught failure is rolled back").isNull();
+        assertThat(bContextLeft.get()).as("no context left on B's thread").isFalse();
+        assertThat(rows.getById("x").getName()).as("the holder commits unaffected").isEqualTo("a");
+    }
+
+    @Test
+    @DisplayName("A caught deadlock marks the cycle-closer's transaction rollback-only; the other transaction commits")
+    void caughtDeadlockMarksTheCycleClosersTransactionRollbackOnly() throws Exception {
+        store.setLockWaitBoundMillis(3000);
+        CountDownLatch t2Wrote = new CountDownLatch(1);
+        CountDownLatch t1Waiting = new CountDownLatch(1);
+        JsonLockTable.installStepHook(waiterRegisteredBy("deadlock-t1", t1Waiting));
+        AtomicReference<DataAccessException> caught = new AtomicReference<>();
+        AtomicReference<RuntimeException> t2CommitFailure = new AtomicReference<>();
+
+        Worker t1 = Worker.start("deadlock-t1", () -> inTransaction(() -> {
+            rows.insert(new LockRow("p1", "t1"));
+            awaitHandshake(t2Wrote, "T2 never wrote Q");
+            others.insert(new LockOther("q1", "t1"));
+        }));
+        Worker t2 = Worker.start("deadlock-t2", () -> {
+            try {
+                manager.begin();
+                others.insert(new LockOther("q2", "t2"));
+                t2Wrote.countDown();
+                awaitHandshake(t1Waiting, "T1 never registered as waiting for Q");
+                try {
+                    rows.insert(new LockRow("p2", "t2"));
+                } catch (DataAccessException e) {
+                    caught.set(e);
+                }
+                others.insert(new LockOther("q2b", "written after the caught deadlock"));
+                try {
+                    manager.commit();
+                } catch (RuntimeException e) {
+                    t2CommitFailure.set(e);
+                }
+            } finally {
+                rollbackIfStillActive();
+            }
+        });
+        t1.finish();
+        t2.finish();
+
+        assertThat(caught.get()).as("the cycle-closing request fails with a deadlock").hasMessageContaining("deadlock");
+        assertThat(t2CommitFailure.get())
+                .as("catching the deadlock does not save the transaction: its commit rolls back")
+                .isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(others.getById("q2")).as("the cycle-closer's write before the failure is rolled back").isNull();
+        assertThat(others.getById("q2b")).as("the cycle-closer's write after the failure is rolled back").isNull();
+        assertThat(rows.getById("p2")).isNull();
+        assertThat(rows.getById("p1")).as("the other transaction commits").isNotNull();
+        assertThat(others.getById("q1")).as("the other transaction commits").isNotNull();
+    }
+
+    @Test
+    @DisplayName("A marked transaction keeps its table locks until it ends: another writer waits for its rollback")
+    void markedTransactionKeepsItsLocksUntilItEnds() throws Exception {
+        store.setLockWaitBoundMillis(200);
+        rows.insert(new LockRow("x", "0"));
+        CountDownLatch aWrote = new CountDownLatch(1);
+        CountDownLatch bMarked = new CountDownLatch(1);
+        CountDownLatch bRelease = new CountDownLatch(1);
+        CountDownLatch thirdReturned = new CountDownLatch(1);
+        AtomicReference<RuntimeException> commitFailure = new AtomicReference<>();
+
+        Worker a = Worker.start("lock-a", () -> inTransaction(() -> {
+            update(rows, new LockRow("x", "a"));
+            aWrote.countDown();
+            awaitHandshake(bMarked, "thread B never failed its lock wait");
+        }));
+        Worker b = Worker.start("lock-b", () -> {
+            try {
+                awaitHandshake(aWrote, "thread A never wrote");
+                manager.begin();
+                others.insert(new LockOther("y", "b"));
+                try {
+                    update(rows, new LockRow("x", "b"));
+                } catch (DataAccessException e) {
+                    bMarked.countDown();
+                }
+                awaitHandshake(bRelease, "the test never released B");
+                try {
+                    manager.commit();
+                } catch (RuntimeException e) {
+                    commitFailure.set(e);
+                }
+            } finally {
+                rollbackIfStillActive();
+            }
+        });
+        awaitHandshake(bMarked, "thread B never failed its lock wait");
+        a.finish();
+        store.setLockWaitBoundMillis(TimeUnit.SECONDS.toMillis(HANDSHAKE_SECONDS));
+        Worker third = Worker.start("lock-third", () -> {
+            others.insert(new LockOther("w", "third"));
+            thirdReturned.countDown();
+        });
+
+        boolean returnedEarly = thirdReturned.await(NOT_YET_MILLIS, TimeUnit.MILLISECONDS);
+        bRelease.countDown();
+        b.finish();
+        third.finish();
+
+        assertThat(returnedEarly).as("another writer of the marked transaction's table waits for it").isFalse();
+        assertThat(commitFailure.get()).isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(others.getById("w")).as("the waiting writer applies after the rollback").isNotNull();
+        assertThat(others.getById("y")).isNull();
+    }
+
+    @Test
+    @DisplayName("A caught lock-wait timeout of a REPEATABLE_READ first read marks the transaction rollback-only")
+    void caughtRepeatableReadLockTimeoutMarksTheTransactionRollbackOnly() throws Exception {
+        store.setLockWaitBoundMillis(200);
+        rows.insert(new LockRow("x", "0"));
+        CountDownLatch aWrote = new CountDownLatch(1);
+        CountDownLatch bDone = new CountDownLatch(1);
+        AtomicReference<DataAccessException> caught = new AtomicReference<>();
+        AtomicReference<RuntimeException> commitFailure = new AtomicReference<>();
+
+        Worker a = Worker.start("lock-a", () -> inTransaction(() -> {
+            update(rows, new LockRow("x", "a"));
+            aWrote.countDown();
+            awaitHandshake(bDone, "thread B never finished");
+        }));
+        Worker b = Worker.start("lock-b", () -> {
+            try {
+                awaitHandshake(aWrote, "thread A never wrote");
+                manager.begin();
+                setIsolationLevel(Connection.TRANSACTION_REPEATABLE_READ);
+                others.insert(new LockOther("y", "written before the read"));
+                try {
+                    rows.getById("x");
+                } catch (DataAccessException e) {
+                    caught.set(e);
+                }
+                try {
+                    manager.commit();
+                } catch (RuntimeException e) {
+                    commitFailure.set(e);
+                }
+            } finally {
+                rollbackIfStillActive();
+                bDone.countDown();
+            }
+        });
+        a.finish();
+        b.finish();
+
+        assertThat(caught.get()).as("the first read's lock wait fails").hasMessageContaining("lock-wait timeout");
+        assertThat(commitFailure.get()).isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(others.getById("y")).as("the transaction's write is rolled back").isNull();
+        assertThat(rows.getById("x").getName()).isEqualTo("a");
+    }
+
+    @Test
+    @DisplayName("@Transactional: a lock-wait timeout caught in the method body still rolls the transaction back "
+            + "with UnexpectedRollbackException")
+    void transactionalMethodCatchingALockWaitTimeoutRollsBack() throws Exception {
+        store.setLockWaitBoundMillis(200);
+        CatchingBean bean = catchingBean();
+        CountDownLatch holderWrote = new CountDownLatch(1);
+        CountDownLatch holderRelease = new CountDownLatch(1);
+        Worker holder = Worker.start("catching-holder", () -> inTransaction(() -> {
+            others.insert(new LockOther("held", "holder"));
+            holderWrote.countDown();
+            awaitHandshake(holderRelease, "the test never released the holder");
+        }));
+        awaitHandshake(holderWrote, "the holder never wrote");
+
+        Throwable thrown;
+        try {
+            thrown = catchThrowable(() -> bean.writeRowThenCatchOtherFailure("c-row", "c-other"));
+        } finally {
+            holderRelease.countDown();
+            holder.finish();
+        }
+
+        assertThat(bean.caught.get()).as("the body caught the lock-wait timeout").hasMessageContaining("lock-wait timeout");
+        assertThat(thrown).as("the method's commit rolls back").isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(rows.getById("c-row")).as("the method's earlier write is rolled back").isNull();
+        assertThat(manager.hasActiveTransaction()).as("no context left on the thread").isFalse();
+        assertThat(others.getById("held")).as("the holder commits unaffected").isNotNull();
+    }
+
+    @Test
+    @DisplayName("@Transactional(timeout = 1): a lock wait ended by the transaction's deadline and caught in the body "
+            + "still rolls the transaction back with UnexpectedRollbackException")
+    void transactionalDeadlineLockWaitCaughtInTheBodyRollsBack() throws Exception {
+        CatchingBean bean = catchingBean();
+        CountDownLatch holderWrote = new CountDownLatch(1);
+        CountDownLatch holderRelease = new CountDownLatch(1);
+        Worker holder = Worker.start("deadline-holder", () -> inTransaction(() -> {
+            others.insert(new LockOther("held", "holder"));
+            holderWrote.countDown();
+            awaitHandshake(holderRelease, "the test never released the holder");
+        }));
+        awaitHandshake(holderWrote, "the holder never wrote");
+
+        long start = System.nanoTime();
+        Throwable thrown;
+        try {
+            thrown = catchThrowable(() -> bean.timedWriteRowThenCatchOtherFailure("d-row", "d-other"));
+        } finally {
+            holderRelease.countDown();
+            holder.finish();
+        }
+        long waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+        assertThat(bean.caught.get()).as("the body caught the lock-wait timeout").hasMessageContaining("lock-wait timeout");
+        assertThat(waitedMillis).as("bounded by the transaction's deadline, not the 5 s default").isBetween(500L, 3000L);
+        assertThat(thrown).as("the method's commit rolls back").isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(rows.getById("d-row")).as("the method's earlier write is rolled back").isNull();
+        assertThat(manager.hasActiveTransaction()).as("no context left on the thread").isFalse();
+    }
+
+    @Test
+    @DisplayName("A plain write outside a transaction that times out just fails: nothing is applied, nothing is marked, "
+            + "and the next plain write applies")
+    void plainWriteLockWaitTimeoutJustFails() throws Exception {
+        store.setLockWaitBoundMillis(200);
+        rows.insert(new LockRow("x", "0"));
+        CountDownLatch aWrote = new CountDownLatch(1);
+        CountDownLatch bDone = new CountDownLatch(1);
+        AtomicReference<DataAccessException> failure = new AtomicReference<>();
+        AtomicBoolean bHadContext = new AtomicBoolean(true);
+
+        Worker a = Worker.start("lock-a", () -> inTransaction(() -> {
+            update(rows, new LockRow("x", "a"));
+            aWrote.countDown();
+            awaitHandshake(bDone, "thread B never finished");
+        }));
+        Worker b = Worker.start("lock-b", () -> {
+            try {
+                awaitHandshake(aWrote, "thread A never wrote");
+                try {
+                    update(rows, new LockRow("x", "b"));
+                } catch (DataAccessException e) {
+                    failure.set(e);
+                }
+                bHadContext.set(manager.hasActiveTransaction());
+                others.insert(new LockOther("y", "plain after the failure"));
+            } finally {
+                bDone.countDown();
+            }
+        });
+        a.finish();
+        b.finish();
+
+        assertThat(failure.get()).as("the plain write fails").hasMessageContaining("lock-wait timeout");
+        assertThat(bHadContext.get()).as("no transaction context is created for a plain write").isFalse();
+        assertThat(others.getById("y")).as("the next plain write applies").isNotNull();
+        assertThat(rows.getById("x").getName()).as("the failed plain write was not applied").isEqualTo("a");
+    }
+
     // ===== Helpers =====
 
     /**
@@ -936,6 +1243,52 @@ class JsonTransactionLockingTest {
         public void writeRowThenOther(String rowId, String otherId) {
             rows.insert(new LockRow(rowId, "row"));
             others.insert(new LockOther(otherId, "other"));
+        }
+    }
+
+    /** A {@link CatchingBean} from a JSON-backed container, wired as {@link #timedBean()} wires its bean. */
+    private CatchingBean catchingBean() throws ReflectiveOperationException {
+        SimpleContainer context = new SimpleContainer();
+        try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
+            UltiTools mockUltiTools = mock(UltiTools.class);
+            when(mockUltiTools.getDataStore()).thenReturn(store);
+            ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+            invokeWireAop(context, scope);
+        }
+        context.registerBean(CatchingBean.class);
+        context.refresh();
+        CatchingBean bean = context.getBean(CatchingBean.class);
+        bean.rows = rows;
+        bean.others = others;
+        return bean;
+    }
+
+    /** A container bean whose methods catch a lock failure in their body and return normally. */
+    public static class CatchingBean {
+        volatile SimpleJsonDataOperator<LockRow> rows;
+        volatile SimpleJsonDataOperator<LockOther> others;
+        final AtomicReference<DataAccessException> caught = new AtomicReference<>();
+
+        /** Writes a row, then writes a table another transaction holds and catches the failure. */
+        @Transactional
+        public void writeRowThenCatchOtherFailure(String rowId, String otherId) {
+            rows.insert(new LockRow(rowId, "row"));
+            try {
+                others.insert(new LockOther(otherId, "other"));
+            } catch (DataAccessException e) {
+                caught.set(e);
+            }
+        }
+
+        /** The same with a one-second deadline, which ends the lock wait before the 5-second default. */
+        @Transactional(timeout = 1)
+        public void timedWriteRowThenCatchOtherFailure(String rowId, String otherId) {
+            rows.insert(new LockRow(rowId, "row"));
+            try {
+                others.insert(new LockOther(otherId, "other"));
+            } catch (DataAccessException e) {
+                caught.set(e);
+            }
         }
     }
 
