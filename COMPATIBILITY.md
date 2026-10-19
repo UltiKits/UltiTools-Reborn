@@ -2289,6 +2289,73 @@ Each corrects a declared behaviour the framework did not deliver. The panel prot
   中文补充：模块扫描诊断（6.3.0 新增）的 `SEVERE` 汇总（某模块跳过了加载失败的类）经插件日志输出，控制台显示为 `ERROR`，
   并以 `error` 级别推送到面板（#571；本周期较早的 6.3.0 快照经标准错误流输出，显示为 `WARN`）。
 
+### A failing joined `@Transactional` method rolls back the whole transaction (6.3.0) — changed without a migration period
+
+This is "moving from silent degradation to failure", listed above among the changes that need a
+migration period, made in 6.3.0 without the two-step period by the maintainer's decision of
+2026-10-19.
+
+**What changed.** A `@Transactional` method that joins a transaction already active on the thread —
+`REQUIRED`, the default, or `SUPPORTS` or `MANDATORY` called inside a transaction — and throws an
+exception its own `rollbackFor`/`noRollbackFor` rules accept now marks the whole transaction
+rollback-only, even when the calling method catches the exception. The outermost commit then rolls
+back every write of the transaction, the caller's included, and throws
+`com.ultikits.ultitools.exceptions.UnexpectedRollbackException`. This holds on SQLite, MySQL and JSON
+alike, and it is the same rule a failed nested `DataOperator#transaction(...)` scope follows in 6.3.0.
+In detail:
+
+- An exception the joined method's rules do not accept — a checked exception under the default rules,
+  or a type listed in its `noRollbackFor` — leaves the transaction committable, and the outer method
+  commits both its own writes and the joined method's.
+- A joined failure that the outer method does not catch rolls the transaction back as before, and the
+  caller receives the original exception, not `UnexpectedRollbackException`.
+- When, after such a mark, the outer method throws an exception its own rules commit despite (for
+  example one listed in its `noRollbackFor`), the caller receives `UnexpectedRollbackException` with
+  that exception attached as suppressed.
+- A joined method's `isolation`, `readOnly` and `timeout` are not applied; they belong to the
+  transaction that began it.
+
+**Before.** `@Transactional` was not wired in 6.2.5 at all (see the `Propagation.NESTED` record in
+[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md)). The 6.3.0 snapshots published
+earlier in this cycle ran a joined method without a scope of its own, so a failure the caller caught
+left the transaction committable and the outer method committed the failed method's writes. Only a
+module compiled against such a snapshot that catches a joined method's exception and expects its
+transaction to commit is affected; no first-party module uses `@Transactional`.
+
+**Why without a migration period.** The policy above lists moving from silent degradation to failure
+among the changes that need one. The maintainer decided on 2026-10-19 to adopt Spring's default
+(`AbstractPlatformTransactionManager`, `globalRollbackOnParticipationFailure = true`) in 6.3.0, instead
+of keeping the old behaviour or deferring the change past 6.3.0.
+
+**What a module author does instead.**
+
+- Let the failure propagate, so the transaction rolls back with the original exception.
+- Put work whose failure the caller survives in a `REQUIRES_NEW` method, which commits or rolls back
+  alone.
+- Or list the exception in the joined method's `noRollbackFor` when its writes are meant to stay.
+
+Code that builds a `TransactionInterceptor` over its own `TransactionManager`: the interceptor now
+calls `begin()`, then `commit()` or `rollback()`, around a joined method, so `begin()` on an active
+transaction must join it, `rollback()` at a nested depth must mark the transaction rollback-only
+without ending it, and the outermost `commit()` of a marked transaction must roll back and throw
+`UnexpectedRollbackException`, as both built-in managers do. No signature changed.
+
+中文补充：加入现有事务的 `@Transactional` 方法（默认的 `REQUIRED`，或在事务中调用的 `SUPPORTS`、`MANDATORY`）
+抛出其自身 `rollbackFor`/`noRollbackFor` 规则认可的异常时，整个事务被标记为仅回滚，即使调用方捕获了该异常也是如此；
+最外层提交随后回滚该事务的全部写入（包括调用方自己的写入），并抛出 `UnexpectedRollbackException`。SQLite、MySQL 与
+JSON 行为一致，与 6.3.0 中失败的嵌套 `DataOperator#transaction(...)` 作用域遵循同一规则。规则不认可的异常（默认规则下的
+受检异常，或列在 `noRollbackFor` 中的类型）不会标记事务，外层方法照常提交双方的写入；外层方法未捕获的失败照旧回滚，调用方
+收到原来的异常；标记之后，外层方法若抛出其自身规则仍要求提交的异常，调用方收到 `UnexpectedRollbackException`，该异常作为
+suppressed 附在其上；加入现有事务的方法不应用自己的 `isolation`、`readOnly` 和 `timeout`。6.2.5 中 `@Transactional`
+完全没有接线；本周期较早发布的 6.3.0 快照中，被捕获的加入方失败不会标记事务，外层方法会提交失败方法的写入。只有针对这类快照
+编译、捕获加入方异常并期望事务提交的模块受影响；没有第一方模块使用 `@Transactional`。维护者于 2026-10-19 决定在 6.3.0
+直接采用 Spring 的默认规则（`AbstractPlatformTransactionManager`，`globalRollbackOnParticipationFailure = true`），
+不设迁移期。模块作者的做法：让失败向外传播；把调用方需要承受其失败的工作放进 `REQUIRES_NEW` 方法，它单独提交或回滚；或者在
+加入方方法的 `noRollbackFor` 中列出该异常，以保留其写入。自行以 `TransactionManager` 构造 `TransactionInterceptor` 的代码：
+拦截器现在会在加入方方法前后调用 `begin()`，再调用 `commit()` 或 `rollback()`，因此活动事务上的 `begin()` 必须加入该事务，
+嵌套层的 `rollback()` 必须只把事务标记为仅回滚而不结束它，被标记事务的最外层 `commit()` 必须回滚并抛出
+`UnexpectedRollbackException`，两个内置管理器均如此。没有签名变化。
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its

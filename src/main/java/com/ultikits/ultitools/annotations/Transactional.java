@@ -13,6 +13,17 @@ import java.lang.annotation.Target;
  * be wrapped in a database transaction. The transaction will be committed if the
  * method completes normally, or rolled back if an exception is thrown.
  * <p>
+ * A method that joins a transaction already active on the thread ({@link Propagation#REQUIRED},
+ * the default, or {@link Propagation#SUPPORTS} or {@link Propagation#MANDATORY} called inside a
+ * transaction) does not end it. When such a method throws an exception its
+ * {@link #rollbackFor()}/{@link #noRollbackFor()} rules accept, the whole transaction is marked
+ * rollback-only, even if the caller catches the exception: the outermost commit then rolls back
+ * every write of the transaction and throws
+ * {@link com.ultikits.ultitools.exceptions.UnexpectedRollbackException}. An exception the rules do
+ * not accept leaves the transaction committable. This is Spring's default
+ * ({@code AbstractPlatformTransactionManager}, {@code globalRollbackOnParticipationFailure = true}),
+ * and it applies on every backend (SQLite, MySQL and JSON).
+ * <p>
  * Usage examples:
  * <pre>{@code
  * // Basic usage - starts a new transaction or joins existing one
@@ -58,6 +69,9 @@ import java.lang.annotation.Target;
  *       table locks its suspended caller holds instead of waiting for them, and if both write the
  *       same key, the caller's later commit is the value that stays. (On the JDBC backends the
  *       inner call would wait for its own caller's row lock until the lock-wait timeout.)</li>
+ *   <li>Work whose failure the caller wants to survive goes in a {@link Propagation#REQUIRES_NEW}
+ *       method, which commits or rolls back alone; a joined method's failure marks the caller's
+ *       whole transaction rollback-only (see above).</li>
  * </ul>
  *
  * @author wisdomme
@@ -155,6 +169,9 @@ public @interface Transactional {
      * the rule whose listed class is the <b>shallower</b> inheritance-depth match to the thrown
      * exception wins (Spring's {@code RuleBasedTransactionAttribute} tiebreak); on an exact-depth
      * tie - including the same class appearing in both arrays - the transaction rolls back.
+     * <p>
+     * For a method that joins an existing transaction, these rules decide whether its exception
+     * marks that transaction rollback-only.
      *
      * @return exception types to additionally rollback for
      * @since 6.3.0 additive combination with {@link #noRollbackFor()} and the depth tiebreak
@@ -169,6 +186,9 @@ public @interface Transactional {
      * <p>
      * Combines with {@link #rollbackFor()} by shallowest-inheritance-depth match, described there;
      * on an exact-depth tie the transaction still rolls back.
+     * <p>
+     * For a method that joins an existing transaction, these rules decide whether its exception
+     * marks that transaction rollback-only: an exception listed here leaves it committable.
      *
      * @return exception types to not rollback for
      */

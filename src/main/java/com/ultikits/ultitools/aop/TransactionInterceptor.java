@@ -13,7 +13,42 @@ import com.ultikits.ultitools.interfaces.TransactionManager;
  * AOP interceptor that implements declarative transaction management.
  * <p>
  * This interceptor processes @Transactional annotations and manages
- * transaction boundaries accordingly.
+ * transaction boundaries accordingly. Each propagation is handled as follows:
+ * <ul>
+ *   <li>{@code REQUIRED}: begins a new transaction when none is active; otherwise joins the
+ *       active one as a participant (below).</li>
+ *   <li>{@code REQUIRES_NEW}: suspends whatever is active, runs in a new, independent transaction,
+ *       and resumes the suspended one afterwards.</li>
+ *   <li>{@code SUPPORTS}: joins an active transaction as a participant; without one, the method
+ *       runs with no transaction.</li>
+ *   <li>{@code MANDATORY}: joins an active transaction as a participant; without one, it throws
+ *       {@link IllegalStateException} and the method does not run.</li>
+ *   <li>{@code NOT_SUPPORTED}: suspends whatever is active, runs with no transaction, and resumes
+ *       the suspended one afterwards.</li>
+ *   <li>{@code NEVER}: throws {@link IllegalStateException} when a transaction is active;
+ *       otherwise runs with no transaction.</li>
+ * </ul>
+ * <p>
+ * A joined {@code REQUIRED}, {@code SUPPORTS} or {@code MANDATORY} method runs in a participation
+ * scope: {@code begin()}, then {@code commit()} when it returns, or {@code rollback()} when it
+ * throws an exception its own {@code rollbackFor}/{@code noRollbackFor} rules accept (otherwise
+ * {@code commit()}); its exception is rethrown unchanged. This relies on the
+ * {@link TransactionManager} nesting contract both built-in managers implement:
+ * {@code begin()} on an active transaction joins it, {@code rollback()} at a nested depth marks the
+ * transaction rollback-only without ending it, and the outermost {@code commit()} of a marked
+ * transaction rolls back and throws
+ * {@link com.ultikits.ultitools.exceptions.UnexpectedRollbackException}. So a joined method's
+ * failure that its caller catches still rolls the whole transaction back, as Spring does by default
+ * ({@code AbstractPlatformTransactionManager}'s {@code globalRollbackOnParticipationFailure = true};
+ * the participant's rollback-or-commit choice follows {@code TransactionAspectSupport}'s
+ * {@code completeTransactionAfterThrowing}). A joined method's isolation, read-only and timeout
+ * settings are not applied; they belong to the transaction that began it.
+ * <p>
+ * For a new transaction, the commit after a normal return runs after, not inside, the body's
+ * failure handler ({@code TransactionAspectSupport}'s {@code invokeWithinTransaction} shape), so the
+ * transaction is completed once: a failing commit reaches the caller as it is, and when the
+ * method's rules commit despite its exception and that commit fails, the body's exception is kept
+ * on the commit failure as suppressed.
  *
  * @author wisdomme
  * @since 6.2.0
