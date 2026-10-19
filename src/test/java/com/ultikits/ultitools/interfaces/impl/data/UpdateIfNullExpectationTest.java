@@ -60,8 +60,9 @@ import com.zaxxer.hikari.HikariDataSource;
  * <p>
  * Outcomes are captured with {@code catchThrowable}, so on a framework that still refuses a null
  * expected value these tests fail by assertion, not by an uncaught exception. The SQLite operator
- * runs over H2 in MySQL mode, as {@code ConditionalUpdateTest} does: the SQLite JDBC driver is not on
- * the test classpath (Paper ships it at runtime), and this plan adds no dependency.
+ * runs over H2 in MySQL mode, as {@code ConditionalUpdateTest} does, which keeps these tests
+ * independent of the SQLite driver (real-driver behaviour is covered by the {@code Relational*Test}
+ * classes), and this plan adds no dependency.
  * <br>
  * #640：{@code updateIf} 在默认 EQUAL 比较下把 null 期望值读作 {@code IS NULL}（JSON：字段不存在或为 null）。
  */

@@ -148,8 +148,8 @@ class SQLiteDataStoreTest {
         void shouldGetOperatorForAnnotatedEntity() {
             // Arrange - dataOperatorMap is instance-scoped and keyed by a private composite type
             // since Task 2 (SILENT-03), so this drives the real getOperator() path with
-            // HikariConfig/HikariDataSource/SQLiteDataOperator construction mocked out (the SQLite
-            // JDBC driver is not on the test classpath - see PoolStateTests for why).
+            // HikariConfig/HikariDataSource/SQLiteDataOperator construction mocked out, so the test
+            // needs no real driver or database file - see PoolStateTests.
             when(mockPlugin.getPluginName()).thenReturn("annotated-entity-plugin");
             SQLiteDataStore store = new SQLiteDataStore();
 
@@ -234,10 +234,9 @@ class SQLiteDataStoreTest {
          * {@code getOperator(UltiToolsPlugin, Class)} caches by entity class only, so each new entity
          * class for the same plugin (same backing .db file) triggers its own {@code new
          * HikariConfig()}/{@code new HikariDataSource(config)} pair. Both are intercepted with
-         * {@code mockConstruction} so the SQLite JDBC driver is never touched -
-         * {@code HikariConfig.setDriverClassName("org.sqlite.JDBC")} performs its own
-         * {@code Class.forName} eagerly and throws on the real class, and that driver ships with
-         * Paper, not with this project's test dependencies.
+         * {@code mockConstruction} so the SQLite JDBC driver is never touched: the test counts pool
+         * constructions without depending on a real driver or creating a database file. Real-driver
+         * behaviour is covered by the {@code Relational*Test} classes.
          * <p>
          * RED at HEAD (before Task 2's fix): 3 entity classes -&gt; 3 pool constructions. GREEN after
          * Task 2 re-keys the pool map by backing-file path with {@code computeIfAbsent}.

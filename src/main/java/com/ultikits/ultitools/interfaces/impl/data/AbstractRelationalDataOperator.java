@@ -10,7 +10,6 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -26,6 +25,7 @@ import javax.sql.DataSource;
 import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.dbutils.ResultSetHandler;
 import org.apache.commons.dbutils.handlers.ScalarHandler;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -69,6 +69,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     /** Alias of the row-identifier column {@link #backfillNullIds} selects next to the entity's own. */
     private static final String BACKFILL_ROWID = "ultitools_backfill_rowid";
     /**
+     * The escape character of the {@code LIKE} that INCLUDE, STARTSWITH and ENDSWITH render; see
+     * {@link #sqlOperatorFor} for why it is not a backslash.
+     */
+    private static final char LIKE_ESCAPE = '!';
+    /**
      * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
      * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
      * system refuses without {@code --add-opens java.base/java.time}, throwing
@@ -97,6 +102,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * before it is concatenated into SQL text (T-02-SQLI-1).
      */
     private final Set<String> knownColumns;
+    /**
+     * The Java type of the field behind each {@code @Column} name, reflected once at construction in
+     * the same pass as {@link #knownColumns} (which is its key set). {@link #appendConditions} passes
+     * it to {@link #orderedComparisonOperand(String, Class)} for {@code GREATER} and {@code LESS}.
+     */
+    private final Map<String, Class<?>> columnTypes;
 
     /**
      * Creates a new data operator.
@@ -120,28 +131,32 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     "Entity class " + type.getName() + " must have @Table annotation");
         }
         this.tableName = tableAnnotation.value();
-        this.knownColumns = buildKnownColumns(type);
+        this.columnTypes = buildColumnTypes(type);
+        this.knownColumns = columnTypes.keySet();
         initializeTable();
     }
 
     /**
-     * Reflects the entity's {@code @Column} mappings once, for {@link #validateColumn(String)}'s
-     * allow-list. This mirrors the same reflected metadata {@link #buildColumnDefinitions(Class)}
-     * and {@link #getColumnMappings()} already read from the entity class — a dedicated pass over
-     * it, not a second scan of anything already cached.
+     * Reflects the entity's {@code @Column} mappings once: their names are
+     * {@link #validateColumn(String)}'s allow-list, and the field type behind each name is what
+     * {@link #orderedComparisonOperand(String, Class)} receives. This mirrors the same reflected
+     * metadata {@link #buildColumnDefinitions(Class)} and {@link #getColumnMappings()} already read
+     * from the entity class — a dedicated pass over it, not a second scan of anything already
+     * cached. When two fields declare the same name, the first one reflected keeps the mapping.
      *
      * @param entityType the entity class
-     * @return an unmodifiable set of every {@code @Column} SQL name declared on {@code entityType}
-     *         (including inherited fields, e.g. {@code BaseDataEntity}'s {@code id})
+     * @return an unmodifiable map from every {@code @Column} SQL name declared on
+     *         {@code entityType} (including inherited fields, e.g. {@code BaseDataEntity}'s
+     *         {@code id}) to the Java type of its field
      */
-    private static Set<String> buildKnownColumns(Class<?> entityType) {
-        Set<String> columns = new HashSet<>();
+    private static Map<String, Class<?>> buildColumnTypes(Class<?> entityType) {
+        Map<String, Class<?>> columns = new LinkedHashMap<>();
         for (Field field : ReflectionUtil.getFields(entityType)) {
             if (field.isAnnotationPresent(Column.class)) {
-                columns.add(field.getAnnotation(Column.class).value());
+                columns.putIfAbsent(field.getAnnotation(Column.class).value(), field.getType());
             }
         }
-        return Collections.unmodifiableSet(columns);
+        return Collections.unmodifiableMap(columns);
     }
 
     /**
@@ -555,55 +570,138 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     /**
      * Maps a {@link Comparison} to its SQL operator fragment (including the placeholder).
      * <p>
-     * Shared by all four relational WHERE builders ({@link #exist(WhereCondition...)},
+     * Shared by all five relational WHERE builders ({@link #exist(WhereCondition...)},
      * {@link #getAll(WhereCondition...)}, {@link #page(int, int, WhereCondition...)},
-     * {@link #del(WhereCondition...)}) so a given {@code Comparison} means the same thing on
-     * every one of them, and on {@code SimpleJsonDataOperator}'s JSON backend. There is no
-     * silent fallback to equality: an unhandled constant throws rather than being misread as
+     * {@link #del(WhereCondition...)}, {@link #updateIf}) so a given {@code Comparison} means the
+     * same thing on every one of them, and on {@code SimpleJsonDataOperator}'s JSON backend. There
+     * is no silent fallback to equality: an unhandled constant throws rather than being misread as
      * {@code EQUAL}, since a silent default is exactly how this defect stayed invisible before.
+     * <p>
+     * {@code INCLUDE}, {@code STARTSWITH} and {@code ENDSWITH} render {@code LIKE ? ESCAPE '!'}:
+     * the value is matched literally as text (see {@link #likeWrappedValue}), the way
+     * {@code SimpleJsonDataOperator} uses {@code contains}, {@code startsWith} and {@code endsWith}.
+     * The escape character is the exclamation mark ({@code LIKE_ESCAPE}), not a backslash: MySQL's
+     * default {@code sql_mode} needs a doubled backslash inside the {@code ESCAPE} literal, and with
+     * {@code NO_BACKSLASH_ESCAPES} that doubled form is two characters and is rejected, while the
+     * exclamation mark means the same thing on SQLite, MySQL in either mode, and H2. No caller text
+     * enters the SQL. {@link #getLike} and {@code Query#like} are separate pattern operators and are
+     * not affected; {@code EQUAL}, {@code GREATER} and {@code LESS} are unchanged here (the column
+     * side of {@code GREATER} and {@code LESS} goes through {@link #orderedComparisonOperand}, and
+     * their parameter side is {@code orderedPlaceholder}, which {@link #appendConditions} takes from
+     * {@link #orderedComparisonPlaceholder}).
      *
-     * @param comparison the comparison operator
+     * @param comparison         the comparison operator
+     * @param orderedPlaceholder the parameter operand of {@code GREATER} and {@code LESS}; the other
+     *                           comparisons always use a plain {@code ?}
      * @return the SQL fragment, e.g. {@code " > ?"}
      */
-    private String sqlOperatorFor(Comparison comparison) {
+    private String sqlOperatorFor(Comparison comparison, String orderedPlaceholder) {
         switch (comparison) {
             case EQUAL:
                 return " = ?";
             case GREATER:
-                return " > ?";
+                return " > " + orderedPlaceholder;
             case LESS:
-                return " < ?";
+                return " < " + orderedPlaceholder;
             case INCLUDE:
             case STARTSWITH:
             case ENDSWITH:
-                return " LIKE ?";
+                return " LIKE ? ESCAPE '" + LIKE_ESCAPE + "'";
             default:
                 throw new IllegalArgumentException("Unhandled comparison: " + comparison);
         }
     }
 
     /**
-     * Wraps a condition's value with the {@code %} wildcards its {@link Comparison} implies,
-     * matching {@code SimpleJsonDataOperator#conditionCal}'s existing placement exactly:
-     * {@code INCLUDE} wraps both sides, {@code STARTSWITH} appends a trailing wildcard,
-     * {@code ENDSWITH} prepends a leading wildcard. {@code EQUAL}/{@code GREATER}/{@code LESS}
-     * pass the value through unchanged.
+     * Builds the parameter to bind for a condition's value. For {@code INCLUDE},
+     * {@code STARTSWITH} and {@code ENDSWITH} the value is matched literally as text: it is
+     * rendered with {@link String#valueOf(Object)} (so a {@code null} value and non-String values
+     * render exactly as before), then every escape character {@code '!'}, {@code %} and {@code _}
+     * in it is prefixed with {@code '!'} -- the escape character first, so the prefixes added for
+     * the other two are not escaped again -- and only then are the wildcards added that the
+     * comparison implies, in the same places {@code SimpleJsonDataOperator} matches:
+     * {@code INCLUDE} on both sides, {@code STARTSWITH} after the value, {@code ENDSWITH} before
+     * it. A backslash needs no escaping because {@link #sqlOperatorFor} names {@code '!'} as the
+     * only escape character. {@code EQUAL}, {@code GREATER} and {@code LESS} pass the value through
+     * unchanged.
      *
      * @param condition the condition supplying the comparison and the raw value
      * @return the value to bind as the SQL parameter
      */
     private Object likeWrappedValue(WhereCondition condition) {
         Object value = condition.getValue();
-        switch (condition.getComparison()) {
-            case INCLUDE:
-                return "%" + value + "%";
-            case STARTSWITH:
-                return value + "%";
-            case ENDSWITH:
-                return "%" + value;
-            default:
-                return value;
+        Comparison comparison = condition.getComparison();
+        if (comparison != Comparison.INCLUDE && comparison != Comparison.STARTSWITH
+                && comparison != Comparison.ENDSWITH) {
+            return value;
         }
+        String text = String.valueOf(value);
+        StringBuilder literal = new StringBuilder(text.length() + 8);
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == LIKE_ESCAPE || c == '%' || c == '_') {
+                literal.append(LIKE_ESCAPE);
+            }
+            literal.append(c);
+        }
+        switch (comparison) {
+            case INCLUDE:
+                return "%" + literal + "%";
+            case STARTSWITH:
+                return literal + "%";
+            default:
+                return "%" + literal;
+        }
+    }
+
+    /**
+     * Returns the SQL operand that a {@code GREATER} or {@code LESS} condition compares on the
+     * column side. The default returns {@code column} unchanged, so the database compares the
+     * stored value as it is declared. A dialect overrides it to compare the stored value as a number
+     * of the field's Java type when the declared column type would not, for example a numeric field
+     * left on the default {@code VARCHAR(255)} column.
+     * <p>
+     * {@link #appendConditions} calls it only for {@code GREATER} and {@code LESS}, and only after
+     * {@link #validateColumn(String)} has accepted {@code column}; {@code EQUAL} and the three
+     * {@code LIKE} comparisons never reach it. Its result is concatenated into the SQL text, so an
+     * override must build it only from {@code column} and constants, never from a condition's
+     * value or any other caller text.
+     *
+     * @param column    an allow-listed {@code @Column} name of the entity
+     * @param fieldType the Java type of the field mapped to {@code column}
+     * @return the SQL operand to compare, e.g. {@code column} or a cast of it
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    protected String orderedComparisonOperand(String column, Class<?> fieldType) {
+        return column;
+    }
+
+    /**
+     * Returns the SQL operand that a {@code GREATER} or {@code LESS} condition compares on the
+     * parameter side: the placeholder {@code ?} the condition's value is bound to, or an expression
+     * around it. The default returns {@code ?}, so the database compares the value as bound. A dialect
+     * overrides it, together with {@link #orderedComparisonOperand(String, Class)}, when both sides
+     * must pass through the same conversion to compare the way the stored value reads back, for
+     * example a {@code float} field whose stored text keeps fewer digits than the bound value. The
+     * value is passed so an override can apply that conversion only to values it keeps the order of,
+     * for example a number whose {@code double} value is finite.
+     * <p>
+     * {@link #appendConditions} calls it only for {@code GREATER} and {@code LESS}, after
+     * {@link #validateColumn(String)} has accepted the column, and binds the condition's value to
+     * the result's one placeholder. Its result is concatenated into the SQL text, so an override must
+     * return exactly one {@code ?} and build the rest only from constants, never from a condition's
+     * value or any other caller text; it may only use the value to choose between such constant
+     * operands.
+     *
+     * @param fieldType the Java type of the field the condition compares
+     * @param value     the condition's value, which is bound to the placeholder; may be {@code null}
+     * @return the SQL operand holding exactly one {@code ?}, e.g. {@code ?} or a cast of it
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    protected String orderedComparisonPlaceholder(Class<?> fieldType, Object value) {
+        return "?";
     }
 
     /**
@@ -662,7 +760,16 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 sql.append(condition.getColumn()).append(" IS NULL");
                 continue;
             }
-            sql.append(condition.getColumn()).append(sqlOperatorFor(condition.getComparison()));
+            Comparison comparison = condition.getComparison();
+            if (comparison == Comparison.GREATER || comparison == Comparison.LESS) {
+                Class<?> fieldType = columnTypes.get(condition.getColumn());
+                sql.append(orderedComparisonOperand(condition.getColumn(), fieldType));
+                sql.append(sqlOperatorFor(comparison,
+                        orderedComparisonPlaceholder(fieldType, condition.getValue())));
+            } else {
+                sql.append(condition.getColumn());
+                sql.append(sqlOperatorFor(comparison, "?"));
+            }
             params.add(likeWrappedValue(condition));
         }
     }
@@ -672,6 +779,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         return exist(WhereCondition.builder().column("id").value(object.getId()).build());
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * JDBC drivers report {@code COUNT(*)} as an {@code Integer} or a {@code Long} (sqlite-jdbc
+     * returns an {@code Integer}), so the count is read as a Number.
+     */
     @Override
     public boolean exist(WhereCondition... whereConditions) {
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ").append(tableName);
@@ -680,8 +793,8 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             appendConditions(sql, params, whereConditions, false);
         }
         try {
-            Long count = queryRunner.query(sql.toString(), new ScalarHandler<>(), params.toArray());
-            return count != null && count > 0;
+            Number count = queryRunner.query(sql.toString(), new ScalarHandler<Number>(), params.toArray());
+            return count != null && count.longValue() > 0;
         } catch (SQLException e) {
             LOGGER.warning("Failed to check existence: " + e.getMessage());
             return false;

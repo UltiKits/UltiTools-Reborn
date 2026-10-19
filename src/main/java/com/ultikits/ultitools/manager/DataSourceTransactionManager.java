@@ -24,8 +24,9 @@ import org.jetbrains.annotations.ApiStatus;
  * Uses ThreadLocal to associate transactions with threads, ensuring thread safety.
  * Each thread can have at most one active transaction at a time.
  * <p>
- * <b>A transaction is never committed after its commit or rollback failed</b> (as of 6.3.0,
- * UltiTools-Reborn#634). JDBC commits an open transaction when auto-commit is switched on
+ * <b>No further commit is issued for a transaction whose commit or rollback failed</b> (as of
+ * 6.3.0, UltiTools-Reborn#634): auto-commit is never switched on for it, and the commit is never
+ * retried. JDBC commits an open transaction when auto-commit is switched on
  * ({@link Connection#setAutoCommit(boolean)}), so auto-commit is restored only after a commit or
  * rollback that succeeded. A connection whose commit or rollback failed is discarded instead: a
  * HikariCP pool is told to evict it ({@link HikariDataSource#evictConnection(Connection)}, which
@@ -33,6 +34,23 @@ import org.jetbrains.annotations.ApiStatus;
  * connection is closed. Measured on HikariCP 5.1.0: a pooled connection merely closed after a
  * rollback that keeps failing goes back to the pool with auto-commit off and the transaction still
  * open, and the next borrower's work joins it; an evicted one is never handed out again.
+ * <p>
+ * What the caller can rely on afterwards (this class serves SQLite and MySQL):
+ * <ul>
+ *   <li>A rollback that succeeded is the confirmed outcome: none of the transaction's writes is
+ *       stored.</li>
+ *   <li>A commit that finds the transaction marked rollback-only rolls it back and throws
+ *       {@link UnexpectedRollbackException}: a confirmed rollback, none of its writes stored. If
+ *       that rollback fails, the connection is discarded and nothing is committed either.</li>
+ *   <li>After a failed rollback, the connection is discarded and the framework issues no
+ *       commit.</li>
+ *   <li>After a commit that fails at {@link Connection#commit()} ({@code DataAccessException},
+ *       {@code TRANSACTION_FAILED}), the outcome is unknown. The database may have applied the
+ *       commit before the failure reached the framework (for example, a MySQL connection lost
+ *       after {@code COMMIT} executed and before its acknowledgement arrived), and discarding or
+ *       evicting the connection cannot undo an applied commit. A caller that must not apply a
+ *       write twice re-reads the data, or makes the write conditional, before trying again.</li>
+ * </ul>
  *
  * @author wisdomme
  * @since 6.2.0
@@ -118,6 +136,16 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * An {@link UnexpectedRollbackException} means the transaction had been marked rollback-only
+     * and was rolled back: none of its writes is stored. A {@link DataAccessException}
+     * ({@code TRANSACTION_FAILED}) raised because {@link Connection#commit()} failed means the
+     * outcome is unknown: the database may have applied the commit before the failure reached the
+     * framework, and discarding the connection cannot undo that. Either way the transaction has
+     * ended, its connection is never switched to auto-commit, and the commit is not retried.
+     */
     @Override
     public void commit() {
         TransactionContext ctx = contextHolder.get();
@@ -162,7 +190,7 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
             throw new DataAccessException(ErrorCode.TRANSACTION_FAILED, "Failed to commit transaction", e);
         } finally {
             // #634: a failed commit discards the connection -- the cleanup's auto-commit switch would
-            // otherwise commit the transaction the caller is told did not commit.
+            // otherwise commit a transaction whose commit has just reported failure.
             cleanup(ctx, committed);
         }
     }

@@ -1794,8 +1794,22 @@ This section governs the third kind.
   a nested scope marked rollback-only — so rows the caller was told were not written could be
   stored. As of 6.3.0 auto-commit is restored only after a commit or rollback that succeeded;
   otherwise the connection is discarded (a HikariCP pool evicts it, so it is never handed out
-  again with the transaction still open; any other connection is closed), nothing of the
-  transaction is stored, and the caller still gets the original exception. The startup id backfill
+  again with the transaction still open; any other connection is closed), and the framework issues
+  no further commit for that transaction and never retries one. What is stored afterwards depends
+  on where the failure happened. When the action fails and the rollback succeeds, nothing is
+  stored. When a SQLite or MySQL rollback fails, including the real rollback an outer commit
+  performs for a rollback-only transaction, the connection is discarded and the framework issues no
+  commit. When the commit throws `UnexpectedRollbackException` because the transaction was marked
+  rollback-only, the transaction was rolled back and none of its writes is stored, on SQLite, MySQL
+  and JSON alike. When a SQLite or MySQL commit itself fails (`DataAccessException`,
+  `TRANSACTION_FAILED`), the outcome is unknown: the database may have applied the commit before
+  its acknowledgement was lost (for example, a dropped MySQL connection), discarding the connection
+  cannot undo that, and the framework does not retry the commit. Code that must not apply a write
+  twice (payments, rewards) therefore re-reads the data, or uses a conditional write such as
+  `DataOperator#updateIf`, before trying again. On JSON, a commit that fails commits nothing (see
+  [JSON transactions](#json-transactions-630--staged-atomic-and-durable)). The caller gets the
+  original exception, or `UnexpectedRollbackException` when the transaction was marked
+  rollback-only. The startup id backfill
   of SQLite tables follows the same rule. `DataOperator#transaction(...)` also rolls back on an
   `Error` (it caught `Exception` only, so an `Error` skipped both the commit and the rollback and
   left the thread's transaction open, and the next transaction on that thread nested into it): the
@@ -1813,13 +1827,96 @@ This section governs the third kind.
   中文补充：事务自身的失败路径再失败时，不再隐式提交（#634）。JDBC 在打开自动提交时会提交尚未结束的事务，而框架的事务管理器
   在每个事务结束后都会打开自动提交——包括回滚失败、提交失败，以及外层提交为被嵌套作用域标记为仅回滚的事务执行真正回滚却失败之后——
   因此调用方被告知“未写入”的行可能已被保存。自 6.3.0 起，只有提交或回滚成功后才恢复自动提交；否则丢弃该连接（HikariCP 连接池
-  会将其剔除，不会把仍处于事务中的连接再交给别人；其他连接直接关闭），事务中的内容一律不保存，调用方仍收到原来的异常。SQLite
-  表启动时的 id 补全遵循同一规则。`DataOperator#transaction(...)` 遇到 `Error` 时也会回滚（此前只捕获 `Exception`，`Error`
+  会将其剔除，不会把仍处于事务中的连接再交给别人；其他连接直接关闭），框架不会再为该事务发出提交，也不会重试提交。之后保存了什么，
+  取决于失败发生在哪里：操作失败且回滚成功时，未保存任何写入；SQLite 或 MySQL 的回滚失败时（包括外层提交为仅回滚的事务执行的
+  真正回滚），连接被丢弃，框架不发出提交；提交因事务已被标记为仅回滚而抛出 `UnexpectedRollbackException` 时，事务已回滚，
+  其写入均未保存，SQLite、MySQL 和 JSON 都是如此；SQLite 或 MySQL 的提交本身失败（`DataAccessException`，
+  `TRANSACTION_FAILED`）时，结果未知：数据库可能在确认丢失之前已经应用了该提交（例如 MySQL 连接断开），丢弃连接无法撤销它，
+  框架也不会重试提交。因此不能重复写入的代码（支付、奖励）在重试前应先重新读取数据，或使用条件写入（如
+  `DataOperator#updateIf`）。在 JSON 上，失败的提交不会提交任何内容（见
+  [JSON transactions](#json-transactions-630--staged-atomic-and-durable)）。调用方收到原来的异常；事务被标记为仅回滚时收到
+  `UnexpectedRollbackException`。SQLite 表启动时的 id 补全遵循同一规则。`DataOperator#transaction(...)` 遇到 `Error` 时也会回滚（此前只捕获 `Exception`，`Error`
   会跳过提交和回滚，使线程上的事务保持打开，该线程的下一个事务会嵌套进去）：关系型实现回滚后原样抛出同一个 `Error`，JSON 引擎
   丢弃该事务暂存的写入后原样抛出同一个实例；回滚本身抛出的异常作为 suppressed 附在原异常上，而不是替换它。`@Transactional` 本就会在
   `Error` 时回滚，保持不变；嵌套、仅回滚标记、传播、隔离级别和超时均不变（这句话只针对本次修复；6.3.0 随后对失败的加入方方法和失败的
   嵌套作用域所做的改动见本文后面两个小节）。没有签名变化。见 `FEATURES.md` 中的
   `ultitools.storage.transaction-failure-paths`。
+
+- `WhereCondition` comparisons other than `EQUAL` now take effect on SQLite and MySQL (#675).
+  6.2.5's SQLite and MySQL operators ignored the comparison and matched every condition by
+  equality; JSON already applied it. As of 6.3.0, `getAll`, `exist`, `page`, `del` and `updateIf`
+  apply it on every backend with the meanings below, and no table is changed. `INCLUDE`,
+  `STARTSWITH` and `ENDSWITH` match the value literally, as text, on SQLite, MySQL and JSON alike:
+  `%`, `_`, `!` and `\` are ordinary characters, not wildcards or escapes. Letter case and accents
+  follow the backend: SQLite ignores the case of ASCII letters only; MySQL compares under the
+  `utf8mb3_general_ci` collation of the tables the framework creates (`DEFAULT CHARSET=utf8`), which
+  ignores case and accents, so `e` matches `é`; JSON compares exactly.
+  `GREATER` and `LESS` on a `byte`, `short`, `int`, `long`, `float` or `double` field (or its
+  wrapper) compare numbers of that type. Pass the value as a number of that type (`10`, not
+  `"10"`): a text value is not converted, and MySQL compares it with a default text column as text,
+  so `"10"` sorts below `"2"`. On SQLite the typed comparison holds also in a column left on the
+  default `VARCHAR(255)` type, with 64-bit integer precision, and a stored value is compared the way
+  it reads back: a `float` such as `0.1f`, which SQLite keeps there as the 15 significant digits
+  `0.100000001490116`, is neither greater nor less than `0.1f`. That read-back comparison applies to a value
+  that is a finite number; an infinite value, a number beyond the range of a `double` and any text are
+  compared as they are bound, so `GREATER Float.POSITIVE_INFINITY` matches no row, and a NaN value
+  matches no row. JSON does not support an infinite or NaN value: Gson cannot write it as JSON, so a
+  condition holding one throws `IllegalArgumentException` when it is evaluated, under any comparison.
+  On MySQL such a default text column is
+  compared the way MySQL compares text with a number, in double precision, so whole numbers beyond
+  ±9,007,199,254,740,992 (2^53) compare approximately there; declare the column with a numeric
+  `type` (for example `@Column(value = "stamp", type = "BIGINT")`) where exact results matter. On
+  JSON the values are compared as `double`, which is also approximate beyond
+  ±9,007,199,254,740,992. A field of any other type is compared as the database compares the stored
+  text. Earlier 6.3.0 snapshots treated `%` and `_` as wildcards and compared SQLite text columns as
+  text; no release did. `EQUAL`, `getLike` and `Query#like` are unchanged. `exist(...)`,
+  `exist(entity)` and an `eq`-only `Query#exists()` threw `ClassCastException` on SQLite from 6.2.x
+  on, because sqlite-jdbc reports `COUNT(*)` as an `Integer`; they now answer normally. Measured on
+  the fifteen modules' `master` and UltiTools-External-Example (2026-10-19), no `src/main` code uses
+  `INCLUDE`, `STARTSWITH`, `ENDSWITH`, `GREATER`, `LESS`, the `comparison(...)` builder method,
+  `getLike` or `LikeType` (13 files there use `WhereCondition`, all with the default `EQUAL`), so no
+  shipped module changes behaviour. Known limitations, documented rather than changed: on SQLite a
+  `double` that needs 16 or 17 significant digits (`1/3.0`) is stored in a default column with 15
+  (`0.333333333333333`) and reads back and compares as that value, so `LESS 1/3.0` selects a row
+  written as `1/3.0`, where JSON, which keeps every digit, does not; declare the column
+  `type = "DOUBLE"` to keep every digit. On SQLite a number that agrees with a stored `float`
+  to 15 significant digits but differs after them (for example `Math.nextDown((double) 0.1f)`, a whole
+  number of 10^15 or more such as `(1L << 53) + 1`, or a decimal with 16 or more significant digits)
+  compares as equal to it, so `GREATER` that value does not select the row holding `0.1f`; this holds in a default
+  column and also in a column declared `REAL`, which earlier 6.3.0 snapshots compared exactly. Pass a
+  `float` value for a `float` field. On SQLite a NaN comparison value is bound as NULL, so a condition
+  holding it matches no row and an `updateIf` with it never applies; do not retry `updateIf` on a NaN
+  threshold. A numeric field's column that holds non-numeric text,
+  written by hand or by another program, compares on SQLite as its leading number (`'abc'` as 0,
+  `'12abc'` as 12), while JSON compares that row as text. See `ultitools.storage.where-comparisons`
+  in `FEATURES.md`.
+
+  中文补充：`EQUAL` 以外的 `WhereCondition` 比较方式现在在 SQLite 和 MySQL 上生效（#675）。6.2.5 的 SQLite 与 MySQL
+  实现忽略比较方式，所有条件都按相等匹配；JSON 本来就会应用它。自 6.3.0 起，`getAll`、`exist`、`page`、`del` 和
+  `updateIf` 在所有后端按以下含义应用比较方式，且不改动任何表。`INCLUDE`、`STARTSWITH` 和 `ENDSWITH` 把值作为文本字面匹配，
+  SQLite、MySQL 和 JSON 一致：`%`、`_`、`!` 和 `\` 都是普通字符，不是通配符或转义符。字母大小写和重音取决于后端：
+  SQLite 只忽略 ASCII 字母的大小写；MySQL 按框架建表时使用的 `utf8mb3_general_ci` 排序规则（`DEFAULT CHARSET=utf8`）比较，
+  它同时忽略大小写和重音，因此 `e` 能匹配 `é`；JSON 精确比较。`GREATER` 和 `LESS` 用于 `byte`、`short`、`int`、`long`、
+  `float` 或 `double` 字段（或其包装类型）时，按该类型的数值比较。请以该类型的数字传值（`10`，而不是 `"10"`）：文本值不会被转换，
+  MySQL 会把它与默认文本列按文本比较，于是 `"10"` 排在 `"2"` 之前。在 SQLite 上，列保持默认 `VARCHAR(255)` 类型时同样按类型比较，
+  整数保持 64 位精度，所存的值按读回时的值比较：`0.1f` 这样的 `float` 在该列中保存为 15 位有效数字 `0.100000001490116`，
+  它既不大于也不小于 `0.1f`。这种按读回值的比较只适用于有限数字的值；无穷大、超出 `double` 范围的数字以及任何文本都按绑定时的值比较，
+  因此 `GREATER Float.POSITIVE_INFINITY` 不匹配任何行，NaN 值也不匹配任何行。JSON 不支持无穷大或 NaN 值：Gson 无法把它写成 JSON，
+  因此含有这种值的条件在求值时会抛出 `IllegalArgumentException`，任何比较方式都如此。在 MySQL 上，这种默认文本列按 MySQL 比较文本与数字的方式以双精度比较，超出
+  ±9,007,199,254,740,992（2^53）的整数在那里只是近似比较；需要精确结果时，请为该列声明数值 `type`（例如
+  `@Column(value = "stamp", type = "BIGINT")`）。在 JSON 上按 `double` 比较，超出 ±9,007,199,254,740,992 时同样是近似的。
+  其他类型的字段按数据库比较所存文本的方式比较。本周期较早的 6.3.0 快照把 `%` 和 `_` 当作通配符，并在 SQLite
+  上把文本列按文本比较；没有任何正式版本如此。`EQUAL`、`getLike` 和 `Query#like` 不变。`exist(...)`、`exist(entity)`
+  以及只含 `eq` 条件的 `Query#exists()` 自 6.2.x 起在 SQLite 上会抛出 `ClassCastException`（sqlite-jdbc 把
+  `COUNT(*)` 报告为 `Integer`），现在能正常返回结果。在十五个模块的 `master` 与 UltiTools-External-Example 上测得
+  （2026-10-19）：`src/main` 中没有代码使用 `INCLUDE`、`STARTSWITH`、`ENDSWITH`、`GREATER`、`LESS`、`comparison(...)`
+  构建方法、`getLike` 或 `LikeType`（其中 13 个文件使用 `WhereCondition`，都用默认的 `EQUAL`），因此没有已发布模块的行为发生变化。
+  已知限制（只写文档，不改代码）：在 SQLite 上，需要 16 或 17 位有效数字的 `double`（如 `1/3.0`）在默认列中只保存 15 位
+  （`0.333333333333333`），读回和比较都按这个值，因此 `LESS 1/3.0` 会选中写入时为 `1/3.0` 的行，而保留全部数字的 JSON 不会；
+  要保留全部数字，请把该列声明为 `type = "DOUBLE"`。在 SQLite 上，与所存 `float` 前 15 位有效数字相同、之后才不同的任何数值
+  （例如 `Math.nextDown((double) 0.1f)`、10^15 及以上的整数如 `(1L << 53) + 1`，或有 16 位及以上有效数字的小数）会被视为与它相等，因此 `GREATER` 该值不会选中保存 `0.1f` 的行；默认列如此，声明为 `REAL`
+  的列也如此，而本周期较早的 6.3.0 快照在 `REAL` 列上是精确比较的。对 `float` 字段请传 `float` 值。在 SQLite 上，NaN 比较值会被绑定为 NULL，因此含它的条件不匹配任何行，带它的 `updateIf` 也永远不会生效；请勿对 NaN 阈值重试 `updateIf`。数值字段的列中若有手工或其他程序写入的非数字文本，在 SQLite 上按其开头的数字比较
+  （`'abc'` 为 0，`'12abc'` 为 12），JSON 则对该行按文本比较。见 `FEATURES.md` 中的 `ultitools.storage.where-comparisons`。
 
 - `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
   `PluginManager#unregister(UltiToolsPlugin)` delisting the module (#507). `getPluginList()` used to return the manager's live internal `ArrayList`, which callers had

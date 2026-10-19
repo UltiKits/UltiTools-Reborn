@@ -51,7 +51,8 @@ import com.zaxxer.hikari.HikariDataSource;
  * This is deliberately one end-to-end test, not four unit tests: it drives the whole path
  * {@code DataScope -> DataStore -> DataSource -> DataSourceTransactionManager -> wireAop advisor
  * -> TransactionInterceptor -> real JDBC rollback}, using an in-memory H2 database standing in for
- * SQLite (the SQLite JDBC driver is supplied by Paper at runtime and is not on the test classpath).
+ * SQLite (H2 keeps this test independent of the SQLite driver; real-driver behaviour is covered by
+ * the {@code Relational*Test} classes).
  */
 @DisplayName("wireAop -> @Transactional -> real JDBC rollback (Phase 2 Plan 1 tracer)")
 class TransactionalRollbackEndToEndTest {

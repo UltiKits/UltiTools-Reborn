@@ -652,8 +652,8 @@ class DataStoreManagerTest {
 
         private HikariDataSource createH2Pool() {
             HikariConfig config = new HikariConfig();
-            // H2 stands in for SQLite here - the SQLite JDBC driver ships with Paper, not with this
-            // project's test dependencies, so a real jdbc:sqlite: pool cannot be constructed in tests.
+            // H2 stands in for SQLite here, which keeps this test independent of the SQLite driver;
+            // real-driver behaviour is covered by the Relational*Test classes.
             config.setJdbcUrl("jdbc:h2:mem:datastoremanagerpooltest" + System.nanoTime() + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
             config.setUsername("sa");
             return new HikariDataSource(config);
