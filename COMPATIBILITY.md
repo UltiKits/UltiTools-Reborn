@@ -327,8 +327,9 @@ For every value `x` of the declared type whose collections and arrays contain no
 its existing skip/warning behavior; plain data in a declared `Object` slot is unchanged.
 Null map values and null whole fields still round-trip. For every canonical
 plain value `p` emitted by the converter (`p = toPlain(x)`), `toPlain(fromPlain(p))` equals `p`.
-A converter may accept noncanonical input `q`; `toPlain(fromPlain(q))` is its canonical form, and
-normalization is stable: `fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)`. Approved coercions
+A converter may accept noncanonical input `q`; `toPlain(fromPlain(q))` is its canonical form (map keys excepted: a key the
+file already holds keeps the file's text, see the typed-key paragraph below), and normalization is stable:
+`fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)`. Approved coercions
 (number to String, numeric text to int/float, `"false"` to boolean and duplicate elements to a Set)
 remain unchanged. 6.2's default parser stored every list element as text, so a 6.2-saved
 `List<Integer>` reads `- '60'`; 6.3.0 binds it as the number 60 and writes `- 60` the next time
@@ -342,6 +343,36 @@ Whole map keys, including `g.m`, `o.O` and `wave.`, are supported as of 6.3.0.
 key `o.O` inside the bound map is one whole key. These are different path conventions. Legacy 6.2 files in which Bukkit
 split a dotted key into nested mappings are read as they are, never automatically merged or renamed, and a save never removes
 such an entry: it stays until the operator removes it (maintainer decision of 2026-10-04).
+
+A map declared with non-text keys - `Integer`, `Long`, `Boolean`, `UUID` and the other scalar key types - loads and writes
+as of 6.3.0 ([#673](https://github.com/UltiKits/UltiTools-Reborn/issues/673)). An entry the file already holds is always
+written under the key text the file holds: a quoted (`'01'`), whole dotted (`1.0`), exponent (`1.0e10`), alternative
+(`yes`, `off`) or upper-case spelling stays as written. Only a key the file lacks is written in its canonical text, and only
+when that text reads back to the same key (text that would load as a number is quoted, such as `'25565'`). A save, a panel
+edit, `saveOperatorChange` and `saveOperatorMapEntry` therefore never rename, requote, reorder or restructure an existing
+key, and removing an entry removes exactly its line. `saveOperatorMapEntry`, with or without an `EntryPresence` condition,
+accepts the key's canonical text: `saveOperatorMapEntry("limits", "1")` reaches the entry the file spells `'01'`. A key the
+operator respells by hand (`'01'` to `1`) is adopted on the next reload, without a conflict and without a write.
+
+When a file holds one such key in several spellings, such as `1:` and `'01':` in a `Map<Integer, String>`, the module still
+loads with the existing warning and binds the first spelling, but every write of that setting is refused until the operator
+deletes all but one spelling and reloads: a save names the setting's changes in one warning as not written, and an operator
+command or a panel edit throws `ConfigWriteRefusedException`. Both reasons name the file, the setting and the key (shown as
+`<redacted>` below a secret-shaped key), never a value. The check reads the file's own keys, so it applies even when the
+module removed that key or emptied the map. The file's other settings are written normally. A setting that names its own
+legacy parser (`@ConfigEntry(parser = ...)`) is outside both rules: its parser alone decides which file keys are one key, so
+`1:` and `'01':` may be two keys to it, no several-spellings refusal applies, and `saveOperatorMapEntry` uses the key text
+exactly as given.
+
+Known limits of typed map keys. (1) If the operator respells a key by hand (`'01':` to `1:`) while the module holds an
+unsaved change to that same entry, the next reload keeps the file (the operator's bytes win, with the existing conflict
+warning) and the module's unsaved change to that entry is dropped; save module changes before hand-editing that entry.
+(2) If the operator adds a key by hand in one spelling (`'01':`) and the module writes the same key before the next reload,
+a second spelling (`1:`) can be inserted; the file then holds one key in two spellings and further writes of that setting
+are refused with the several-spellings warning above until the operator removes one and reloads, so reload after
+hand-editing map keys before the module writes them. (3) For a `SortedMap` whose key type compares different texts as one key
+(`BigDecimal` `1.0` and `1.00`), the several-spellings check does not detect the two spellings as one key, because it
+matches keys with `equals`; no shipped module uses such a map, so avoid writing one key in two numeric spellings.
 
 A declared setting written as a flat dotted key is that setting, as of 6.3.0 (#612). When a module declares
 `@ConfigEntry(path = "features.chat")` and the file holds `features.chat: false` instead of `features:` / `chat: false`,
@@ -649,8 +680,14 @@ all changed files through the write gate, and only then replaces them. Each file
 exactly the bytes it was staged against, checked again immediately before its move: a file an operator saved in between
 refuses the whole batch with `ConfigWriteRefusedException` naming that file, the operator's save is kept, and the files
 already replaced are restored to exactly the bytes they were verified against. Entity baselines and raw acknowledgments advance
-after every commit succeeds. An in-process staging/replacement refusal restores attempted targets
-and the complete prior entity state, removes staged temporaries, and rethrows the original error.
+after every commit succeeds. An in-process staging/replacement failure restores the complete prior entity state, removes
+staged temporaries, and rethrows the original error; on disk, the rollback acts only on bytes the batch itself still owns
+([#673](https://github.com/UltiKits/UltiTools-Reborn/issues/673)). A file the batch did not replace - never reached, or its
+replacement failed with an ordinary error, which leaves it holding its previous bytes - is never written or deleted by the
+rollback, so an operator save made while the batch was failing is kept. A file the batch replaced is put back only while
+it still holds exactly the batch's bytes; one the operator saved after the replacement is kept, and one WARNING names it.
+A file whose own put-back failed is left as the SEVERE describes, with its framework backup: the rollback does not write
+it again, and its configuration refuses every write until the operator compares the two and reloads.
 Recovery errors are attached as suppressed exceptions; persistently unavailable storage can prevent
 restoration and is not falsely reported as a successful rollback. Semantic no-ops write nothing.
 This is not a crash-safe multi-file transaction: a JVM crash between moves remains deferred to #545.
@@ -803,21 +840,37 @@ No general alias-preservation guarantee is claimed, and apart from putting back 
 (#622), nothing is restored from an earlier backup. [#545](https://github.com/UltiKits/UltiTools-Reborn/issues/545) remains the
 separate crash-safe multi-file transaction limit.
 
+Three YAML spellings fail the write gate's check (6.3.0). A framework write changes only the keys it owns and verifies
+that every other line of the file keeps its bytes and its value; these spellings cannot pass that check. None of them blocks
+reading the file, but a write of another key of that file is refused with one WARNING, and the file is left exactly as it
+was:
+
+- an unquoted binary value, such as `blob: !!binary YWI=` (it would be rendered as `blob: !!binary 'YWI='`);
+- a set written in block form, with `? a` entries (it would be rendered as `a:`);
+- a binary value used as a map key, such as `blobs: {!!binary 'YWI=': 1}`.
+
+Workaround: write binary values quoted (`blob: !!binary 'YWI='` or `blob: !!binary "YWI="`) or as a block literal
+(`blob: !!binary |` followed by the indented base64 on the next line), and write sets in flow form
+(`tags: !!set {a: null, b: null}`); values in these spellings never block a write of another key. A binary map key has no
+such spelling: keep binary values out of the keys of a file the framework writes.
+
 ### 中文补充：6.3.0 配置层迁移
 
 - 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
 - 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并，保存也不会删除这些条目，留给服主自己删（维护者 2026-10-04 决定）。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值；重载时文件里缺少的键改用声明默认值（上次加载时还在、即服主刚删掉的键警告一次）（模块自上次加载或保存后改过该设置时保留模块的值），两种情况都不改文件，之后的保存也不会补回该键（#596）。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
+- 6.3.0 起，非文本键的映射（`Integer`、`Long`、`Boolean`、`UUID` 等标量键）可以加载和写入（#673）。文件已有的条目总按文件里的键文字写入：加引号（`'01'`）、整数写成带点（`1.0`）、指数（`1.0e10`）、别名（`yes`、`off`）或大写的写法都原样保留；只有文件没有的键才按规范文字写入，且该文字必须读回同一个键。保存、面板编辑、`saveOperatorChange` 和 `saveOperatorMapEntry` 都不会改名、改引号、改顺序或改结构，删除条目只删它那一行；`saveOperatorMapEntry("limits", "1")` 能找到文件里写作 `'01'` 的条目。服主手动改写键（`'01'` 改成 `1`）在下次重载时直接采用，不报冲突也不写文件。同一个键在文件中有多种写法（如 `1:` 与 `'01':`）时，模块仍照常加载并给出原有警告，但该设置的所有写入都被拒绝，直到服主删掉多余写法并重载；保存时一条警告列出未写入的改动，服主命令和面板编辑抛出 `ConfigWriteRefusedException`，原因只写文件、设置和键（敏感键之下显示为 `<redacted>`），从不写值。自带旧式解析器（`@ConfigEntry(parser = ...)`）的设置不受上述两条规则约束：哪些文件键是同一个键只由该解析器决定，`1:` 与 `'01':` 对它可以是两个键，不会因多种写法被拒绝，`saveOperatorMapEntry` 也按给出的键文字原样使用。已知限制：（1）服主手动改写某个键（`'01':` 改成 `1:`）时，若模块对同一条目有尚未保存的改动，下次重载保留文件（服主的字节优先，并给出原有的冲突警告），模块对该条目的未保存改动被丢弃；请先保存模块的改动，再手动编辑该条目。（2）服主手动以一种写法加入键（`'01':`），模块在下次重载之前写入同一个键时，可能插入第二种写法（`1:`）；文件随后以两种写法持有同一个键，该设置之后的写入会被拒绝（沿用上述多种写法警告），直到服主删掉一个并重载；请在手动编辑映射键后先重载，再让模块写入。（3）对于键类型把不同文字视为同一个键的 `SortedMap`（如 `BigDecimal` 的 `1.0` 与 `1.00`），多种写法检查按 `equals` 匹配键，因此检测不到这两种写法是同一个键；没有已发布的模块使用这样的映射，请不要用两种数字写法写同一个键。
 - 6.3.0 起，声明的设置写成带点的扁平键时就是该设置（#612）：模块声明 `@ConfigEntry(path = "features.chat")`，文件写的是 `features.chat: false` 而不是 `features:` / `chat: false` 时，模块读到 `false`，与 6.2 经 Bukkit 读取时相同；路径的点以任何方式拆分都算（`a.b.c` 写成 `a.b:` / `c: 1` 也可以）。框架不会再为这种设置补一份嵌套写法：启动补键、模块保存、服主命令（`saveOperatorChange`、`saveOperatorMapEntry`）和面板编辑都经写入闸门写在该设置所在的那一行，面板也只按设置路径显示一次。`@ConditionalOnConfig` 改用同一个文档读取器和同一规则读取，不再用 Bukkit 的 `YamlConfiguration`，所以启动补键前后读到的都是模块绑定的值；仍只认布尔值。`isPresentInFile` 同样按此规则判断（扁平点键也算存在）。同一文件里一个设置写了两种形式（例如 `features.chat: false` 和 `features:` / `chat: true`）时，在模块代码运行前拒绝加载该模块（重载则拒绝重载、保留运行中的值），提示说明该设置写了两种形式，只写文件和设置路径，不写值；`@ConditionalOnConfig` 读取的路径即使没有配置实体声明，写了两种形式时同样拒绝该模块的组件扫描。两种形式的值相同也拒绝：在 3,710 个实际配置文件上实测，没有一个文件把同一设置写了两次；若接受相同的两份，之后某次写入只改其中一份，下次启动就会拒绝模块。删掉其中一行再重启即可。此规则只针对声明的设置路径，映射值里的键仍按完整键处理（如上面的 `o.O`）。文件缺少的设置会插入到文件已有的那个节下面，绝不写成该节的第二种形式（自 6.3.0 起，#614）：插入位置是文件以节的形式（映射，或没有值的键）持有的、设置路径最长的那段前缀，其余部分写成嵌套键。例如文件写了 `a.b:` / `c: 3`、模块声明了 `a.b.d`，启动补键会把 `d:` 写在 `a.b:` 下面。如果同一节的某个声明设置把路径的剩余部分写成节下的一个带点键（如 `a:` / `  b.c: 3`），缺少的 `a.b.d` 会以同样的方式写在它旁边（`  b.d: 2`），绝不另写嵌套的 `b:` / `d:`（维护者对 #614 修复的第一道审查意见所作的决定）；这样的兄弟设置若拆分方式不同，则按下文拒绝插入。如果文件把这个节写了几种形式，设置会插入到其中唯一一个还持有该节其他声明设置的形式下；没有或不止一个形式持有时拒绝插入：WARNING（服主命令则抛 `ConfigWriteRefusedException`）写明文件、设置和节，从不写值，内存中使用声明默认值。服主命令、服主改动和面板编辑插入设置时同样如此。
 - 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。模块的显式保存同样经过写入闸门，只拥有它要写的设置（#599，见下）；服主操作写入和面板编辑同样经过写入闸门，只写它们改的设置或映射条目，不再规整排版或展开锚点；闸门拒绝时面板收到注明原因的错误，文件不变（#600）。渲染器只能按一种规范排版写回；文件排版与之不同的地方，闸门无法保留，因此对该文件的**每一次**经闸门写入（启动补键、改写注释、保存、服主操作写入、面板编辑）都会拒绝，无论改的是哪个设置。这是有意的：规则不允许为了让写入通过而规整服主的排版（维护者授权下编排者 2026-10-05 的决定）。文件保持原样，内存中使用相应值，警告列出键和原因，并给出要改的行号（“…would change (line N)”或“…shares line N…”）。实测会拒绝的排版（每种都有测试 `OperatorFileWriterLayoutRefusalListTest` 固定）：只含空格的行或文件；值或节键后面的行尾空格；用多个空格对齐的行内注释（`#` 前只有一个空格的会保留）；冒号后多于一个空格、流式方括号内侧的空格（`[ world ]`）；文档开始标记 `---` 或结束标记 `...`；块标量（`|` 或 `>`）后面跟空行；没有末尾换行的文件里，最后一个值是用 `|`、`|+` 或 `>` 写的块标量（在这种文件末尾它的值没有末尾换行，所以会按 `|-` 或 `>-` 写回；这种文件里其它位置的块标量、以及用 `|-` 或 `>-` 写的最后一个值都会保留——但把文件最后一个值写成以换行结尾的文本的写入会被拒绝，并指出那一行；值永远不会被改动）；一节末尾、空行之后、缩进比下一个键更深的注释，以及任何缩进比下面的键更深的注释；同一文件里两种缩进宽度；混用换行符；续到下一行的普通值、值里的制表符、显式 `? key`、显式标签（`!!str`）；只含 BOM 的文件（原因里注明 BOM）；值为 `null` 且带行内注释的条目（`foo: ~  # placeholder`）被写入改成映射时，YAML 库无法在那里写出该注释，写入被拒绝并指出该键（#624，由 `WriteGateRuntimeFailureTest` 固定）。会保留的排版（其它键的写入照常通过）：`#` 前一个空格的行内注释、后面没有空行的块标量（包括紧跟在它后面的注释行：它被读成下面那个键或列表项的注释，与普通值之后的注释相同，[#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592)）、内侧无空格的流式映射和列表、带引号的值、全文一致的四空格缩进、与键同列的列表项、全文统一的 CRLF 或 LF、没有末尾换行（含有块标量的文件也一样，上面所说的最后一个值除外）、BOM、`#` 后无空格的注释、多个空行、十六进制数、`~` 和空值。使用锚点的文件整体拒绝，不按行。实测：框架和十五个模块自带的 32 个 YAML 文件、维护者测试服务器 `plugins/UltiTools/` 下 3,710 个配置 YAML 文件（2026-10-05 在 6.3.0 开发期间实测），经真实闸门插入一个键全部通过；已知唯一会拒绝的出厂文件是 6.0.9 之前各个 6.0.x 版本（6.0.0 至 6.0.8）的框架 `config.yml`（见下）。改掉警告指出的那一行，下一次写入即可通过。0 字节文件、只有空行的文件、以及只含行首注释（前面可有空行）的文件在闸门看来是空文档：启动时在已有字节之后补入声明的键（没有其它字节需要保留），服主操作写入或面板编辑插入它指定的设置；保存从不插入。只含空格的文件、含缩进注释的纯注释文件和只含 BOM 的文件按排版拒绝（见上），内存使用默认值、模块照常加载；只含制表符、`---` 或 `...` 的文件无法解析，按无法解析的文件保护（永不写入）；块标量后面依次是缩进大于 0 列的注释行、空行、第二个注释行的文件也一样：SnakeYAML 2.2 在这种排版上会在组装节点时抛出异常（[#617](https://github.com/UltiKits/UltiTools-Reborn/issues/617)，未修复）。读取后被删除的文件，服主操作写入或面板编辑会独占地重新创建它，只含指定的设置及其注释。YAML 库在闸门内部抛出的运行时异常（应用写入的修改、渲染文档、为自检重新解析渲染结果时）与闸门无法保留的排版一样按拒绝处理（#624）：不写入；闸门的一条警告列出文件、键、失败的步骤和异常类名，从不含异常消息（消息可能引用文件内容），例如 `the file cannot be written at autoreply.rules.foo: rendering the document failed (EmitterException)`；这些步骤（包括读取文件）中的其它非受检异常同样按拒绝处理；显式写入（`saveOperatorChange`、`saveOperatorMapEntry`、面板编辑）抛出注明键的 `ConfigWriteRefusedException`，自动写入照常在内存中使用声明默认值。库的运行时异常不会再传到调用方，按约定在 `IOException` 时回滚的模块因此与文件保持一致。启动时其它非受检异常不会拒绝模块：一条警告列出文件和异常类名，内存中使用声明默认值。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
 - 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。6.3.0 起，原地写入在打开目标之后失败（写到一半中断、force 或关闭失败）不再留下写了一半的目标（#622）：框架先把目标放回原样——按原地方式写回目标在此之前的字节，也就是已 force 的备份里的内容（之所以原地写回，是因为这条退路所替代的原子移动已被拒绝）——再删除该备份，然后才报告 `IOException`；因此文件保持写入前的内容，与在该异常时回滚内存改动的模块一致。面板批次以同样方式放回它打开过的每个文件，并报告失败（#582）。若放回本身也失败：一条 SEVERE 列出文件和备份（从不含内容），备份保留且之后的加载不会删除它；写入该文件的配置在重载重新读取文件之前，把它视为读取后已被改动：`isFileModifiedSinceSnapshot()` 为真，服主操作写入和面板编辑以 `ConfigWriteRefusedException`（“the file changed since it was read: …”）拒绝，`save()` 不写入并以一条 WARNING 列出键。处理方法：对比文件与备份，必要时用备份覆盖文件，然后重载。成功的原地写入所用的备份只在成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。除放回刚失败的那次写入外，不从更早的备份还原，不保证多文件崩溃事务。
 - 读取器无法读取的两种排版（#580、#617，维护者 2026-10-05 决定：只写入文档，不改读取器，不向上游报告）：框架带注释读取 YAML（Paper 自带的 SnakeYAML 2.2），以下两种合法的 YAML 排版无法读取，文件按无法解析处理：永不写入，启动时模块使用声明默认值（重载保留运行中的值），已有的 SEVERE 日志指出该文件（`Cannot load <文件>: <解析位置>; file will not be overwritten`）。文件的字节不会丢失，但其中服主的值在排版改正之前不会生效。其一：块锚点的第一个子键之前有注释（`defaults: &defaults` 下一行是 `# 注释`，再下一行才是 `setting: inherited`）——把注释移到锚点键上方或第一个子键之后即可读取。其二：块标量（`|-` 或 `>`）后面依次是缩进大于 0 列的注释行、空行、第二个注释行——删掉两个注释之间的空行（或删掉其中一个注释）即可读取。另外，缺少的设置若要插入到某个“冒号后没有值”的键（如 `c:`）的紧后面，写入闸门每次启动都会以“与不属于本次写入的键共用一行”拒绝（#628，未修复，内存中使用默认值）；要把文字设置留空，请写 `key: ''`，这种写法会保留且不会被拒绝。
+- 三种 YAML 写法无法通过写入闸门的校验（闸门要求未写入的每一行字节和值都不变）：不加引号的二进制值（`blob: !!binary YWI=`）、块形式的集合（`? a`）、用作映射键的二进制值。它们不影响读取，但同一文件中其它键的写入会被拒绝（一条 WARNING），文件保持原样。变通办法：二进制值加引号（`!!binary 'YWI='`）或写成块字面量（`!!binary |`），集合写成流形式（`!!set {a: null, b: null}`）；二进制映射键没有可用写法，不要在框架会写入的文件中用它作键。
 - 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`#`、一个空格加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。面板编辑以服主同意为准，只替换它指定的键，不发警告（#600）。框架写的注释行被服主删除（设置本身保留）时，下次启动和下次 `/ul reload` 都会把它写回原位，用当时所选的语言，无论是否切换了语言；但如果该设置正上方还留着服主自己的注释行，这行就是该设置的全部注释、属于服主，框架不会在上面再写。服主写的值、键和行都不会变；切换语言时，该设置以外的框架注释照常跟随切换。出厂语言文件写的注释和自定义语言文件写的注释都是如此（由 `DeletedFrameworkCommentTest` 固定）。所以删除注释行去不掉注释：想让令牌设置不带框架注释，请把该行换成自己的注释（哪怕只是一个 `#`），框架认不出是自己的，就会保留，也不会在上面再写。整个设置（注释和键）一起删除时，下次启动会带着默认值和注释写回，位置在剩余设置之后，而不是原来的位置。
 - 6.3.0 起模块 `save()` 只写模块自上次加载或保存以来改过的设置，并且只在文件该处仍是框架上次读到或写入的值、且该值正是模块的起始值（能无转换警告地转换为上次加载或保存时的设置值）时才写（#599，维护者 2026-10-04 决定）。声明为 `Map` 的设置按条目写（按声明的映射类型逐层进入嵌套映射），只设置或删除模块增、改、删的条目（空映射或被模块删空的映射整体写，因为它的键行随首条或末条一起变）；其他值——列表、Bukkit `Location`/`Vector` 等 `ConfigurationSerializable`、类型化映射中本身不是映射的条目值——都算一个值，要么整体写入要么不写，文件里不会出现模块与服主各占一部分的值。声明为 `Map<String, Object>` 或原始 `Map` 的设置只拆一层，其下的普通嵌套映射算一个值。重载合并（复合值或列表冲突时整体采用文件的值，只列键名）、面板编辑复合值内的字段（以框架上次读到的整个值加上该字段的改动为写入单位，且仅当写入时文件仍保存着该整个值；否则拒绝并注明设置名“文件在读取后已被改动，请先重载”，不写入）以及 `saveOperatorMapEntry`（键深入到非映射条目内部时抛 `IllegalArgumentException`，不写入）都按同一规则判断什么算一个值。保存从不补写文件缺少的键、从不改写注释、从不删除模块没删的映射条目。因此服主在磁盘上改过的值、删掉的键、框架无法使用的值或列表元素（`interval: 3O0`、`[60, 30, 10, abc]`）以及 6.2 拆开的映射条目，无论模块是否改了该设置，保存都不会覆盖（#596）。没写成的改动留在内存，每次保存一条警告列出文件和这些键，不列值；被写入闸门拒绝的键由闸门的警告连同原因列出。其余每一行逐字节不变，否则不写；没有可写内容时不碰文件。“文件仍是读取时的内容”比较的是框架上次读到或写入的文本：服主不经 `/ul reload` 直接在磁盘上改过的设置——哪怕值不变，比如把 `y: 64` 改成 `y: 64.0`——之后模块对该设置的改动不会写入（警告中列出），直到重载重新读取文件；没有任何内容丢失，模块的值留在内存中。`save()` 用于服主通过模块要求的改动，或语言切换后重新渲染出厂文字。6.2.5 的显式保存会直接覆盖服主在磁盘上改过的值；6.3.0 依维护者“服主写的配置绝不被自动覆盖”的规则取消此行为，没有过渡期。
 - 6.3.0 新增两个服主操作写入方法（增量 API）：`saveOperatorChange(String...)` 只写指定的设置（如 `/setspawn` 指定六个 `spawn.location.*`），`saveOperatorMapEntry(String, String...)` 只写映射设置中的一个条目（如 `/autoreply` 的一条规则；文件缺少时插入，模块映射里已删除时从文件删除；每个映射键是完整键，`play.example` 是一个键）。服主的命令即同意：指定键处以模块的值为准，服主手改过的也替换；文件缺少的指定设置连同注释插入。其余一律不写（模块改过但未指定的设置也不写；用 `saveOperatorChange` 指定整个映射设置会整体写入并丢掉服主手加的条目，只改一个条目的命令应使用 `saveOperatorMapEntry`），写入经写入闸门且只拥有这些键。被拒绝时（文件不可读或无法解析、使用锚点、排版无法逐字节保留、准备写入期间文件被改）抛出新的 `com.ultikits.ultitools.config.ConfigWriteRefusedException`（`IOException` 子类），消息和 `getReason()` 说明原因、不含任何值；文件保持原样，内存中的值不变且仍未保存。路径不是已声明的配置项，或对非映射设置调用条目方法，抛 `IllegalArgumentException` 且不写。两者都在实体锁下执行，须在服务器主线程调用。
 - 6.3.0 新增 `saveOperatorMapEntry(EntryPresence, String, String...)`（增量 API，#623）：映射条目的写入可附带存在性条件，`MUST_BE_ABSENT` 用于新建条目的命令（如 `/autoreply add`），`MUST_BE_PRESENT` 用于修改已有条目的命令（如 `/autoreply setkeyword`），模块不必再用自己的解析器另读一次文件。条件在写入闸门据以校验的同一次读取上判断，闸门在替换文件前还会再核对一次这些字节：服主自加载以来手动添加或删除的条目都能看到，此后保存的改动则让闸门以“文件已被改动”拒绝写入。“存在”指该条目的完整键路径在文件中存在（框架读取该设置的位置：嵌套键或扁平的带点键，#612，再接映射键，每个都是完整键）；值为 `null` 的条目算存在；上级键缺失、为 `null`、为空映射 `{}` 或不是映射时算不存在，缺失、空白或只有注释的文件不含任何条目。条件不成立时不写入（字节和修改时间不变），框架只记 FINE 级日志，并抛出新的 `com.ultikits.ultitools.config.ConfigEntryPresenceException`（`ConfigWriteRefusedException` 的子类）：`getRequired()` 给出不成立的条件，`getReason()` 给出条目的键路径，从不含值。条件为 `null` 时抛 `IllegalArgumentException`。两个重载都是 6.3.0 新增的。第一个参数直接写字面量 `null` 的调用（`saveOperatorMapEntry(null, "path", "key")`）因两个重载都匹配而无法编译；请把 `null` 强制转换为所需的类型（此时会抛 `IllegalArgumentException`）。
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性（路径按声明设置路径的方式读取（#612）：按点拆成嵌套键、作为一个扁平带点键或两者混合，文件以任一形式持有该键即算存在，因此含点的完整映射键也能查到），修改声明字段后 `save()`。两个官方调用方 UltiEssentials 与 UltiRemoteBag 已在其适配 6.3.0 的版本中改用 `isPresentInFile`；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
-- 注册批次验证完成才开始独立写文件；面板批次先验证并经写入闸门暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复；每个文件替换前再核对一次字节，期间被服主保存的文件整批拒绝（`ConfigWriteRefusedException` 注明文件）、服主的保存保留，已替换的文件恢复为核对时的原字节。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
+- 注册批次验证完成才开始独立写文件；面板批次先验证并经写入闸门暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复；每个文件替换前再核对一次字节，期间被服主保存的文件整批拒绝（`ConfigWriteRefusedException` 注明文件）、服主的保存保留，已替换的文件恢复为核对时的原字节。回滚只处理本批次仍拥有的字节（#673）：本批次没有替换的文件（未执行到，或替换以普通错误失败、文件仍是原字节）回滚时绝不写入或删除，批次失败期间服主的保存保留；已替换的文件仅当仍是本批次写入的字节时才放回，之后被服主保存的保留并警告一次；放回本身失败的文件按 SEVERE 所述连同框架备份保留，回滚不再写它，该配置拒绝一切写入，直到服主比对两者并重载。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
 - 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。重载重建模块语言之后、模块自己的重载钩子之前，框架经写入闸门、按重新读取的文件，只把它能认出的自己的注释行改成新语言，不写任何值、键或其它注释行（#594）。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。此规则不改变任何公开签名；`reloadSelf()` 自 6.3.0 起为 `final` 是另一项改动所致。
 - 框架自己的 `plugins/UltiTools/config.yml` 启动时补入缺少的面板键（能力开关、`ultipanel.commands.blocklist`、`ultipanel.files.editable-roots`、操作日志轮转键）同样经过写入闸门，只插入（#605）。补键迁移是 6.3.0 新增的（6.2.x 只在 `config.yml` 不存在时写入它）；它在本周期较早的 6.3.0 快照中的第一个版本会整份重写文件：十六进制数变成十进制、锚点被展开、`o.O` 这样的含点键被拆成嵌套映射、显式 `null` 被替换。现在其余每个字节保持不变（已在每个已发布的 6.2.x `config.yml` 上实测）；闸门无法逐字节写回的文件（手工对齐、锚点）保持原样，警告一次列出这些键，由 jar 自带 `config.yml` 中的默认值（现在也列出命令黑名单和可编辑根目录）生效。若文件以扁平含点键（如 `ultipanel.capabilities.logs: false`）或含点的节键保存其中某个设置，而插入的嵌套节会在服务器读取时取代它，同样不写入：警告一次，指出文件和该设置（不含任何值），缺少的键使用 jar 默认值。较早版本实测：6.0.9 和 6.1.x 的 `config.yml` 同样只插入；6.0.9 之前各个 6.0.x 版本（6.0.0 至 6.0.8）的 `config.yml` 含 `trustIp: [ ]`（方括号内侧有空格），每次启动都被拒绝并警告一次、指出第 14 行，缺少的键使用 jar 默认值，不写入任何内容——只有从 6.0.8 或更早版本直接升级才会遇到；改成 `trustIp: []` 或手工补上这些键即可消除警告。
 - UltiTools 只在 `plugins/bStats/config.yml` 不存在、或已含 `serverUuid` 时启动 bStats（#606）。该文件由所有使用 bStats 的插件共用；此前无法解析的文件被当作空文件，bStats 的默认值会写在它上面。现在无法读取、无法解析或缺少 `serverUuid` 的文件逐字节保持不变，记一行日志说明，本次运行 UltiTools 不发送统计。在 Paper 上，服务器自带的统计代码会在任何插件加载之前读取该文件，并用新的默认值重写无法解析或缺少 `serverUuid` 的文件（在 Paper 1.21.11 上实测），因此这类文件是被服务器本身替换的，而不是被 UltiTools 替换的，UltiTools 只会看到有效的文件。
@@ -1621,7 +1674,15 @@ This section governs the third kind.
   recorded file (same SHA-256); the failure it raises is
   `PluginInstallUtils.RemovalDeferredException` (`@ApiStatus.Internal`), a
   `java.nio.file.FileSystemException` that names every recorded file. Only when the record cannot
-  be written is a plain `FileSystemException` naming the files thrown instead.
+  be written is a plain `FileSystemException` thrown instead. It names only the module JARs still on
+  disk, and the record failure travels with it as a suppressed
+  `PluginInstallUtils.RemovalNotRecordedException` (`@ApiStatus.Internal`), an `IOException` that is
+  not a `FileSystemException` and names no file to delete (#676). The `/upm uninstall` reply then
+  lists only those JARs to delete by hand and says on a line of its own that the deletion was not
+  recorded, so the next start will not delete them. At the start that applies a record, a recorded
+  JAR whose content cannot be read to confirm that it is still the recorded file is neither deleted
+  nor dropped: it stays in the modules folder, keeps its entry in the record unchanged for the next
+  start, and is reported as one SEVERE line with the read error (#676).
 - The modules folder is computed in one place, `<plugin data folder>/plugins` (#517). Before 6.3.0
   the start-up scan read `System.getProperty("user.dir")` + `/plugins/UltiTools/plugins` while the
   module class loader, install, update and uninstall read the data folder; on a server whose JVM was
@@ -1927,6 +1988,82 @@ This section governs the third kind.
   unparseable one, never overwritten). A module that already handles the declared `IOException`
   needs no change. Separately, each credential write now forces the file and its directory to disk
   around the atomic rename, which adds the cost of two disk syncs to each credential write.
+  When both the pre-6.3.0 `plugins/UltiTools/data.json` and the current `.ultikits/credentials.json` under the server
+  root exist, the old copy is removed only after the current file has been read as a credential document - any JSON
+  object, `{}` included ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672)); the current file's content
+  wins and is never overwritten with the old one's. A current file that is empty, whitespace-only, the JSON literal
+  `null`, not valid JSON, a string or a number instead of an object, or not a regular file does not count: both files are
+  kept unchanged, one WARNING names both paths (never any content), no server UUID is generated and no UltiCloud token is
+  written or cleared, and `CredentialStore.write` refuses with a `DataAccessException` while a readable pre-6.3.0 copy
+  waits behind such a file. The next access after the current file is fixed - restored from a backup, or moved out of the
+  way so the old copy migrates - completes the cleanup. A current file that cannot be opened (permission denied) also keeps
+  both files and fails the access. Before this change the old copy was deleted as soon as the current file existed, so an
+  unreadable current file left no readable credential at all. Migration to a current file that does not exist yet is
+  unchanged: the copy is written, read back and compared with the old data before the old file is removed.
+
+  中文补充：两份凭据文件并存时，只有当前文件（服务器根目录下的 `.ultikits/credentials.json`）能被读成凭据文档（任何 JSON 对象，包括 `{}`）之后，才会删除 6.3.0 之前的旧副本（`plugins/UltiTools/data.json`）（#672）；以当前文件的内容为准，不会被旧内容覆盖。当前文件为空、只含空白、为 `null`、不是合法 JSON、是字符串或数字而不是对象，或不是普通文件时，两个文件都原样保留，一条 WARNING 写明两个路径（不含任何文件内容），不生成服务器 UUID，也不写入或清除 UltiCloud 令牌；旧副本可读而当前文件不可读期间，`CredentialStore.write` 以 `DataAccessException` 拒绝。修好当前文件（从备份恢复，或把它移开让旧副本迁移）之后的下一次访问会完成清理。当前文件无法打开（权限不足）时同样保留两个文件，并使这次访问失败。此前只要当前文件存在就会删除旧副本，当前文件不可读时就不剩任何可读的凭据。当前文件尚不存在时的迁移不变：先写入、读回并与旧数据比较，之后才删除旧文件。
+- **A remote file request uses the object it authorizes** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
+  as of v6.3.0). The remote file API (`read`, `write`, `list`, `delete`) used to judge one form of the requested path and
+  use another: the check ran on the path with every `name/..` pair removed textually, while the I/O used the path as
+  sent, so a `..` after a symbolic link could reach a file outside the editable roots that the check never looked at, and
+  a write to a dangling link created the link's target. Each request is now resolved on the filesystem once, and that one
+  result is both what is judged and what is read, written, listed or deleted. What an operator or a panel author sees:
+  a request whose real target lies outside every editable root is refused with the configurable
+  `ultipanel.files.editable-roots` refusal, and a `list` marks such an entry `accessible: false` with
+  `reason: OUTSIDE_ROOTS` (an alias to an outside file used to be listed as accessible); a path that cannot be located safely is
+  refused and no configuration changes that - `.` or `..` in the part of the path that does not exist yet, a dangling or
+  looping symbolic link, a directory that cannot be searched, and a `delete` that names no ordinary entry (`/`, `.`,
+  `dir/.`, `dir/..`; these used to remove the contents of the directory they collapse to); a symbolic link inside a root
+  that points to a protected file (a credential file, the remote action log's directory) is refused like that file, and a
+  `list` marks it `PROTECTED_CREDENTIAL`; a `delete` of a terminal symbolic link - to a file, to a directory with
+  `recursive` absent, `false` or `true`, or to nothing - removes only the link and leaves its target and everything under
+  it alone (a link to a directory deleted with `recursive: true` used to empty the directory it pointed to first), and a
+  recursive `delete` of a real directory never follows a symbolic link inside the deleted tree: that link is removed as a
+  link and its target is untouched (a link inside the tree to an outside directory or to the action log's directory used
+  to have its target emptied, and one to the credential directory used to refuse the whole delete). Links and
+  junctions are never followed whether they are the delete target or inside the deleted tree, and protected locations
+  are judged by real path, whichever editable root a request matched and in whatever order the roots are configured
+  (roots `[plugins/shadow, plugins]` with `plugins/shadow` linking to `plugins/UltiTools` do not reach the action log's
+  directory through either root), so a `list` also marks a link to a directory by its target like any other alias. Every
+  refusal is one `DENIED` entry in the remote action log; a refusal reached while the path was being resolved on disk was
+  recorded `ALLOWED` before. A permitted request that then fails for an ordinary reason (a missing file, a path of the
+  wrong type, a write without content) is still one `ALLOWED` entry and a failure reply, and a `list` still records one
+  entry for the directory, never one per row. A panel that stays inside its roots sees no difference; one that reached a
+  file through a `..` after a link is now refused, and the operator who wants that content reachable adds its real
+  directory to `ultipanel.files.editable-roots`. Known limitations: a separate local process that swaps a path component
+  for a link between the check and the use can still redirect that one request (the panel itself cannot create links);
+  a hard link to a credential file that the operator places inside an editable root under another name cannot be told
+  apart from an ordinary file by path, so do not hard-link credential files into editable roots; and on a
+  case-insensitive macOS filesystem a case variant of the protected `plugins/UltiTools/security` directory name is not
+  recognised by the unconditional deny layer. On such a filesystem a request that names a directory in the wrong
+  case is treated as an entry rather than as a real directory: a non-empty directory requested in the wrong case is
+  refused ("directory not empty") and not deleted, and an empty one is deleted without `recursive`.
+
+  中文补充：**远程文件请求使用的就是被授权的那个对象**（自 6.3.0 起，#672）。远程文件 API（`read`、`write`、`list`、`delete`）原来判断的是路径的一种形式，实际使用的却是另一种：检查时先把路径中每个 `名称/..` 在文本上消去，I/O 却用原样的路径，所以符号链接后面的 `..` 可能到达检查从未看过的可编辑根之外的文件，向悬空链接写入还会创建链接指向的目标。现在每个请求只在文件系统上解析一次，这一个结果既是被判断的对象，也是被读取、写入、列出或删除的对象。服主和面板作者会看到：真实目标在所有可编辑根之外的请求，以可配置的 `ultipanel.files.editable-roots` 拒绝，`list` 会把这样的条目标为 `accessible: false`、`reason: OUTSIDE_ROOTS`（指向根外文件的别名原来被列为可访问）；无法被安全定位的路径一律拒绝且无法通过配置放行——路径中尚不存在的部分里的 `.` 或 `..`、悬空或循环的符号链接、无法搜索的目录，以及不指向任何普通条目的 `delete`（`/`、`.`、`dir/.`、`dir/..`，这些原来会清掉它们所折叠到的目录的内容）；根内指向受保护文件（凭据文件、远程操作日志目录）的符号链接，与该文件本身一样被拒绝，`list` 将其标为 `PROTECTED_CREDENTIAL`；对末端符号链接的 `delete`——无论指向文件、指向目录（`recursive` 缺省、`false` 或 `true`）还是什么都不指向——只删除链接本身，目标及其下的一切不动（带 `recursive: true` 删除指向目录的链接，原来会先清空链接所指的目录）；对真实目录的递归 `delete` 也绝不跟随被删目录树内部的符号链接：该链接作为链接被删除，其目标不动（树内指向根外目录或操作日志目录的链接，原来会让其目标被清空；指向凭据目录的链接，原来会使整个删除被拒绝）。链接与 junction 无论是删除目标本身还是位于被删除的树内，都不会被跟随；受保护位置按真实路径判断，与请求匹配到哪个可编辑根、根的配置顺序无关（根为 `[plugins/shadow, plugins]` 且 `plugins/shadow` 链接到 `plugins/UltiTools` 时，经哪个根都到不了操作日志目录），因此 `list` 也像对待其他别名一样按目标标记指向目录的链接。每次拒绝都在远程操作日志里记为一条 `DENIED`；此前在磁盘上解析路径时才发生的拒绝被记为 `ALLOWED`。获准之后因普通原因失败的请求（文件不存在、类型不符、写入不带内容）仍是一条 `ALLOWED` 加一条失败回复，`list` 仍只为目录记一条，不会每行一条。只在根内活动的面板看不到差别；通过链接后面的 `..` 到达文件的面板现在会被拒绝，想让那些内容可达的服主，请把真实目录加入 `ultipanel.files.editable-roots`。已知限制：另一个本地进程若在检查与使用之间把路径中的某一段换成链接，仍可改变这一次请求的去向（面板本身无法创建链接）；服主以其他名称放进可编辑根的、指向凭据文件的硬链接，按路径无法与普通文件区分，所以不要把凭据文件硬链接进可编辑根；在不区分大小写的 macOS 文件系统上，受保护的 `plugins/UltiTools/security` 目录名的大小写变体不会被无条件拒绝层识别。在这类文件系统上，以错误大小写指定目录的请求会被当作普通条目而非真实目录处理：以错误大小写请求删除非空目录会被拒绝（“directory not empty”）而不会被删除，空目录则无需 `recursive` 即被删除。
+- **`update_config` is gated by the target it routes to** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
+  as of v6.3.0). The message was gated by `ultipanel.capabilities.file-write` whatever it carried, although a `fileName` of
+  `server_properties` is handed to the server-properties editor (a read without content, a write with it). A message for
+  that target now needs `ultipanel.capabilities.server-properties` and nothing else, and every other `update_config` (a
+  named configuration file, the whole configuration) needs `ultipanel.capabilities.file-write` and nothing else; a
+  `fileName` the handler cannot read as one string needs `file-write` and reaches no editor. A refusal is the existing
+  `capability_denied` reply naming the switch, with the request's `requestId`, and one `DENIED` entry in the remote action
+  log. So a panel that edited `server.properties` through `update_config` with only `file-write` on is refused until the
+  operator turns `server-properties` on, and with `server-properties` on and `file-write` off the same message is allowed.
+  The safe-key whitelist is unchanged: a key outside it still gets an error reply naming the key, and the file is not
+  touched.
+
+  中文补充：**`update_config` 按它实际路由到的目标选择开关**（自 6.3.0 起，#672）。原来这条消息无论内容是什么都由 `ultipanel.capabilities.file-write` 把关，而 `fileName` 为 `server_properties` 的消息其实交给服务器属性编辑器处理（不带内容为读取，带内容为写入）。现在该目标只需要 `ultipanel.capabilities.server-properties`，别无其他；其余所有 `update_config`（指名的配置文件、整份配置）只需要 `ultipanel.capabilities.file-write`；处理器读不成单个字符串的 `fileName` 需要 `file-write`，也到不了任何编辑器。拒绝时仍是现有的、点明开关的 `capability_denied` 回复（带上请求的 `requestId`），并在远程操作日志里记一条 `DENIED`。因此只开了 `file-write` 就通过 `update_config` 编辑 `server.properties` 的面板，在服主打开 `server-properties` 之前会被拒绝；开着 `server-properties`、关着 `file-write` 时，同一条消息现在被允许。安全键白名单不变：白名单之外的键仍得到点明该键的错误回复，文件不被改动。
+- **A malformed `ultipanel.commands.blocklist` is rejected whole** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
+  as of v6.3.0). The value was read through a converting list getter, so a plain string, an empty string or a list holding a
+  mapping installed an empty or partial blocklist, and the panel could run commands the operator meant to block. When the
+  framework loads the key at server start it now accepts only a list of which every element is a string (each trimmed and
+  lower-cased); anything else - a scalar, a map, or a list with an element that is a mapping, a nested list, null, a number or
+  a boolean - is ignored as a whole. One WARNING names `ultipanel.commands.blocklist` and the kind of the value, never the
+  value, and the ten-command default stays in force. An explicit empty list `[]` is valid and blocks nothing, and an absent
+  key, or `blocklist: ~`, keeps the default. The file is never rewritten. To block nothing, write `[]`; to block a command,
+  write it as a string element.
+
+  中文补充：**格式错误的 `ultipanel.commands.blocklist` 会被整体拒绝**（自 6.3.0 起，#672）。原来这个值经由会做类型转换的列表读取方法读入，所以普通字符串、空字符串或含映射的列表会装入一个空的或残缺的黑名单，面板就能执行服主本想拦截的命令。现在框架在服务器启动时加载该键，只接受每个元素都是字符串的列表（每项去掉首尾空白并转小写）；其他任何形式——标量、映射，或含映射、嵌套列表、null、数字、布尔元素的列表——都整体忽略，输出一条 WARNING，写明 `ultipanel.commands.blocklist` 和值的种类（不写值本身），十条命令的默认值继续生效。显式的空列表 `[]` 合法，表示不拦截任何命令；键缺失或写成 `blocklist: ~` 时保留默认值。文件绝不被改写。想不拦截任何命令请写 `[]`；想拦截某条命令，把它写成字符串元素。
 - Configuration writes follow the maintainer's rule that operator-written configuration is never
   overwritten automatically (2026-10-04, "what code may write, by file type";
   [#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599)). Changed without a migration period,
@@ -2019,6 +2156,18 @@ This section governs the third kind.
     annotations; they have no effect there. No first-party module is refused by these declaration checks.
 
   中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`。现在，对本身就是 `@ConfigEntry` 设置的字段，按其声明类型判断；声明类型若能容纳注解可检查的值（`Object`、`Serializable`、`Comparable`、`CharSequence`、`Number` 或其他被检查种类的父类型），则不算约束错误，加载时绑定的值照常检查；这些类型中只有 `Object` 无需转换器即可绑定，其余类型需要模块转换器（`@ConfigConverterFor`），否则模块会以 `no config converter for ...` 被拒绝；绑定的值若是注解无法读取的种类（`@Range` 下 `Object` 设置里的文本，`@Pattern`、`@Size` 或 `@NotEmpty` 下的数字），按该注解的普通违规处理：启动时拒绝加载，`/ul reload` 时拒绝重载并保留运行中的值（6.3.0 之前会静默通过）；这类字段的规则如下：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。只有永远不可能容纳可检查值的声明类型才算声明错误：这类声明会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组（`List<Integer>` 上的 `@Range` 就属于这种错误：它不适用于列表本身）。配置类中不是 `@ConfigEntry` 设置的字段上的约束同样会被拒绝。**约束注解只对本身就是配置类 `@ConfigEntry` 设置的字段生效。** 值类型的字段、嵌套类的字段，以及转换器产生的任何对象上的注解（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）既不检查也不报告；框架不会深入值类型（#633，按维护者 2026-10-06 的决定关闭）。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目）。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，它们不会被检查（模块自行检查），模块照常加载；它面向 6.3.0 的构建保留了这两个注解，但它们在那里不起作用。没有第一方模块会被这些声明检查拒绝。
+
+- **Declarative GUI: one frame runs only the work queued when it starts** (as of v6.3.0). Before 6.3.0 a
+  frame kept running until its queue was empty, so a widget whose `State.initState` called `setState` and then
+  threw kept the server thread rebuilding that page inside a single frame and never returned. Now a rebuild
+  requested during a frame runs on the next one. **Known limitation:** such a broken page is still retried once
+  per tick for as long as it is open, and each failure is logged. Fix the widget: a `State` must not throw from
+  `initState`; catch the failure there and render an error state instead.
+
+  中文补充：**声明式 GUI：每一帧只执行该帧开始时已排队的任务**（自 6.3.0 起）。6.3.0 之前一帧会一直执行到队列清空，
+  因此某个组件的 `State.initState` 先调用 `setState` 再抛出异常时，服务器主线程会在同一帧里反复重建该页面、永不返回。
+  现在帧内请求的重建在下一帧执行。**已知限制：**这样的坏页面只要还开着，仍会每个 tick 重试一次，每次失败都会记录日志。
+  请修复该组件：`State` 不应从 `initState` 抛出异常，应在其中捕获失败并渲染错误状态。
 
 ### Behavioral changes that do need one
 
@@ -2146,6 +2295,50 @@ Each corrects behaviour that contradicted the documentation or left state held b
   `Error`，其后的 bean 仍会被清理。十五个 UltiKits 模块都没有使用 `saveBeforeRemove`。没有签名变化。见 `FEATURES.md` 中的
   `ultitools.runtime.player-cache-quit`。
 
+- **Known limitations of command validators, inherited `@CmdTarget` and tab completion (6.3.0),
+  documented rather than defended.** Each needs an unusual combination of conditions or code that
+  steps outside the module container; none changes a verdict in normal use. A module author's
+  remedy is given with each.
+  - **Executors that share one custom validator chain.** An executor releases the
+    `@CmdCD` and `@UsageLimit` validators it dispatched through when its module unloads, and leaves a
+    validator alone while another loaded executor that has dispatched still has it in its chain (a
+    chain passed to `super(chain)`, or one instance returned from `createDefaultValidatorChain()` by
+    several executors). An executor counts as a user from its first dispatch on. If that first-ever
+    dispatch runs off the main thread (a command run from another thread)
+    at the same moment another sharing executor's module unloads, the unload can release the
+    shared lock validator, clearing its locks, while that first command is still running. **Do not
+    share one custom validator chain instance across executors of different modules;** give each
+    executor its own chain. The validators an executor owns itself are always released correctly.
+  - **A shared validator is unregistered when the last sharing executor is torn down.** Until then
+    it stays registered with the player-cache manager. An executor the module container never tears
+    down - one built with `new` and registered by hand, outside the container - keeps a shared
+    validator registered until that executor is garbage collected. The effect is a delayed
+    unregister, never a wrong verdict. **Let the module container own its executors.**
+  - **The inherited `@CmdTarget` check reads the whole superclass chain at scan time.** The load
+    check for a method-level `@CmdTarget` that widens or switches the class-level value now covers
+    command mappings inherited from base classes, not only methods the class declares. It reads each
+    superclass's methods during the component scan, so a base class with a method whose signature
+    names a class that is missing at run time (an absent optional dependency) now fails the scan
+    with `NoClassDefFoundError`; before, the same failure came when the executor was constructed.
+    The framework has no `@ConditionalOnClass`-style annotation for this. **Keep classes that need
+    an optional dependency out of command base classes** - or keep that dependency's types out of
+    their method signatures - and load them only when the dependency is present.
+  - **Later-argument tab completion offers each literal once, but not across sources.** For an
+    argument after the first, a literal token several matching formats share (`alpha enable` and
+    `alpha enable <target>`) is offered once. A `@CmdParam(suggest = ...)` completer's candidates are
+    appended as it returns them, so a completer that returns the same string as a literal already
+    offered can still show it twice. **Do not return a subcommand literal from a parameter
+    completer.**
+
+  中文补充：命令校验器、继承的 `@CmdTarget` 与补全的已知限制（6.3.0，写入文档，不改代码）。(1) 多个执行器共用同一个自定义
+  校验器链（`super(chain)`，或几个执行器从 `createDefaultValidatorChain()` 返回同一个实例）时，若某个执行器首次分发发生在主线程之外，
+  且恰在另一个共用它的模块卸载的同一时刻，卸载可能释放共享的锁校验器，而那条命令仍在执行。请勿在不同模块的执行器之间共用同一个
+  自定义链，每个执行器使用自己的链。(2) 共享校验器在最后一个共用它的执行器被销毁前一直登记在玩家缓存管理器中；不由模块容器
+  销毁的执行器（用 `new` 创建并手动注册）会让它保留到该执行器被垃圾回收，只是注销延后，不会产生错误的判定。请让容器持有执行器。
+  (3) 继承的 `@CmdTarget` 检查在组件扫描时读取整条父类链：父类中某个方法签名引用了运行时缺失的类（缺失的可选依赖）时，扫描阶段就会
+  抛出 `NoClassDefFoundError`，而不是等到执行器构造。请不要把需要可选依赖的类放进命令基类，或让依赖的类型不出现在其方法签名中。
+  (4) 后续参数的补全会对字面量去重，但参数补全器返回与已提供字面量相同的字符串时，仍可能出现两次；请勿从参数补全器返回子命令字面量。
+
 ### Panel log stream and panel reply changes (6.3.0) that need no migration period
 
 Each corrects a declared behaviour the stream did not deliver. The panel protocol changes only additively: a
@@ -2260,6 +2453,16 @@ its meaning.
   line, is refused with a reason naming the lines (no value); `set_all` lists it under `failed` and, as an added
   field, gives its reason under `failureReasons` (key to reason); the server log names each refused key once.
   The server itself still re-writes the whole file when it next starts (measured on Paper 1.21.11).
+- **Known limitation of panel responder scheduling** (#677). Panel responders are new in 6.3.0: a module's
+  responder runs on one of `PanelResponderRegistry`'s worker threads (at most 4 calls at once, at most 64 requests
+  waiting) under one 3-second deadline counted from the request's arrival. If the thread admitting a request stalls
+  for longer than that deadline between starting it and queueing the request, while all 4 workers are blocked, the
+  request, already answered with its timeout error, is queued afterwards and holds one of the 64 waiting slots until a
+  worker frees, so a later request can be refused as if the queue were full. No wrong reply is sent.
+
+  中文补充：面板 responder 调度的已知限制（#677）。若接收请求的线程恰好在启动该请求的 3 秒时限与把请求放入队列之间停顿超过
+  3 秒，且 4 个工作线程同时阻塞，这个已按超时答复的请求仍会在之后入队，并占用 64 个等待位置中的一个，直到有工作线程空出；
+  其间后来的请求可能被当作队列已满而拒绝。不会发出错误的回复。
 
 ### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
 
@@ -2810,9 +3013,12 @@ exactly what an `IncompatibleClassChangeError` for an overridden final method re
 stack trace at SEVERE (the trace is logged at FINE), naming the module JAR and — only when its
 `plugin.yml` declares them — its `version` and `api-version`, saying it was built against an older
 UltiTools-API version and is not compatible with this one, and ending with the JVM's original
-message. Every other module that does not depend on it still loads; a module that lists it under
-`depend:` is refused along with it, as for any missing hard dependency. The fix is to replace that
-JAR with a release of the module built for the current UltiTools-API version.
+message. Every other module still loads, except a module that names it in
+`@PluginDependency(depends = ...)`, which is refused along with it, as for any missing hard
+dependency. `plugin.yml`'s `depend:` lists Bukkit server plugins and is not the path by which one
+module's refusal reaches another; a module that names it only under `softDepends`, `loadBefore` or
+`loadAfter` still loads. The fix is to replace that JAR with a release of the module built for the
+current UltiTools-API version.
 
 The opposite mismatch is reported the other way round. When the same kind of failure comes from a
 module whose declared `api-version` is above the installed framework's — a module built for a newer

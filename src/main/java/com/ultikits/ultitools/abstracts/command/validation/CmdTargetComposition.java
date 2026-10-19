@@ -2,10 +2,14 @@ package com.ultikits.ultitools.abstracts.command.validation;
 
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.CmdTarget.CmdTargetType;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * The single implementation of {@code @CmdTarget}'s class-versus-method composition rule.
@@ -115,6 +119,14 @@ public final class CmdTargetComposition {
      * Pure reflection - no instance required, safe to call before the class becomes a bean
      * definition. Absent class-level annotation is treated as BOTH, so a method-level
      * restriction on an otherwise-unrestricted class is always a narrowing, never a violation.
+     * <p>
+     * Two sets of methods are checked. First, the class's effective command mappings, exactly as
+     * dispatch registers them ({@link ReflectionUtil#getEffectiveCommandMappings(Class)}): an
+     * inherited mapping widening or laterally switching the class-level value is refused here,
+     * not run by a sender the class excludes (case 57). Second, every method the class itself
+     * declares with {@code @CmdTarget}, whether or not it is a mapping - the check that existed
+     * before inherited mappings were added - so no class refused before is accepted now. A
+     * violation for an inherited method also names the class that declared it.
      *
      * @param commandClass the command class to check
      * @return one human-readable violation per WIDENING or LATERAL method; empty for a legal class
@@ -124,8 +136,12 @@ public final class CmdTargetComposition {
                 ? commandClass.getAnnotation(CmdTarget.class).value()
                 : CmdTargetType.BOTH;
 
+        Set<Method> candidates = new LinkedHashSet<>(
+                ReflectionUtil.getEffectiveCommandMappings(commandClass).values());
+        candidates.addAll(Arrays.asList(commandClass.getDeclaredMethods()));
+
         List<String> violations = new ArrayList<>();
-        for (Method method : commandClass.getDeclaredMethods()) {
+        for (Method method : candidates) {
             if (!method.isAnnotationPresent(CmdTarget.class)) {
                 continue;
             }
@@ -145,9 +161,12 @@ public final class CmdTargetComposition {
      */
     private static String describe(Class<?> commandClass, Method method, CmdTargetType classLevel,
                                      CmdTargetType methodLevel, Transition transition) {
+        String declaredIn = commandClass.equals(method.getDeclaringClass())
+                ? ""
+                : " (declared in " + method.getDeclaringClass().getName() + ")";
         return String.format(
-                "%s#%s: class-level @CmdTarget(%s) and method-level @CmdTarget(%s) is a %s "
+                "%s#%s%s: class-level @CmdTarget(%s) and method-level @CmdTarget(%s) is a %s "
                         + "transition, which is not a narrowing and is refused",
-                commandClass.getName(), method.getName(), classLevel, methodLevel, transition);
+                commandClass.getName(), method.getName(), declaredIn, classLevel, methodLevel, transition);
     }
 }

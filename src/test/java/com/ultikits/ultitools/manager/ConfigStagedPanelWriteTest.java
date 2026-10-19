@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -45,6 +46,7 @@ class ConfigStagedPanelWriteTest {
 
     @BeforeEach
     void setup() throws Exception {
+        clearLeakedUltiToolsInstance();
         UltiToolsPlugin plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("PanelBatch");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(directory.toString());
@@ -423,6 +425,139 @@ class ConfigStagedPanelWriteTest {
         assertThat(warnings).filteredOn(text -> text.contains(kept.getFileName().toString()) && text.contains("not restored"))
                 .hasSize(1);
         assertNoTemporaries();
+    }
+
+    /**
+     * Case 13 (#673): an ordinary commit failure is not ownership of the file. The batch's second commit fails with a plain
+     * IOException after the operator saved that file; the commit published nothing, so the batch rollback must leave the
+     * operator's bytes exactly as they are - it may put back only what the batch itself published. The commit order is
+     * not assumed.
+     */
+    @Test
+    void ordinaryCommitFailureKeepsTheOperatorSaveMadeDuringIt() throws Exception {
+        List<String> warnings = new ArrayList<>();
+        List<Path> committed = new ArrayList<>();
+        Path failed = failSecondCommitAfterAnOperatorSave(warnings, committed);
+        assertThat(committed).as("one file was really published before the failure").hasSize(1);
+        for (int i = 0; i < entities.size(); i++) {
+            Path target = directory.resolve(entities.get(i).getConfigFilePath());
+            if (target.getFileName().equals(failed.getFileName())) {
+                assertThat(Files.readAllBytes(target)).as("the operator's save made during the failure is kept")
+                        .isEqualTo(operatorSave(originals.get(i)));
+            } else {
+                assertThat(Files.readAllBytes(target)).as("published and put back, or untouched").isEqualTo(originals.get(i));
+            }
+            assertThat(state(entities.get(i))).isEqualTo(checkpoints.get(i));
+        }
+        String name = failed.getFileName().toString();
+        assertThat(warnings).as("nothing to report: the failed write never owned the file")
+                .noneMatch(text -> text.contains(name) && text.contains("not restored"));
+        assertNoTemporaries();
+    }
+
+    /** Case 13, continued: the kept operator save stays protected against the module's later writes (L2). */
+    @Test
+    void operatorSaveSurvivesLaterWrites() throws Exception {
+        List<String> warnings = new ArrayList<>();
+        Path failed = failSecondCommitAfterAnOperatorSave(warnings, new ArrayList<Path>());
+        int index = -1;
+        for (int i = 0; i < entities.size(); i++) {
+            if (entities.get(i).getConfigFilePath().equals(failed.getFileName().toString())) { index = i; }
+        }
+        Values entity = entities.get(index);
+        Path target = directory.resolve(entity.getConfigFilePath());
+        byte[] operator = operatorSave(originals.get(index));
+        assertThat(Files.readAllBytes(target)).as("precondition: the operator's save was kept").isEqualTo(operator);
+        assertThat(entity.isFileModifiedSinceSnapshot()).isTrue();
+
+        warnings.clear();
+        clearLeakedUltiToolsInstance();
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("com.ultikits.ultitools");
+        java.util.logging.Handler capture = warningCapture(warnings);
+        logger.addHandler(capture);
+        try {
+            assertThatCode(entity::save).doesNotThrowAnyException();
+        } finally { logger.removeHandler(capture); }
+        assertThat(Files.readAllBytes(target)).as("save() never writes over the operator's other line").isEqualTo(operator);
+        assertThat(warnings).as("the module's unsaved other is reported not written").anyMatch(text ->
+                text.contains(entity.getConfigFilePath()) && text.contains("other") && text.contains("were not written"));
+
+        entity.reload();
+        JsonObject edit = new JsonObject(); edit.addProperty("value", 10);
+        JsonObject files = new JsonObject(); files.add(entity.getConfigFilePath(), edit);
+        JsonObject root = new JsonObject(); root.add("PanelBatch", files);
+        assertThatCode(() -> manager.loadFromJson(root.toString())).doesNotThrowAnyException();
+        String expected = new String(operator, StandardCharsets.UTF_8)
+                .replace("value: " + (index + 1) + "\n", "value: 10\n");
+        assertThat(new String(Files.readAllBytes(target), StandardCharsets.UTF_8)).as("only the value line changes")
+                .isEqualTo(expected).contains("other: saved by the operator while the batch was failing\n");
+        assertNoTemporaries();
+    }
+
+    /**
+     * Clears a mocked {@code UltiTools} instance an earlier test class in the same fork left behind (as
+     * InPlaceFallbackRestoreTest does, gate-1 F1): with one, {@code save()} reports its unwritten keys through the mock's
+     * {@code getLogger()}, which is {@code null}, instead of the framework logger this test captures.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the framework singleton is a private static field
+    private static void clearLeakedUltiToolsInstance() throws ReflectiveOperationException {
+        Field instance = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
+        instance.setAccessible(true);
+        instance.set(null, null);
+    }
+
+    /** The original file text with only its other line saved by the operator. */
+    private static byte[] operatorSave(byte[] original) {
+        return new String(original, StandardCharsets.UTF_8)
+                .replace("other: disk\n", "other: saved by the operator while the batch was failing\n")
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Runs the three-file panel batch: every commit is real except the second one attempted, which writes the operator's
+     * save to its file and then fails with a plain IOException without replacing anything (an ordinary failure after the
+     * last-moment check).
+     *
+     * @return the target of the failed commit; {@code committed} receives the targets whose real commit ran
+     */
+    private Path failSecondCommitAfterAnOperatorSave(List<String> warnings, List<Path> committed) throws Exception {
+        Path[] failed = new Path[1];
+        AtomicInteger attempts = new AtomicInteger();
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("com.ultikits.ultitools");
+        java.util.logging.Handler capture = warningCapture(warnings);
+        logger.addHandler(capture);
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(
+                AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString())).thenAnswer(call -> {
+                Path target = call.getArgument(0);
+                AtomicConfigWriter.StagedWrite observed = Mockito.spy((AtomicConfigWriter.StagedWrite) call.callRealMethod());
+                Mockito.doAnswer(commit -> {
+                    if (attempts.incrementAndGet() == 2) {
+                        failed[0] = target;
+                        Files.write(target, operatorSave(Files.readAllBytes(target)));
+                        throw new IOException("injected ordinary commit failure");
+                    }
+                    Object result = commit.callRealMethod();
+                    committed.add(target);
+                    return result;
+                }).when(observed).commit();
+                return observed;
+            });
+            assertThatThrownBy(() -> manager.loadFromJson(payload()))
+                    .isInstanceOf(IOException.class).hasMessage("injected ordinary commit failure");
+        } finally { logger.removeHandler(capture); }
+        assertThat(failed[0]).as("the second commit was reached").isNotNull();
+        return failed[0];
+    }
+
+    private static java.util.logging.Handler warningCapture(List<String> warnings) {
+        return new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getLevel().intValue() >= java.util.logging.Level.WARNING.intValue()) { warnings.add(record.getMessage()); }
+            }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        };
     }
 
     private static byte[] operatorEdit(Path target) {

@@ -5,16 +5,25 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 
+import org.assertj.core.api.SoftAssertions;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,9 +31,17 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
+import org.mockito.invocation.Invocation;
 
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.TestHelper;
@@ -44,6 +61,28 @@ class CommandExecutionManagerTest {
     private CommandExecutionManager manager;
     private UltiPanelWebSocketClient mockWebSocketClient;
     private Logger mockLogger;
+
+    /**
+     * The valid list a reload row installs before it loads the invalid value, so the reload rows
+     * can tell "the previous valid list was kept" apart from "the shipped default came back".
+     */
+    private static final String VALID_PREVIOUS_BLOCKLIST = "[stop, deop]";
+
+    /** A string placed inside invalid values; no logged line may contain it. */
+    private static final String SENTINEL = "zq-sentinel-84e6";
+
+    private static final String BLOCKLIST_KEY = "ultipanel.commands.blocklist";
+
+    @TempDir
+    Path rawConfigDir;
+
+    private int rawConfigCounter;
+
+    /** Every synthetic configuration this test published, in order. */
+    private final List<RawConfig> publishedRawConfigs = new ArrayList<>();
+
+    /** The action log the published UltiTools mocks return. */
+    private final RemoteActionLog rawActionLog = mock(RemoteActionLog.class);
 
     @BeforeEach
     void setUp() {
@@ -1097,6 +1136,373 @@ class CommandExecutionManagerTest {
             // MUST restore: a leaked default locale corrupts every later test in the 5340-test
             // suite, not just this class.
             java.util.Locale.setDefault(originalLocale);
+        }
+    }
+
+    // --- Raw-YAML blocklist validation (case 84e60349, D-05). Top-level, not @Nested, for the
+    // same Surefire method-filter reason as the four tests above. ---
+
+    /**
+     * Writes a synthetic config.yml whose {@code ultipanel.commands.blocklist} is the given raw
+     * YAML text ({@code null} writes a file without the key), loads it with
+     * {@link YamlConfiguration#loadConfiguration(java.io.File)} so mappings, nested lists, nulls,
+     * numbers and booleans reach the loader as the raw values YAML produced ({@code config.set}
+     * cannot express a present null element), and publishes it through a fresh
+     * {@link UltiTools} mock with this class's mocked logger.
+     */
+    private RawConfig publishRawConfig(String blocklistYaml) throws IOException {
+        rawConfigCounter++;
+        Path file = rawConfigDir.resolve("config-" + rawConfigCounter + ".yml");
+        String text = blocklistYaml == null
+                ? "ultipanel:\n  commands:\n    timeout: 30\n"
+                : "ultipanel:\n  commands:\n    blocklist: " + blocklistYaml + "\n";
+        Files.write(file, text.getBytes(StandardCharsets.UTF_8));
+        YamlConfiguration config = YamlConfiguration.loadConfiguration(file.toFile());
+        UltiTools ultiTools = TestHelper.mockUltiToolsInstance(mockUltiTools -> {
+            when(mockUltiTools.getConfig()).thenReturn(config);
+            when(mockUltiTools.getLogger()).thenReturn(mockLogger);
+            when(mockUltiTools.getRemoteActionLog()).thenReturn(rawActionLog);
+        });
+        RawConfig published = new RawConfig(file, config, ultiTools);
+        publishedRawConfigs.add(published);
+        return published;
+    }
+
+    /**
+     * Loads {@code blocklistYaml} through one of the two entries: a newly constructed manager, or
+     * a public {@code loadConfiguration()} call on a manager that already loaded
+     * {@link #VALID_PREVIOUS_BLOCKLIST}.
+     */
+    private CommandExecutionManager loadThroughEntry(String blocklistYaml, BlocklistEntry entry)
+            throws IOException {
+        if (entry == BlocklistEntry.CONSTRUCTION) {
+            publishRawConfig(blocklistYaml);
+            return new CommandExecutionManager();
+        }
+        publishRawConfig(VALID_PREVIOUS_BLOCKLIST);
+        CommandExecutionManager reloaded = new CommandExecutionManager();
+        assertThat(reloaded.isCommandAllowed("op").isAllowed())
+                .as("precondition: the valid previous list [stop, deop] was installed and allows op")
+                .isTrue();
+        publishRawConfig(blocklistYaml);
+        reloaded.loadConfiguration();
+        return reloaded;
+    }
+
+    private static void assertConfigurableRefusal(SoftAssertions softly, CommandExecutionManager loaded,
+            String command) {
+        AccessDecision decision = loaded.isCommandAllowed(command);
+        softly.assertThat(decision.isAllowed()).as("%s is refused", command).isFalse();
+        softly.assertThat(decision.isConfigurable()).as("%s refusal is the configurable blocklist decision", command)
+                .isTrue();
+        softly.assertThat(decision.getConfigKey()).as("%s refusal names the blocklist key", command)
+                .isEqualTo("ultipanel.commands.blocklist");
+    }
+
+    private static void assertAllowed(SoftAssertions softly, CommandExecutionManager loaded, String command) {
+        softly.assertThat(loaded.isCommandAllowed(command).isAllowed()).as("%s is allowed", command).isTrue();
+    }
+
+    static Stream<Arguments> invalidBlocklistRows() {
+        Stream.Builder<Arguments> rows = Stream.builder();
+        for (InvalidBlocklist shape : InvalidBlocklist.values()) {
+            for (BlocklistEntry entry : BlocklistEntry.values()) {
+                rows.add(Arguments.of(shape, entry));
+            }
+        }
+        return rows.build();
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidBlocklistRows")
+    @DisplayName("an invalid raw blocklist value is rejected as a whole and the current policy is kept")
+    void invalidRawBlocklistIsRejectedWholeAndCurrentPolicyKept(InvalidBlocklist shape, BlocklistEntry entry)
+            throws IOException {
+        CommandExecutionManager loaded = loadThroughEntry(shape.yaml, entry);
+
+        SoftAssertions softly = new SoftAssertions();
+        // stop is in both the shipped default and the previous valid list: refused in every row.
+        assertConfigurableRefusal(softly, loaded, "stop");
+        assertConfigurableRefusal(softly, loaded, "minecraft:stop");
+        // op is in the shipped default (construction) but not in the previous valid list (reload).
+        if (entry.keepsShippedDefault()) {
+            assertConfigurableRefusal(softly, loaded, "op");
+            assertConfigurableRefusal(softly, loaded, "bukkit:op");
+        } else {
+            assertAllowed(softly, loaded, "op");
+            assertAllowed(softly, loaded, "bukkit:op");
+        }
+        softly.assertAll();
+    }
+
+    // --- Task 2 pins: valid, empty, absent and top-level-null controls; warning content; audit
+    // effect; and no write to the operator's file or the loaded section (D-05). ---
+
+    /** Every WARNING-level message logged so far that names the blocklist key. */
+    private List<String> warningsNamingBlocklistKey() {
+        List<String> warnings = new ArrayList<>();
+        for (Invocation invocation : Mockito.mockingDetails(mockLogger).getInvocations()) {
+            String message = warningMessageOf(invocation);
+            if (message != null && message.contains(BLOCKLIST_KEY)) {
+                warnings.add(message);
+            }
+        }
+        return warnings;
+    }
+
+    private static String warningMessageOf(Invocation invocation) {
+        Object[] args = invocation.getArguments();
+        String method = invocation.getMethod().getName();
+        if ("warning".equals(method) && args.length == 1) {
+            return String.valueOf(args[0]);
+        }
+        if ("log".equals(method) && args.length >= 2 && Level.WARNING.equals(args[0])) {
+            return String.valueOf(args[1]);
+        }
+        return null;
+    }
+
+    /** Every argument of every call made on the mocked logger, rendered as text. */
+    private String everythingLogged() {
+        StringBuilder logged = new StringBuilder();
+        for (Invocation invocation : Mockito.mockingDetails(mockLogger).getInvocations()) {
+            logged.append(Arrays.deepToString(invocation.getArguments())).append('\n');
+        }
+        return logged.toString();
+    }
+
+    @ParameterizedTest
+    @EnumSource(BlocklistEntry.class)
+    @DisplayName("a valid list with padding and mixed case is normalized and replaces the policy as a whole")
+    void validPaddedMixedCaseBlocklistReplacesThePolicy(BlocklistEntry entry) throws IOException {
+        CommandExecutionManager loaded = loadThroughEntry("['  OP ', 'Stop']", entry);
+
+        SoftAssertions softly = new SoftAssertions();
+        assertConfigurableRefusal(softly, loaded, "op");
+        assertConfigurableRefusal(softly, loaded, "bukkit:op");
+        assertConfigurableRefusal(softly, loaded, "stop");
+        assertConfigurableRefusal(softly, loaded, "minecraft:stop");
+        assertAllowed(softly, loaded, "deop");
+        assertAllowed(softly, loaded, "minecraft:deop");
+        softly.assertThat(warningsNamingBlocklistKey()).as("a valid list logs no warning").isEmpty();
+        softly.assertAll();
+    }
+
+    @ParameterizedTest
+    @EnumSource(BlocklistEntry.class)
+    @DisplayName("an explicit empty list is installed and blocks nothing")
+    void explicitEmptyBlocklistBlocksNothing(BlocklistEntry entry) throws IOException {
+        CommandExecutionManager loaded = loadThroughEntry("[]", entry);
+
+        SoftAssertions softly = new SoftAssertions();
+        for (String command : Arrays.asList("op", "bukkit:op", "stop", "minecraft:stop", "deop")) {
+            assertAllowed(softly, loaded, command);
+        }
+        softly.assertThat(warningsNamingBlocklistKey()).as("an empty list logs no warning").isEmpty();
+        softly.assertAll();
+    }
+
+    @ParameterizedTest
+    @EnumSource(BlocklistEntry.class)
+    @DisplayName("an absent key keeps the current policy: the default on construction, the previous list on reload")
+    void absentBlocklistKeyKeepsTheCurrentPolicy(BlocklistEntry entry) throws IOException {
+        CommandExecutionManager loaded = loadThroughEntry(null, entry);
+
+        assertAbsentKeyOutcome(loaded, entry);
+    }
+
+    @ParameterizedTest
+    @EnumSource(BlocklistEntry.class)
+    @DisplayName("a top-level null value (blocklist: ~) reads as an absent key, not as an invalid value")
+    void topLevelNullBlocklistReadsAsAbsentKey(BlocklistEntry entry) throws IOException {
+        CommandExecutionManager loaded = loadThroughEntry("~", entry);
+
+        // Characterization: YamlConfiguration drops a null-valued key while building its sections,
+        // so the key is not set and this row is absent-key coverage, not invalid-value coverage.
+        RawConfig nullFixture = publishedRawConfigs.get(publishedRawConfigs.size() - 1);
+        assertThat(nullFixture.config.isSet(BLOCKLIST_KEY)).as("blocklist: ~ is reported as set").isFalse();
+        assertAbsentKeyOutcome(loaded, entry);
+    }
+
+    private void assertAbsentKeyOutcome(CommandExecutionManager loaded, BlocklistEntry entry) {
+        SoftAssertions softly = new SoftAssertions();
+        assertConfigurableRefusal(softly, loaded, "stop");
+        assertConfigurableRefusal(softly, loaded, "minecraft:stop");
+        assertConfigurableRefusal(softly, loaded, "deop");
+        assertAllowed(softly, loaded, "say hi");
+        if (entry.keepsShippedDefault()) {
+            assertConfigurableRefusal(softly, loaded, "op");
+            assertConfigurableRefusal(softly, loaded, "reload");
+        } else {
+            assertAllowed(softly, loaded, "op");
+            assertAllowed(softly, loaded, "reload");
+        }
+        softly.assertThat(warningsNamingBlocklistKey()).as("an absent key logs no warning").isEmpty();
+        softly.assertAll();
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidBlocklistRows")
+    @DisplayName("an invalid value logs exactly one warning naming the key and its shape, never the value")
+    void invalidBlocklistWarnsOnceWithShapeAndWithoutValue(InvalidBlocklist shape, BlocklistEntry entry)
+            throws IOException {
+        loadThroughEntry(shape.sentinelYaml, entry);
+
+        List<String> warnings = warningsNamingBlocklistKey();
+        assertThat(warnings).as("one warning for the one invalid load").hasSize(1);
+        assertThat(warnings.get(0)).contains(BLOCKLIST_KEY).contains(shape.shape);
+        assertThat(everythingLogged()).as("no logged line carries the raw value").doesNotContain(SENTINEL);
+    }
+
+    @ParameterizedTest
+    @EnumSource(InvalidBlocklist.class)
+    @DisplayName("after an invalid reload, executeCommand still refuses stop with exactly one DENIED entry")
+    void invalidReloadStillRefusesStopWithOneDeniedEntry(InvalidBlocklist shape) throws IOException {
+        CommandExecutionManager loaded = loadThroughEntry(shape.yaml, BlocklistEntry.RELOAD);
+        loaded.setWebSocketClient(mockWebSocketClient);
+        JsonObject commandData = new JsonObject();
+        commandData.addProperty("command", "stop");
+        commandData.addProperty("executor", "some-admin");
+        commandData.addProperty("async", false);
+        commandData.addProperty("commandId", "invalid-reload-stop");
+
+        loaded.executeCommand(commandData);
+
+        ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(rawActionLog, times(1)).record(entryCaptor.capture());
+        assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(entryCaptor.getValue().getCapability()).isEqualTo(Capability.COMMANDS.name());
+        ArgumentCaptor<JsonObject> panelCaptor = ArgumentCaptor.forClass(JsonObject.class);
+        verify(mockWebSocketClient).sendMessage(panelCaptor.capture());
+        JsonObject result = panelCaptor.getValue().getAsJsonObject("data");
+        assertThat(result.get("success").getAsBoolean()).isFalse();
+        assertThat(result.get("output").getAsString()).contains(BLOCKLIST_KEY);
+    }
+
+    static Stream<Arguments> everyBlocklistRow() {
+        List<String> values = new ArrayList<>();
+        for (InvalidBlocklist shape : InvalidBlocklist.values()) {
+            values.add(shape.yaml);
+        }
+        values.addAll(Arrays.asList("['  OP ', 'Stop']", "[]", null, "~"));
+        Stream.Builder<Arguments> rows = Stream.builder();
+        for (String value : values) {
+            for (BlocklistEntry entry : BlocklistEntry.values()) {
+                rows.add(Arguments.of(value, entry));
+            }
+        }
+        return rows.build();
+    }
+
+    @ParameterizedTest
+    @MethodSource("everyBlocklistRow")
+    @DisplayName("loading never writes the operator's file, never saves, and never rewrites the loaded value")
+    void loadingNeverWritesTheOperatorConfiguration(String blocklistYaml, BlocklistEntry entry) throws IOException {
+        List<ConfigSnapshot> before = new ArrayList<>();
+        loadThroughEntryCapturing(blocklistYaml, entry, before);
+
+        assertThat(publishedRawConfigs).hasSameSizeAs(before);
+        for (int i = 0; i < before.size(); i++) {
+            before.get(i).assertUnchanged(publishedRawConfigs.get(i));
+        }
+    }
+
+    /**
+     * {@link #loadThroughEntry} that snapshots each fixture right after it is published, before
+     * any load reads it.
+     */
+    private CommandExecutionManager loadThroughEntryCapturing(String blocklistYaml, BlocklistEntry entry,
+            List<ConfigSnapshot> snapshots) throws IOException {
+        if (entry == BlocklistEntry.RELOAD) {
+            snapshots.add(new ConfigSnapshot(publishRawConfig(VALID_PREVIOUS_BLOCKLIST)));
+            CommandExecutionManager reloaded = new CommandExecutionManager();
+            snapshots.add(new ConfigSnapshot(publishRawConfig(blocklistYaml)));
+            reloaded.loadConfiguration();
+            return reloaded;
+        }
+        snapshots.add(new ConfigSnapshot(publishRawConfig(blocklistYaml)));
+        return new CommandExecutionManager();
+    }
+
+    /** File bytes, key set and raw blocklist value of one published configuration. */
+    private static final class ConfigSnapshot {
+        final byte[] fileBytes;
+        final Object rawValue;
+        final List<Object> rawElements;
+        final String rawText;
+        final Object keys;
+
+        ConfigSnapshot(RawConfig published) throws IOException {
+            this.fileBytes = Files.readAllBytes(published.file);
+            this.rawValue = published.config.get(BLOCKLIST_KEY);
+            this.rawElements = rawValue instanceof List ? new ArrayList<>((List<?>) rawValue) : null;
+            this.rawText = String.valueOf(rawValue);
+            this.keys = published.config.getKeys(true);
+        }
+
+        void assertUnchanged(RawConfig published) throws IOException {
+            assertThat(Files.readAllBytes(published.file)).as("file bytes").isEqualTo(fileBytes);
+            verify(published.ultiTools, never()).saveConfig();
+            Object rawAfter = published.config.get(BLOCKLIST_KEY);
+            assertThat(rawAfter).as("raw value at the key is the same object").isSameAs(rawValue);
+            if (rawElements != null) {
+                assertThat(new ArrayList<Object>((List<?>) rawAfter)).as("raw list elements")
+                        .containsExactlyElementsOf(rawElements);
+            }
+            assertThat(String.valueOf(rawAfter)).as("raw value content").isEqualTo(rawText);
+            assertThat(published.config.getKeys(true)).as("loaded key set").isEqualTo(keys);
+        }
+    }
+
+    /** The two ways a blocklist value reaches {@code loadConfiguration()}. */
+    enum BlocklistEntry {
+        /** A newly constructed manager; its current policy is the shipped ten-command default. */
+        CONSTRUCTION,
+        /** A repeated public call after {@link #VALID_PREVIOUS_BLOCKLIST} was installed. */
+        RELOAD;
+
+        boolean keepsShippedDefault() {
+            return this == CONSTRUCTION;
+        }
+    }
+
+    /**
+     * Raw YAML values for the key that are not a list of strings (case 84e60349). {@code yaml} is
+     * the Task 1 decision fixture; {@code sentinelYaml} is the same shape with {@link #SENTINEL}
+     * placed inside the value wherever the shape has text to carry it (the empty-string scalar has
+     * none, so its sentinel check is vacuous); {@code shape} is the phrase the warning must name.
+     */
+    enum InvalidBlocklist {
+        SCALAR_STRING("op", SENTINEL, "the value is a string"),
+        EMPTY_STRING_SCALAR("''", "''", "the value is a string"),
+        LIST_OF_ONLY_A_MAPPING("[{name: op}]", "[{" + SENTINEL + ": " + SENTINEL + "}]", "element 1 is a map"),
+        OP_WITH_A_MAPPING("[op, {name: deop}]", "[op, {name: " + SENTINEL + "}]", "element 2 is a map"),
+        OP_WITH_A_NESTED_LIST("[op, [deop]]", "[op, [" + SENTINEL + "]]", "element 2 is a list"),
+        OP_WITH_A_NULL("[op, null]", "[" + SENTINEL + ", null]", "element 2 is null"),
+        OP_WITH_A_NUMBER("[op, 5]", "[" + SENTINEL + ", 5]", "element 2 is a number"),
+        OP_WITH_A_BOOLEAN("[op, true]", "[" + SENTINEL + ", true]", "element 2 is a boolean");
+
+        final String yaml;
+        final String sentinelYaml;
+        final String shape;
+
+        InvalidBlocklist(String yaml, String sentinelYaml, String shape) {
+            this.yaml = yaml;
+            this.sentinelYaml = sentinelYaml;
+            this.shape = shape;
+        }
+    }
+
+    /** One published synthetic configuration: its file, the loaded section and the UltiTools mock. */
+    private static final class RawConfig {
+        final Path file;
+        final YamlConfiguration config;
+        final UltiTools ultiTools;
+
+        RawConfig(Path file, YamlConfiguration config, UltiTools ultiTools) {
+            this.file = file;
+            this.config = config;
+            this.ultiTools = ultiTools;
         }
     }
 

@@ -299,9 +299,17 @@ public class UltiPanelLogTransmitter {
     }
 
     /**
-     * Queues one start-up record the early capture replays (#487) for delivery in batches; nothing
-     * is sent until {@link #startReplay()}. The same gate as {@link #sendLog} applies: nothing is
-     * queued while transmission is off or the panel is not connected.
+     * Queues one start-up record the early capture replays (#487) for delivery in batches.
+     * <p>
+     * Queuing is an in-memory hand-off and does not depend on the connection: the capture has
+     * already given the record up, so a socket that closes while the capture is still handing its
+     * records over (#677) must not lose the rest. Nothing is sent here; {@link #startReplay()}'s
+     * sender sends only while the client reports itself connected, and records still queued when
+     * the panel reconnects on a new client are handed to the next transmitter
+     * ({@link #takePending()}). The transmission switch still applies -- nothing is queued while
+     * transmission is off, or when there is no client -- and the queue holds at most what
+     * {@code EarlyLogCapture} kept: at most 2,000 records and about 512 KiB, and nothing once it has
+     * waited five minutes for the stream.
      *
      * @param level     the log level (info, warning, error, debug)
      * @param message   the log message
@@ -314,7 +322,7 @@ public class UltiPanelLogTransmitter {
         if (holdsExternalDrainLock()) {
             return;
         }
-        if (!logTransmissionEnabled.get() || webSocketClient == null || !webSocketClient.isConnected()) {
+        if (!logTransmissionEnabled.get() || webSocketClient == null) {
             return;
         }
         JsonObject logData = fitReplayEntry(buildLogData(level, message, source, throwable, timestamp));

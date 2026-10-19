@@ -14,6 +14,8 @@ import java.util.jar.JarFile;
 
 import org.jetbrains.annotations.ApiStatus;
 
+import com.ultikits.ultitools.utils.CodeSourceLocations;
+
 /**
  * Localized interface.
  */
@@ -175,7 +177,10 @@ public interface Localized {
      * both a packaged JAR and an exploded directory (development workspace) layout. Reuses the
      * {@code getProtectionDomain().getCodeSource()} -&gt; {@code JarFile} idiom
      * {@code UltiToolsPlugin.saveResources()} already uses, so this is correct on a module's
-     * first-ever startup, before its embedded resources have been extracted to disk.
+     * first-ever startup, before its embedded resources have been extracted to disk. The location is
+     * resolved through {@link CodeSourceLocations#toFile(URL)}, the same resolver the dictionary
+     * reader uses, so a module installed under a path with a space or a non-ASCII character still
+     * reports the languages it ships (#676 case 26).
      * <p>
      * Exposed as {@code public static} out of necessity, not invitation -- interface methods
      * cannot be non-public before Java 9, so this is a direct test seam for {@link #supported()}'s
@@ -187,8 +192,7 @@ public interface Localized {
     @ApiStatus.Internal
     static List<String> scanLangResources(URL codeSourceLocation) {
         try {
-            String rawPath = codeSourceLocation.getPath();
-            File location = new File(rawPath.startsWith("/") ? rawPath : rawPath.substring(1));
+            File location = CodeSourceLocations.toFile(codeSourceLocation);
             if (location.isDirectory()) {
                 return scanLangDirectory(new File(location, "lang"));
             }

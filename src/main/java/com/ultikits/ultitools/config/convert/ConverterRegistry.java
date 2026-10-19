@@ -15,6 +15,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -393,15 +394,91 @@ public final class ConverterRegistry {
      * @throws ConversionException on conversion failure
      */
     @ApiStatus.Internal
-    @SuppressWarnings("removal")
     public ConversionResult<Object> toPlainResult(Object value, Type type, String file, List<String> path, ConfigEntry entry)
             throws ConversionException {
+        return toPlainResult(value, type, file, path, entry, null);
+    }
+
+    /**
+     * Internal write-planning bridge that also takes the plain value the file holds at {@code path}.
+     * @param value Java value
+     * @param type declared type
+     * @param file configuration file
+     * @param path whole keys
+     * @param entry annotation, or null for registry conversion
+     * @param fileValue the plain value the file holds at {@code path}, or {@code null} when unknown
+     * @return plain value and collected nested omissions
+     * @throws ConversionException on conversion failure
+     */
+    @ApiStatus.Internal
+    @SuppressWarnings("removal")
+    public ConversionResult<Object> toPlainResult(Object value, Type type, String file, List<String> path, ConfigEntry entry,
+                                                  Object fileValue) throws ConversionException {
         List<ConversionFailure> failures = new ArrayList<>();
-        Context ctx = new Context(this, file, path, type, failures);
-        Object plain = entry == null || entry.parser() == DefaultConfigParser.class
+        boolean registryConversion = entry == null || entry.parser() == DefaultConfigParser.class;
+        // A legacy parser never sees the file's value: it serializes the Java value as it always did.
+        Context ctx = new Context(this, file, path, type, failures, registryConversion ? fileValue : null);
+        Object plain = registryConversion
                 ? write(value, ctx) : invokeWrite(new LegacyParserAdapter(entry.parser()), value, ctx);
         return new ConversionResult<>(plain, failures);
     }
+
+    /**
+     * File-key ambiguity scan: finds every typed map key that two or more of the file's own keys at one map level read
+     * back to ({@code 1:} and {@code '01':} in a {@code Map<Integer, String>}), decided from the file's keys alone -
+     * no Java value is involved, so a key the module removed or never held still counts. It follows the same descent
+     * the writer uses (map entries by key text, list elements by index, only through declared map, collection and
+     * array types that the generic converter writes) and indexes each map level with the same helper the writer's
+     * binding uses, so the two never disagree. Only maps whose declared key type is neither {@code String} nor
+     * {@code Object} are indexed; file keys that do not read as the key type are ignored. Reading a key is a probe and
+     * adds no failure anywhere.
+     *
+     * @param type declared type of the setting
+     * @param fileValue the plain value the file holds at {@code path}
+     * @param file configuration file, for location
+     * @param path whole keys of the setting, for location
+     * @return the located path of every ambiguous typed key, ending in its first spelling in file order; key paths
+     *         only, never a value; empty when there is none
+     */
+    @ApiStatus.Internal
+    public List<List<String>> ambiguousFileKeys(Type type, Object fileValue, String file, List<String> path) {
+        List<List<String>> found = new ArrayList<>();
+        scanFileKeys(new Context(this, file, path, type, new ArrayList<>(), fileValue), found);
+        return Collections.unmodifiableList(found);
+    }
+
+    /** Descends where the writer descends: only through declared types the generic converter writes. */
+    private void scanFileKeys(Context ctx, List<List<String>> found) {
+        Class<?> raw = rawClass(ctx.declaredType());
+        if (registered(raw) != null || GenericConverters.resolveWrite(ctx.declaredType()) == null) { return; }
+        if (ctx.fileValue instanceof Map<?, ?> && Map.class.isAssignableFrom(raw)) { scanFileMap(ctx, found); }
+        else if (ctx.fileValue instanceof List<?>) { scanFileList(ctx, raw, found); }
+    }
+
+    /** Scans each list element by its index, where the declared type is an array or a collection. */
+    private void scanFileList(Context ctx, Class<?> raw, List<List<String>> found) {
+        Type element;
+        if (raw.isArray()) { element = ConversionTypes.component(ctx.declaredType()); }
+        else if (Collection.class.isAssignableFrom(raw)) { element = ConversionTypes.argument(ctx.declaredType(), Collection.class, 0); }
+        else { return; }
+        for (int index = 0; index < ((List<?>) ctx.fileValue).size(); index++) {
+            scanFileKeys(ctx.child(Integer.toString(index), element), found);
+        }
+    }
+
+    /** Reports this map level's ambiguous typed keys, then scans every entry's value by its file key text. */
+    private void scanFileMap(Context ctx, List<List<String>> found) {
+        Type keyType = ConversionTypes.argument(ctx.declaredType(), Map.class, 0);
+        Type valueType = ConversionTypes.argument(ctx.declaredType(), Map.class, 1);
+        for (List<String> spellings : GenericConverters.fileKeyIndex(ctx, keyType).values()) {
+            if (heldInSeveralSpellings(spellings)) { found.add(ctx.child(spellings.get(0), keyType).path()); }
+        }
+        for (Object fileKey : ((Map<?, ?>) ctx.fileValue).keySet()) {
+            scanFileKeys(ctx.child(String.valueOf(fileKey), valueType), found);
+        }
+    }
+
+    private static boolean heldInSeveralSpellings(List<String> spellings) { return spellings.size() > 1; }
 
     /**
      * Selects an explicitly declared legacy parser before registry conversion.
@@ -419,7 +496,7 @@ public final class ConverterRegistry {
     public <T> ConversionResult<T> fromPlainResult(Object plain, Type type, String file, List<String> path, ConfigEntry entry)
             throws ConversionException {
         List<ConversionFailure> failures = new ArrayList<>();
-        Context ctx = new Context(this, file, path, type, failures);
+        Context ctx = new Context(this, file, path, type, failures, null);
         T value = entry == null || entry.parser() == DefaultConfigParser.class
                 ? read(plain, ctx) : invokeRead(new LegacyParserAdapter(entry.parser()), plain, ctx);
         return new ConversionResult<>(value, failures);
@@ -475,7 +552,7 @@ public final class ConverterRegistry {
             throws ConversionException {
         ConfigConverter<?> custom = registered(factory);
         Type declared = custom == null ? ConfigurationSerializable.class : factory;
-        Context located = new Context(this, ctx.file, ctx.path, declared, ctx.failures);
+        Context located = new Context(this, ctx.file, ctx.path, declared, ctx.failures, null);
         return invokeRead(custom == null ? BukkitConverters.SERIALIZABLE : custom, plain, located);
     }
 
@@ -497,6 +574,26 @@ public final class ConverterRegistry {
         }
     }
 
+    /**
+     * Outcome of {@link Context#probe}: whether the read succeeded without any failure, and the value it read. A probe
+     * never records a failure in the conversion that ran it.
+     */
+    @ApiStatus.Internal
+    public static final class Probe {
+        private static final Probe FAILED = new Probe(false, null);
+        private final boolean succeeded;
+        private final Object value;
+        private Probe(boolean succeeded, Object value) {
+            this.succeeded = succeeded;
+            this.value = value;
+        }
+        private static Probe read(Object value) { return new Probe(true, value); }
+        /** @return whether the plain value read as the declared type without any failure */
+        public boolean succeeded() { return succeeded; }
+        /** @return the value read; {@code null} when the probe failed */
+        public Object value() { return value; }
+    }
+
     @ApiStatus.Internal
     public static final class Context implements ConversionContext {
         private final ConverterRegistry registry;
@@ -504,13 +601,25 @@ public final class ConverterRegistry {
         private final List<String> path;
         private final Type type;
         private final List<ConversionFailure> failures;
+        /**
+         * The plain value the file holds at {@link #path}, or {@code null} when unknown. Writes carry it so a typed
+         * map key can be written under the file's own key text; reads never use it.
+         */
+        private final Object fileValue;
+        /**
+         * The entries of the file map at this location by their key text, first in map order; built once, on the first
+         * lookup that misses an exact key, so binding every key of a map visits its file entries once, not once per key
+         * (PR #687 local Codex run 2).
+         */
+        private Map<String, Object> fileEntriesByText;
         private Context(ConverterRegistry registry, String file, List<String> path, Type type,
-                        List<ConversionFailure> failures) {
+                        List<ConversionFailure> failures, Object fileValue) {
             this.registry = registry;
             this.file = file;
             this.path = Collections.unmodifiableList(new ArrayList<>(path));
             this.type = type;
             this.failures = failures;
+            this.fileValue = fileValue;
         }
         /**
          * Applies the ordinary registered hierarchy before delegate-aware Bukkit fallback.
@@ -529,10 +638,10 @@ public final class ConverterRegistry {
         @Override public Type declaredType() { return type; }
         @Override public Object toPlain(Object nested) throws ConversionException {
             return registry.write(nested, new Context(registry, file, path,
-                    nested == null ? Object.class : nested.getClass(), failures));
+                    nested == null ? Object.class : nested.getClass(), failures, fileValue));
         }
         @Override public <V> V fromPlain(Object nested, Type declared) throws ConversionException {
-            return registry.read(nested, new Context(registry, file, path, declared, failures));
+            return registry.read(nested, new Context(registry, file, path, declared, failures, null));
         }
         /**
          * @param value nested Java value
@@ -541,7 +650,7 @@ public final class ConverterRegistry {
          * @throws ConversionException on failure
          */
         public Object writeTyped(Object value, Type declared) throws ConversionException {
-            return registry.write(value, new Context(registry, file, path, declared, failures));
+            return registry.write(value, new Context(registry, file, path, declared, failures, fileValue));
         }
         /**
          * @param value nested plain value
@@ -551,9 +660,12 @@ public final class ConverterRegistry {
          * @throws ConversionException on failure
          */
         public <V> V readTyped(Object value, Type declared) throws ConversionException {
-            return registry.read(value, new Context(registry, file, path, declared, failures));
+            return registry.read(value, new Context(registry, file, path, declared, failures, null));
         }
         /**
+         * The nested context carries the file's value at the nested location: the entry under {@code segment} when
+         * the file value is a map, the element at that index when it is a list and {@code segment} is an index, else
+         * none.
          * @param segment whole key or index
          * @param declared nested type
          * @return nested context
@@ -561,7 +673,33 @@ public final class ConverterRegistry {
         public Context child(String segment, Type declared) {
             List<String> childPath = new ArrayList<>(path);
             childPath.add(segment);
-            return new Context(registry, file, childPath, declared, failures);
+            return new Context(registry, file, childPath, declared, failures, fileEntry(segment));
+        }
+        /**
+         * @return the plain value the file holds at this context's location, or {@code null} when unknown; a probe and
+         *         every read carry none
+         */
+        @ApiStatus.Internal
+        public Object fileValue() { return fileValue; }
+        /**
+         * Reads {@code plain} as {@code declared} through the same registry path the loader uses, at this context's
+         * location, without recording anything in this conversion's failure list: a refusal, or any nested omission,
+         * goes to a throw-away list and makes the probe fail. Used to check that a map key's text reads back to the
+         * key it was written from, and to index the keys a file holds.
+         *
+         * @param plain document value to read
+         * @param declared type to read it as
+         * @return the read value, or a failed probe; never throws a conversion failure
+         */
+        @ApiStatus.Internal
+        public Probe probe(Object plain, Type declared) {
+            List<ConversionFailure> discarded = new ArrayList<>();
+            try {
+                Object value = registry.read(plain, new Context(registry, file, path, declared, discarded, null));
+                return discarded.isEmpty() ? Probe.read(value) : Probe.FAILED;
+            } catch (ConversionException | RuntimeException refused) {
+                return Probe.FAILED;
+            }
         }
         /**
          * @param raw refused input
@@ -575,6 +713,35 @@ public final class ConverterRegistry {
          */
         public ConversionException failure(String reason, Throwable cause) {
             return new ConversionException(reason, file, path, type, cause);
+        }
+
+        /**
+         * The file's value under {@code segment}: the entry whose key is exactly that text, else the first entry in map
+         * order whose key reads as that text, through the index built once per map.
+         */
+        private Object fileEntry(String segment) {
+            if (fileValue instanceof Map<?, ?>) {
+                Map<?, ?> entries = (Map<?, ?>) fileValue;
+                if (entries instanceof HashMap<?, ?> && entries.containsKey(segment)) { return entries.get(segment); }
+                if (fileEntriesByText == null) { fileEntriesByText = entriesByText(entries); }
+                return fileEntriesByText.get(segment);
+            }
+            if (fileValue instanceof List<?> && segment.matches("\\d{1,9}")) {
+                List<?> elements = (List<?>) fileValue;
+                int index = Integer.parseInt(segment);
+                return index < elements.size() ? elements.get(index) : null;
+            }
+            return null;
+        }
+
+        /** {@code entries} by key text ({@code String.valueOf}), keeping the first entry in map order for each text. */
+        private static Map<String, Object> entriesByText(Map<?, ?> entries) {
+            Map<String, Object> byText = new HashMap<>();
+            for (Map.Entry<?, ?> entry : entries.entrySet()) {
+                String text = String.valueOf(entry.getKey());
+                if (!byText.containsKey(text)) { byText.put(text, entry.getValue()); }
+            }
+            return byText;
         }
     }
 }

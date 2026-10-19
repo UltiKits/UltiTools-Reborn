@@ -292,6 +292,11 @@ public class CommandManager {
      * {@link #register(UltiToolsPlugin, CommandExecutor, String, String, String...)}) --
      * not a name-based relookup, which could mis-resolve a different module's command if
      * two modules share a primary alias under this framework's shared fallback prefix.
+     * <p>
+     * Once those commands are released, {@code plugin} is no longer tracked: this manager then
+     * references neither the unloaded module nor its command objects, and {@link
+     * #getPluginByCommand(Command)} can no longer return it. A later registration for the same
+     * instance starts a new list.
      *
      * @param plugin UltiTools Plugin instance
      */
@@ -303,13 +308,17 @@ public class CommandManager {
         for (Command command : commands) {
             unregisterCommand(commandMap, command);
         }
+        // Dropped only after every command was released: if one release throws, the entry stays and a
+        // later call (close() included) can still release the rest.
+        commandListMap.remove(plugin);
     }
 
     /**
      * Unregister all commands.
      */
     public void close() {
-        for (UltiToolsPlugin plugin : commandListMap.keySet()) {
+        // A copy: unregisterAll removes each module's entry as it goes.
+        for (UltiToolsPlugin plugin : new ArrayList<>(commandListMap.keySet())) {
             unregisterAll(plugin);
         }
     }

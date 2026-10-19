@@ -16,12 +16,24 @@ move, but what they now actually do did.
 ## Breaking: removed APIs
 
 A downstream module JAR **compiled against 6.2.5 and not recompiled** either continues to load and
-run unaffected, or fails in exactly one of the ways this section and
-[`COMPATIBILITY.md`](COMPATIBILITY.md) describe: one `SEVERE` summary at module scan naming the
-module and the skipped class, with the rest of the module unaffected. Full per-symbol reasoning,
-replacements, and the exact downstream failure shape for every entry below live in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md); the generated, cumulative
-list of every deprecated/announced/removed member is
+run unaffected, or fails in one of two ways:
+
+- A class that references a removed API is skipped at module scan, with one `SEVERE` summary naming
+  the module and the skipped class; the rest of that module loads.
+- A main class that overrides `unregisterSelf()` or `reloadSelf()`, both `final` in 6.3.0, fails
+  with `IncompatibleClassChangeError` when it is loaded, and the whole module is refused at load:
+  one `SEVERE` line names the module JAR and says it was built against an older UltiTools-API
+  version. Any other module that names it in `@PluginDependency(depends = ...)` is then refused, as
+  for any missing hard dependency; every other module still loads.
+
+To fix the second case, a module author moves the override's work to `onUnregister()` or
+`onReload()`, removes every `super.unregisterSelf()` and `super.reloadSelf()` call, deletes an
+override that only logs, and recompiles against 6.3.0; see
+[Third occurrence: 6.2.5 → 6.3.0, a MINOR](COMPATIBILITY.md#third-occurrence-625--630-a-minor) in
+`COMPATIBILITY.md`. A server operator installs a release of the module built for 6.3.0. Full
+per-symbol reasoning, replacements, and the exact downstream failure shape for every entry below
+live in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md); the generated,
+cumulative list of every deprecated/announced/removed member is
 [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
 
 ### `AbstractCommandExecutor` — the one removal with real downstream users
@@ -213,6 +225,26 @@ worked before/after examples, and measurement evidence for every item below are 
 - `CommandExecutionManager.isCommandAllowed` and `FileOperationManager.isPathAllowed` change
   return type from `boolean` to `AccessDecision` (an internal, non-public-API change; recorded
   here because `japicmp` reports it, not because it is a compatibility event for module authors).
+- A remote file request now uses the object it authorizes: `read`, `write`, `list` and `delete` resolve the
+  requested path on the filesystem once, so a `..` after a symbolic link, a link whose target lies outside every
+  editable root and a dangling or looping link can no longer reach an unauthorized file, a path that cannot be
+  located safely is refused, and a `list` marks an alias to an outside file `OUTSIDE_ROOTS` (#672).
+- A panel `delete` of a symbolic link removes only the link, never its target, whether the link points to a file,
+  to a directory (with `recursive` absent, `false` or `true`) or to nothing, and a recursive `delete` of a directory
+  never follows a link inside the deleted tree: the link is removed and its target is untouched (#672).
+- A symbolic link inside an editable root that points to a protected file (a credential file, the remote action
+  log's directory) is refused like that file, and a `list` marks it `PROTECTED_CREDENTIAL` (#672).
+- Every refused remote file request is one `DENIED` entry in the remote action log, including a refusal reached
+  while the path is resolved on disk; a permitted request that then fails for an ordinary reason stays one
+  `ALLOWED` entry (#672).
+- `update_config` is gated by the target it routes to: a `server_properties` target needs only
+  `ultipanel.capabilities.server-properties`, every other target only `ultipanel.capabilities.file-write` (#672).
+- A malformed `ultipanel.commands.blocklist` (not a list, or a list with an element that is not a string) is
+  ignored as a whole with one warning and the default blocklist stays in force, instead of installing an empty
+  or partial one; an explicit `[]` stays valid (#672).
+- When both the pre-6.3.0 credential file and the current one exist, the old file is removed only after the
+  current file reads as a credential document; otherwise both are kept, a warning names both paths, and no
+  identity or token is written until the current file is fixed (#672).
 
 ## Where to look for more detail
 

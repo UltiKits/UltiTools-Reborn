@@ -60,6 +60,17 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
  * at {@link Level#SEVERE}, naming the file and what to check. Only a file that does not exist at all
  * starts a fresh identity.
  * <p>
+ * <b>The current file is validated before the pre-6.3.0 copy is removed (D-06).</b> When both files
+ * exist, the pre-6.3.0 copy is deleted only after the current file has been read as a credential
+ * document (any parsed JSON object, {@code {}} included); the current value wins and is never
+ * overwritten with the old content. Existence alone is not validity: if the current file is empty, is
+ * not a valid JSON document, or is not a regular file, both files are kept unchanged and one WARNING
+ * naming both paths is logged per episode; if it cannot be opened at all, the read error propagates and
+ * both are kept. While a readable pre-6.3.0 copy waits behind such a current file, {@link #read()}
+ * reports a parse failure, {@link #update} refuses as above, and {@link #write(Map)} refuses too, so
+ * nothing can replace the current file and let a later migration remove the only readable copy. Once
+ * the current file is fixed, the next store access completes the cleanup.
+ * <p>
  * <b>Durability (#573).</b> The temporary file is forced to disk before the atomic move, and the
  * parent directory is forced after it where the platform allows (a directory cannot be opened as a
  * channel on Windows, so that step is best-effort), so a power loss cannot leave the credential path
@@ -151,6 +162,13 @@ public final class CredentialStore {
      * Guarded by {@link #LOCK}.
      */
     private static String reportedLeftover;
+
+    /**
+     * The WARNING last logged for a readable pre-6.3.0 file kept because the current file beside it
+     * cannot be read as a credential document (D-06), so one episode is reported once; cleared by the
+     * next migration that finds no such conflict. Guarded by {@link #LOCK}.
+     */
+    private static String reportedKeptBoth;
 
     private CredentialStore() {
     }
@@ -287,13 +305,23 @@ public final class CredentialStore {
      * temp directory. If the filesystem cannot honour an atomic move, this method fails loudly
      * ({@link DataAccessException} wrapping {@link AtomicMoveNotSupportedException}) rather than
      * silently falling back to a non-atomic copy.
+     * <p>
+     * Refuses while a readable pre-6.3.0 file waits behind a current file that cannot be read as a
+     * credential document (D-06): replacing the current file then would let the next migration delete
+     * the only readable copy. The migration and this decision run under the same lock acquisition as
+     * the write itself. A torn current file with no pre-6.3.0 file beside it is still replaced, as
+     * before.
      *
      * @param data the complete document to persist; replaces any existing content
+     * @throws DataAccessException if the write fails, or while such a conflict is unresolved
      */
     public static void write(Map<String, Object> data) {
         Objects.requireNonNull(data, "data");
-        migrate();
         synchronized (LOCK) {
+            String keptBoth = migrateLocked();
+            if (keptBoth != null) {
+                throw new DataAccessException("Refusing to write the credential store. " + keptBoth);
+            }
             writeLocked(data);
         }
     }
@@ -353,7 +381,9 @@ public final class CredentialStore {
      * The whole safety property is the order of operations, in one sentence: <b>read the old
      * file, write and verify the new one, and only then delete the old one</b> -- so a crash or a
      * write failure at any point during migration leaves the operator's credential exactly where
-     * it already was, never in neither place.
+     * it already was, never in neither place. When a current file already exists, the order is:
+     * <b>validate the current file, then delete the old one</b> (D-06) -- a current file that cannot
+     * be read as a credential document keeps both files, and a read error keeps both and propagates.
      */
     static void migrate() {
         synchronized (LOCK) {
@@ -361,10 +391,28 @@ public final class CredentialStore {
         }
     }
 
-    private static void migrateLocked() {
+    /**
+     * Runs the migration and reports a kept-both conflict once per episode.
+     *
+     * @return the operator-facing description of an unresolved conflict -- a readable pre-6.3.0 file
+     *         kept beside a current file that cannot be read as a credential document -- or
+     *         {@code null} when there is none
+     */
+    private static String migrateLocked() {
+        String keptBoth = migrateOnceLocked();
+        if (keptBoth == null) {
+            reportedKeptBoth = null;
+        } else if (!keptBoth.equals(reportedKeptBoth)) {
+            reportedKeptBoth = keptBoth;
+            logWarning(keptBoth);
+        }
+        return keptBoth;
+    }
+
+    private static String migrateOnceLocked() {
         Path oldPath = resolveOldLocationPath();
         if (oldPath == null || !Files.exists(oldPath)) {
-            return;
+            return null;
         }
 
         ReadResult oldResult = readFrom(oldPath);
@@ -382,17 +430,14 @@ public final class CredentialStore {
                     logWarning(message);
                 }
             }
-            return;
+            return null;
         }
         // isAbsent() cannot happen here: Files.exists(oldPath) was just confirmed true above, and
         // readFrom(...) only reports absence when the file does not exist.
 
         Path newPath = resolveTargetPath();
         if (Files.exists(newPath)) {
-            logInfo("Both the pre-6.3.0 credential file (" + oldPath + ") and the current one ("
-                    + newPath + ") exist; leaving the current file untouched and removing the old one.");
-            deleteOldFile(oldPath);
-            return;
+            return cleanUpBesideCurrentLocked(oldPath, newPath);
         }
 
         try {
@@ -401,7 +446,7 @@ public final class CredentialStore {
             logWarning("Failed to migrate the credential file from " + oldPath + " to " + newPath
                     + " -- the old file has been left in place, and the operator's credential is "
                     + "unaffected: " + e.getMessage());
-            return;
+            return null;
         }
 
         ReadResult verify = readFrom(newPath);
@@ -409,11 +454,45 @@ public final class CredentialStore {
             logWarning("Migrated the credential file to " + newPath + " but the read-back did not "
                     + "match what was written -- leaving the old file at " + oldPath + " in place "
                     + "as a precaution rather than deleting a credential that failed verification.");
-            return;
+            return null;
         }
 
         deleteOldFile(oldPath);
         logInfo("Migrated the credential file from " + oldPath + " to " + newPath + ".");
+        return null;
+    }
+
+    /**
+     * The existing-current branch of the migration. Existence is not validity (D-06): the old copy is
+     * deleted only after the current file reads as a credential document, and the current file is
+     * never touched. A current file that does not read as one keeps both files; a read error
+     * ({@link DataAccessException}) propagates and deletes nothing.
+     *
+     * @return the kept-both description, or {@code null} once the old copy has been handled
+     */
+    private static String cleanUpBesideCurrentLocked(Path oldPath, Path newPath) {
+        if (readFrom(newPath).isParseFailure()) {
+            return describeKeptBoth(oldPath, newPath);
+        }
+        logInfo("Both the pre-6.3.0 credential file (" + oldPath + ") and the current one ("
+                + newPath + ") exist and the current one reads as a credential document; leaving it "
+                + "untouched and removing the old one.");
+        deleteOldFile(oldPath);
+        return null;
+    }
+
+    /**
+     * The operator-facing description of a readable pre-6.3.0 file kept beside a current file that
+     * cannot be read as a credential document (D-06): both paths, that both were kept, and what to
+     * check. Paths only -- never file content.
+     */
+    private static String describeKeptBoth(Path oldPath, Path currentPath) {
+        return "The current credential file " + currentPath + " exists but cannot be read as a credential "
+                + "document (it is empty, not a valid JSON object, or not a regular file), so the readable "
+                + "pre-6.3.0 credential file " + oldPath + " has not been removed: both files have been kept "
+                + "unchanged. Until the current file is fixed, no new server UUID is generated and no "
+                + "UltiCloud token is written. Check the current file: restore it from a backup, or move it "
+                + "out of the way so the pre-6.3.0 file is migrated on the next use.";
     }
 
     private static void deleteOldFile(Path oldPath) {

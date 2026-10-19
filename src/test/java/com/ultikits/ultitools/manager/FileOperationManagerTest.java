@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -13,7 +12,6 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.util.Collections;
@@ -124,25 +122,22 @@ class FileOperationManagerTest {
     }
 
     /**
-     * Reflects into the private {@code getSecureFile(String)} and unwraps
-     * {@link InvocationTargetException} so callers can assert directly on the thrown
-     * {@link SecurityException} (or the returned {@link File} on success).
+     * Calls the package-private follow-mode resolver. Phase 20.2 replaced the private
+     * {@code getSecureFile(String)} (which these tests used to reach by reflection, asserting a
+     * thrown {@code SecurityException}) with {@code resolveTarget}, which returns the refusal as
+     * an {@link AccessDecision} instead of throwing — so a refusal is asserted unconditionally on
+     * the returned decision, and an admission on the returned operand.
      */
-    private File invokeGetSecureFile(String path) throws Exception {
-        Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
-        getSecureFile.setAccessible(true);
-        try {
-            return (File) getSecureFile.invoke(fileOperationManager, path);
-        } catch (InvocationTargetException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException) {
-                throw (RuntimeException) cause;
-            }
-            if (cause instanceof Exception) {
-                throw (Exception) cause;
-            }
-            throw e;
-        }
+    private FileOperationManager.ResolvedTarget resolveFollowing(String path) {
+        return fileOperationManager.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
+    }
+
+    /** Asserts a refusal that names {@code ultipanel.files.editable-roots} as the key to change. */
+    private static void assertDeniedOutsideRoots(FileOperationManager.ResolvedTarget target) {
+        assertThat(target.getDecision().isAllowed()).isFalse();
+        assertThat(target.getDecision().isConfigurable()).isTrue();
+        assertThat(target.getDecision().getConfigKey()).isEqualTo("ultipanel.files.editable-roots");
+        assertThat(target.getOperand()).isNull();
     }
 
     /**
@@ -205,70 +200,52 @@ class FileOperationManagerTest {
         }
     }
 
+    /**
+     * Migrated from the former {@code GetSecureFileTests} (Phase 20.2): the empty-path, null-path
+     * and traversal refusals used to assert only inside a {@code catch}, so they passed vacuously
+     * when nothing was thrown; they now assert the returned decision unconditionally.
+     */
     @Nested
-    @DisplayName("getSecureFile 测试")
-    class GetSecureFileTests {
+    @DisplayName("resolveTarget basics (formerly getSecureFile)")
+    class ResolveTargetBasicsTests {
 
         @Test
-        @DisplayName("空路径应该抛出 SecurityException")
-        void emptyPathShouldThrowSecurityException() throws Exception {
-            // Arrange
-            Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
-            getSecureFile.setAccessible(true);
+        @DisplayName("an empty path is denied, and the refusal is not configurable")
+        void emptyPathIsDeniedNonConfigurably() {
+            FileOperationManager.ResolvedTarget target = resolveFollowing("");
 
-            // Act & Assert
-            try {
-                getSecureFile.invoke(fileOperationManager, "");
-            } catch (Exception e) {
-                assertThat(e.getCause()).isInstanceOf(SecurityException.class);
-            }
+            assertThat(target.getDecision().isAllowed()).isFalse();
+            assertThat(target.getDecision().isConfigurable()).isFalse();
+            assertThat(target.getOperand()).isNull();
         }
 
         @Test
-        @DisplayName("null 路径应该抛出 SecurityException")
-        void nullPathShouldThrowSecurityException() throws Exception {
-            // Arrange
-            Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
-            getSecureFile.setAccessible(true);
+        @DisplayName("a null path is denied, and the refusal is not configurable")
+        void nullPathIsDeniedNonConfigurably() {
+            FileOperationManager.ResolvedTarget target = resolveFollowing(null);
 
-            // Act & Assert
-            try {
-                getSecureFile.invoke(fileOperationManager, (String) null);
-            } catch (Exception e) {
-                assertThat(e.getCause()).isInstanceOf(SecurityException.class);
-            }
+            assertThat(target.getDecision().isAllowed()).isFalse();
+            assertThat(target.getDecision().isConfigurable()).isFalse();
+            assertThat(target.getOperand()).isNull();
         }
 
         @Test
-        @DisplayName("应该移除开头的斜杠")
+        @DisplayName("a leading slash is removed")
         void shouldRemoveLeadingSlash() throws Exception {
-            // Arrange — getSecureFile now resolves real containment against editableRoots (Task 3);
-            // point both fields at tempDir so the default-cwd fallback (no plugins/logs on disk) is
-            // not what's under test here.
+            // Point both fields at tempDir so the default-cwd fallback (no plugins/logs on disk)
+            // is not what's under test here.
             setServerRootAndEditableRoots(tempDir);
-            Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
-            getSecureFile.setAccessible(true);
 
-            // Act
-            File result = (File) getSecureFile.invoke(fileOperationManager, "/test.txt");
+            FileOperationManager.ResolvedTarget target = resolveFollowing("/test.txt");
 
-            // Assert
-            assertThat(result.getName()).isEqualTo("test.txt");
+            assertThat(target.getDecision().isAllowed()).isTrue();
+            assertThat(target.getOperand().getName()).isEqualTo("test.txt");
         }
 
         @Test
-        @DisplayName("应该检测路径遍历攻击")
-        void shouldDetectPathTraversalAttack() throws Exception {
-            // Arrange
-            Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
-            getSecureFile.setAccessible(true);
-
-            // Act & Assert
-            try {
-                getSecureFile.invoke(fileOperationManager, "../../../etc/passwd");
-            } catch (Exception e) {
-                assertThat(e.getCause()).isInstanceOf(SecurityException.class);
-            }
+        @DisplayName("a traversal path is denied as outside the editable roots")
+        void shouldDetectPathTraversalAttack() {
+            assertDeniedOutsideRoots(resolveFollowing("../../../etc/passwd"));
         }
     }
 
@@ -1033,8 +1010,7 @@ class FileOperationManagerTest {
 
         setServerRootAndEditableRoots(tempDir, root);
 
-        assertThatThrownBy(() -> invokeGetSecureFile("root-evil/x"))
-                .isInstanceOf(SecurityException.class);
+        assertDeniedOutsideRoots(resolveFollowing("root-evil/x"));
     }
 
     /**
@@ -1065,8 +1041,7 @@ class FileOperationManagerTest {
 
         setServerRootAndEditableRoots(tempDir, root);
 
-        assertThatThrownBy(() -> invokeGetSecureFile("root/link/somefile.txt"))
-                .isInstanceOf(SecurityException.class);
+        assertDeniedOutsideRoots(resolveFollowing("root/link/somefile.txt"));
     }
 
     /**
@@ -1092,8 +1067,7 @@ class FileOperationManagerTest {
 
         setServerRootAndEditableRoots(tempDir, pluginsDir);
 
-        assertThatThrownBy(() -> invokeGetSecureFile("Plugins/foo.yml"))
-                .isInstanceOf(SecurityException.class);
+        assertDeniedOutsideRoots(resolveFollowing("Plugins/foo.yml"));
     }
 
     /**
@@ -1290,7 +1264,7 @@ class FileOperationManagerTest {
     }
 
     @Nested
-    @DisplayName("getSecureFile 的分段感知包含检查测试（D-21）")
+    @DisplayName("resolveTarget segment-aware containment (D-21, formerly getSecureFile)")
     class SegmentAwareContainmentTests {
 
         @Test
@@ -1302,9 +1276,10 @@ class FileOperationManagerTest {
             sub.mkdirs();
             setServerRootAndEditableRoots(tempDir, root);
 
-            File result = invokeGetSecureFile("root/sub/file.yml");
+            FileOperationManager.ResolvedTarget target = resolveFollowing("root/sub/file.yml");
 
-            assertThat(result.getName()).isEqualTo("file.yml");
+            assertThat(target.getDecision().isAllowed()).isTrue();
+            assertThat(target.getOperand().getName()).isEqualTo("file.yml");
         }
 
         @Test
@@ -1315,9 +1290,10 @@ class FileOperationManagerTest {
             setServerRootAndEditableRoots(tempDir, root);
 
             // Neither "new" nor "file.yml" exist yet — only "root" does.
-            File result = invokeGetSecureFile("root/new/file.yml");
+            FileOperationManager.ResolvedTarget target = resolveFollowing("root/new/file.yml");
 
-            assertThat(result.getName()).isEqualTo("file.yml");
+            assertThat(target.getDecision().isAllowed()).isTrue();
+            assertThat(target.getOperand().getName()).isEqualTo("file.yml");
         }
 
         @Test
@@ -1329,8 +1305,7 @@ class FileOperationManagerTest {
 
             // "nowhere" does not exist anywhere under tempDir — its nearest existing ancestor is
             // tempDir itself, which is NOT the configured root (tempDir/root).
-            assertThatThrownBy(() -> invokeGetSecureFile("nowhere/deep/file.yml"))
-                    .isInstanceOf(SecurityException.class);
+            assertDeniedOutsideRoots(resolveFollowing("nowhere/deep/file.yml"));
         }
 
         @Test
@@ -1342,9 +1317,10 @@ class FileOperationManagerTest {
             sub.mkdirs();
             setServerRootAndEditableRoots(tempDir, root);
 
-            File result = invokeGetSecureFile("root/sub/../file.yml");
+            FileOperationManager.ResolvedTarget target = resolveFollowing("root/sub/../file.yml");
 
-            assertThat(result.getName()).isEqualTo("file.yml");
+            assertThat(target.getDecision().isAllowed()).isTrue();
+            assertThat(target.getOperand().getName()).isEqualTo("file.yml");
         }
 
         @Test
@@ -1354,8 +1330,7 @@ class FileOperationManagerTest {
             root.mkdirs();
             setServerRootAndEditableRoots(tempDir, root);
 
-            assertThatThrownBy(() -> invokeGetSecureFile("root/../elsewhere/file.yml"))
-                    .isInstanceOf(SecurityException.class);
+            assertDeniedOutsideRoots(resolveFollowing("root/../elsewhere/file.yml"));
         }
     }
 
@@ -1810,14 +1785,10 @@ class FileOperationManagerTest {
          * {@link AccessDecision} maps to {@code OUTSIDE_ROOTS}, a non-configurable one maps to
          * {@code PROTECTED_CREDENTIAL}.
          * <p>
-         * End-to-end, a listed child can only ever be marked {@code OUTSIDE_ROOTS} when the listed
-         * directory itself is an ancestor of an editable root rather than a descendant of one — a
-         * shape {@code getSecureFile}'s containment check (unchanged by this plan; see its
-         * prohibitions) never admits for the top-level directory, since {@code Path.startsWith}
-         * containment is monotonic under path extension: if the listed directory itself passed
-         * containment, every one of its children does too. This method pins the mapping directly,
-         * independent of whether today's concrete configuration surface can reach it for
-         * {@code list} specifically.
+         * End-to-end, since Phase 20.2 a listed file child is marked {@code OUTSIDE_ROOTS} when it
+         * is an in-root alias whose real target lies outside every editable root — list marking
+         * takes each child's decision from the same follow-mode resolver a read would use (pinned
+         * in {@code FileOperationTargetConsistencyTest}). This method pins the mapping directly.
          */
         @Test
         @DisplayName("原因码派生：可配置拒绝映射为 OUTSIDE_ROOTS，不可配置拒绝映射为 PROTECTED_CREDENTIAL")

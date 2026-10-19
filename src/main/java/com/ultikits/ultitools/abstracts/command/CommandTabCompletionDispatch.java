@@ -37,7 +37,10 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
  *     relocated -- not copied -- from the removed (6.3.0) AbstractCommandExecutor's private methods of the same name
  *     (T-05-20 / T-05-21). {@code BaseCommandExecutor.suggest} had ZERO permission checks before
  *     this class existed, so migrating a command onto the current generation leaked the entire
- *     sub-command table to unprivileged players.</li>
+ *     sub-command table to unprivileged players. In tab completion the silent counterpart
+ *     ({@code isVisible}) filters every path before a mapping contributes anything: first-token
+ *     literals and parameter slots directly, later-argument literals and parameter slots through
+ *     {@code matchCandidates}.</li>
  *     <li>Argument-index -&gt; matched-method -&gt; parameter-name resolution for a multi-token
  *     argument vector ({@link #suggest(BiMap, Player, Command, String[], Object)}), which is
  *     absent from {@code commands/tabcomplete/TabCompletionManager} (its {@code createContext}
@@ -154,10 +157,21 @@ public final class CommandTabCompletionDispatch {
 
     /**
      * Argument-position resolution for a multi-token vector: find every mapping whose format's
-     * literal/parameter prefix matches the already-typed tokens (permission-filtered), then for
-     * each candidate resolve the token at the position being completed -- either a {@code
-     * <param>} slot (delegated to {@code commands/tabcomplete/}) or a literal token (collected
-     * from every visible sibling format long enough to have one at this position).
+     * literal/parameter prefix matches the already-typed tokens, then for each candidate resolve
+     * the token at the position being completed -- either a {@code <param>} slot (delegated to
+     * {@code commands/tabcomplete/}) or a literal token.
+     * <p>
+     * A literal comes from the matched candidate itself and from nothing else: {@link
+     * #matchCandidates(BiMap, Player, String[], int)} has already filtered every candidate by the
+     * typed prefix, by format length and by visibility (permission and OP), so a player who typed
+     * {@code alpha} is offered only the literals of the {@code alpha ...} mappings they may see.
+     * Until 6.3.0 the literal branch instead rescanned every visible mapping at this position,
+     * ignoring the typed branch, and repeated that list once per matching candidate (case 61).
+     * <p>
+     * Each literal is offered once: several candidates can share the literal at this position
+     * ({@code alpha enable} and {@code alpha enable <target>}), so a literal is added only when
+     * the result does not already hold it, in candidate order. Parameter-slot suggestions are a
+     * different source and are appended exactly as their completer returns them.
      */
     private static List<String> suggestSubsequentToken(BiMap<String, Method> mappings, Player player,
                                                          Command command, String[] args,
@@ -171,8 +185,8 @@ public final class CommandTabCompletionDispatch {
             if (isParameterToken(arg)) {
                 completions.addAll(suggestParameterSlot(player, command, args, targetIndex, method, arg,
                         executorInstance));
-            } else {
-                completions.addAll(suggestLiteralSiblingToken(mappings, player, targetIndex));
+            } else if (!completions.contains(arg)) {
+                completions.add(arg);
             }
         }
 
@@ -229,31 +243,6 @@ public final class CommandTabCompletionDispatch {
         return TabCompletionManager.getInstance().suggest(context, resolvedSuggest);
     }
 
-    /**
-     * Permission-filtered before it can contribute a suggestion -- T-05-20's mitigation extended
-     * to this branch too. The removed (6.3.0) {@code AbstractCommandExecutor.suggest}'s equivalent
-     * else-branch scanned every sibling format unconditionally; both generations now share this
-     * gated version.
-     */
-    private static List<String> suggestLiteralSiblingToken(BiMap<String, Method> mappings, Player player,
-                                                             int targetIndex) {
-        List<String> completions = new ArrayList<>();
-        for (Map.Entry<String, Method> entry : mappings.entrySet()) {
-            if (!isVisible(player, entry.getValue())) {
-                continue;
-            }
-            String[] formatArgs = splitFormat(entry.getKey());
-            if (formatArgs.length <= targetIndex) {
-                continue;
-            }
-            String suggestion = formatArgs[targetIndex];
-            if (!isParameterToken(suggestion)) {
-                completions.add(suggestion);
-            }
-        }
-        return completions;
-    }
-
     private static String[] splitFormat(String format) {
         return format == null || format.isEmpty() ? new String[0] : format.split(" ");
     }
@@ -272,7 +261,7 @@ public final class CommandTabCompletionDispatch {
      * CommandSender, Method)} / {@link #checkOp(CommandSender, Method)} (T-05-fix Part 3 /
      * SILENT-25). Real-machine UAT observed a player without permission repeatedly receiving the
      * "no permission" message while typing unrelated sub-commands, because every mapping this
-     * class's first-token and literal-sibling-token paths evaluate for visibility went through
+     * class's first-token and later-argument paths evaluate for visibility went through
      * the SAME messaging {@code checkPermission}/{@code checkOp} used by actual command dispatch
      * (the removed (6.3.0) {@code AbstractCommandExecutor.onCommand}'s call site). Tab completion is
      * not a command invocation: filtering an unprivileged sender's candidates out silently is

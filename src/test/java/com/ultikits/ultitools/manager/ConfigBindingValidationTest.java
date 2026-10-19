@@ -5,10 +5,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -25,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandExecutor;
@@ -47,6 +51,7 @@ import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
+import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.annotations.command.CmdCD;
@@ -54,6 +59,8 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.aop.AopEligibility;
+import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.exceptions.UltiToolsException;
 import com.ultikits.ultitools.interfaces.DataStore;
@@ -415,6 +422,54 @@ class ConfigBindingValidationTest {
         public void doGo(Player player) {
             // Test stub - not exercised
         }
+    }
+
+    // === Fixtures: case 36, a class-level bound @CmdCD on the base of a proxied inherited mapping ===
+    // Declared at this outer level, not inside the @Nested group: under -source 1.8 an inner class
+    // cannot declare static nested classes. Public so the proxy factory can subclass them. No
+    // @CmdExecutor, for the same reason as SharedChainBoxedExecutor.
+
+    /**
+     * Carries the class-level binding and declares the intercepted mapping. Its inheritor is only
+     * ever registered as its generated proxy: SimpleContainer refuses an unproxied instance of a
+     * class carrying @ExceptionCatch.
+     */
+    @CmdCD(config = BindingTimingConfig.class, key = "cooldown.wild")
+    public abstract static class InterceptedBoundBase extends BaseCommandExecutor {
+        public final AtomicInteger bodies = new AtomicInteger();
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @ExceptionCatch
+        @CmdMapping(format = "go")
+        public void doGo(Player player) {
+            bodies.incrementAndGet();
+        }
+    }
+
+    /** Declares nothing: the mapping and the binding are both inherited. */
+    public static class InterceptedBoundInheritor extends InterceptedBoundBase {
+    }
+
+    /** The unproxied control's own pair: the same class-level binding, no AOP annotation. */
+    @CmdCD(config = BindingTimingConfig.class, key = "cooldown.wild")
+    public abstract static class PlainBoundBase extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "go")
+        public void doGo(Player player) {
+            // Test stub - not exercised
+        }
+    }
+
+    /** Declares nothing: the mapping and the binding are both inherited. */
+    public static class PlainBoundInheritor extends PlainBoundBase {
     }
 
     /**
@@ -1208,6 +1263,75 @@ class ConfigBindingValidationTest {
 
             assertEquals(before, ConfigBoundCooldownState.seconds(executor));
             verifyNoInteractions(configManager);
+        }
+    }
+
+    // === Case 36: a proxied inherited mapping under a base-class bound @CmdCD ===
+
+    @SuppressWarnings("unchecked")
+    private static <T> T proxyOf(Class<T> type) throws Exception {
+        Class<? extends T> proxyClass = new ProxyFactory(Collections.emptyList())
+                .createProxyClass(type, AopEligibility.findAopAnnotatedMethods(type));
+        return proxyClass.getDeclaredConstructor().newInstance();
+    }
+
+    /** The case-36 precondition: the stored mapping is the generated proxy's override. */
+    private static Method assertStoredMappingIsAProxyOverride(BaseCommandExecutor executor) {
+        Method stored = executor.getMappings().get("go");
+        assertTrue(stored != null && ProxyFactory.isProxyClass(stored.getDeclaringClass()),
+                "precondition: the mapping stored under 'go' must be declared by a generated proxy, "
+                        + "otherwise this test does not reproduce case 36; stored: " + stored);
+        return stored;
+    }
+
+    @Nested
+    @DisplayName("a base-class bound @CmdCD on a proxied inherited mapping (case 36)")
+    class ProxiedInheritedBindingTests {
+
+        @Test
+        @DisplayName("the binding is resolved when the module loads")
+        void proxiedInheritedBaseBindingIsResolvedAtLoad() throws Exception {
+            config.setWildCooldown(12);
+            InterceptedBoundInheritor proxy = proxyOf(InterceptedBoundInheritor.class);
+            assertStoredMappingIsAProxyOverride(proxy);
+
+            PluginManager.validateConfigBindings(module, containerWith(proxy));
+
+            assertEquals(Collections.singletonMap(wildKey(), 12), ConfigBoundCooldownState.seconds(proxy));
+        }
+
+        @Test
+        @DisplayName("after the load, dispatch enforces the bound seconds and never reports an unresolved binding")
+        void proxiedInheritedBaseBindingIsEnforcedAtDispatch() throws Exception {
+            config.setWildCooldown(12);
+            InterceptedBoundInheritor proxy = proxyOf(InterceptedBoundInheritor.class);
+            Method mapping = assertStoredMappingIsAProxyOverride(proxy);
+            PluginManager.validateConfigBindings(module, containerWith(proxy));
+            when(UltiTools.getInstance().i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            UUID playerId = UUID.fromString("00000000-0000-0000-0000-000000000036");
+            Player player = mock(Player.class);
+            lenient().when(player.getUniqueId()).thenReturn(playerId);
+            Command command = mock(Command.class);
+            lenient().when(command.getName()).thenReturn("boundinherited");
+
+            proxy.onCommand(player, command, "boundinherited", new String[]{"go"});
+            proxy.onCommand(player, command, "boundinherited", new String[]{"go"});
+
+            assertEquals(1, proxy.bodies.get(), "the bound 12-second cooldown must refuse the second dispatch");
+            verify(player, never()).sendMessage(contains("never resolved"));
+            long remaining = proxy.getCooldownValidator().getRemainingCooldown(playerId, proxy, mapping.toString());
+            assertTrue(remaining >= 11 && remaining <= 13, "remaining cooldown seconds: " + remaining);
+        }
+
+        @Test
+        @DisplayName("control: the same base-class binding without a proxy is resolved at load")
+        void plainInheritedBaseBindingIsResolvedAtLoad() throws Exception {
+            config.setWildCooldown(12);
+            PlainBoundInheritor executor = new PlainBoundInheritor();
+
+            PluginManager.validateConfigBindings(module, containerWith(executor));
+
+            assertEquals(Collections.singletonMap(wildKey(), 12), ConfigBoundCooldownState.seconds(executor));
         }
     }
 }

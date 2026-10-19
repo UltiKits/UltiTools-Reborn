@@ -51,8 +51,9 @@ public class SystemLogHandler extends Handler {
     private final UltiPanelLogTransmitter logTransmitter;
 
     // Log-level filter configuration
+    // volatile: main-thread event handlers read the set a panel config request replaces on the WebSocket thread.
     @Getter
-    private Set<String> enabledLevels;
+    private volatile Set<String> enabledLevels;
 
     // Excluded-logger configuration
     @Getter @Setter

@@ -59,6 +59,21 @@ public class GuiRenderer {
     private final Map<Integer, Consumer<InventoryClickEvent>> clickHandlers = new HashMap<>();
 
     /**
+     * True while {@link #performBuild()} is running its build body. Main-thread-confined: it is
+     * only read and written on the server main thread ({@link #performBuild()} redirects itself
+     * there first, and {@link #scheduleBuild()} reads it only after confirming it is on the main
+     * thread), so it needs no synchronization.
+     */
+    private boolean buildInProgress;
+
+    /**
+     * True when a rebuild was requested while {@link #buildInProgress} was set. Main-thread-
+     * confined like {@link #buildInProgress}. Cleared, and replayed as exactly one
+     * {@link #scheduleBuild()} call, when the build that recorded it exits.
+     */
+    private boolean rebuildRequestedDuringBuild;
+
+    /**
      * Creates a GuiRenderer.
      *
      * @param gui    the associated Gui instance
@@ -106,8 +121,22 @@ public class GuiRenderer {
      * Schedules a rebuild.
      * <p>
      * Uses frame coalescing, so multiple calls within a short window trigger only one rebuild.
+     * <p>
+     * <b>Requests raised during a build are coalesced, never re-entrant.</b> When this is called
+     * on the main thread while {@link #performBuild()} is running (for example a
+     * {@code State.setState} inside {@code initState} while the tree is being mounted, or a
+     * request raised by a child created during later frame work), the request is only recorded.
+     * Every request recorded during one build becomes exactly one follow-up
+     * {@code scheduleBuild()} after that build exits, so it runs against a fully mounted tree
+     * under the scheduler's normal frame timing. Calls from other threads are unchanged: the
+     * scheduler marshals them onto the main thread, where they run after the current main-thread
+     * task.
      */
     public void scheduleBuild() {
+        if (scheduler.isOnMainThread() && buildInProgress) {
+            rebuildRequestedDuringBuild = true;
+            return;
+        }
         scheduler.scheduleFrame(this::performBuild);
     }
 
@@ -118,6 +147,14 @@ public class GuiRenderer {
      * result is fed to the already-mounted root Element ({@link Element#update}, whose base-class
      * implementation now marks it dirty -- see D-09 item 2), rather than being built once at
      * {@link #initialize} time and never re-derived again.
+     * <p>
+     * <b>No re-entrance.</b> A call that arrives while a build is already running on the main
+     * thread (for instance a scheduler drain reached from inside the build) does not start a
+     * nested build; it is recorded like a {@link #scheduleBuild()} request. When the outermost
+     * build exits, normally or by exception, the in-progress flag is cleared first and a
+     * recorded request is replayed as exactly one {@link #scheduleBuild()}. A replay that runs
+     * after {@link #dispose()} builds nothing, because it returns at the
+     * {@code widgetSupplier == null} check below.
      */
     private void performBuild() {
         if (!scheduler.isOnMainThread()) {
@@ -129,47 +166,70 @@ public class GuiRenderer {
             return;
         }
 
-        // Re-derive the Widget tree from the current state -- called exactly once per frame
-        Widget widget = widgetSupplier.get();
-
-        if (rootElement == null) {
-            mountRoot(widget);
-        } else if (rootElement.canUpdate(widget)) {
-            rootElement.update(widget);
-        } else {
-            // The supplier returned a Widget incompatible with the mounted root's type
-            // (T-05-52): remount explicitly. Element.update()'s IllegalArgumentException must
-            // not be allowed to escape into the scheduled frame, which would leave the
-            // Inventory half-written.
-            rootElement.unmount();
-            mountRoot(widget);
+        if (buildInProgress) {
+            rebuildRequestedDuringBuild = true;
+            return;
         }
 
-        // Rebuild the Element tree (only the dirty subtrees are rebuilt)
-        rebuildElement(rootElement);
+        buildInProgress = true;
+        try {
+            // Re-derive the Widget tree from the current state -- called exactly once per frame
+            Widget widget = widgetSupplier.get();
 
-        // Collect RenderNodes -- a snapshot, not a live reference; see collectRenderNodesRecursive
-        List<RenderNode> newRenderNodes = collectRenderNodes(rootElement);
+            if (rootElement == null) {
+                mountRoot(widget);
+            } else if (rootElement.canUpdate(widget)) {
+                rootElement.update(widget);
+            } else {
+                // The supplier returned a Widget incompatible with the mounted root's type
+                // (T-05-52): remount explicitly. Element.update()'s IllegalArgumentException must
+                // not be allowed to escape into the scheduled frame, which would leave the
+                // Inventory half-written.
+                rootElement.unmount();
+                mountRoot(widget);
+            }
 
-        // Diff
-        List<RenderNode> oldNodes = lastRenderNodes != null ? lastRenderNodes : Collections.emptyList();
-        DiffResult diffResult = differ.diff(oldNodes, newRenderNodes);
+            // Rebuild the Element tree (only the dirty subtrees are rebuilt)
+            rebuildElement(rootElement);
 
-        // Apply the changes
-        applyDiff(diffResult);
+            // Collect RenderNodes -- a snapshot, not a live reference; see collectRenderNodesRecursive
+            List<RenderNode> newRenderNodes = collectRenderNodes(rootElement);
 
-        // Save the current state (a snapshot -- not retroactively changed by the next frame's
-        // in-place mutation of the live RenderNodes)
-        lastRenderNodes = newRenderNodes;
+            // Diff
+            List<RenderNode> oldNodes = lastRenderNodes != null ? lastRenderNodes : Collections.emptyList();
+            DiffResult diffResult = differ.diff(oldNodes, newRenderNodes);
 
-        // Update the click handlers
-        updateClickHandlers(newRenderNodes);
+            // Apply the changes
+            applyDiff(diffResult);
+
+            // Save the current state (a snapshot -- not retroactively changed by the next frame's
+            // in-place mutation of the live RenderNodes)
+            lastRenderNodes = newRenderNodes;
+
+            // Update the click handlers
+            updateClickHandlers(newRenderNodes);
+        } finally {
+            // Clear the in-progress flag before replaying, so the replay is scheduled as a
+            // normal frame rather than recorded again; a frame that throws must not leave the
+            // renderer unable to build later frames.
+            buildInProgress = false;
+            if (rebuildRequestedDuringBuild) {
+                rebuildRequestedDuringBuild = false;
+                scheduleBuild();
+            }
+        }
     }
 
     /**
      * Creates and mounts the root Element.
      * <p>
      * Shared by both the first build and the "supplier returned an incompatible type" case.
+     * <p>
+     * The root build scheduler is registered <b>before</b> {@code mount} on purpose: a rebuild
+     * request raised while the tree is being mounted (a {@code setState} inside
+     * {@code initState}, or a value source that delivers synchronously on subscribe) must not be
+     * dropped. It reaches {@link #scheduleBuild()} while the build is in progress, is recorded
+     * there, and is replayed as one follow-up frame after this build exits.
      *
      * @param widget the root Widget
      */

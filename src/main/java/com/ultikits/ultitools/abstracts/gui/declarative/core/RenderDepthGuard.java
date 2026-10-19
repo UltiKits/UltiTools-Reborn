@@ -17,8 +17,9 @@ import org.jetbrains.annotations.ApiStatus;
  *       subtree.</li>
  *   <li>{@code GuiRenderer.rebuildElement} -- the element-rebuild recursion, against an
  *       already-mounted tree</li>
- *   <li>{@code GridViewElement.performRebuild} -- nested inside the above for a GridView's own
- *       children</li>
+ *   <li>{@code GridViewElement.performRebuild} -- nested inside the above: walks each GridView
+ *       child's complete subtree (rebuilding every dirty descendant, checked at every visited
+ *       node) before the GridView's positions are applied</li>
  *   <li>{@code GridViewElement.collectRenderNodeLeaves} -- walks a GridView cell's subtree to
  *       propagate its computed slot to every leaf</li>
  *   <li>{@code GuiRenderer.collectRenderNodesRecursive} -- the render-node collection recursion,

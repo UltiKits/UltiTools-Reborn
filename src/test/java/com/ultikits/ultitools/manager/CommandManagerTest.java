@@ -55,6 +55,8 @@ import com.ultikits.ultitools.context.SimpleContainer;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockito.Answers;
+import org.mockito.MockedStatic;
 
 /**
  * CommandManager 测试
@@ -114,6 +116,24 @@ class CommandManagerTest {
         @Override
         protected void handleHelp(CommandSender sender) {
             sender.sendMessage("Help for test command");
+        }
+    }
+
+    /** A second module's command, for close() over several modules. */
+    @CmdExecutor(alias = {"secondcmd"}, permission = "test.second", description = "Second command")
+    static class SecondCommandExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            sender.sendMessage("Help for second command");
+        }
+    }
+
+    /** A third module's command, for close() over several modules. */
+    @CmdExecutor(alias = {"thirdcmd"}, permission = "test.third", description = "Third command")
+    static class ThirdCommandExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            sender.sendMessage("Help for third command");
         }
     }
 
@@ -292,6 +312,53 @@ class CommandManagerTest {
         void shouldNotThrowForEmptyMap() { // NOPMD - uses Mockito verify()
             // Act & Assert - 不应该抛出异常
             commandManager.close();
+        }
+
+        /**
+         * unregisterAll drops a module's entry once its commands are released, so close() must not iterate
+         * the live key set: with two or more modules left it would throw ConcurrentModificationException
+         * after the first one and leave the rest registered. Needs a real command map, which MockBukkit's
+         * own plugin manager does not expose (see CommandManagerKnownCommandsCleanupTest).
+         */
+        @Test
+        @DisplayName("close() after one module was unloaded releases every remaining module's command and tracks none")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reaches the private register(plugin, executor) primitive and the private map
+        void closeAfterUnloadReleasesEveryRemainingModule() throws Exception {
+            SimpleCommandMap realCommandMap = new SimpleCommandMap(server, new HashMap<>());
+            SimplePluginManager realPluginManager = new SimplePluginManager(server, realCommandMap);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getDescription()).thenReturn(
+                        new PluginDescriptionFile("ultitools", "1.0", "com.ultikits.ultitools.UltiTools"));
+            });
+            Method register = CommandManager.class.getDeclaredMethod("register", UltiToolsPlugin.class, CommandExecutor.class);
+            register.setAccessible(true);
+            Field mapField = CommandManager.class.getDeclaredField("commandListMap");
+            mapField.setAccessible(true);
+            UltiToolsPlugin unloaded = moduleNamed("Unloaded");
+            UltiToolsPlugin second = moduleNamed("Second");
+            UltiToolsPlugin third = moduleNamed("Third");
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class, Answers.CALLS_REAL_METHODS)) {
+                bukkit.when(Bukkit::getPluginManager).thenReturn(realPluginManager);
+                register.invoke(commandManager, unloaded, new TestCommandExecutor());
+                register.invoke(commandManager, second, new SecondCommandExecutor());
+                register.invoke(commandManager, third, new ThirdCommandExecutor());
+                commandManager.unregisterAll(unloaded);
+
+                assertDoesNotThrow(commandManager::close);
+
+                assertThat(realCommandMap.getCommand("secondcmd")).as("the second module's command is released").isNull();
+                assertThat(realCommandMap.getCommand("thirdcmd")).as("the third module's command is released").isNull();
+                assertThat((Map<?, ?>) mapField.get(commandManager)).as("no module is tracked after close()").isEmpty();
+            }
+        }
+
+        private UltiToolsPlugin moduleNamed(String name) {
+            UltiToolsPlugin module = mock(UltiToolsPlugin.class);
+            when(module.getPluginName()).thenReturn(name);
+            when(module.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            return module;
         }
     }
 
