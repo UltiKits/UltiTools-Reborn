@@ -11,12 +11,15 @@ place that defines what "the same bytes" means:
   validate  re-check a manifest, the retained bytes, the source commit they came from and,
             when given, the authority and UAT receipts that accepted that exact manifest
   stage     print the retained files to upload, in manifest order, after re-validating them
+  compare   classify assets already on a release (downloaded into a directory) against the
+            manifest: identical, partial or absent (reconcilable) or mismatch (never replaced)
 
 The manifest is public: it names files by basename and carries no local path, no approval
 text and no receipt. Authority stays in the separate receipts, which are never uploaded.
 
 Standard library only. The helper never contacts a network service, never runs a build and
-only runs read-only git commands. Exit codes: 0 ok, 1 refused, 2 usage error.
+only runs read-only git commands. Exit codes: 0 ok, 1 refused, 2 usage error, and for compare
+3 when the remote holds an identical subset that a retry may complete.
 """
 
 import argparse
@@ -726,6 +729,78 @@ def cmd_stage(args):
     return 0
 
 
+def cmd_compare(args):
+    """Compare a release's downloaded assets with the accepted manifest, byte for byte."""
+    problems = Problems()
+    manifest, raw = load_manifest(args.manifest, problems)
+    if manifest is None:
+        problems.emit()
+        return 1
+    expected = dict((a["filename"], a["sha256"]) for a in manifest["artifacts"])
+    expected[Path(args.manifest).name] = sha256_bytes(raw)
+    remote = Path(args.remote_dir)
+    present, mismatched, unexpected = [], [], []
+    for entry in sorted(os.listdir(str(remote))):
+        path = remote / entry
+        if entry not in expected:
+            unexpected.append(entry)
+            problems.add("unexpected_asset", "%s is not part of the accepted candidate" % entry)
+            continue
+        data = read_regular(path, problems, entry)
+        if data is None:
+            mismatched.append(entry)
+            continue
+        present.append(entry)
+        if sha256_bytes(data) != expected[entry]:
+            mismatched.append(entry)
+            problems.add("asset_mismatch", "%s on the release differs from the accepted bytes" % entry)
+    draft = None
+    if args.release_json:
+        release, _ = load_json_record(args.release_json, problems, "release view")
+        if release is not None:
+            draft = release.get("isDraft")
+            if release.get("tagName") != "v" + manifest["version"]:
+                problems.add("release_tag", "release tag %r is not v%s" % (release.get("tagName"), manifest["version"]))
+            if release.get("targetCommitish") != manifest["source_head"]:
+                problems.add("release_target", "the release targets %r, the accepted source is %s" % (
+                    release.get("targetCommitish"), manifest["source_head"]))
+            if not isinstance(draft, bool):
+                problems.add("release_draft_unknown", "isDraft must be a boolean")
+            listed = release.get("assets")
+            if not isinstance(listed, list):
+                problems.add("release_assets_unknown", "the release view lists no assets array")
+                listed = []
+            for item in listed:
+                name = item.get("name") if isinstance(item, dict) else None
+                if name not in present and name not in mismatched and name not in unexpected:
+                    problems.add("asset_not_read_back", "%r is listed on the release but was not downloaded" % name)
+                elif name in present and item.get("size") != (remote / name).stat().st_size:
+                    problems.add("asset_mismatch", "%s: listed size differs from the downloaded bytes" % name)
+            names = set(item.get("name") for item in listed if isinstance(item, dict))
+            for name in present:
+                if name not in names:
+                    problems.add("asset_not_listed", "%s was downloaded but is not listed on the release" % name)
+    missing = sorted(set(expected) - set(present) - set(mismatched))
+    if problems:
+        status = "mismatch"
+    elif not missing:
+        status = "identical"
+    elif not present:
+        status = "absent"
+    else:
+        status = "partial"
+    problems.emit()
+    if args.shell:
+        print("STATUS=%s" % status)
+        print("DRAFT=%s" % ("true" if draft else "false"))
+        for name in missing:
+            print("MISSING=%s" % name)
+    else:
+        print(json.dumps({"status": status, "missing": missing, "mismatched": sorted(mismatched),
+                          "unexpected": unexpected, "draft": draft}, sort_keys=True))
+    return {"identical": 0, "mismatch": 1}.get(status, 3)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="release_artifacts.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command")
@@ -742,8 +817,13 @@ def main(argv=None):
     validate.add_argument("--shell", action="store_true", help="print KEY=VALUE lines of validated fields")
     stage = sub.add_parser("stage", help="print the retained files to upload, in manifest order")
     stage.add_argument("--manifest", required=True)
+    compare = sub.add_parser("compare", help="classify a release's downloaded assets against the manifest")
+    compare.add_argument("--manifest", required=True)
+    compare.add_argument("--remote-dir", required=True)
+    compare.add_argument("--release-json", help="output of gh release view --json tagName,targetCommitish,isDraft,assets")
+    compare.add_argument("--shell", action="store_true", help="print STATUS, DRAFT and MISSING lines")
     args = parser.parse_args(argv)
-    handlers = {"retain": cmd_retain, "validate": cmd_validate, "stage": cmd_stage}
+    handlers = {"retain": cmd_retain, "validate": cmd_validate, "stage": cmd_stage, "compare": cmd_compare}
     if args.command not in handlers:
         parser.print_usage(sys.stderr)
         return 2

@@ -865,6 +865,16 @@ class EdgeHandoffTests(HandoffTestCase):
         self.fx.add_release(TAG, self.fx.head(), {"extra.jar": b"PK"}, draft=True)
         self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "unexpected")
 
+    def test_publish_dry_run_rechecks_without_writing(self):
+        manifest, authority, uat = self.approved()
+        result = self.publish(manifest, authority, uat, "--dry-run")
+        output = result.stdout.decode()
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("not acceptance evidence", output)
+        self.assertEqual(self.fx.gh_writes(), [])
+        self.assertIsNone(self.fx.release_assets())
+        self.assert_no_build()
+
     # ---------------------------------------------------------- idempotency
 
     def test_interrupted_publication_is_reconciled_without_replacement(self):
