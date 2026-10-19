@@ -10,7 +10,6 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -26,6 +25,7 @@ import javax.sql.DataSource;
 import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.dbutils.ResultSetHandler;
 import org.apache.commons.dbutils.handlers.ScalarHandler;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -102,6 +102,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * before it is concatenated into SQL text (T-02-SQLI-1).
      */
     private final Set<String> knownColumns;
+    /**
+     * The Java type of the field behind each {@code @Column} name, reflected once at construction in
+     * the same pass as {@link #knownColumns} (which is its key set). {@link #appendConditions} passes
+     * it to {@link #orderedComparisonOperand(String, Class)} for {@code GREATER} and {@code LESS}.
+     */
+    private final Map<String, Class<?>> columnTypes;
 
     /**
      * Creates a new data operator.
@@ -125,28 +131,32 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     "Entity class " + type.getName() + " must have @Table annotation");
         }
         this.tableName = tableAnnotation.value();
-        this.knownColumns = buildKnownColumns(type);
+        this.columnTypes = buildColumnTypes(type);
+        this.knownColumns = columnTypes.keySet();
         initializeTable();
     }
 
     /**
-     * Reflects the entity's {@code @Column} mappings once, for {@link #validateColumn(String)}'s
-     * allow-list. This mirrors the same reflected metadata {@link #buildColumnDefinitions(Class)}
-     * and {@link #getColumnMappings()} already read from the entity class — a dedicated pass over
-     * it, not a second scan of anything already cached.
+     * Reflects the entity's {@code @Column} mappings once: their names are
+     * {@link #validateColumn(String)}'s allow-list, and the field type behind each name is what
+     * {@link #orderedComparisonOperand(String, Class)} receives. This mirrors the same reflected
+     * metadata {@link #buildColumnDefinitions(Class)} and {@link #getColumnMappings()} already read
+     * from the entity class — a dedicated pass over it, not a second scan of anything already
+     * cached. When two fields declare the same name, the first one reflected keeps the mapping.
      *
      * @param entityType the entity class
-     * @return an unmodifiable set of every {@code @Column} SQL name declared on {@code entityType}
-     *         (including inherited fields, e.g. {@code BaseDataEntity}'s {@code id})
+     * @return an unmodifiable map from every {@code @Column} SQL name declared on
+     *         {@code entityType} (including inherited fields, e.g. {@code BaseDataEntity}'s
+     *         {@code id}) to the Java type of its field
      */
-    private static Set<String> buildKnownColumns(Class<?> entityType) {
-        Set<String> columns = new HashSet<>();
+    private static Map<String, Class<?>> buildColumnTypes(Class<?> entityType) {
+        Map<String, Class<?>> columns = new LinkedHashMap<>();
         for (Field field : ReflectionUtil.getFields(entityType)) {
             if (field.isAnnotationPresent(Column.class)) {
-                columns.add(field.getAnnotation(Column.class).value());
+                columns.putIfAbsent(field.getAnnotation(Column.class).value(), field.getType());
             }
         }
-        return Collections.unmodifiableSet(columns);
+        return Collections.unmodifiableMap(columns);
     }
 
     /**
@@ -575,7 +585,8 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * {@code NO_BACKSLASH_ESCAPES} that doubled form is two characters and is rejected, while the
      * exclamation mark means the same thing on SQLite, MySQL in either mode, and H2. No caller text
      * enters the SQL. {@link #getLike} and {@code Query#like} are separate pattern operators and are
-     * not affected; {@code EQUAL}, {@code GREATER} and {@code LESS} are unchanged here.
+     * not affected; {@code EQUAL}, {@code GREATER} and {@code LESS} are unchanged here (the column
+     * side of {@code GREATER} and {@code LESS} goes through {@link #orderedComparisonOperand}).
      *
      * @param comparison the comparison operator
      * @return the SQL fragment, e.g. {@code " > ?"}
@@ -640,6 +651,29 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     }
 
     /**
+     * Returns the SQL operand that a {@code GREATER} or {@code LESS} condition compares on the
+     * column side. The default returns {@code column} unchanged, so the database compares the
+     * stored value as it is declared. A dialect overrides it to compare the stored value as a number
+     * of the field's Java type when the declared column type would not, for example a numeric field
+     * left on the default {@code VARCHAR(255)} column.
+     * <p>
+     * {@link #appendConditions} calls it only for {@code GREATER} and {@code LESS}, and only after
+     * {@link #validateColumn(String)} has accepted {@code column}; {@code EQUAL} and the three
+     * {@code LIKE} comparisons never reach it. Its result is concatenated into the SQL text, so an
+     * override must build it only from {@code column} and constants, never from a condition's
+     * value or any other caller text.
+     *
+     * @param column    an allow-listed {@code @Column} name of the entity
+     * @param fieldType the Java type of the field mapped to {@code column}
+     * @return the SQL operand to compare, e.g. {@code column} or a cast of it
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    protected String orderedComparisonOperand(String column, Class<?> fieldType) {
+        return column;
+    }
+
+    /**
      * Appends a {@code WHERE} clause built from {@code conditions} to {@code sql} and their
      * bound values to {@code params}, routing every column through {@link #sqlOperatorFor} so
      * the four relational builders cannot diverge in how they honor a {@link Comparison} again.
@@ -695,7 +729,13 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 sql.append(condition.getColumn()).append(" IS NULL");
                 continue;
             }
-            sql.append(condition.getColumn()).append(sqlOperatorFor(condition.getComparison()));
+            Comparison comparison = condition.getComparison();
+            if (comparison == Comparison.GREATER || comparison == Comparison.LESS) {
+                sql.append(orderedComparisonOperand(condition.getColumn(), columnTypes.get(condition.getColumn())));
+            } else {
+                sql.append(condition.getColumn());
+            }
+            sql.append(sqlOperatorFor(comparison));
             params.add(likeWrappedValue(condition));
         }
     }
