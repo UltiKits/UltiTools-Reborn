@@ -3,6 +3,7 @@ package com.ultikits.ultitools.interfaces.impl.data.json;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -26,6 +27,10 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * holds it while it applies. A checkpoint takes the write side only to capture the dirty entries and
  * allocate its own number, so every commit numbered below the checkpoint is fully applied before
  * the capture and every other commit is numbered above it.
+ * <p>
+ * <b>Checkpoint.</b> {@link #checkpoint()} writes every entry changed since the last checkpoint, of
+ * every operator of the identity, to its file through one checkpoint record, then truncates the
+ * journal. Checkpoints of one identity run one at a time, from capture to clearing the dirty marks.
  * <p>
  * <b>Recovery.</b> {@link #recoverOnce()} replays the identity's committed records into its table
  * files before any of its tables is read. Success is remembered; a refusal (a damaged record, an
@@ -178,6 +183,77 @@ public final class JsonIdentity {
         recovered = true;
     }
 
+    /**
+     * Writes every entry changed since the last checkpoint to its file, crash atomically, and
+     * truncates the journal (20.4-RESEARCH.md section 12.7). In order:
+     * <ol>
+     *   <li>take the checkpoint mutex, so checkpoints of this identity run one at a time, waiting
+     *       for one already running;</li>
+     *   <li>under the commit gate's write side, capture every dirty key of every operator with its
+     *       generation and its committed value or absence, and allocate the checkpoint's sequence
+     *       number K; nothing captured: return without writing anything;</li>
+     *   <li>write checkpoint record K, then the captured entity files (deleting those of deleted
+     *       entries), force the table directories, and delete every record numbered up to K in
+     *       ascending order, K last ({@link JsonJournal#checkpoint(long, List)});</li>
+     *   <li>clear each captured dirty mark whose generation is unchanged, so a key written again
+     *       after the capture stays dirty for the next checkpoint.</li>
+     * </ol>
+     * Because a commit holds the gate's read side from its number to its apply, every commit
+     * numbered below K is in the captured values and every later one is numbered above K, so the
+     * truncation never drops a commit.
+     *
+     * @throws DataAccessException ({@code DATA_PERSISTENCE_FAILED}) if a record or entity file
+     *         cannot be written, moved or deleted; the dirty marks stay, so the next checkpoint
+     *         writes the same entries again
+     */
+    void checkpoint() {
+        checkpointMutex.lock();
+        try {
+            List<Captured> captured = new ArrayList<>();
+            long sequence;
+            ReentrantReadWriteLock.WriteLock gate = commitGate.writeLock();
+            gate.lock();
+            try {
+                for (SimpleJsonDataOperator<?> operator : operators) {
+                    operator.captureDirty(captured);
+                }
+                if (captured.isEmpty()) {
+                    return;
+                }
+                sequence = journal.nextSequence();
+            } finally {
+                gate.unlock();
+            }
+            fire(STEP_CHECKPOINT_CAPTURED);
+            journal.checkpoint(sequence, entriesOf(captured));
+            fire(STEP_CHECKPOINT_TRUNCATED);
+            for (Captured each : captured) {
+                each.operator.clearDirty(each.key, each.generation);
+            }
+        } catch (IOException e) {
+            throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED,
+                    "Failed to flush the JSON data of " + name + " to disk; the changed entries stay pending and"
+                            + " the next flush writes them again.", e);
+        } finally {
+            checkpointMutex.unlock();
+        }
+    }
+
+    private List<JsonJournal.Entry> entriesOf(List<Captured> captured) {
+        List<JsonJournal.Entry> entries = new ArrayList<>(captured.size());
+        for (Captured each : captured) {
+            try {
+                entries.add(each.operator.checkpointEntry(each.key, each.value));
+            } catch (IllegalArgumentException invalid) {
+                throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED,
+                        "Failed to flush the JSON data of " + name + ": an entry of table '"
+                                + each.operator.tableName() + "' cannot be stored as a file ("
+                                + invalid.getMessage() + ").", invalid);
+            }
+        }
+        return entries;
+    }
+
     static void installStepHook(StepHook hook) {
         stepHook = hook == null ? NO_STEP_HOOK : hook;
     }
@@ -193,5 +269,20 @@ public final class JsonIdentity {
     /** A test callback for the named checkpoint steps. */
     interface StepHook {
         void onStep(String step);
+    }
+
+    /** One dirty key captured by a checkpoint: its generation and its committed value, or {@code null} if deleted. */
+    static final class Captured {
+        final SimpleJsonDataOperator<?> operator;
+        final Object key;
+        final long generation;
+        final Object value;
+
+        Captured(SimpleJsonDataOperator<?> operator, Object key, long generation, Object value) {
+            this.operator = operator;
+            this.key = key;
+            this.generation = generation;
+            this.value = value;
+        }
     }
 }

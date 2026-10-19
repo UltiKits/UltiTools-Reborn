@@ -1,10 +1,8 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import java.io.File;
-import java.io.IOException;
 import java.io.Reader;
 import java.io.Serializable;
-import java.io.Writer;
 import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
@@ -14,13 +12,16 @@ import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -123,9 +124,6 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * side and the visibility write side; a checkpoint captures it under the gate's write side.
      */
     private final Map<Object, Long> dirty = new ConcurrentHashMap<>();
-
-    /** Keeps two {@link #flush()} calls from writing the same files at the same time. */
-    private final Object flushMonitor = new Object();
 
     /**
      * An operator over the table directory {@code storeLocation}, with an identity of its own: its
@@ -366,9 +364,56 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * @throws IllegalArgumentException if a key is not one path segment
      */
     void journalEntries(JsonTransaction.Overlay<T> overlay, List<JsonJournal.Entry> record) {
-        overlay.forEach((key, value) -> record.add(value == null
+        overlay.forEach((key, value) -> record.add(checkpointEntry(key, value)));
+    }
+
+    /**
+     * The journal entry that brings {@code key}'s file to {@code value}: the entity's JSON (the
+     * form this operator has always written to its files) for a value, a delete for {@code null}.
+     *
+     * @throws IllegalArgumentException if {@code key} is not one path segment
+     */
+    JsonJournal.Entry checkpointEntry(Object key, Object value) {
+        return value == null
                 ? JsonJournal.Entry.delete(journalTable, key)
-                : JsonJournal.Entry.put(journalTable, key, GSON.toJson(value))));
+                : JsonJournal.Entry.put(journalTable, key, GSON.toJson(value));
+    }
+
+    /**
+     * Adds every dirty key of this operator, with its generation and its committed value (or
+     * {@code null} if the entry is gone), to {@code captured}. Called by
+     * {@link JsonIdentity#checkpoint()} under the commit gate's write side, when no commit or
+     * plain write is applying. Collects references only; committed values are never changed in
+     * place.
+     */
+    void captureDirty(List<JsonIdentity.Captured> captured) {
+        for (Map.Entry<Object, Long> mark : dirty.entrySet()) {
+            Object key = mark.getKey();
+            captured.add(new JsonIdentity.Captured(this, key, mark.getValue(), cache.get(key)));
+        }
+    }
+
+    /**
+     * Clears {@code key}'s dirty mark if it still carries {@code generation}: a key written again
+     * after a checkpoint's capture keeps its newer mark for the next checkpoint.
+     */
+    void clearDirty(Object key, long generation) {
+        dirty.remove(key, generation);
+    }
+
+    /**
+     * Refuses an id that cannot name this table's entity file {@code <id>.json}: an empty id, or one
+     * containing a slash, a backslash or NUL. Such an entry could never be journaled or written by a
+     * checkpoint; before 6.3.0 it was flushed into a sub-path and read back as a corrupt entry.
+     */
+    private void requireStorableKey(Object key) {
+        try {
+            JsonJournal.Entry.delete(journalTable, key);
+        } catch (IllegalArgumentException invalid) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to insert into JSON table '" + tableName() + "' an entity whose id cannot name"
+                            + " its file: " + invalid.getMessage(), invalid);
+        }
     }
 
     /**
@@ -633,6 +678,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         obj.onCreate();
         T stored = detach(obj);
         Object key = obj.getId();
+        requireStorableKey(key);
         if (transaction == null) {
             publishPlainWrite(() -> {
                 if (cache.putIfAbsent(key, stored) == null) {
@@ -999,52 +1045,53 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     /**
      * {@inheritDoc}
      * <p>
-     * Writes every committed entry to its file. Takes no table lock, so a flush never waits for a
-     * transaction; committed values are never changed in place, so each file receives one whole
-     * committed value. Two flushes of this operator do not run at the same time.
+     * Runs a checkpoint of this operator's identity ({@link JsonIdentity#checkpoint()}): every
+     * entry changed since the last checkpoint, of every table of the plugin, is written through one
+     * checkpoint record, so a crash during the flush leaves either the state before it or the
+     * state it captured, never a half-written table and never an older value. Entries that did not
+     * change are not rewritten. Waits for a checkpoint of the same plugin already running, and for
+     * a commit that is between its record and its apply; takes no table lock. Never writes staged
+     * data of an open transaction.
+     *
+     * @throws DataAccessException ({@code DATA_PERSISTENCE_FAILED}) if the data could not be written;
+     *         the changed entries stay pending for the next flush
      */
     @Override
     public void flush() {
-        synchronized (flushMonitor) {
-            cache.forEach((key, value) -> {
-                try {
-                    File file = new File(storeLocation + File.separator + key + ".json");
-                    FileUtils.touch(file);
-                    try (Writer writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8)) {
-                        writer.write(GSON.toJson(value));
-                    }
-                } catch (IOException e) {
-                    // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- a
-                    // failed write to the JSON store is a persistence failure.
-                    throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED,
-                            "Failed to flush data to disk for key: " + key, e);
-                }
-            });
-        }
+        transactionManager.journalIdentity().checkpoint();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Deletes every {@code *.json} file of this table that has no committed entry, except the file
+     * of a key with a pending dirty mark: a deletion that has not been checkpointed yet reaches disk
+     * only through the next checkpoint's record, which is what keeps plain writes crash atomic per
+     * flush. Holds the identity's checkpoint mutex, so no checkpoint writes files meanwhile.
+     */
     @Override
     public void gc() {
-        File folder = new File(storeLocation);
-        File[] files = folder.listFiles((file) -> file.getName().endsWith(".json"));
-        if (files == null) {
-            return;
-        }
-        List<File> rubbishBin = new ArrayList<>();
-        for (File file : files) {
-            String id = FileUtils.mainName(file);
-            boolean recycle = true;
+        ReentrantLock checkpointMutex = transactionManager.journalIdentity().checkpointMutex();
+        checkpointMutex.lock();
+        try {
+            File[] files = new File(storeLocation).listFiles(file -> file.getName().endsWith(".json"));
+            if (files == null) {
+                return;
+            }
+            Set<String> live = new HashSet<>();
             for (Object key : cache.keySet()) {
-                if (key.toString().equals(id)) {
-                    recycle = false;
+                live.add(key.toString());
+            }
+            for (Object key : dirty.keySet()) {
+                live.add(key.toString());
+            }
+            for (File file : files) {
+                if (!live.contains(FileUtils.mainName(file))) {
+                    FileUtils.del(file);
                 }
             }
-            if (recycle) {
-                rubbishBin.add(file);
-            }
-        }
-        for (File file : rubbishBin) {
-            FileUtils.del(file);
+        } finally {
+            checkpointMutex.unlock();
         }
     }
 

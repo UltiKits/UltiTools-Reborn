@@ -4,7 +4,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -96,13 +95,36 @@ public class JsonStore implements DataStore {
     }
 
     /**
-     * Flush all cached data operators.
-     * This method is extracted from BukkitRunnable for testability.
+     * The periodic flush: runs one checkpoint per identity ({@link JsonIdentity#checkpoint()}),
+     * writing every entry of that plugin changed since its last checkpoint through one checkpoint
+     * record, then {@code gc()} on each of the identity's operators. An identity whose checkpoint
+     * fails keeps its changed entries pending and does not stop the others; the first failure is
+     * rethrown afterwards with the rest suppressed. Extracted from the {@code BukkitRunnable} for
+     * testability.
      */
     void flushAllCaches() {
-        for (Cached cached : dataOperatorMap.values()) {
-            cached.flush();
-            cached.gc();
+        checkpointEveryIdentity();
+    }
+
+    private void checkpointEveryIdentity() {
+        RuntimeException failure = null;
+        for (JsonTransactionManager manager : transactionManagers.values()) {
+            JsonIdentity identity = manager.journalIdentity();
+            try {
+                identity.checkpoint();
+                for (SimpleJsonDataOperator<?> operator : identity.operators()) {
+                    operator.gc();
+                }
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
@@ -303,13 +325,15 @@ public class JsonStore implements DataStore {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Runs one final checkpoint per identity, then {@code gc()} on its operators, as
+     * {@link #flushAllCaches()} does.
+     */
     @Override
     public void destroyAllOperators() {
-        Iterator<Cached> iterator = dataOperatorMap.values().iterator();
-        iterator.forEachRemaining(each -> {
-            each.flush();
-            each.gc();
-        });
+        checkpointEveryIdentity();
     }
 
     @Override
