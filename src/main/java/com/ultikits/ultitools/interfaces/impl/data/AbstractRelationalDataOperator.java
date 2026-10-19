@@ -69,6 +69,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     /** Alias of the row-identifier column {@link #backfillNullIds} selects next to the entity's own. */
     private static final String BACKFILL_ROWID = "ultitools_backfill_rowid";
     /**
+     * The escape character of the {@code LIKE} that INCLUDE, STARTSWITH and ENDSWITH render; see
+     * {@link #sqlOperatorFor} for why it is not a backslash.
+     */
+    private static final char LIKE_ESCAPE = '!';
+    /**
      * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
      * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
      * system refuses without {@code --add-opens java.base/java.time}, throwing
@@ -555,12 +560,22 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     /**
      * Maps a {@link Comparison} to its SQL operator fragment (including the placeholder).
      * <p>
-     * Shared by all four relational WHERE builders ({@link #exist(WhereCondition...)},
+     * Shared by all five relational WHERE builders ({@link #exist(WhereCondition...)},
      * {@link #getAll(WhereCondition...)}, {@link #page(int, int, WhereCondition...)},
-     * {@link #del(WhereCondition...)}) so a given {@code Comparison} means the same thing on
-     * every one of them, and on {@code SimpleJsonDataOperator}'s JSON backend. There is no
-     * silent fallback to equality: an unhandled constant throws rather than being misread as
+     * {@link #del(WhereCondition...)}, {@link #updateIf}) so a given {@code Comparison} means the
+     * same thing on every one of them, and on {@code SimpleJsonDataOperator}'s JSON backend. There
+     * is no silent fallback to equality: an unhandled constant throws rather than being misread as
      * {@code EQUAL}, since a silent default is exactly how this defect stayed invisible before.
+     * <p>
+     * {@code INCLUDE}, {@code STARTSWITH} and {@code ENDSWITH} render {@code LIKE ? ESCAPE '!'}:
+     * the value is matched literally as text (see {@link #likeWrappedValue}), the way
+     * {@code SimpleJsonDataOperator} uses {@code contains}, {@code startsWith} and {@code endsWith}.
+     * The escape character is the exclamation mark ({@code LIKE_ESCAPE}), not a backslash: MySQL's
+     * default {@code sql_mode} needs a doubled backslash inside the {@code ESCAPE} literal, and with
+     * {@code NO_BACKSLASH_ESCAPES} that doubled form is two characters and is rejected, while the
+     * exclamation mark means the same thing on SQLite, MySQL in either mode, and H2. No caller text
+     * enters the SQL. {@link #getLike} and {@code Query#like} are separate pattern operators and are
+     * not affected; {@code EQUAL}, {@code GREATER} and {@code LESS} are unchanged here.
      *
      * @param comparison the comparison operator
      * @return the SQL fragment, e.g. {@code " > ?"}
@@ -576,33 +591,51 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             case INCLUDE:
             case STARTSWITH:
             case ENDSWITH:
-                return " LIKE ?";
+                return " LIKE ? ESCAPE '" + LIKE_ESCAPE + "'";
             default:
                 throw new IllegalArgumentException("Unhandled comparison: " + comparison);
         }
     }
 
     /**
-     * Wraps a condition's value with the {@code %} wildcards its {@link Comparison} implies,
-     * matching {@code SimpleJsonDataOperator#conditionCal}'s existing placement exactly:
-     * {@code INCLUDE} wraps both sides, {@code STARTSWITH} appends a trailing wildcard,
-     * {@code ENDSWITH} prepends a leading wildcard. {@code EQUAL}/{@code GREATER}/{@code LESS}
-     * pass the value through unchanged.
+     * Builds the parameter to bind for a condition's value. For {@code INCLUDE},
+     * {@code STARTSWITH} and {@code ENDSWITH} the value is matched literally as text: it is
+     * rendered with {@link String#valueOf(Object)} (so a {@code null} value and non-String values
+     * render exactly as before), then every escape character {@code '!'}, {@code %} and {@code _}
+     * in it is prefixed with {@code '!'} -- the escape character first, so the prefixes added for
+     * the other two are not escaped again -- and only then are the wildcards added that the
+     * comparison implies, in the same places {@code SimpleJsonDataOperator} matches:
+     * {@code INCLUDE} on both sides, {@code STARTSWITH} after the value, {@code ENDSWITH} before
+     * it. A backslash needs no escaping because {@link #sqlOperatorFor} names {@code '!'} as the
+     * only escape character. {@code EQUAL}, {@code GREATER} and {@code LESS} pass the value through
+     * unchanged.
      *
      * @param condition the condition supplying the comparison and the raw value
      * @return the value to bind as the SQL parameter
      */
     private Object likeWrappedValue(WhereCondition condition) {
         Object value = condition.getValue();
-        switch (condition.getComparison()) {
+        Comparison comparison = condition.getComparison();
+        if (comparison != Comparison.INCLUDE && comparison != Comparison.STARTSWITH
+                && comparison != Comparison.ENDSWITH) {
+            return value;
+        }
+        String text = String.valueOf(value);
+        StringBuilder literal = new StringBuilder(text.length() + 8);
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == LIKE_ESCAPE || c == '%' || c == '_') {
+                literal.append(LIKE_ESCAPE);
+            }
+            literal.append(c);
+        }
+        switch (comparison) {
             case INCLUDE:
-                return "%" + value + "%";
+                return "%" + literal + "%";
             case STARTSWITH:
-                return value + "%";
-            case ENDSWITH:
-                return "%" + value;
+                return literal + "%";
             default:
-                return value;
+                return "%" + literal;
         }
     }
 
