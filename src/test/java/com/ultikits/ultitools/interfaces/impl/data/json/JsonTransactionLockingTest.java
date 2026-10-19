@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -24,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -82,6 +85,9 @@ class JsonTransactionLockingTest {
 
     /** Bounded await for "this has not happened yet". */
     private static final long NOT_YET_MILLIS = 300;
+
+    /** The lock-wait bound of the tests that wake a waiter only after its deadline has passed. */
+    private static final long LATE_WAKE_BOUND_MILLIS = 200;
 
     private static final String A_COMMITTED = "A committed";
     private static final String B_UPDATE_RETURNED = "B update returned";
@@ -1190,6 +1196,135 @@ class JsonTransactionLockingTest {
         assertThat(rows.getById("kept-1")).as("the write before the refusal commits").isNotNull();
         assertThat(rows.getById("kept-2")).as("the write after the refusal commits").isNotNull();
         assertThat(manager.hasActiveTransaction()).isFalse();
+    }
+
+    // ===== A waiter woken past its deadline fails, even with the table free (question 7 A) =====
+
+    @Test
+    @DisplayName("A REPEATABLE_READ first read woken past its lock-wait deadline with the table free fails with a "
+            + "lock-wait timeout and marks its transaction rollback-only")
+    void repeatableReadWokenPastItsDeadlineWithTheTableFreeTimesOut() throws Exception {
+        rows.insert(new LockRow("x", "0"));
+        AtomicReference<String> readValue = new AtomicReference<>();
+        AtomicReference<DataAccessException> caught = new AtomicReference<>();
+        AtomicReference<RuntimeException> commitFailure = new AtomicReference<>();
+
+        wakeWaiterPastItsDeadlineWithTheTableFree("late-reader", () -> {
+            manager.begin();
+            try {
+                setIsolationLevel(Connection.TRANSACTION_REPEATABLE_READ);
+                try {
+                    readValue.set(rows.getById("x").getName());
+                } catch (DataAccessException e) {
+                    caught.set(e);
+                }
+                try {
+                    manager.commit();
+                } catch (RuntimeException e) {
+                    commitFailure.set(e);
+                }
+            } finally {
+                rollbackIfStillActive();
+            }
+        });
+
+        assertThat(readValue.get()).as("the read does not go on past its deadline").isNull();
+        assertThat(caught.get()).as("the read fails with a lock-wait timeout").isNotNull()
+                .hasMessageContaining("lock-wait timeout");
+        assertThat(commitFailure.get()).as("the failed wait marks the transaction rollback-only")
+                .isInstanceOf(UnexpectedRollbackException.class);
+    }
+
+    @Test
+    @DisplayName("A plain write woken past its lock-wait deadline with the table free fails and is not applied")
+    void plainWriteWokenPastItsDeadlineWithTheTableFreeIsNotApplied() throws Exception {
+        rows.insert(new LockRow("x", "0"));
+        AtomicReference<DataAccessException> caught = new AtomicReference<>();
+
+        wakeWaiterPastItsDeadlineWithTheTableFree("late-writer", () -> {
+            try {
+                update(rows, new LockRow("x", "late"));
+            } catch (DataAccessException e) {
+                caught.set(e);
+            }
+        });
+
+        assertThat(caught.get()).as("the write fails with a lock-wait timeout").isNotNull()
+                .hasMessageContaining("lock-wait timeout");
+        assertThat(rows.getById("x").getName()).as("the write was not applied").isEqualTo("0");
+    }
+
+    /**
+     * Runs {@code waiter} on a thread named {@code waiterName} while this thread owns {@code rows}'
+     * table, and lets the waiter go on only once its lock-wait deadline has passed and the table is
+     * free. This thread holds the lock table's monitor from the moment the waiter parks in its
+     * timed wait until both are true, so the waiter, signalled or timed out, cannot leave the wait
+     * before then: no sleep orders anything. Afterwards no waiter is left registered and the table
+     * is free.
+     */
+    private void wakeWaiterPastItsDeadlineWithTheTableFree(String waiterName, Runnable waiter) throws Exception {
+        long boundNanos = TimeUnit.MILLISECONDS.toNanos(LATE_WAKE_BOUND_MILLIS);
+        store.setLockWaitBoundMillis(LATE_WAKE_BOUND_MILLIS);
+        JsonLockTable lockTable = rows.lockTable();
+        ReentrantLock monitor = monitorOf(lockTable);
+        CountDownLatch waiterRegistered = new CountDownLatch(1);
+        AtomicLong registeredAt = new AtomicLong();
+        JsonLockTable.installStepHook(step -> {
+            if (JsonLockTable.STEP_WAITER_REGISTERED.equals(step) && waiterName.equals(Thread.currentThread().getName())) {
+                registeredAt.set(System.nanoTime());
+                waiterRegistered.countDown();
+            }
+        });
+
+        lockTable.acquire(rows, System.nanoTime() + TimeUnit.SECONDS.toNanos(HANDSHAKE_SECONDS));
+        boolean owned = true;
+        try {
+            Worker worker = Worker.start(waiterName, waiter);
+            awaitHandshake(waiterRegistered, waiterName + " never registered as waiting");
+            // The waiter registered holding the monitor and keeps it until its timed wait parks, so
+            // this waits for that, and from here on the waiter stays parked.
+            monitor.lock();
+            try {
+                // The waiter's deadline was taken before it registered, so it has passed once one
+                // whole bound has elapsed since the registration.
+                while (System.nanoTime() - registeredAt.get() - boundNanos <= 0L) {
+                    Thread.yield();
+                }
+                lockTable.release(rows);
+                owned = false;
+            } finally {
+                monitor.unlock();
+            }
+            worker.finish();
+        } finally {
+            if (owned) {
+                lockTable.release(rows);
+            }
+        }
+
+        assertThat(waitersOf(lockTable)).as("no waiter is left registered").isEmpty();
+        lockTable.acquire(rows, System.nanoTime());
+        lockTable.release(rows);
+    }
+
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private static ReentrantLock monitorOf(JsonLockTable lockTable) throws ReflectiveOperationException {
+        Field field = JsonLockTable.class.getDeclaredField("monitor");
+        field.setAccessible(true);
+        return (ReentrantLock) field.get(lockTable);
+    }
+
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private static Map<?, ?> waitersOf(JsonLockTable lockTable) throws ReflectiveOperationException {
+        Field field = JsonLockTable.class.getDeclaredField("waitsFor");
+        field.setAccessible(true);
+        ReentrantLock monitor = monitorOf(lockTable);
+        monitor.lock();
+        try {
+            return new java.util.HashMap<>((Map<?, ?>) field.get(lockTable));
+        } finally {
+            monitor.unlock();
+        }
     }
 
     // ===== Helpers =====
