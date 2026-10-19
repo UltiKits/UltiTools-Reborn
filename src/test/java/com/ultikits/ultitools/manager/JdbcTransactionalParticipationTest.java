@@ -63,9 +63,9 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataOperator;
  * <p>
  * Every case runs on both stand-ins, and every assertion message names the backend: "sqlite" is a
  * {@link SQLiteDataOperator} over an H2 file database in MySQL mode, "mysql" a
- * {@link MysqlDataOperator} over an in-memory H2 database in MySQL mode (the SQLite JDBC driver is
- * supplied by Paper at runtime and is not on the test classpath, as {@code TransactionFailurePathsTest}
- * records). Each backend gets its own container, wired while {@code UltiTools.getDataStore()} answers
+ * {@link MysqlDataOperator} over an in-memory H2 database in MySQL mode (H2 keeps these cases
+ * independent of the SQLite driver; real-driver behaviour is covered by the {@code Relational*Test}
+ * classes). Each backend gets its own container, wired while {@code UltiTools.getDataStore()} answers
  * a fake JDBC store over that backend's data source; the two operators join the
  * {@link TransactionManager} the container registered. The proxy is the bean's subclass, so each
  * outer method calls its inner method on itself. Rows are counted through the operators after each

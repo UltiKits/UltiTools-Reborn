@@ -67,7 +67,8 @@ import com.zaxxer.hikari.HikariDataSource;
  * whose connections throw {@link SQLException} from {@code rollback()} or {@code commit()} a set
  * number of times and otherwise delegate, recording what was called on them. Rows are counted on an
  * independent connection that bypasses the wrapper. The SQLite operator runs over an H2 database
- * file in MySQL mode (the SQLite JDBC driver is not on the test classpath and this plan adds no
+ * file in MySQL mode (H2 keeps the fault-injection cases independent of the SQLite driver, whose
+ * real behaviour is covered by the {@code Relational*Test} classes, and this plan adds no
  * dependency); the MySQL operator over an in-memory H2 database in MySQL mode.
  * <br>
  * #634：回滚或提交失败后不再打开自动提交（JDBC 会因此提交事务），连接被关闭并从连接池中剔除；
