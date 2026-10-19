@@ -56,7 +56,12 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * <b>Recovery</b> deletes temporary records and files, applies the committed records in ascending
  * order, forces the touched table directories, then deletes the applied records in ascending
  * order. Every record carries full after-images and every entity file is replaced atomically, so a
- * recovery interrupted at any step and run again ends at the same files.
+ * recovery interrupted at any step and run again ends at the same files. A damaged committed
+ * record stops recovery before any file changes; it is never deleted, skipped or applied.
+ * <p>
+ * <b>Checkpoint</b> writes its own record first, the entity files only after that record is
+ * committed, then deletes every record at or below its number in ascending order, its own last,
+ * so no interruption lets a replay bring an older value back over a newer one.
  * <p>
  * Directory forces are best effort: supported on Linux, not on Windows; a failure is logged once
  * at {@code FINE} and never fails the operation.
@@ -235,9 +240,15 @@ final class JsonJournal {
 
     /**
      * Brings the identity's table files to the state of its committed records: empties the
-     * journal's {@code tmp/} directory and deletes temporary records, applies the committed
-     * records in ascending order through the entity-file writer, then deletes the applied records
-     * in ascending order. A missing journal directory is an empty journal; nothing is created.
+     * journal's {@code tmp/} directory and deletes temporary records, verifies <b>every</b>
+     * committed record, applies them in ascending order through the entity-file writer, then
+     * deletes the applied records in ascending order. A missing journal directory is an empty
+     * journal; nothing is created.
+     * <p>
+     * A damaged committed record (question 8 option A of 20.4-DECISIONS.md) makes recovery throw
+     * before any table file or record is changed. The record is never deleted, skipped or applied:
+     * recovery keeps refusing until the server operator moves the file out of the journal
+     * directory, and then applies the remaining records.
      *
      * @throws DataAccessException if a committed record is damaged; the message names the file
      * @throws IOException         if a file cannot be read, written, moved or deleted
@@ -248,31 +259,59 @@ final class JsonJournal {
         }
         deleteTemporaries();
         fire(RECOVERY_TEMPS_DELETED);
-        List<RecordFile> committed = new ArrayList<>();
-        for (RecordFile file : listRecordFiles()) {
-            if (!file.temporary) {
-                committed.add(file);
-            }
-        }
-        for (int i = 0; i < committed.size(); i++) {
-            Record record = decode(committed.get(i));
-            writeEntityFiles(PHASE_RECOVERY, record.entries());
-            if (i < committed.size() - 1) {
+        List<Record> records = listCommitted();
+        for (int i = 0; i < records.size(); i++) {
+            writeEntityFiles(PHASE_RECOVERY, records.get(i).entries());
+            if (i < records.size() - 1) {
                 fire(RECOVERY_BETWEEN_RECORDS);
             }
         }
         fire(RECOVERY_RECORDS_APPLIED);
-        for (int i = 0; i < committed.size(); i++) {
-            Files.deleteIfExists(committed.get(i).path);
-            if (i < committed.size() - 1) {
+        for (int i = 0; i < records.size(); i++) {
+            Files.deleteIfExists(records.get(i).file());
+            if (i < records.size() - 1) {
                 fire(RECOVERY_BETWEEN_DELETIONS);
             }
         }
         forceDirectory(directory);
     }
 
+    /**
+     * Writes a checkpoint, in this order: commits checkpoint record {@code sequence} (K) holding
+     * every entry's after-image; only after K's rename, writes the entity files and deletes the
+     * files of deleted entries, then forces the touched table directories; finally deletes every
+     * record, committed or temporary, numbered at or below K, in ascending order, K last. Records
+     * above K are left alone.
+     * <p>
+     * Why this order: replay applies records in ascending order and the last record touching a
+     * key decides its value. An entity file on disk before K is committed could be overwritten by
+     * an older surviving record at replay; deleting K before an older record could leave that
+     * older record without K. With this order, every interruption leaves records whose replay
+     * ends with K's values once K is renamed, and the older values before it.
+     * <p>
+     * Truncation deletes records by number without reading them. The caller guarantees that every
+     * record numbered below K is already reflected in {@code entries} or in the table files.
+     *
+     * @param sequence K, from {@link #nextSequence()}
+     * @param entries  the captured after-images and deletes
+     * @throws IOException if a record or entity file cannot be written, moved or deleted
+     */
     void checkpoint(long sequence, List<Entry> entries) throws IOException {
-        // skeleton
+        writeRecord(sequence, Kind.CHECKPOINT, entries);
+        writeEntityFiles(PHASE_CHECKPOINT, entries);
+        List<RecordFile> truncated = new ArrayList<>();
+        for (RecordFile file : listRecordFiles()) {
+            if (file.sequence <= sequence) {
+                truncated.add(file);
+            }
+        }
+        for (int i = 0; i < truncated.size(); i++) {
+            Files.deleteIfExists(truncated.get(i).path);
+            if (i < truncated.size() - 1) {
+                fire(CHECKPOINT_BETWEEN_TRUNCATIONS);
+            }
+        }
+        forceDirectory(directory);
     }
 
     /**
