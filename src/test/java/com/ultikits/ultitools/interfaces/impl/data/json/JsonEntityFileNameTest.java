@@ -62,6 +62,9 @@ class JsonEntityFileNameTest {
     /** The characters a Windows file name cannot contain, besides the separators and control characters. */
     private static final String WINDOWS_ONLY_CHARACTERS = "<>:\"|?*";
 
+    /** The directory name, next to a table directory, that models another Windows drive. */
+    private static final String OTHER_DRIVE_PREFIX = "drive-";
+
     @TempDir
     Path tempDir;
 
@@ -91,6 +94,10 @@ class JsonEntityFileNameTest {
                 Arguments.of("Windows device name COM9 with an extension", "com9.log"),
                 Arguments.of("Windows device name LPT1", "lpt1"),
                 Arguments.of("Windows device name LPT9 with an extension", "LPT9.x"),
+                Arguments.of("Windows device name COM with superscript one", "COM¹"),
+                Arguments.of("Windows device name com with superscript two, lower case", "com²"),
+                Arguments.of("Windows device name LPT with superscript three and an extension", "Lpt³.txt"),
+                Arguments.of("Windows device name LPT with superscript one", "LPT¹"),
                 Arguments.of("trailing dot", "page."),
                 Arguments.of("trailing space", "page "),
                 Arguments.of("dot", "."),
@@ -185,6 +192,109 @@ class JsonEntityFileNameTest {
         assertThat(((DataAccessException) thrown).getErrorCode()).isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
         assertThat(thrown.getMessage()).as("the refusal names the id").contains(id);
         assertThat(rows.getAll()).as("nothing was stored").isEmpty();
+    }
+
+    // ===== The resolved file must be <table directory>/<id>.json =====
+
+    static Stream<Arguments> drivePrefixedIds() {
+        return Stream.of(
+                Arguments.of("same drive letter as the table directory (would alias id 'foo')", "c:foo"),
+                Arguments.of("same drive letter, upper case", "C:foo"),
+                Arguments.of("another drive letter (would land outside the data folder)", "d:foo"),
+                Arguments.of("prefix-namespaced UUID", "p:123e4567-e89b-12d3-a456-426614174000"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("drivePrefixedIds")
+    @DisplayName("Where the file system reads 'x:' as a drive prefix (Windows), an id starting with it is refused at insert")
+    void insertRefusesAnIdTheFileSystemReadsAsADrivePrefix(String why, String id) throws Exception {
+        Path table = tempDir.resolve("rows");
+        SimpleJsonDataOperator<FileRow> rows = new SimpleJsonDataOperator<>(table.toString(), FileRow.class);
+        JsonFileNames.installResolver(JsonEntityFileNameTest::resolveLikeWindowsWithDrives);
+
+        Throwable thrown = catchThrowable(() -> rows.insert(new FileRow(id, "refused")));
+
+        assertThat(thrown).as(why).isInstanceOf(DataAccessException.class);
+        assertThat(((DataAccessException) thrown).getErrorCode()).isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
+        assertThat(thrown.getMessage()).as("the refusal names the id").contains(id);
+        assertThat(rows.getAll()).as("nothing was stored").isEmpty();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("drivePrefixedIds")
+    @DisplayName("A flush meeting an id the file system reads as a drive prefix fails named, writes no record and no file anywhere")
+    void checkpointOfADrivePrefixedIdFailsNamed(String why, String id) throws Exception {
+        Path parent = Files.createDirectories(tempDir.resolve("checkpoint"));
+        Path table = parent.resolve("rows");
+        Path journal = parent.resolve("rows" + JsonJournal.DIRECTORY_NAME);
+        SimpleJsonDataOperator<FileRow> rows = new SimpleJsonDataOperator<>(table.toString(), FileRow.class);
+        rows.insert(new FileRow("foo", "plain"));
+        rows.insert(new FileRow(id, "prefixed"));
+        JsonFileNames.installResolver(JsonEntityFileNameTest::resolveLikeWindowsWithDrives);
+
+        Throwable thrown = catchThrowable(rows::flush);
+
+        assertThat(thrown).as("%s: a checked, named failure", why).isInstanceOf(DataAccessException.class);
+        assertThat(messages(thrown)).as("the failure names the table and the id").contains("rows").contains(id);
+        assertThat(recordFileNames(journal)).as("no checkpoint record was left behind").isEmpty();
+        assertThat(entityFileNames(table)).as("no entity file was written").isEmpty();
+        assertThat(otherDriveFiles(parent)).as("nothing was written outside the table directory").isEmpty();
+
+        JsonFileNames.resetResolver();
+        rows.flush();
+        assertThat(entityFileNames(table)).as("the entries stayed pending for the next flush")
+                .containsExactlyInAnyOrder("foo.json", id + ".json");
+    }
+
+    @Test
+    @DisplayName("Recovery meeting an id the file system reads as a drive prefix refuses named and changes no file")
+    void recoveryOfADrivePrefixedIdRefusesNamed() throws Exception {
+        Path parent = Files.createDirectories(tempDir.resolve("recovery"));
+        Path table = Files.createDirectories(parent.resolve("rows"));
+        Path journalDirectory = parent.resolve("rows" + JsonJournal.DIRECTORY_NAME);
+        write(table.resolve("a.json"), "{\"id\":\"a\",\"name\":\"zero\"}");
+        JsonJournal journal = new JsonJournal(parent, journalDirectory);
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(
+                Entry.put("rows", "c:a", "{\"id\":\"c:a\",\"name\":\"aliased\"}")));
+        journal.writeRecord(2L, Kind.COMMIT, Collections.singletonList(
+                Entry.put("rows", "d:b", "{\"id\":\"d:b\",\"name\":\"elsewhere\"}")));
+        Path record = journalDirectory.resolve(JsonJournal.recordFileName(1L, JsonJournal.COMMITTED_SUFFIX));
+        JsonFileNames.installResolver(JsonEntityFileNameTest::resolveLikeWindowsWithDrives);
+        List<String> recordsBefore = recordFileNames(journalDirectory);
+
+        Throwable thrown = catchThrowable(() -> new SimpleJsonDataOperator<>(table.toString(), FileRow.class));
+
+        assertThat(thrown).as("a named, checked failure").isInstanceOf(DataAccessException.class);
+        assertThat(messages(thrown)).as("the refusal names the record, the table and the id")
+                .contains(record.getFileName().toString()).contains("rows").contains("c:a");
+        assertThat(entityFileNames(table)).as("no table file changed").containsExactly("a.json");
+        assertThat(read(table.resolve("a.json"))).as("id 'a' was not overwritten by id 'c:a'").contains("zero");
+        assertThat(otherDriveFiles(parent)).as("nothing was written outside the table directory").isEmpty();
+        assertThat(recordFileNames(journalDirectory)).as("no record deleted").isEqualTo(recordsBefore);
+    }
+
+    @ParameterizedTest(name = "''{0}''")
+    @ValueSource(strings = {"a/b", "../escaped", "sub/../x", "/absolute", "a//"})
+    @DisplayName("On the real file system, an entity file that would not be <table directory>/<id>.json is refused")
+    void entityFileRefusesANameThatLeavesTheTableDirectory(String key) {
+        Path table = tempDir.resolve("rows");
+
+        Throwable thrown = catchThrowable(() -> JsonFileNames.entityFile(table, key));
+
+        assertThat(thrown).as("'%s' does not name a file in the table directory", key)
+                .isInstanceOf(InvalidPathException.class);
+    }
+
+    @ParameterizedTest(name = "''{0}''")
+    @ValueSource(strings = {"123e4567-e89b-12d3-a456-426614174000", "123e4567-e89b-12d3-a456-426614174000:1",
+            "primary-wallet-merge", "c:foo", "a..b", ".hidden", "con"})
+    @DisplayName("On Linux, every id without a separator names exactly <table directory>/<id>.json, UltiRemoteBag's <uuid>:<page> included")
+    void entityFileOnLinuxIsTheTableDirectoryAndTheId(String key) {
+        Path absolute = tempDir.resolve("rows");
+        Path relative = absolute.getFileName();
+
+        assertThat(JsonFileNames.entityFile(absolute, key)).isEqualTo(absolute.resolve(key + ".json"));
+        assertThat(JsonFileNames.entityFile(relative, key)).isEqualTo(relative.resolve(key + ".json"));
     }
 
     // ===== Existing files are never renamed =====
@@ -291,6 +401,41 @@ class JsonEntityFileNameTest {
             }
         }
         return directory.resolve(fileName);
+    }
+
+    /**
+     * Resolves like JDK 21's {@code WindowsPathParser} and {@code WindowsPath#resolve}: a name
+     * that starts with an ASCII letter and a colon is a drive-relative path, not an error. The
+     * table directory is taken to be on drive {@code C:}. For that drive the result is the rest of
+     * the name in the table directory ({@code c:foo.json} becomes {@code <table>/foo.json}); for
+     * any other drive it is a path on that drive, modelled as a sibling directory
+     * {@code drive-<letter>} of the table directory. Any other name resolves as
+     * {@link #resolveLikeWindows(Path, String)} does.
+     */
+    private static Path resolveLikeWindowsWithDrives(Path directory, String fileName) {
+        if (fileName.length() >= 2 && fileName.charAt(1) == ':' && isAsciiLetter(fileName.charAt(0))) {
+            char drive = Character.toLowerCase(fileName.charAt(0));
+            String rest = fileName.substring(2);
+            if (drive == 'c') {
+                return resolveLikeWindows(directory, rest);
+            }
+            return resolveLikeWindows(directory.resolveSibling(OTHER_DRIVE_PREFIX + drive), rest);
+        }
+        return resolveLikeWindows(directory, fileName);
+    }
+
+    private static boolean isAsciiLetter(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+
+    /** Every file under the modelled other drives next to tables in {@code parent}. */
+    private static List<String> otherDriveFiles(Path parent) throws IOException {
+        List<String> names = new ArrayList<>();
+        try (Stream<Path> children = Files.list(parent)) {
+            children.filter(child -> child.getFileName().toString().startsWith(OTHER_DRIVE_PREFIX))
+                    .forEach(child -> names.add(child.getFileName().toString()));
+        }
+        return names;
     }
 
     /** {@code id} as a refusal shows it: a control character as a {@code \}{@code uXXXX} escape. */
