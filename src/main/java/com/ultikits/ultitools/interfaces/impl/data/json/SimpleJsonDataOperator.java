@@ -1116,6 +1116,22 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * written, or {@code UnexpectedRollbackException} for a transaction marked rollback-only) has
      * already ended the transaction and is not followed by a rollback. Mirrors
      * {@code AbstractRelationalDataOperator#transaction(Callable)}.
+     * <p>
+     * <b>Isolation (question 11 A of the Phase 20.4 decisions).</b> A transaction this method
+     * begins locks each table at its first read or write, the {@code REPEATABLE_READ} behaviour of
+     * {@link JsonTransactionManager}: once the action has read a table, no other transaction or
+     * plain write can change it until this transaction ends, so a read-modify-write inside the
+     * action cannot lose an update. This keeps the guarantee 6.2.5 gave by running each
+     * {@code transaction(...)} callback alone per operator. The cost is the same as there: a read
+     * inside the action can wait for another transaction that holds the table, at most 5 seconds,
+     * after which it fails with a {@link DataAccessException} and the transaction rolls back; a
+     * wait that would close a cycle of transactions waiting for each other fails at once. The
+     * table lock is requested before the read takes the visibility lock, never while holding it.
+     * A call that joins a transaction already active on this thread (a {@code @Transactional}
+     * method, or an outer {@code transaction(...)}) keeps that transaction's isolation, as a
+     * participating scope does in Spring and as a JDBC transaction keeps the isolation it began
+     * with: inside a default {@code @Transactional} method, reads stay at read committed and take
+     * no table lock.
      */
     // PMD.AvoidCatchingThrowable: an Error must roll the transaction back too (#634); it is
     // rethrown unchanged, never swallowed.
@@ -1123,7 +1139,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     @Override
     public <R> R transaction(Callable<R> action) throws Exception {
         JsonTransactionManager manager = transactionManager();
+        boolean outermost = !manager.hasActiveTransaction();
         manager.begin();
+        if (outermost) {
+            manager.currentTransaction().setLockAtFirstRead(true);
+        }
         R result;
         try {
             result = action.call();
@@ -1168,7 +1188,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * {@inheritDoc}
      * <p>
      * Atomic: runs as one transaction (joining the one active on this thread, if any), so a
-     * failure part-way stores none of the entities.
+     * failure part-way stores none of the entities. The batch goes through
+     * {@link #transaction(Runnable)}, so a batch transaction it begins locks a table at its first
+     * read; every insert takes the table's lock before its own read, so this changes nothing here.
      */
     @Override
     public void insertAll(List<T> entities) {
@@ -1183,7 +1205,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * {@inheritDoc}
      * <p>
      * Atomic: runs as one transaction (joining the one active on this thread, if any), so a
-     * failure part-way changes none of the entries.
+     * failure part-way changes none of the entries. The batch goes through
+     * {@link #transaction(Callable)}, so a batch transaction it begins locks a table at its first
+     * read; every update takes the table's lock before its own read, so this changes nothing here.
      */
     @Override
     public void updateAll(List<T> entities) throws IllegalAccessException {

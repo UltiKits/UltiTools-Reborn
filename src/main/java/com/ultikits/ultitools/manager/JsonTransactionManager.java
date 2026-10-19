@@ -61,10 +61,18 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonTransaction;
  *       catching the exception does not save it: its outer {@link #commit()} discards the staged
  *       writes and throws {@link UnexpectedRollbackException}. A write outside a transaction just
  *       fails. Dirty
- *       writes and blind overwrites therefore cannot interleave with an open transaction. At the
- *       default isolation reads take no table lock, so a read-modify-write can still lose an
- *       update: compute a write from a read with {@code updateIf}, or use {@code REPEATABLE_READ}
- *       or {@code SERIALIZABLE}, which lock a table at its first read.</li>
+ *       writes and blind overwrites therefore cannot interleave with an open transaction. In a
+ *       {@code @Transactional} transaction at the default isolation reads take no table lock, so a
+ *       read-modify-write can still lose an update: compute a write from a read with
+ *       {@code updateIf}, or use {@code REPEATABLE_READ} or {@code SERIALIZABLE}, which lock a
+ *       table at its first read.</li>
+ *   <li><b>Programmatic transactions lock at first read.</b> A transaction begun by
+ *       {@code DataOperator#transaction(...)} locks each table at its first read or write, as
+ *       {@code REPEATABLE_READ} does (question 11 A of the Phase 20.4 decisions), which keeps the
+ *       per-table serialisation 6.2.5's {@code synchronized} {@code transaction(...)} gave: a read
+ *       inside it can wait for another transaction's table lock, bounded as a write is. A
+ *       {@code transaction(...)} that joins an active transaction keeps that transaction's
+ *       isolation.</li>
  *   <li><b>Settings.</b> {@link #setIsolationLevel(int)}: {@code REPEATABLE_READ} and
  *       {@code SERIALIZABLE} also lock a table at its first read; {@code DEFAULT},
  *       {@code READ_UNCOMMITTED} and {@code READ_COMMITTED} lock at the first write (read

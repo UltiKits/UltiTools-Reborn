@@ -43,10 +43,11 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  * <p>
  * Settings, applied by {@link JsonTransactionManager} right after the transaction begins:
  * <ul>
- *   <li><b>Lock at first read</b> ({@code REPEATABLE_READ}, {@code SERIALIZABLE}): the first read of
- *       a table also takes its write lock, so the table stays still for the rest of the transaction
- *       and a read-modify-write cannot lose an update. The lock is requested before the read takes
- *       the visibility read side, never while holding it.</li>
+ *   <li><b>Lock at first read</b> ({@code REPEATABLE_READ}, {@code SERIALIZABLE}, and every
+ *       transaction begun by {@code DataOperator#transaction(...)}, question 11 A of the Phase 20.4
+ *       decisions): the first read of a table also takes its write lock, so the table stays still
+ *       for the rest of the transaction and a read-modify-write cannot lose an update. The lock is
+ *       requested before the read takes the visibility read side, never while holding it.</li>
  *   <li><b>Read-only</b>: every write fails with a {@link DataAccessException} before it locks or
  *       stages anything.</li>
  *   <li><b>Deadline</b> ({@code @Transactional(timeout)}): every operation checks it first and fails
