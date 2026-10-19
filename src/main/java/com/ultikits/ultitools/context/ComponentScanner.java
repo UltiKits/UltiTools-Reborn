@@ -49,6 +49,11 @@ import org.jetbrains.annotations.ApiStatus;
  * missing optional plugin) is skipped exactly like a class that fails to load during discovery: a
  * {@code WARNING} naming it, and the class counted in the package's one {@code SEVERE} summary,
  * which is therefore emitted after the assembly phase. The rest of the module still loads.
+ * <p>
+ * A configuration class the container already created when the assembly phase reaches it (a
+ * configuration class assembled before it needed it, or the same class discovered through two
+ * overlapping requested packages) is reused, not constructed again; its {@code @Bean} methods run
+ * once.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // IoC container invokes @Bean factory methods -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
@@ -395,13 +400,36 @@ public class ComponentScanner {
     }
 
     /**
-     * Register a configuration class.
+     * Register a configuration class: create it and run its {@code @Bean} methods, or reuse the
+     * instance the container already holds.
+     * <p>
+     * A {@code @Configuration} class is also a component definition, so the container can create it
+     * before the assembly phase reaches it: when a configuration class assembled earlier needs it,
+     * directly or through a service. A class discovered once per requested package, when the
+     * packages overlap, reaches this method twice. In both cases the instance the container
+     * already holds under the class's bean name is the one every holder has and the one closed
+     * with the container, so it is reused: constructing another would run the constructor and
+     * {@code @PostConstruct} again, replace the instance its earlier holders keep, and leave the
+     * first one never destroyed. Its {@code @Bean} methods run once per instance, recorded by the
+     * container.
      */
     private void registerConfiguration(Class<?> clazz) {
         try {
             String beanName = getBeanName(clazz);
-            Object configInstance = clazz.getDeclaredConstructor().newInstance();
-            container.registerSingleton(beanName, configInstance);
+            Object configInstance = container.getSingleton(beanName, false);
+            if (!clazz.isInstance(configInstance)) {
+                configInstance = clazz.getDeclaredConstructor().newInstance();
+                container.registerSingleton(beanName, configInstance);
+                Object registered = container.getSingleton(beanName, false);
+                if (registered != null && registered != configInstance) {
+                    // A BeanPostProcessor substituted the instance; it is the one a later
+                    // discovery of this class finds.
+                    container.markConfigurationAssembled(registered);
+                }
+            }
+            if (!container.markConfigurationAssembled(configInstance)) {
+                return;
+            }
 
             // Process @Bean methods
             for (Method method : clazz.getDeclaredMethods()) {

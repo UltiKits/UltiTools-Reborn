@@ -79,6 +79,12 @@ public class SimpleContainer {
     private final Map<String, Throwable> unresolvableBeans = new ConcurrentHashMap<>();
     // Cache for supplier types to avoid instantiation in getBeanNamesForType
     private final Map<String, Class<?>> supplierTypes = new ConcurrentHashMap<>();
+    // Each @Configuration instance whose @Bean methods the scan's assembly phase has run, by
+    // reference identity: a configuration class this container already holds -- created early
+    // because a class assembled before it needed it, or assembled by an earlier discovery of the
+    // same class -- is reused rather than constructed again, and its @Bean methods run once.
+    // Guarded by this container's monitor.
+    private final Set<Object> assembledConfigurations = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
     private SimpleContainer parent;
     private ClassLoader classLoader;
     private boolean isStarted = false;
@@ -753,6 +759,9 @@ public class SimpleContainer {
         // 07-23: release the failed-bean memo too -- instance-scoped bookkeeping, cleared exactly
         // like every other per-container structure above.
         unresolvableBeans.clear();
+        synchronized (this) {
+            assembledConfigurations.clear();
+        }
         isStarted = false;
         
         LOGGER.info("Container closed.");
@@ -934,6 +943,17 @@ public class SimpleContainer {
         }
         // Always use UltiTools JavaPlugin classloader as fallback
         return UltiTools.getJavaPluginClassLoader();
+    }
+
+    /**
+     * Records that the scan's assembly phase runs the {@code @Bean} methods of {@code configuration}
+     * (package-visible for {@link ComponentScanner}).
+     *
+     * @param configuration a {@code @Configuration} instance this container holds
+     * @return {@code true} the first time for this instance, {@code false} on every later call
+     */
+    synchronized boolean markConfigurationAssembled(Object configuration) {
+        return assembledConfigurations.add(configuration);
     }
 
     /**
