@@ -73,6 +73,7 @@ class PluginManagerFirstAssemblyTest {
     private static final String AOP_MODULE = FIXTURE_ROOT + "aop.AopReadyFixtureModule";
     private static final String CONFIG_MODULE = FIXTURE_ROOT + "config.ConfigReadyFixtureModule";
     private static final String FACTORY_MODULE = FIXTURE_ROOT + "factory.FactoryOrderFixtureModule";
+    private static final String CONFIG_AUTOWIRE_MODULE = FIXTURE_ROOT + "configautowire.ConfigAutowireFixtureModule";
     private static final String CONTEXT_ENTRY_MODULE = FIXTURE_ROOT + "contextentry.ContextEntryFixtureModule";
     private static final String REFUSED_CONTEXT_ENTRY_MODULE =
             FIXTURE_ROOT + "contextentryrefused.RefusedContextEntryFixtureModule";
@@ -517,6 +518,51 @@ class PluginManagerFirstAssemblyTest {
             assertThat(product).as("the @Bean product").isNotNull();
             assertThat(call(product, "getService")).as("the product's injected service")
                     .isSameAs(container.getBean(Class.forName(FACTORY_MODULE + "$FactoryService", true, loader)));
+        }
+    }
+
+    // ===== Review round 1: a config entity may inject a scanned service of its own module =====
+
+    @Nested
+    @DisplayName("a config entity that @Autowires a @Service of its own module loads, and a @Bean product still gets the config entity")
+    class ConfigEntityAutowiringTests {
+
+        @Test
+        @DisplayName("register(Class): the config entity gets the module's service; the @Bean product gets the config entity")
+        void configEntityInjectsScannedService_throughRegisterClass() throws Exception {
+            assertConfigEntityAutowired(EntryPoint.REGISTER_CLASS);
+        }
+
+        @Test
+        @DisplayName("register(UltiToolsPlugin): the config entity gets the module's service; the @Bean product gets the config entity")
+        void configEntityInjectsScannedService_throughRegisterInstance() throws Exception {
+            assertConfigEntityAutowired(EntryPoint.REGISTER_INSTANCE);
+        }
+
+        private void assertConfigEntityAutowired(EntryPoint entryPoint) throws Exception {
+            // JAR entry order: module, config entity, configuration class, product, then the service.
+            FixtureJarClassLoader loader = loaderFor(CONFIG_AUTOWIRE_MODULE, "ConfigAutowireFixtureModule",
+                    fixture(CONFIG_AUTOWIRE_MODULE), fixture(CONFIG_AUTOWIRE_MODULE + "$AutowiringConfig"),
+                    fixture(CONFIG_AUTOWIRE_MODULE + "$ProductConfiguration"),
+                    fixture(CONFIG_AUTOWIRE_MODULE + "$ConfigReadingProduct"),
+                    fixture(CONFIG_AUTOWIRE_MODULE + "$HelperService"));
+            AbstractConfigEntity config = (AbstractConfigEntity) Class.forName(
+                    CONFIG_AUTOWIRE_MODULE + "$AutowiringConfig", true, loader).getDeclaredConstructor().newInstance();
+            Map<String, AbstractConfigEntity> configs = new HashMap<>();
+            configs.put("config/config-autowire.yml", config);
+            lenient().when(configManager.getAllConfigEntities(any())).thenReturn(configs);
+
+            Loaded loaded = load(entryPoint, loader, CONFIG_AUTOWIRE_MODULE);
+            assertLoaded(loaded, entryPoint);
+
+            SimpleContainer container = loaded.plugin.getContext();
+            Object service = container.getBean(Class.forName(CONFIG_AUTOWIRE_MODULE + "$HelperService", true, loader));
+            assertThat(service).as("the module's service").isNotNull();
+            assertThat(call(config, "getHelper")).as("the config entity's injected service").isSameAs(service);
+            Object product = container.getBean("configReadingProduct");
+            assertThat(product).as("the @Bean product").isNotNull();
+            assertThat(call(product, "getConfig")).as("the product's injected config entity").isSameAs(config);
+            assertThat(container.getBean("autowiringConfig")).as("the config entity by its bean name").isSameAs(config);
         }
     }
 

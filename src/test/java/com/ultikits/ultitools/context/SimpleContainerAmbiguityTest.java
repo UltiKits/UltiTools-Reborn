@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -843,6 +845,76 @@ class SimpleContainerAmbiguityTest {
 
             assertSame(original, thrown, "the memoized original error must be rethrown unchanged");
             assertEquals(0, LowNoArgShape.constructed);
+        }
+    }
+
+    // === Concurrent first resolution (review round 1) ===
+
+    interface Lamp {
+    }
+
+    @Service
+    static class OnlyLamp implements Lamp {
+    }
+
+    /**
+     * A definition whose first {@code getBeanClass()} read on {@code requester} lets another
+     * thread create its bean, and waits for it, before answering: the interleaving in which a
+     * candidate becomes a singleton between {@code describeCandidates}' singleton pass and its
+     * definition pass.
+     */
+    static final class InterleavingDefinition extends BeanDefinition {
+        private final AtomicBoolean armed = new AtomicBoolean();
+        private volatile Thread requester;
+        private volatile SimpleContainer container;
+        private volatile String name;
+        private final AtomicReference<Object> createdByOther = new AtomicReference<>();
+
+        InterleavingDefinition(Class<?> beanClass, String beanName) {
+            super(beanClass, beanName);
+        }
+
+        void armFor(Thread thread, SimpleContainer owner, String beanName) {
+            requester = thread;
+            container = owner;
+            name = beanName;
+            armed.set(true);
+        }
+
+        @Override
+        public Class<?> getBeanClass() {
+            if (Thread.currentThread() == requester && armed.compareAndSet(true, false)) {
+                Thread other = new Thread(() -> createdByOther.set(container.getBean(name)), "concurrent-creator");
+                other.start();
+                try {
+                    other.join(TimeUnit.SECONDS.toMillis(10));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return super.getBeanClass();
+        }
+    }
+
+    @Nested
+    @DisplayName("Concurrent first resolution")
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    class ConcurrentFirstResolutionTests {
+
+        @Test
+        @DisplayName("a candidate another thread creates between the singleton pass and the definition pass is still found")
+        void candidateCreatedBetweenThePassesIsFound() {
+            SimpleContainer container = new SimpleContainer();
+            InterleavingDefinition definition = new InterleavingDefinition(OnlyLamp.class, "onlyLamp");
+            container.registerBeanDefinition("onlyLamp", definition);
+            definition.armFor(Thread.currentThread(), container, "onlyLamp");
+
+            Lamp resolved = container.getBean(Lamp.class);
+
+            assertFalse(definition.armed.get(), "the interleaving must have happened");
+            assertNotNull(definition.createdByOther.get(), "the other thread created the bean");
+            assertSame(definition.createdByOther.get(), resolved,
+                    "getBean(Class) must return the bean the other thread created, not null");
         }
     }
 }
