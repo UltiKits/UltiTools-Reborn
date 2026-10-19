@@ -389,7 +389,9 @@ public class JsonTransactionManager implements TransactionManager {
      * transaction checks it first and fails with a {@code DataAccessException} once it has passed,
      * and every lock wait ends at the sooner of it and the 5-second default bound; the caller's
      * failure path (for {@code @Transactional}, {@code TransactionInterceptor}) then rolls the
-     * transaction back. A non-positive value is inert. With no active transaction this logs a
+     * transaction back. A lock wait the deadline ends also marks the transaction rollback-only, as
+     * any failed lock wait does, so catching that failure does not save it. A non-positive value is
+     * inert. With no active transaction this logs a
      * warning and records nothing.
      */
     @Override

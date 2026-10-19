@@ -2345,9 +2345,10 @@ one `@Table`, one folder of `<id>.json` files.
   `@Transactional(timeout = ...)` deadline if that comes sooner, and then fails with a `DataAccessException`
   whose message starts `JSON write failed with a lock-wait timeout`; the write is not applied. A wait that would
   complete a cycle (each of two transactions waiting for the other) fails the call that closes the cycle at once,
-  with a message starting `JSON write failed with a deadlock`. Either failure rolls its transaction back when it
-  leaves the transaction's scope, as any other failure does. Plain writes outside a transaction follow the same
-  wait rule.
+  with a message starting `JSON write failed with a deadlock`. Either failure marks its transaction rollback-only
+  before the exception is thrown, so catching the exception does not save the transaction: its outermost commit
+  rolls back everything it wrote and throws `UnexpectedRollbackException`. The transaction keeps its table locks
+  until it ends. Plain writes outside a transaction follow the same wait rule; such a write that fails just fails.
 - **Read-only.** `readOnly = true` rejects writes.
 - **Propagation as on SQLite and MySQL.** `REQUIRES_NEW` and `NOT_SUPPORTED` suspend the active transaction,
   including its staged writes and table locks, and resume it afterwards. One difference: such a method runs on the
@@ -2379,6 +2380,8 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 
 - A plain JSON write can wait for a transaction's table lock, for at most 5 seconds.
 - A transaction can fail with a lock-wait or deadlock error and roll back. The framework does not retry it.
+  Catching the error inside the transaction does not save it: the commit rolls back and throws
+  `UnexpectedRollbackException`.
 - A commit that changed something writes and forces one journal record before it returns, so it waits for the
   disk on the committing thread, which is often the server's main thread.
 - Read-modify-write code uses `updateIf` or `REPEATABLE_READ` (see above); at the default isolation it can lose
@@ -2456,8 +2459,9 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   `@Transactional(isolation = Isolation.REPEATABLE_READ)` / `Isolation.SERIALIZABLE`，它们在第一次读取时就锁表。
 - **有上限的等待。** 写入遇到被锁的表，最多等待 5 秒，或者等到事务的 `@Transactional(timeout = ...)` 截止时间（如果更早），然后抛出
   `DataAccessException`，消息以 `JSON write failed with a lock-wait timeout` 开头，该写入不生效。若这次等待会形成环（两个事务互相等待），
-  闭环的那次调用立即失败，消息以 `JSON write failed with a deadlock` 开头。这两种失败的异常离开事务作用域时，与其他失败一样回滚该事务。
-  事务外的普通写入遵循同一等待规则。
+  闭环的那次调用立即失败，消息以 `JSON write failed with a deadlock` 开头。这两种失败都会在抛出异常之前把所在事务标记为只能回滚，
+  因此捕获该异常并不能挽救事务：最外层提交会回滚该事务写入的全部内容，并抛出 `UnexpectedRollbackException`。该事务持有的表锁保留到它结束为止。
+  事务外的普通写入遵循同一等待规则；这样的写入失败时只是失败。
 - **只读。** `readOnly = true` 拒绝写入。
 - **传播行为与 SQLite、MySQL 相同。** `REQUIRES_NEW` 与 `NOT_SUPPORTED` 挂起活动事务（连同其暂存的写入和表锁），结束后恢复。唯一的差别：
   这类方法与被它挂起的调用方在同一线程上运行，而表锁归线程所有，所以它不会等待调用方持有的锁；若它写入调用方已暂存的同一个键，最终保留
@@ -2478,7 +2482,8 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 **模块作者可能注意到：**
 
 - 普通 JSON 写入可能等待事务的表锁，最多 5 秒。
-- 事务可能因锁等待超时或死锁而失败并回滚，框架不会重试。
+- 事务可能因锁等待超时或死锁而失败并回滚，框架不会重试。在事务内捕获该错误并不能挽救事务：提交会回滚并抛出
+  `UnexpectedRollbackException`。
 - 改动了数据的提交会在返回前写入并强制落盘一条日志记录，即在提交线程（常常是服务器主线程）上等待磁盘。
 - “先读后写”的代码使用 `updateIf` 或 `REPEATABLE_READ`（见上）；默认隔离级别下它可能丢失更新。
 - 同一线程上的 `REQUIRES_NEW` 或 `NOT_SUPPORTED` 方法不会等待其调用方的表锁（见上）。
