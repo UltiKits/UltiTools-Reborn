@@ -128,12 +128,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     /**
      * An operator over the table directory {@code storeLocation}, with an identity of its own: its
      * transactions journal in {@code <storeLocation>.ultitools-journal}, a sibling of the table
-     * directory, and it has its own table locks. Servers reach JSON data through {@code JsonStore},
-     * whose operators share their plugin's identity; this constructor serves code that builds an
-     * operator directly.
+     * directory, and it has its own table locks. Before it reads the table directory it recovers
+     * that journal, so the entries it loads include every transaction committed before a crash.
+     * Servers reach JSON data through {@code JsonStore}, whose operators share their plugin's
+     * identity; this constructor serves code that builds an operator directly.
      *
      * @param storeLocation the table directory, one {@code <key>.json} file per entity
      * @param type          the entity type
+     * @throws DataAccessException naming the file if a committed journal record is damaged; nothing
+     *         is changed, and constructing the operator again succeeds once the file has been moved
+     *         out of the journal directory
      */
     public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
         this(storeLocation, type,
@@ -143,9 +147,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     /**
      * An operator of an identity {@code JsonStore} manages: it uses that identity's manager (and so
      * its journal, commit gate and visibility lock) and the store's lock table, and registers with
-     * the identity so the identity's checkpoints capture its changes. The caller has recovered the
-     * identity before calling this, so the table files read here already include every committed
-     * record.
+     * the identity so the identity's checkpoints capture its changes. Recovers the identity's
+     * journal before reading the table directory (for {@code JsonStore} it already has, and this is
+     * a no-op), so the table files read here include every committed record.
      *
      * @param storeLocation      the table directory, a direct child of the identity root
      * @param type               the entity type
@@ -160,6 +164,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         this.transactionManager = transactionManager;
         this.lockTable = lockTable;
         this.journalTable = transactionManager.journalIdentity().tableName(storeLocation);
+        transactionManager.journalIdentity().recoverOnce();
         File file = new File(storeLocation);
         File[] files = file.listFiles();
         if (files != null) {

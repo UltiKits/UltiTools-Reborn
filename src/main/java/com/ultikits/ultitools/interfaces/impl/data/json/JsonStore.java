@@ -277,12 +277,18 @@ public class JsonStore implements DataStore {
      * so {@code @Transactional} is no longer refused on {@code datasource.type: json} (02-05,
      * D-03). Called by {@code PluginManager.wireAop}'s JSON branch, a different package -- public
      * for that reason, even though it is not part of the officially-extensible {@link DataStore}
-     * contract; the staging and table locking it drives stay package-private in this package, on
-     * {@link SimpleJsonDataOperator}, {@link JsonTransaction} and this store's lock table.
+     * contract; the staging, table locking and journaling it drives stay package-private in this
+     * package, on {@link SimpleJsonDataOperator}, {@link JsonTransaction}, {@link JsonIdentity} and
+     * this store's lock table.
      * <p>
      * Shares one instance with every {@link SimpleJsonDataOperator} {@link #getOperator} hands
      * out for the same identity, so a single {@code @Transactional} method's writes across
-     * several of that plugin's entities are governed by the same transaction.
+     * several of that plugin's entities are governed by the same transaction: staged until the
+     * outermost commit and invisible to other threads until then; made durable at commit by one
+     * journal record, forced to disk before the commit returns; then applied to every table so
+     * other threads see them at one instant. Each table a transaction writes is locked against
+     * other writers until it ends. The record is replayed at the next start if the server stops
+     * before the next flush, before any of the plugin's tables is read.
      *
      * @param scope the identity token minted for the caller
      * @return this store's manager for that caller's identity
