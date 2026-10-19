@@ -197,8 +197,8 @@ public class JsonTransactionManager implements TransactionManager {
         }
 
         // D-08: an inner rollback() at a depth this commit() has now unwound to may have marked
-        // the context rollback-only instead of tearing it down; a failed table-lock wait marks it
-        // the same way (JsonTransaction#lock, question 7 A). At depth 1 that marker must be
+        // the context rollback-only instead of tearing it down; a failed table-lock wait (question
+        // 7 A) and an operation refused after the deadline mark it the same way (JsonTransaction). At depth 1 that marker must be
         // honoured with a real rollback, not silently overridden by a commit the caller never
         // asked to happen after all -- exactly the same reasoning as
         // DataSourceTransactionManager#commit().
@@ -206,12 +206,13 @@ public class JsonTransactionManager implements TransactionManager {
             try {
                 ctx.transaction.rollback();
                 LOGGER.fine("JSON transaction rolled back for " + identity
-                        + " (was marked rollback-only by a failed nested scope or a failed table-lock wait)");
+                        + " (was marked rollback-only by a failed nested scope, a failed table-lock wait or an expired deadline)");
             } finally {
                 contextHolder.remove();
             }
             throw UnexpectedRollbackException.markedBy(
-                    "a failed nested transaction scope or a failed table-lock wait in " + identity);
+                    "a failed nested transaction scope, a failed table-lock wait or an expired deadline in "
+                            + identity);
         }
 
         try {
@@ -387,11 +388,11 @@ public class JsonTransactionManager implements TransactionManager {
      * Records a deadline {@code seconds} from now on the active transaction, exactly as
      * {@link DataSourceTransactionManager#setTimeout(int)} does. Every later operation of the
      * transaction checks it first and fails with a {@code DataAccessException} once it has passed,
-     * and every lock wait ends at the sooner of it and the 5-second default bound; the caller's
-     * failure path (for {@code @Transactional}, {@code TransactionInterceptor}) then rolls the
-     * transaction back. A lock wait the deadline ends also marks the transaction rollback-only, as
-     * any failed lock wait does, so catching that failure does not save it. A non-positive value is
-     * inert. With no active transaction this logs a
+     * and every lock wait ends at the sooner of it and the 5-second default bound. Either failure
+     * marks the transaction rollback-only before it is thrown, as Spring's
+     * {@code ResourceHolderSupport#checkTransactionTimeout} does, so catching it does not save the
+     * transaction: the outer {@link #commit()} rolls back and throws
+     * {@link UnexpectedRollbackException}. A non-positive value is inert. With no active transaction this logs a
      * warning and records nothing.
      */
     @Override

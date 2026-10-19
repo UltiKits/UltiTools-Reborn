@@ -50,8 +50,9 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  *   <li><b>Read-only</b>: every write fails with a {@link DataAccessException} before it locks or
  *       stages anything.</li>
  *   <li><b>Deadline</b> ({@code @Transactional(timeout)}): every operation checks it first and fails
- *       once it has passed, and it bounds every lock wait (the sooner of it and the 5-second default
- *       bound).</li>
+ *       once it has passed, marking the transaction rollback-only first (as Spring's
+ *       {@code ResourceHolderSupport#checkTransactionTimeout} does), and it bounds every lock wait
+ *       (the sooner of it and the 5-second default bound).</li>
  * </ul>
  * <p>
  * <b>A failed lock wait marks the transaction rollback-only</b> (question 7 A of the Phase 20.4
@@ -62,7 +63,10 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  * transaction: its outermost commit discards every staged write and throws
  * {@code UnexpectedRollbackException}. The mark is the manager's own rollback-only flag, the one a
  * failed nested scope sets. The transaction keeps the table locks it already holds until it ends,
- * like any other open transaction; the failed request itself holds nothing.
+ * like any other open transaction; the failed request itself holds nothing. A refusal of the
+ * statement itself -- a write in a read-only transaction, an id that cannot name its file, and the
+ * operator's other argument checks -- does not mark the transaction, as a failed statement does
+ * not end a MySQL or SQLite transaction.
  * <p>
  * Staged values are detached copies: no object the caller holds is reachable from an overlay.
  * An instance is confined to the thread whose {@link JsonTransactionManager} context holds it
@@ -175,8 +179,8 @@ public final class JsonTransaction {
      * Called before a read of {@code operator} takes the visibility read side: checks the deadline
      * and, at {@code REPEATABLE_READ} or {@code SERIALIZABLE}, takes the table's write lock.
      *
-     * @throws DataAccessException if the deadline has passed, or the lock wait fails; a failed lock
-     *         wait first marks this transaction rollback-only
+     * @throws DataAccessException if the deadline has passed, or the lock wait fails; either first
+     *         marks this transaction rollback-only
      */
     void beforeRead(SimpleJsonDataOperator<?> operator) {
         checkDeadline(operator);
@@ -192,9 +196,9 @@ public final class JsonTransaction {
      * it.
      *
      * @throws DataAccessException if the transaction is read-only, the deadline has passed, or the
-     *         lock wait fails (deadlock or lock-wait timeout); a failed lock wait first marks this
-     *         transaction rollback-only, so catching the exception does not save it, and its locks
-     *         are released when it ends
+     *         lock wait fails (deadlock or lock-wait timeout); an expired deadline and a failed lock
+     *         wait first mark this transaction rollback-only, so catching the exception does not
+     *         save it, and its locks are released when it ends; the read-only refusal does not
      */
     void beforeWrite(SimpleJsonDataOperator<?> operator) {
         if (readOnly) {
@@ -205,8 +209,14 @@ public final class JsonTransaction {
         lock(operator);
     }
 
+    /**
+     * Refuses the operation once the deadline has passed, marking this transaction rollback-only
+     * first, as Spring's {@code ResourceHolderSupport#checkTransactionTimeout} calls
+     * {@code setRollbackOnly()} before it throws {@code TransactionTimedOutException}.
+     */
     private void checkDeadline(SimpleJsonDataOperator<?> operator) {
         if (deadlineNanos != null && System.nanoTime() - deadlineNanos >= 0L) {
+            markRollbackOnly();
             throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
                     "JSON transaction timeout: the transaction's deadline passed before this operation on table '"
                             + operator.tableName() + "' started.");
@@ -237,7 +247,8 @@ public final class JsonTransaction {
     }
 
     /**
-     * Marks this transaction rollback-only through the manager's own mechanism, the way
+     * Marks this transaction rollback-only, for a failed lock wait or an expired deadline, through
+     * the manager's own mechanism, the way
      * {@code TransactionInterceptor} records a failed participant: the failed request joins the
      * transaction as one more scope and rolls that scope back, and a rollback at a nested depth
      * sets the manager's rollback-only flag (D-08) without ending the transaction or releasing its
