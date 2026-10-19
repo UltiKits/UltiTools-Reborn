@@ -1112,7 +1112,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * commit, so other threads see all of them at once. Any {@link Throwable} the action throws --
      * an {@link Error} included (#634) -- rolls the transaction back, which discards the staged
      * writes and never touches committed data, and is rethrown as the same instance; a rollback
-     * failure is attached to it as suppressed. Mirrors
+     * failure is attached to it as suppressed. A commit that throws (a record that cannot be
+     * written, or {@code UnexpectedRollbackException} for a transaction marked rollback-only) has
+     * already ended the transaction and is not followed by a rollback. Mirrors
      * {@code AbstractRelationalDataOperator#transaction(Callable)}.
      */
     // PMD.AvoidCatchingThrowable: an Error must roll the transaction back too (#634); it is
@@ -1122,10 +1124,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     public <R> R transaction(Callable<R> action) throws Exception {
         JsonTransactionManager manager = transactionManager();
         manager.begin();
+        R result;
         try {
-            R result = action.call();
-            manager.commit();
-            return result;
+            result = action.call();
         } catch (Throwable failure) {
             try {
                 manager.rollback();
@@ -1134,6 +1135,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             }
             throw failure;
         }
+        // Outside the catch, as in TransactionInterceptor: a commit that throws has already ended
+        // the transaction (the manager discards it whether or not the commit succeeds), so there
+        // is nothing left to roll back, and a second rollback() would only log that no
+        // transaction is active.
+        manager.commit();
+        return result;
     }
 
     @Override
