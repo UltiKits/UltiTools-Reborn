@@ -1534,6 +1534,181 @@ class JsonTransactionLockingTest {
         }
     }
 
+    // ===== Programmatic transaction(...) locks at first read (question 11 A) =====
+
+    /**
+     * The gate 1 reviewer's lost-update scenario through {@code DataOperator#transaction(Callable)}:
+     * 6.2.5 ran each JSON {@code transaction(...)} callback alone per operator ({@code synchronized}),
+     * so both increments were kept. Question 11 A restores that: a transaction begun by
+     * {@code transaction(...)} locks a table at its first read, so B's read waits for A's commit.
+     */
+    @Test
+    @DisplayName("transaction(Callable): two concurrent read-modify-write callbacks keep both updates (question 11 A)")
+    void programmaticCallableTransactionReadModifyWriteKeepsBothUpdates() throws Exception {
+        assertProgrammaticReadModifyWriteKeepsBothUpdates(body -> rows.transaction(() -> {
+            body.run();
+            return null;
+        }));
+    }
+
+    @Test
+    @DisplayName("transaction(Runnable): two concurrent read-modify-write callbacks keep both updates (question 11 A)")
+    void programmaticRunnableTransactionReadModifyWriteKeepsBothUpdates() throws Exception {
+        assertProgrammaticReadModifyWriteKeepsBothUpdates(body -> rows.transaction(body));
+    }
+
+    @Test
+    @DisplayName("@Transactional default reads without waiting for a table a programmatic transaction holds")
+    void transactionalDefaultReadDoesNotWaitForAProgrammaticTransactionsTableLock() throws Exception {
+        assertReadDoesNotWaitWhileAProgrammaticTransactionHoldsTheTable(IsolationBean::readName);
+    }
+
+    /**
+     * A {@code transaction(...)} nested in an active {@code @Transactional} transaction joins it and
+     * keeps that transaction's isolation, as a participating scope does in Spring
+     * ({@code AbstractPlatformTransactionManager} applies a definition's isolation only when it
+     * starts a new transaction) and as a JDBC connection keeps the isolation its transaction began
+     * with: the joined read takes no table lock at the default isolation.
+     */
+    @Test
+    @DisplayName("transaction(...) nested in @Transactional default keeps read committed: its read does not wait")
+    void nestedProgrammaticTransactionInsideTransactionalDefaultKeepsReadCommitted() throws Exception {
+        assertReadDoesNotWaitWhileAProgrammaticTransactionHoldsTheTable(IsolationBean::readNameThroughNestedTransaction);
+    }
+
+    /**
+     * X = 0; A reads X inside {@code entry} and waits until B has either read X or registered as a
+     * waiter for the table; A then writes its read + 1 and commits; B writes its read + 1.
+     */
+    private void assertProgrammaticReadModifyWriteKeepsBothUpdates(ProgrammaticEntry entry) throws InterruptedException {
+        rows.insert(new LockRow("x", "0"));
+        CountDownLatch aRead = new CountDownLatch(1);
+        CountDownLatch bReadOrWaiting = new CountDownLatch(1);
+        AtomicReference<Integer> bRead = new AtomicReference<>();
+        JsonLockTable.installStepHook(waiterRegisteredBy("programmatic-b", bReadOrWaiting));
+
+        Worker a = Worker.start("programmatic-a", () -> runEntry(entry, () -> {
+            int read = Integer.parseInt(rows.getById("x").getName());
+            aRead.countDown();
+            awaitHandshake(bReadOrWaiting, "thread B neither read nor waited for the table");
+            update(rows, new LockRow("x", String.valueOf(read + 1)));
+        }));
+        Worker b = Worker.start("programmatic-b", () -> {
+            awaitHandshake(aRead, "thread A never read");
+            runEntry(entry, () -> {
+                int read = Integer.parseInt(rows.getById("x").getName());
+                bRead.set(read);
+                bReadOrWaiting.countDown();
+                update(rows, new LockRow("x", String.valueOf(read + 1)));
+            });
+        });
+        a.finish();
+        b.finish();
+
+        assertThat(rows.getById("x").getName()).as("both increments are kept, as in 6.2.5").isEqualTo("2");
+        assertThat(bRead.get()).as("B's first read waited for A's commit").isEqualTo(1);
+    }
+
+    /**
+     * A programmatic transaction on another thread reads and writes X and keeps the table locked;
+     * {@code read} runs on a reader thread through an {@link IsolationBean} method and must return
+     * the committed value without registering as a lock waiter.
+     */
+    private void assertReadDoesNotWaitWhileAProgrammaticTransactionHoldsTheTable(BeanRead read) throws Exception {
+        rows.insert(new LockRow("x", "committed"));
+        IsolationBean bean = isolationBean();
+        CountDownLatch holds = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch readerWaited = new CountDownLatch(1);
+        CountDownLatch readDone = new CountDownLatch(1);
+        AtomicReference<String> seen = new AtomicReference<>();
+        JsonLockTable.installStepHook(waiterRegisteredBy("isolation-reader", readerWaited));
+
+        Worker holder = Worker.start("isolation-holder", () -> runEntry(body -> rows.transaction(body), () -> {
+            rows.getById("x");
+            update(rows, new LockRow("x", "staged"));
+            holds.countDown();
+            awaitHandshake(release, "the test never released the holder");
+        }));
+        awaitHandshake(holds, "the holder never locked the table");
+        Worker reader = Worker.start("isolation-reader", () -> {
+            try {
+                seen.set(read.apply(bean, "x"));
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            } finally {
+                readDone.countDown();
+            }
+        });
+
+        boolean returned = readDone.await(HANDSHAKE_SECONDS, TimeUnit.SECONDS);
+        long waiterRegistrations = readerWaited.getCount();
+        release.countDown();
+        holder.finish();
+        reader.finish();
+
+        assertThat(returned).as("the read returned while the programmatic transaction held the table").isTrue();
+        assertThat(waiterRegistrations).as("the reader never registered as a lock waiter").isEqualTo(1L);
+        assertThat(seen.get()).as("the read sees committed data").isEqualTo("committed");
+        assertThat(rows.getById("x").getName()).as("the holder commits afterwards").isEqualTo("staged");
+    }
+
+    /** Runs {@code body} through {@code entry}, rethrowing a checked failure unchecked on the worker thread. */
+    private static void runEntry(ProgrammaticEntry entry, Runnable body) {
+        try {
+            entry.run(body);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** An {@link IsolationBean} from a JSON-backed container, wired as {@link #timedBean()} wires its bean. */
+    private IsolationBean isolationBean() throws ReflectiveOperationException {
+        SimpleContainer context = new SimpleContainer();
+        try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
+            UltiTools mockUltiTools = mock(UltiTools.class);
+            when(mockUltiTools.getDataStore()).thenReturn(store);
+            ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+            invokeWireAop(context, scope);
+        }
+        context.registerBean(IsolationBean.class);
+        context.refresh();
+        IsolationBean bean = context.getBean(IsolationBean.class);
+        bean.rows = rows;
+        return bean;
+    }
+
+    /** One way into a programmatic transaction: {@code transaction(Callable)} or {@code transaction(Runnable)}. */
+    @FunctionalInterface
+    private interface ProgrammaticEntry {
+        void run(Runnable body) throws Exception;
+    }
+
+    /** One read made through an {@link IsolationBean} method. */
+    @FunctionalInterface
+    private interface BeanRead {
+        String apply(IsolationBean bean, String id) throws Exception;
+    }
+
+    /** A container bean whose {@code @Transactional} methods (default isolation) read a row. */
+    public static class IsolationBean {
+        volatile SimpleJsonDataOperator<LockRow> rows;
+
+        /** Reads a row in a {@code @Transactional} transaction at the default isolation. */
+        @Transactional
+        public String readName(String id) {
+            return rows.getById(id).getName();
+        }
+
+        /** Reads a row through a {@code transaction(...)} joined to a default-isolation {@code @Transactional} one. */
+        @Transactional
+        public String readNameThroughNestedTransaction(String id) throws Exception {
+            return rows.transaction(() -> rows.getById(id).getName());
+        }
+    }
+
     // ===== Fixtures =====
 
     @Table("locking_rows")
