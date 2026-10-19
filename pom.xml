@@ -51,7 +51,11 @@
         <ultitools.deploy.folder>${project.build.directory}/deploy</ultitools.deploy.folder>
         <!-- Last released artifact on Maven Central (v6.2.5 tag) that the japicmp binary-compatibility
              gate below diffs against. Override with -Djapicmp.baseline.version= to compare against a
-             different released version. -->
+             different released version. Lifecycle (Phase 21 D-12): the formal 6.3.0 release keeps
+             this 6.2.5 baseline. Only after 6.3.0 is downloadable from Maven Central does the NEXT
+             development cycle advance it to 6.3.0 and retire the 6.3.0 removal exclusions below.
+             A formal (non-SNAPSHOT) build refuses a baseline that is missing, a SNAPSHOT, or not
+             strictly older than the project version (ReleaseBoundaryInvariant). -->
         <japicmp.baseline.version>6.2.5</japicmp.baseline.version>
     </properties>
 
@@ -337,15 +341,21 @@
                  BaseCommandExecutor#handleHelp is itself `protected abstract` - the framework
                  already requires every downstream command class to bind to a protected member,
                  so protected is part of the public contract by construction. The <excludes> list
-                 is Phase 7's authored removal record, one entry per symbol this milestone removes;
-                 Phase 8 deletes the whole list and locks the gate to zero tolerance.
+                 is Phase 7's authored removal record, one entry per symbol this milestone removes.
+                 Per Phase 21 D-12 the list is NOT emptied for the formal 6.3.0 release: 6.3.0 keeps
+                 the 6.2.5 baseline and these exact, removal-ledger-registered exclusions, and any
+                 incompatibility the ledger does not register still fails the build. The next
+                 development cycle, after 6.3.0 is downloadable from Maven Central, advances the
+                 baseline to 6.3.0 and retires these entries.
                  japicmp 二进制兼容性门（GATE-01，阶段 2/3）。自 6.3.0 起阻断构建：
                  com.ultikits.ultitools 中任何公共或受保护成员的二进制不兼容变更都会导致
                  `mvn verify` 失败，除非该符号已在下方 <excludes> 中列出。accessModifier 取
                  `protected` 而非 `public`，因为 BaseCommandExecutor#handleHelp 本身就是
                  `protected abstract`——框架已经要求每个下游命令类绑定到一个受保护成员，所以
                  protected 本就是公共契约的一部分。下方 <excludes> 列表是 Phase 7 逐条记录的删除
-                 清单，Phase 8 会整体删除该列表并将门禁收紧为零容忍。 -->
+                 清单。按 Phase 21 D-12，正式 6.3.0 发布时不清空该列表：6.3.0 继续以 6.2.5 为基线，
+                 保留这些与删除台账一致的精确排除项，台账未登记的不兼容仍会阻断构建。6.3.0 可从
+                 Maven Central 下载之后，下一开发周期再把基线前移到 6.3.0 并清除这些排除项。 -->
             <plugin>
                 <groupId>com.github.siom79.japicmp</groupId>
                 <artifactId>japicmp-maven-plugin</artifactId>
@@ -398,8 +408,13 @@
                              FQCN is a whole-class removal, a Class#member(paramTypes) key names
                              one removed member. Full justification per entry is in
                              .planning/phases/07-generational-removals/07-JAPICMP-BASELINE.md. This
-                             list stays populated during the cycle and is emptied at the release
-                             boundary by ReleaseBoundaryInvariant (D-05). -->
+                             list stays populated through the formal 6.3.0 release (Phase 21 D-12,
+                             superseding D-05's empty-at-release rule). On every build,
+                             DeprecationRegistryGenerator holds each entry to the removal ledger
+                             (RemovalConsistencyEvaluator: no unregistered, stale or missing
+                             exclusion) and OverBroadExclusionInvariantTest rejects a whole-class
+                             entry for a class that still exists. The entries are retired when the
+                             next cycle advances japicmp.baseline.version past 6.2.5. -->
                         <excludes>
                             <!-- Whole-class removals: one entry covers the class and every one
                                  of its members. -->
