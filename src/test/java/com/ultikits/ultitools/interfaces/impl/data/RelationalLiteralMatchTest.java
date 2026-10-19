@@ -99,9 +99,6 @@ class RelationalLiteralMatchTest {
         @Column("marker")
         private String marker;
 
-        public LiteralRow() {
-        }
-
         public String getLabel() {
             return label;
         }

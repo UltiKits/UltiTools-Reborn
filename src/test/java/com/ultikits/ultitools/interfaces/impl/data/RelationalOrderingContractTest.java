@@ -208,9 +208,6 @@ class RelationalOrderingContractTest {
         @Column("marker")
         private String marker;
 
-        public OrderingRow() {
-        }
-
         @Override
         public void apply(Values values) {
             level = values.level;
@@ -276,9 +273,6 @@ class RelationalOrderingContractTest {
 
         @Column("marker")
         private String marker;
-
-        public TypedOrderingRow() {
-        }
 
         @Override
         public void apply(Values values) {
@@ -389,6 +383,8 @@ class RelationalOrderingContractTest {
         Set<String> matches = new LinkedHashSet<>();
         for (Values values : FIXTURE) {
             double stored = ((Number) values.get(cond.field)).doubleValue();
+            // Deliberate: the exact decimal expansion of the double, rounded to 15 digits afterwards.
+            @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
             double kept = new BigDecimal(stored).round(new MathContext(15)).doubleValue();
             if (cond.holds(Double.compare(kept, ((Number) cond.threshold).doubleValue()))) {
                 matches.add(values.code);

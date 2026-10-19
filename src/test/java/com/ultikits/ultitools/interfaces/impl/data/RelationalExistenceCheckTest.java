@@ -42,14 +42,19 @@ class RelationalExistenceCheckTest {
 
     static final String TABLE = "existence_check_row";
 
+    @TempDir
+    Path tempDir;
+
+    private HikariDataSource sqlitePool;
+    private SQLiteDataOperator<ExistenceRow> sqliteOperator;
+    private HikariDataSource h2Pool;
+    private SQLiteDataOperator<ExistenceRow> h2Operator;
+
     /** One stored row with a single default-typed text column. */
     @Table(TABLE)
     public static class ExistenceRow extends BaseDataEntity<String> {
         @Column("label")
         private String label;
-
-        public ExistenceRow() {
-        }
 
         public String getLabel() {
             return label;
@@ -59,14 +64,6 @@ class RelationalExistenceCheckTest {
             this.label = label;
         }
     }
-
-    @TempDir
-    Path tempDir;
-
-    private HikariDataSource sqlitePool;
-    private SQLiteDataOperator<ExistenceRow> sqliteOperator;
-    private HikariDataSource h2Pool;
-    private SQLiteDataOperator<ExistenceRow> h2Operator;
 
     @BeforeAll
     static void mockServer() {

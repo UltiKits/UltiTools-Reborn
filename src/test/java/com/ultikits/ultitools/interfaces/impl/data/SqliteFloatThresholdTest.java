@@ -89,6 +89,8 @@ class SqliteFloatThresholdTest {
     }
 
     /** Number thresholds every SQLite lane follows Java on, on both column types. */
+    // Deliberate: the exact decimal expansion of the float 0.1f, not the shortest text 0.1.
+    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
     static final List<Object[]> NUMBER_CASES = Collections.unmodifiableList(Arrays.asList(
             new Object[]{Comparison.GREATER, Float.POSITIVE_INFINITY},
             new Object[]{Comparison.LESS, Float.POSITIVE_INFINITY},
@@ -148,9 +150,6 @@ class SqliteFloatThresholdTest {
         @Column("marker")
         private String marker;
 
-        public DefaultRow() {
-        }
-
         @Override
         public void setUp(String code, Float weight) {
             this.code = code;
@@ -184,9 +183,6 @@ class SqliteFloatThresholdTest {
 
         @Column("marker")
         private String marker;
-
-        public RealRow() {
-        }
 
         @Override
         public void setUp(String code, Float weight) {
@@ -246,6 +242,8 @@ class SqliteFloatThresholdTest {
                 double threshold = ((Number) value).doubleValue();
                 holds = comparison == Comparison.GREATER ? stored > threshold : stored < threshold;
             } else {
+                // Deliberate: the exact decimal expansion of the double, not its shortest text form.
+                @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
                 int sign = new BigDecimal(stored).compareTo(exact((Number) value));
                 holds = comparison == Comparison.GREATER ? sign > 0 : sign < 0;
             }
@@ -323,11 +321,21 @@ class SqliteFloatThresholdTest {
          * The rows the operator selected before the float conversion: {@code CAST(weight AS DOUBLE)}
          * against the plainly bound value, run on the lane's database; {@code null} when that SQL fails.
          */
+        /** Fixed statements for the two constant test tables; no part of the SQL is built from input. */
+        private String preConversionSql(String table, Comparison comparison) {
+            boolean greater = comparison == Comparison.GREATER;
+            if (TABLE.equals(table)) {
+                return greater ? "SELECT code FROM float_threshold_row WHERE CAST(weight AS DOUBLE) > ?"
+                        : "SELECT code FROM float_threshold_row WHERE CAST(weight AS DOUBLE) < ?";
+            }
+            return greater ? "SELECT code FROM float_threshold_real_row WHERE CAST(weight AS DOUBLE) > ?"
+                    : "SELECT code FROM float_threshold_real_row WHERE CAST(weight AS DOUBLE) < ?";
+        }
+
         Set<String> preConversionMatches(String table, Comparison comparison, Object value) {
-            String operator = comparison == Comparison.GREATER ? " > ?" : " < ?";
+            String sql = preConversionSql(table, comparison);
             try (Connection connection = dataSource().getConnection();
-                 PreparedStatement statement = connection.prepareStatement(
-                         "SELECT code FROM " + table + " WHERE CAST(weight AS DOUBLE)" + operator)) {
+                 PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setObject(1, value);
                 Set<String> codes = new LinkedHashSet<>();
                 try (ResultSet resultSet = statement.executeQuery()) {
@@ -343,6 +351,8 @@ class SqliteFloatThresholdTest {
 
         @Test
         @DisplayName("del weight GREATER +Infinity or GREATER BigDecimal 1E+400 deletes nothing, on both columns")
+        // The assertions are made through assertSoftly in the check helper this test calls.
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void delGreaterThanEveryFloatDeletesNothing() {
             bothColumns(() -> checkDelDeletesNothing(defaultOperator(), DefaultRow::new, "default column"),
                     () -> checkDelDeletesNothing(realOperator(), RealRow::new, "REAL column"));
@@ -366,6 +376,8 @@ class SqliteFloatThresholdTest {
 
         @Test
         @DisplayName("updateIf weight LESS +Infinity writes every finite row, on both columns")
+        // The assertions are made through assertSoftly in the check helper this test calls.
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void updateIfLessThanInfinityWrites() {
             bothColumns(() -> checkUpdateIfWrites(defaultOperator(), DefaultRow::new, "default column"),
                     () -> checkUpdateIfWrites(realOperator(), RealRow::new, "REAL column"));
@@ -398,6 +410,8 @@ class SqliteFloatThresholdTest {
 
         @Test
         @DisplayName("getAll and exist follow Java for a number threshold of every class, on both columns")
+        // The assertions are made through assertSoftly in the check helper this test calls.
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void numberThresholdsFollowJava() {
             bothColumns(() -> checkNumbersFollowJava(defaultOperator(), DefaultRow::new, "default column"),
                     () -> checkNumbersFollowJava(realOperator(), RealRow::new, "REAL column"));
@@ -430,6 +444,8 @@ class SqliteFloatThresholdTest {
 
         @Test
         @DisplayName("Whole numbers and exact decimals equal to a stored float do not select it")
+        // The assertions are made through assertSoftly in the check helper this test calls.
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void valueEqualToStoredFloatIsNotSelected() {
             bothColumns(() -> checkEqualValues(defaultOperator(), DefaultRow::new, "default column"),
                     () -> checkEqualValues(realOperator(), RealRow::new, "REAL column"));
@@ -439,6 +455,8 @@ class SqliteFloatThresholdTest {
                 DataOperator<R> op, Supplier<R> factory, String column) {
             List<R> rows = insertFixture(op, factory);
             List<String> aboveTwoTo60 = codesOf(op.getAll(weight(Comparison.GREATER, 1L << 60)));
+            // Deliberate: the exact decimal expansion of the float 0.1f, not the shortest text 0.1.
+            @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
             List<String> belowExactTenth = codesOf(op.getAll(weight(Comparison.LESS, new BigDecimal((double) 0.1f))));
             removeRows(op, rows);
             assertSoftly(softly -> {
@@ -451,6 +469,8 @@ class SqliteFloatThresholdTest {
 
         @Test
         @DisplayName("A text threshold selects what the operator selected before the float conversion")
+        // The assertions are made through assertSoftly in the check helper this test calls.
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void textThresholdsSelectAsBefore() {
             bothColumns(() -> checkTextAsBefore(defaultOperator(), DefaultRow::new, TABLE, "default column"),
                     () -> checkTextAsBefore(realOperator(), RealRow::new, REAL_TABLE, "REAL column"));
