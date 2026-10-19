@@ -27,26 +27,46 @@ jobs:
           server-username: SONATYPE_USERNAME
           server-password: SONATYPE_PASSWORD
 
-      - name: Refuse to publish a non-SNAPSHOT version
-        # This workflow fires on every push to alpha. Without this guard, a branch that ever
-        # carries a release version (e.g. mid-release-prep, or a maintainer mistake) would
-        # publish a release from a routine push -- breaching the standing rule that a release
-        # requires an explicit maintainer instruction. A -SNAPSHOT project version is required
-        # to reach the deploy step below.
+      - name: Classify the project version
+        # This workflow fires on every push to alpha. Release preparation legitimately puts a formal
+        # MAJOR.MINOR.PATCH version on alpha; that push must finish green WITHOUT publishing anything,
+        # because a formal release is published only from retained, accepted bytes after an explicit
+        # maintainer instruction (see publish-packages.yml). So the version is classified here and only
+        # a well-formed -SNAPSHOT reaches the deploy step below:
+        #   kind=snapshot  MAJOR.MINOR.PATCH-SNAPSHOT -> deploy the snapshot
+        #   kind=formal    MAJOR.MINOR.PATCH          -> notice, no publication, success
+        #   anything else (empty, malformed, a pre-release suffix) -> error, the job fails
+        id: version
         run: |
           set -euo pipefail
           VERSION="$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
-          echo "Project version: ${VERSION}"
-          if [[ "${VERSION}" != *-SNAPSHOT ]]; then
-            echo "::error::project.version [${VERSION}] does not end in -SNAPSHOT -- refusing to publish. This workflow only ever publishes snapshots; releases require an explicit maintainer instruction."
+          NUMBER='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          if [[ "${VERSION}" =~ ^${NUMBER}-SNAPSHOT$ ]]; then
+            echo "Project version: ${VERSION} (snapshot; the deploy step runs)"
+            echo "kind=snapshot" >> "$GITHUB_OUTPUT"
+          elif [[ "${VERSION}" =~ ^${NUMBER}$ ]]; then
+            echo "::notice::project.version ${VERSION} is a formal release version: nothing is published from this push. A formal release is published only from retained, accepted bytes on explicit maintainer instruction."
+            echo "kind=formal" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::project.version [${VERSION}] is neither MAJOR.MINOR.PATCH-SNAPSHOT nor a formal MAJOR.MINOR.PATCH -- refusing to continue."
             exit 1
           fi
 
       - name: Deploy snapshot to Central
+        # Runs only for kind=snapshot. It re-checks the version itself, so removing or mistyping the
+        # condition above can never publish a formal version from a routine push.
         # Deliberately does not activate the release Maven profile: that profile exists only
         # to attach GPG signing, and Sonatype performs no validation on snapshot deploys, so
         # signing is neither required nor meaningful for this job.
+        if: steps.version.outputs.kind == 'snapshot'
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-        run: mvn -B deploy -DskipTests
+        run: |
+          set -euo pipefail
+          VERSION="$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
+          if ! [[ "${VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-SNAPSHOT$ ]]; then
+            echo "::error::project.version [${VERSION}] is not a -SNAPSHOT version -- refusing to publish. This workflow only ever publishes snapshots; releases require an explicit maintainer instruction."
+            exit 1
+          fi
+          mvn -B deploy -DskipTests
