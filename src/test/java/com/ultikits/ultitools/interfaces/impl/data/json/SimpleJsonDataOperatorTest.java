@@ -740,6 +740,25 @@ class SimpleJsonDataOperatorTest {
                     .extracting(t -> ((DataAccessException) t).getErrorCode())
                     .isEqualTo(ErrorCode.DATA_PERSISTENCE_FAILED);
         }
+
+        @Test
+        @DisplayName("a flush that cannot write leaves the entry dirty, so the next flush writes it once the location is writable")
+        void failedFlushLeavesTheEntryDirty() throws Exception {
+            File blocker = new File(storeDir, "blocker-file");
+            assertThat(blocker.createNewFile()).isTrue();
+            String badStoreLocation = blocker.getAbsolutePath() + File.separator + "subdir";
+            SimpleJsonDataOperator<TestData> badOperator =
+                    new SimpleJsonDataOperator<>(badStoreLocation, TestData.class);
+            badOperator.insert(new TestData("1", "test", 10));
+            assertThatThrownBy(badOperator::flush).isInstanceOf(DataAccessException.class);
+
+            assertThat(blocker.delete()).isTrue();
+            badOperator.flush();
+
+            assertThat(new File(badStoreLocation, "1.json"))
+                    .as("the entry stayed dirty after the failed flush and the next flush wrote it")
+                    .exists();
+        }
     }
 
     // ==================== GC Tests ====================
