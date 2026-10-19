@@ -3068,7 +3068,8 @@ public class PluginManager {
      *   <li>{@code registerType(UltiToolsPlugin)}, which the component scan's conditional
      *       evaluation reads;</li>
      *   <li>mint the {@link DataScope} and hand it to the plugin, then {@link #wireAop};</li>
-     *   <li>open the load scopes and, inside them: config-entity beans, the component scan, the
+     *   <li>open the load scopes and, inside them: the config entities made resolvable by type,
+     *       the component scan, the config entities assembled and registered by name, the
      *       plugin's own singleton registration, the static instance field, the global
      *       entity-ownership record, {@code refresh()}, and {@code @ContextEntry} bean
      *       registration with {@code autowireBean}; then close the load scopes;</li>
@@ -3078,8 +3079,12 @@ public class PluginManager {
      * singleton and {@code refresh()} can each create beans -- {@code registerSingleton} fully
      * assembles its argument (D-14), and autowiring creates whatever it injects. So the data scope,
      * AOP and the load scopes are in place before the first of them runs, and the config entities
-     * before the scan. A bean created before {@code wireAop} could never be proxied afterwards
-     * (C08); one created before the config entities or the data scope could not see them (C09); a
+     * are resolvable by type before the scan, so a configuration class or {@code @Bean} product the
+     * scan creates can inject them. A config entity itself is assembled (autowired,
+     * {@code @PostConstruct}) only after the scan, once every definition of the module exists, so
+     * it can inject the module's own services, as it could in 6.2.5. A bean created before
+     * {@code wireAop} could never be proxied afterwards (C08); one created before the config
+     * entities or the data scope could not see them (C09); a
      * registration made outside the load scopes, the {@code @ContextEntry} bean's included, would
      * not be released with this module instance (C62). The static
      * instance field and the global entity-ownership record keep their place after the scan and
@@ -3146,22 +3151,31 @@ public class PluginManager {
         // all three registries, is opened around registerSelf() in attemptPluginRegistration.
         beginLoadScopes(plugin);
         try {
-            // Register config entities as beans for @Autowired injection -- before the scan and
-            // the plugin singleton, so a bean either of them creates can inject them (C09).
+            // Config entities, in two steps around the scan. Before it, each is resolvable by its
+            // own type (registerType assembles nothing), so a configuration class or @Bean product
+            // the scan creates can inject it (C09). After it, each is fully assembled and
+            // registered by name, so its own @Autowired fields can name the module's scanned
+            // services, whose definitions exist only once the scan has run (6.2.5 registered config
+            // entities after the scan, and such a module loaded there).
             java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
                 UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
-            if (configMap != null) {
-                for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configMap.values()) {
-                    String beanName = config.getClass().getSimpleName();
-                    beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
-                    pluginContext.registerSingleton(beanName, config);
-                }
+            List<com.ultikits.ultitools.abstracts.AbstractConfigEntity> configEntities = configMap == null
+                    ? Collections.<com.ultikits.ultitools.abstracts.AbstractConfigEntity>emptyList()
+                    : new ArrayList<>(configMap.values());
+            for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configEntities) {
+                registerByOwnType(pluginContext, config);
             }
 
             // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
             String[] scanPackages = getPluginScanPackages(pluginClass);
             if (scanPackages.length > 0) {
                 pluginContext.scanComponents(scanPackages);
+            }
+
+            for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configEntities) {
+                String beanName = config.getClass().getSimpleName();
+                beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
+                pluginContext.registerSingleton(beanName, config);
             }
 
             // Register the plugin instance itself by name AFTER scanComponents, not before:
@@ -3223,6 +3237,15 @@ public class PluginManager {
         // module granularity, before onPluginRegistered() schedules anything or registerBukkit()
         // hands a command to Bukkit. This also resolves each bound @CmdCD into its validator.
         validateConfigBindings(plugin, pluginContext);
+    }
+
+    /**
+     * Binds {@code instance} to its own class in {@code context}'s type registry, without assembling
+     * it, so {@code getBean(Class)} and by-type {@code @Autowired} resolve it.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> void registerByOwnType(SimpleContainer context, T instance) {
+        context.registerType((Class<T>) instance.getClass(), instance);
     }
 
     /**
