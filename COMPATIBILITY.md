@@ -2584,9 +2584,25 @@ one `@Table`, one folder of `<id>.json` files.
   commit rolls back and throws `UnexpectedRollbackException`. An exception the rules do not accept leaves the
   transaction committable. See [A failing joined `@Transactional` method rolls back the whole transaction](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period).
 - **Hooks.** `onCreate`, `onUpdate` and `onDelete` fire when the call is made, not at commit.
-- **Entity ids.** An id that cannot name its `<id>.json` file (empty, or containing `/`, `\` or NUL) is refused
-  at `insert` with a `DataAccessException` (`DATA_ENTITY_INVALID`), inside and outside transactions. In 6.2.5 such
-  an id was written to a sub-path and read back as a corrupt entry.
+- **Entity ids name files.** Each entity is stored as `<id>.json`. An `insert` that creates a new id refuses it,
+  inside and outside transactions, with a `DataAccessException` (`DATA_ENTITY_INVALID`) that names the id, if the id:
+  - is empty, or contains `/`, `\`, NUL or another control character (U+0000 to U+001F, U+007F);
+  - is `.` or `..`, or ends in a dot or a space;
+  - is a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, in any letter case),
+    with or without an extension: `con.txt` is refused too, because the part before the first dot is checked;
+  - makes a file name `<id>.json` longer than 255 bytes in UTF-8;
+  - names a file the server's own file system cannot name. On Windows that is an id containing `<`, `>`, `:`, `"`,
+    `|`, `?` or `*`. Linux accepts these, so UltiRemoteBag's `<player uuid>:<page>` ids keep working there.
+
+  Every rule but the last holds on every operating system; the last is the file system's own. A refused insert
+  does not mark its transaction rollback-only. An `insert` of an id that already has an entry changes nothing and
+  is never refused, and a file that already exists is never renamed or rewritten because of these rules: it keeps
+  loading, and updates and deletes of its id keep working. In 6.2.5 an id with `/` or `\` was written to a
+  sub-path and read back as a corrupt entry, and on Windows an id with `:` was accepted and then failed every
+  flush. If a flush meets an id the file system cannot name, it fails with an error naming the table and the id
+  and writes nothing; if a start-up recovery meets one in a journal record (a record copied from Linux to
+  Windows, for example), it refuses that plugin's JSON data with an error naming the record, the table and the id,
+  changes no file, and is handled like a damaged record (see the next item).
 - **A damaged journal record.** If a committed journal record is found damaged at start-up, that plugin's JSON
   data stays closed: its data operations fail with an error naming the file, until the server operator moves the
   file out of the journal folder. The framework never deletes, skips or applies the damaged record. Other plugins
@@ -2616,6 +2632,9 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   above).
 - A joined `@Transactional` method's accepted failure marks the whole transaction rollback-only (see above and the
   linked subsection).
+- Use ids made of lowercase letters, digits, `-` and `_`; a UUID string always works. On Windows, ids containing
+  `<`, `>`, `:`, `"`, `|`, `?` or `*` are refused at insert. Two ids that differ only in letter case name the
+  same file on a case-insensitive file system (Windows, and macOS by default) and overwrite each other there.
 - Map each `@Table` value to one entity class. Two entity classes of one plugin that declare the same `@Table`
   value get two separate caches and two table locks that do not exclude each other, as in 6.2.5, so their writes
   are not ordered against each other and the guarantees above do not hold between them.
@@ -2657,6 +2676,11 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - Known limitation: a file system that lets the server open a directory but refuses to force it makes every flush
   of the plugin fail; the journal grows and, after a restart, the plugin's data stays closed until recovery can
   succeed. No common setup is known to do this (ext4, xfs, NFS, NTFS and APFS are fine).
+- A JSON data folder whose ids contain `<`, `>`, `:`, `"`, `|`, `?` or `*` (UltiRemoteBag's edit claims use `:`)
+  cannot be copied from Linux to Windows: Windows cannot create those files. Data whose ids differ only in letter
+  case cannot be moved to Windows or to a default macOS volume either: the files collide. If a journal record
+  holding such an id reaches a Windows server, start-up keeps that plugin's JSON data closed and names the record:
+  apply it on the Linux server that wrote it, or move it out of the journal folder and lose its changes.
 
 中文补充：JSON 事务（6.3.0）——暂存、原子、持久。在 `datasource.type: json` 下，`DataOperator#transaction(...)` 的保证变得更强，
 `@Transactional` 也像在 SQLite、MySQL 上一样生效。事务调用不会被拒绝：6.2.5 中调用 JSON `transaction(...)` 的模块无需修改；特别是，读写同一张表的两个 `transaction(...)` 回调
@@ -2710,8 +2734,21 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   `SUPPORTS`、`MANDATORY`）抛出其 `rollbackFor`/`noRollbackFor` 规则认可的异常时，即使调用方捕获了该异常，整个事务也被标记为仅回滚，
   最外层提交随后回滚并抛出 `UnexpectedRollbackException`；规则不认可的异常不会使事务无法提交。详见下一小节。
 - **钩子。** `onCreate`、`onUpdate`、`onDelete` 在调用发生时触发，而不是在提交时。
-- **实体 id。** 无法作为 `<id>.json` 文件名的 id（空串，或含 `/`、`\`、NUL）在 `insert` 时被拒绝，抛出 `DataAccessException`
-  （`DATA_ENTITY_INVALID`），事务内外都一样。6.2.5 会把这样的 id 写进子路径，读回时成为损坏的条目。
+- **实体 id 即文件名。** 每个实体存为 `<id>.json`。`insert` 创建新 id 时，若该 id 符合下列任一情况，就抛出指明该 id 的
+  `DataAccessException`（`DATA_ENTITY_INVALID`）予以拒绝，事务内外都一样：
+  - 为空串，或含 `/`、`\`、NUL 或其他控制字符（U+0000 至 U+001F、U+007F）；
+  - 是 `.` 或 `..`，或以点或空格结尾；
+  - 是 Windows 设备名（`CON`、`PRN`、`AUX`、`NUL`、`COM1` 至 `COM9`、`LPT1` 至 `LPT9`，不分大小写），无论带不带扩展名：
+    `con.txt` 也会被拒绝，因为检查的是第一个点之前的部分；
+  - 使文件名 `<id>.json` 的 UTF-8 长度超过 255 字节；
+  - 指向服务器自身文件系统无法命名的文件。在 Windows 上即含 `<`、`>`、`:`、`"`、`|`、`?` 或 `*` 的 id；Linux 接受这些字符，所以
+    UltiRemoteBag 的 `<玩家 uuid>:<页码>` id 在 Linux 上照常可用。
+
+  除最后一条由文件系统自己决定外，其余规则在所有操作系统上都一样。被拒绝的插入不会把事务标记为只能回滚。插入一个已有条目的 id
+  不做任何改动，也永远不会被拒绝；已存在的文件也绝不会因这些规则被改名或重写：它照常加载，对该 id 的更新和删除照常可用。6.2.5 会把
+  含 `/` 或 `\` 的 id 写进子路径，读回时成为损坏的条目；在 Windows 上含 `:` 的 id 会被接受，之后每次刷新都失败。刷新若遇到文件系统
+  无法命名的 id，会以指明表和 id 的错误失败，且不写入任何东西；启动恢复若在日志记录中遇到这样的 id（例如从 Linux 复制到 Windows 的
+  记录），会以指明该记录、表和 id 的错误拒绝打开该插件的 JSON 数据，不改动任何文件，处理方式与损坏的记录相同（见下一条）。
 - **日志记录损坏。** 启动时若发现已提交的日志记录损坏，该插件的 JSON 数据保持关闭：数据操作会失败，错误信息指明该文件，直到服主把该文件
   移出日志文件夹。框架不会删除、跳过或应用损坏的记录，其他插件不受影响。在加载时就获取数据操作器的模块（所有官方模块都是如此）
   会在那次启动时被拒绝加载，所以把文件移走后需要重启服务器；只有在加载完成之后才首次请求数据的插件，会在下一次请求时再次执行恢复，
@@ -2732,6 +2769,8 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   `DataOperator#transaction(...)` 中不会。
 - 同一线程上的 `REQUIRES_NEW` 或 `NOT_SUPPORTED` 方法不会等待其调用方的表锁（见上）。
 - 加入方方法被规则认可的失败会把整个事务标记为仅回滚（见上与下一小节）。
+- id 请只用小写字母、数字、`-` 和 `_`；UUID 字符串总是可用。在 Windows 上，含 `<`、`>`、`:`、`"`、`|`、`?` 或 `*` 的 id 会在插入时
+  被拒绝。只有大小写不同的两个 id，在不区分大小写的文件系统（Windows，以及默认设置的 macOS）上指向同一个文件，会互相覆盖。
 - 一个 `@Table` 值只对应一个实体类。同一插件的两个实体类若声明了相同的 `@Table` 值，会得到两份独立的缓存和两把互不排斥的表锁
   （与 6.2.5 相同），它们的写入彼此没有先后保证，上述各项保证在它们之间都不成立。
 - 每个插件的 JSON 表旁边多了一个隐藏的 `.ultitools-journal` 文件夹。服务器中是 `plugins/UltiTools/data/<插件名>/.ultitools-journal`；
@@ -2758,6 +2797,10 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   服务器日志里。日志的删除在 Windows 上不会重试，被占用的文件会使那次刷新失败，下一次刷新再试。
 - 已知限制：若某文件系统允许服务器打开目录却拒绝强制其落盘，该插件的每次刷新都会失败，日志不断增长，重启后在恢复成功之前该插件的数据保持关闭。
   没有已知的常见环境如此（ext4、xfs、NFS、NTFS、APFS 都没问题）。
+- id 中含 `<`、`>`、`:`、`"`、`|`、`?` 或 `*` 的 JSON 数据文件夹（UltiRemoteBag 的编辑占用记录使用 `:`）无法从 Linux 复制到
+  Windows：Windows 无法创建这些文件。id 只有大小写不同的数据也无法迁移到 Windows 或默认设置的 macOS 卷：文件会互相冲突。若含这类 id
+  的日志记录到了 Windows 服务器上，启动时该插件的 JSON 数据会保持关闭，错误信息指明该记录：请在写下它的 Linux 服务器上应用它，或把它
+  移出日志文件夹并放弃其中的改动。
 
 ### A failing joined `@Transactional` method rolls back the whole transaction (6.3.0) — changed without a migration period
 

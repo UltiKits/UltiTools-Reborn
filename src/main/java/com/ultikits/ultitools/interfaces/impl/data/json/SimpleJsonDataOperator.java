@@ -675,6 +675,18 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         return slice;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The entity is stored as {@code <id>.json}. An insert of an id no entry has yet refuses, with
+     * a {@link DataAccessException} ({@code DATA_ENTITY_INVALID}) naming the id, an id that cannot
+     * name a portable file: a Windows device name with or without an extension, a trailing dot or
+     * space, {@code .} or {@code ..}, a control character, a path separator, a file name longer than
+     * 255 UTF-8 bytes, or a name this server's file system rejects (on Windows,
+     * {@code < > : " | ? *}); see {@code JsonFileNames}. An insert of an id that already has an
+     * entry changes nothing and is never refused, so a file whose name these rules would refuse
+     * keeps working. A refusal does not mark the transaction rollback-only.
+     */
     @Override
     public void insert(T obj) {
         write(transaction -> {
