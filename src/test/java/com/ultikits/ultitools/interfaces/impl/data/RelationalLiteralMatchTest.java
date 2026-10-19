@@ -68,7 +68,9 @@ class RelationalLiteralMatchTest {
     /** Every row the matrix stores, by label. Ids are always assigned by the operator. */
     static final List<String> FIXTURE = Collections.unmodifiableList(Arrays.asList(
             "world", "world_", "worldX", "world_1", "x21", "100%", "100X", "%", "_", "a!b", "aXb",
-            "a\\b", "plain", "nullable"));
+            "a\\b", "plain", "nullable",
+            // Back-to-back escape characters (#675 review IN-05): each must be escaped on its own.
+            "a!!b", "x!%y", "%_z"));
 
     /** The comparisons the matrix walks; the last two are controls (several matches, none). */
     static final List<Case> CASES = Collections.unmodifiableList(Arrays.asList(
@@ -82,6 +84,9 @@ class RelationalLiteralMatchTest {
             new Case(Comparison.INCLUDE, "a\\b"),
             new Case(Comparison.ENDSWITH, "_1"),
             new Case(Comparison.STARTSWITH, "%"),
+            new Case(Comparison.INCLUDE, "!!"),
+            new Case(Comparison.INCLUDE, "!%"),
+            new Case(Comparison.INCLUDE, "%_"),
             new Case(Comparison.INCLUDE, "orld"),
             new Case(Comparison.INCLUDE, "zzz")));
 
@@ -243,7 +248,7 @@ class RelationalLiteralMatchTest {
                             .isNotEmpty();
                 }
             }
-            softly.assertThat(wildcardCases).as("cases holding % or _").isEqualTo(6);
+            softly.assertThat(wildcardCases).as("cases holding % or _").isEqualTo(8);
             softly.assertThat(literalMatches(new Case(Comparison.INCLUDE, "orld"))).as("control orld").hasSize(4);
             softly.assertThat(literalMatches(new Case(Comparison.INCLUDE, "zzz"))).as("control zzz").isEmpty();
         });

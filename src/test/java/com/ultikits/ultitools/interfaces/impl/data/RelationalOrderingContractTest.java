@@ -5,6 +5,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.MathContext;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -82,7 +84,14 @@ class RelationalOrderingContractTest {
             new Values(9, TWO_TO_53 + 1, -0.75, -0.75f, "9"),
             new Values(-5, -(TWO_TO_53 + 1), -5.0, -5.0f, "-5"),
             new Values(0, 9223372036854775806L, 0.0, 0.0f, "0"),
-            new Values(-1, -2L, 0.125, 0.125f, "-1")));
+            new Values(-1, -2L, 0.125, 0.125f, "-1"),
+            // Floats with no exact binary form (#675 review WR-01): SQLite keeps 15 significant digits
+            // of the double a Float is bound as, which lands below 0.1f and 3.3f and above 1.1f and
+            // 20.2f. 20.2f is the largest weight, so "weight GREATER 20.2f" has no exact match.
+            new Values(-3, 3L, 0.1, 0.1f, "-3"),
+            new Values(-4, 4L, 1.1, 1.1f, "-4"),
+            new Values(-6, 6L, 3.3, 3.3f, "-6"),
+            new Values(-7, 7L, 20.2, 20.2f, "-7")));
 
     /** The GREATER and LESS conditions the matrix walks, each threshold of the field's own Java type. */
     static final List<Cond> CONDITIONS = Collections.unmodifiableList(Arrays.asList(
@@ -99,7 +108,11 @@ class RelationalOrderingContractTest {
             new Cond("ratio", Comparison.GREATER, 0.0),
             new Cond("weight", Comparison.GREATER, 0.25f),
             new Cond("weight", Comparison.GREATER, 2.0f),
-            new Cond("weight", Comparison.LESS, 0.0f)));
+            new Cond("weight", Comparison.LESS, 0.0f),
+            new Cond("weight", Comparison.LESS, 0.1f),
+            new Cond("weight", Comparison.GREATER, 1.1f),
+            new Cond("weight", Comparison.LESS, 3.3f),
+            new Cond("weight", Comparison.GREATER, 20.2f)));
 
     static final List<String> NUMERIC_FIELDS = Collections.unmodifiableList(
             Arrays.asList("level", "stamp", "ratio", "weight"));
@@ -368,6 +381,33 @@ class RelationalOrderingContractTest {
         return matches;
     }
 
+    /**
+     * The defect's reading on SQLite (#675 review WR-01): the stored side is the 15-significant-digit
+     * text SQLite keeps for the double a {@code Float} is bound as, the threshold side that double itself.
+     */
+    static Set<String> fifteenDigitMatches(Cond cond) {
+        Set<String> matches = new LinkedHashSet<>();
+        for (Values values : FIXTURE) {
+            double stored = ((Number) values.get(cond.field)).doubleValue();
+            double kept = new BigDecimal(stored).round(new MathContext(15)).doubleValue();
+            if (cond.holds(Double.compare(kept, ((Number) cond.threshold).doubleValue()))) {
+                matches.add(values.code);
+            }
+        }
+        return matches;
+    }
+
+    /** The weight conditions whose exact set differs from the 15-digit reading. */
+    static List<Cond> weightConditionsWhereFifteenDigitsDiffer() {
+        List<Cond> conds = new ArrayList<>();
+        for (Cond cond : CONDITIONS) {
+            if ("weight".equals(cond.field) && !exactMatches(cond).equals(fifteenDigitMatches(cond))) {
+                conds.add(cond);
+            }
+        }
+        return conds;
+    }
+
     /** The fixture codes not in {@code matches}. */
     static Set<String> nonMatches(Set<String> matches) {
         Set<String> rest = new LinkedHashSet<>();
@@ -409,6 +449,19 @@ class RelationalOrderingContractTest {
                     .containsExactlyInAnyOrderElementsOf(NUMERIC_FIELDS);
             softly.assertThat(stampConditionsWherePrecisionMatters())
                     .as("stamp conditions whose exact set differs from the double-precision set").isNotEmpty();
+            List<Cond> floatBoundaries = weightConditionsWhereFifteenDigitsDiffer();
+            softly.assertThat(floatBoundaries).as("weight conditions a 15-digit reading gets wrong").hasSize(4);
+            boolean someGreater = false;
+            boolean someLess = false;
+            boolean someWithoutExactMatch = false;
+            for (Cond cond : floatBoundaries) {
+                someGreater |= cond.comparison == Comparison.GREATER;
+                someLess |= cond.comparison == Comparison.LESS;
+                someWithoutExactMatch |= exactMatches(cond).isEmpty();
+            }
+            softly.assertThat(someGreater && someLess).as("15-digit boundary cases in both directions").isTrue();
+            softly.assertThat(someWithoutExactMatch).as("a 15-digit boundary case with no exact match (negative exist)")
+                    .isTrue();
             boolean someEmpty = false;
             boolean someNonEmpty = false;
             for (Cond cond : CONDITIONS) {
@@ -671,6 +724,40 @@ class RelationalOrderingContractTest {
         @Override
         boolean exactOnDefaultColumns() {
             return true;
+        }
+
+        /**
+         * A {@code double} keeps the bound value on the parameter side (#675 review IN-04 and WR-01):
+         * SQLite stores a double needing 16 or 17 significant digits with 15 in a default column, and
+         * the entity reads back that 15-digit value, so GREATER and LESS compare the threshold with
+         * what reads back. Rendering the parameter through text as well would make 1/3.0 compare as
+         * equal to a row that reads back below it.
+         */
+        @Test
+        @DisplayName("A double field compares the threshold with the value it reads back")
+        void doubleFieldComparesTheValueItReadsBack() {
+            OrderingRow row = new OrderingRow();
+            row.apply(new Values(1, 1L, 1 / 3.0, 0.5f, "third"));
+            row.setMarker("initial");
+            operator().insert(row);
+            OrderingRow stored = operator().getAll().get(0);
+            double readBack = stored.getRatio();
+
+            List<String> lessThanWritten = codesOf(operator().getAll(condition("ratio", Comparison.LESS, 1 / 3.0)));
+            List<String> lessThanReadBack = codesOf(operator().getAll(condition("ratio", Comparison.LESS, readBack)));
+            List<String> greaterThanReadBack = codesOf(operator().getAll(
+                    condition("ratio", Comparison.GREATER, readBack)));
+            stored.setMarker("changed");
+            boolean applied = operator().updateIf(stored, condition("ratio", Comparison.LESS, readBack));
+
+            assertSoftly(softly -> {
+                softly.assertThat(readBack).as("1/3.0 as it reads back from a default column").isEqualTo(0.333333333333333);
+                softly.assertThat(lessThanWritten).as("ratio LESS 1/3.0 (Java: %s < %s)", readBack, 1 / 3.0)
+                        .containsExactly(Double.compare(readBack, 1 / 3.0) < 0 ? "third" : "none");
+                softly.assertThat(lessThanReadBack).as("ratio LESS its own read-back value").isEmpty();
+                softly.assertThat(greaterThanReadBack).as("ratio GREATER its own read-back value").isEmpty();
+                softly.assertThat(applied).as("updateIf ratio LESS its own read-back value").isFalse();
+            });
         }
 
         @Test
