@@ -43,6 +43,12 @@ import org.jetbrains.annotations.ApiStatus;
  * included, before it creates singletons. Between two {@code @Bean} products the order is still
  * the discovery order: one product that needs another product declared later is a documented
  * limitation of {@code registerSingleton} (WR-02), unchanged here.
+ * <p>
+ * A configuration class that fails to link while the assembly phase creates it (a
+ * {@link LinkageError}: a failing static initializer, a {@code @Bean} signature naming a class of a
+ * missing optional plugin) is skipped exactly like a class that fails to load during discovery: a
+ * {@code WARNING} naming it, and the class counted in the package's one {@code SEVERE} summary,
+ * which is therefore emitted after the assembly phase. The rest of the module still loads.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // IoC container invokes @Bean factory methods -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
@@ -64,11 +70,27 @@ public class ComponentScanner {
      */
     public void scanPackages(String... basePackages) {
         List<Class<?>> configurationClasses = new ArrayList<>();
-        for (String basePackage : basePackages) {
-            discoverPackage(basePackage, configurationClasses);
-        }
-        for (Class<?> configurationClass : configurationClasses) {
-            registerConfiguration(configurationClass);
+        // The package each configuration class was discovered in, by index: its diagnostics name.
+        List<String> configurationPackages = new ArrayList<>();
+        List<String> discovered = new ArrayList<>();
+        try {
+            for (String basePackage : basePackages) {
+                discovered.add(basePackage);
+                discoverPackage(basePackage, configurationClasses);
+                while (configurationPackages.size() < configurationClasses.size()) {
+                    configurationPackages.add(basePackage);
+                }
+            }
+            for (int i = 0; i < configurationClasses.size(); i++) {
+                assembleConfiguration(configurationClasses.get(i), configurationPackages.get(i));
+            }
+        } finally {
+            // D-19: one SEVERE summary per requested package, if (and only if) a class of it was
+            // skipped, in discovery or in assembly. A healthy scan never invokes the emitter at
+            // all -- see ModuleScanDiagnostics' own class javadoc.
+            for (String basePackage : discovered) {
+                ModuleScanDiagnostics.emitSummary(basePackage);
+            }
         }
     }
 
@@ -121,12 +143,9 @@ public class ComponentScanner {
             // failure - logged at WARNING and never forwarded to the UltiPanel dashboard
             // (D-24).
             LOGGER.log(Level.WARNING, "Failed to scan package: " + basePackage, e);
-        } finally {
-            // D-19: one SEVERE summary for this basePackage's scan, if (and only if) either
-            // catch block below recorded a skipped class into the accumulator. A healthy scan
-            // never invokes the emitter at all -- see ModuleScanDiagnostics' own class javadoc.
-            ModuleScanDiagnostics.emitSummary(basePackage);
         }
+        // The D-19 summary for this package is emitted by scanPackages, after the assembly phase,
+        // so a configuration class skipped there is counted in the same one summary.
     }
 
     /**
@@ -159,7 +178,7 @@ public class ComponentScanner {
                         // class behaves identically on both scan modes. D-19 escalates the
                         // diagnostics without overturning D-25/D-26's skip-and-continue: the
                         // WARNING stays exactly as it was, and this class is also accumulated so
-                        // discoverPackage's finally block can emit one loud, named summary for the
+                        // scanPackages' finally block can emit one loud, named summary for the
                         // whole module once its scan finishes.
                         ModuleScanDiagnostics.recordSkippedClass(basePackage, className, e);
                         LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
@@ -182,7 +201,7 @@ public class ComponentScanner {
      * @param moduleName  the D-19 diagnostic identifier for this scan -- fixed at the original
      *                    {@code basePackage} for the whole recursion, deliberately NOT the
      *                    per-recursion {@code packageName} above, so a class three subdirectories
-     *                    deep is still attributed to the same module {@code discoverPackage}'s
+     *                    deep is still attributed to the same module {@code scanPackages}'
      *                    {@code finally} block will emit a summary for
      * @param configurationClasses collects the configuration classes found, in discovery order
      */
@@ -353,6 +372,25 @@ public class ComponentScanner {
         } catch (Exception e) {
             // A registration failure, not a skip - reported to the panel (D-24).
             LOGGER.log(Level.SEVERE, "Failed to register component: " + clazz.getName(), e);
+        }
+    }
+
+    /**
+     * The assembly phase for one configuration class: {@link #registerConfiguration(Class)}, with
+     * the per-class isolation the discovery walk gives a class that fails to load (D-25, D-26). A
+     * {@link LinkageError} skips this class only: the same {@code WARNING}, and the class recorded
+     * for its package's D-19 summary. Any other failure keeps its existing handling.
+     *
+     * @param configurationClass the configuration class to create
+     * @param basePackage        the requested package it was discovered in
+     */
+    private void assembleConfiguration(Class<?> configurationClass, String basePackage) {
+        try {
+            registerConfiguration(configurationClass);
+        } catch (LinkageError e) {
+            String className = configurationClass.getName();
+            ModuleScanDiagnostics.recordSkippedClass(basePackage, className, e);
+            LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
         }
     }
 
