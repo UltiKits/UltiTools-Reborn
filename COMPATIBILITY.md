@@ -22,7 +22,7 @@ explains it; the sections below are the reference and stay authoritative where t
 11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
 12. Keep the framework out of your JAR, and if your module uses XSeries declare it yourself as `provided`/`compileOnly` (`com.github.cryptomorin:XSeries:13.7.1` or your own pin): the framework no longer shades it but still delivers it at runtime through its `libraries:` block, and Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
 13. Know the framework's own server requirements: Paper 1.19.2 build 163 or newer, Java 17 below Paper 1.20.5 and Java 21 from it; the UltiKits modules state only the UltiTools-API version they support (6.3.0 or later for `api-version: 630`) (see [Support matrix](#support-matrix)).
-14. If your module uses `DataOperator#transaction(...)` or `@Transactional` on JSON storage, or relies on a failing joined `@Transactional` method or a failing nested `DataOperator#transaction(...)` scope being survivable, review the transaction changes: on `datasource.type: json` transactions are now staged, atomic across a plugin's tables and durable once `commit` returns; a plain JSON write can wait up to 5 seconds for a transaction's table lock; code that computes a write from a value it read uses `updateIf` or `@Transactional(isolation = Isolation.REPEATABLE_READ)`; and on every backend a failing joined method or nested scope marks the whole transaction rollback-only, so the outermost commit throws `UnexpectedRollbackException` (see [JSON transactions](#json-transactions-630--staged-atomic-and-durable), [A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) and [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)). If you also run the server, read the operator guidance in the JSON transactions section: back up `.ultitools-journal` with the tables, never delete it, and run one server per data folder.
+14. If your module uses `DataOperator#transaction(...)` or `@Transactional` on JSON storage, or relies on a failing joined `@Transactional` method or a failing nested `DataOperator#transaction(...)` scope being survivable, review the transaction changes: on `datasource.type: json` transactions are now staged, atomic across a plugin's tables and durable once `commit` returns; a plain JSON write can wait up to 5 seconds for a transaction's table lock; a transaction begun by `DataOperator#transaction(...)` locks each table at its first read, as 6.2.5 ran each callback alone per operator, so a read inside it can wait up to 5 seconds too; a `@Transactional` method that computes a write from a value it read uses `updateIf` or `@Transactional(isolation = Isolation.REPEATABLE_READ)`; and on every backend a failing joined method or nested scope marks the whole transaction rollback-only, so the outermost commit throws `UnexpectedRollbackException` (see [JSON transactions](#json-transactions-630--staged-atomic-and-durable), [A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) and [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)). If you also run the server, read the operator guidance in the JSON transactions section: back up `.ultitools-journal` with the tables, never delete it, and run one server per data folder.
 
 ### 中文补充：模块从 6.2.5 升级到 6.3.0 的检查清单
 
@@ -41,7 +41,7 @@ explains it; the sections below are the reference and stay authoritative where t
 11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
 12. 不要把框架打进自己的 JAR；模块用到 XSeries 时请自行以 `provided`/`compileOnly` 声明（`com.github.cryptomorin:XSeries:13.7.1` 或你自己固定的版本）：框架不再内嵌它，但仍通过自己的 `libraries:` 在运行时提供，Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
 13. 了解框架本身的服务器要求：Paper 1.19.2 build 163 或更新，Paper 1.20.5 以下用 Java 17，1.20.5 起用 Java 21；UltiKits 官方模块只写明它们支持的 UltiTools-API 版本（`api-version: 630` 即 6.3.0 或更高）（见 [Support matrix](#support-matrix)）。
-14. 如果模块在 JSON 存储上使用 `DataOperator#transaction(...)` 或 `@Transactional`，或者依赖“失败的加入方 `@Transactional` 方法 / 失败的嵌套 `DataOperator#transaction(...)` 作用域可以被调用方承受”，请检查事务相关的变化：`datasource.type: json` 下的事务现在是暂存的、跨同一插件各表原子的，并且在 `commit` 返回后即持久；普通 JSON 写入可能为等待事务的表锁而停顿最多 5 秒；凭读到的值计算写入的代码应使用 `updateIf` 或 `@Transactional(isolation = Isolation.REPEATABLE_READ)`；在所有后端上，失败的加入方方法或嵌套作用域都会把整个事务标记为仅回滚，最外层提交会抛出 `UnexpectedRollbackException`（见 [JSON transactions](#json-transactions-630--staged-atomic-and-durable)、[A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) 和 [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)）。如果你同时运营服务器，请阅读 JSON 事务一节中的服主须知：把 `.ultitools-journal` 与各表一起备份、永远不要删除它，并且一个数据文件夹只运行一个服务器。
+14. 如果模块在 JSON 存储上使用 `DataOperator#transaction(...)` 或 `@Transactional`，或者依赖“失败的加入方 `@Transactional` 方法 / 失败的嵌套 `DataOperator#transaction(...)` 作用域可以被调用方承受”，请检查事务相关的变化：`datasource.type: json` 下的事务现在是暂存的、跨同一插件各表原子的，并且在 `commit` 返回后即持久；普通 JSON 写入可能为等待事务的表锁而停顿最多 5 秒；由 `DataOperator#transaction(...)` 开启的事务在第一次读取某张表时就锁住它（与 6.2.5 中每个回调按操作器逐个运行一致），所以其中的读取也可能停顿最多 5 秒；凭读到的值计算写入的 `@Transactional` 方法应使用 `updateIf` 或 `@Transactional(isolation = Isolation.REPEATABLE_READ)`；在所有后端上，失败的加入方方法或嵌套作用域都会把整个事务标记为仅回滚，最外层提交会抛出 `UnexpectedRollbackException`（见 [JSON transactions](#json-transactions-630--staged-atomic-and-durable)、[A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) 和 [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)）。如果你同时运营服务器，请阅读 JSON 事务一节中的服主须知：把 `.ultitools-journal` 与各表一起备份、永远不要删除它，并且一个数据文件夹只运行一个服务器。
 
 ## Config layer (6.3.0)
 
@@ -2503,8 +2503,10 @@ Each corrects a declared behaviour the framework did not deliver. The panel prot
 ### JSON transactions (6.3.0) — staged, atomic and durable
 
 This changes what `DataOperator#transaction(...)` guarantees when `datasource.type` is `json`, and makes
-`@Transactional` work on that backend as it does on SQLite and MySQL. Nothing is refused: a module that
-called JSON `transaction(...)` in 6.2.5 keeps working unchanged, with stronger guarantees. It is a change in
+`@Transactional` work on that backend as it does on SQLite and MySQL. No transaction call is refused: a module that
+called JSON `transaction(...)` in 6.2.5 keeps working unchanged, with stronger guarantees; in particular two
+`transaction(...)` callbacks that read and write the same table still run one after the other, as in 6.2.5 (see
+"`transaction(...)` locks a table at its first read" below). It is a change in
 what other threads can see and in when data reaches the disk, made in 6.3.0 without the two-step migration
 period by the maintainer's decision of 2026-10-18. In this section a *table* is one entity type of one plugin:
 one `@Table`, one folder of `<id>.json` files.
@@ -2537,16 +2539,27 @@ one `@Table`, one folder of `<id>.json` files.
   nothing and forces nothing. The qualifications for Windows and macOS are under "Durability by platform" below.
 - **Table write locks.** The first write to a table inside a transaction locks that table against other writers
   until the transaction ends, so no other write overwrites the transaction's uncommitted change or slips between
-  its writes. A read at the default isolation never waits for a table lock.
-- **Read-modify-write needs `updateIf` or a stricter isolation.** At the default isolation two transactions can
-  both read the same value, and the second then writes a value computed from what it read before the first
+  its writes. A read in a `@Transactional` transaction at the default isolation never waits for a table lock.
+- **`transaction(...)` locks a table at its first read.** A transaction begun by `DataOperator#transaction(...)`
+  (either overload) locks each table at its first read or write, as `REPEATABLE_READ` does, and holds the lock
+  until it ends. Two `transaction(...)` callbacks that read and then write one table therefore run one after the
+  other, as in 6.2.5, where each callback held its operator's lock, and a read-modify-write inside one cannot lose
+  an update. The cost is the one 6.2.5 also had: a read inside `transaction(...)` can wait for another transaction
+  that holds the table, at most 5 seconds (bounded as a write is, below; 6.2.5's lock waited without a bound).
+  A `transaction(...)` that joins an active transaction (a `@Transactional` method, or an outer
+  `transaction(...)`) keeps that transaction's isolation, as a joined scope does in Spring: inside a
+  `@Transactional` method at the default isolation its reads take no table lock. `@Transactional` at the default
+  isolation does not lock at the first read.
+- **In `@Transactional`, read-modify-write needs `updateIf` or a stricter isolation.** At the default isolation two
+  `@Transactional` transactions can both read the same value, and the second then writes a value computed from what it read before the first
   committed: that lost update is not prevented. Code that computes a write from a value it read uses
   `DataOperator#updateIf` (the check and the write run together under the table lock) or
   `@Transactional(isolation = Isolation.REPEATABLE_READ)` or `Isolation.SERIALIZABLE`, which lock the table at
-  the first read.
-- **Bounded waits.** A write that meets a locked table waits at most 5 seconds, or until the transaction's
+  the first read, as `DataOperator#transaction(...)` does.
+- **Bounded waits.** A write, or a read that locks the table at its first read, that meets a locked table waits at most 5 seconds, or until the transaction's
   `@Transactional(timeout = ...)` deadline if that comes sooner, and then fails with a `DataAccessException`
-  whose message starts `JSON write failed with a lock-wait timeout`; the write is not applied. A wait that would
+  whose message starts `JSON write failed with a lock-wait timeout` (the same text for a waiting read); the call
+  is not applied. A wait that would
   complete a cycle (each of two transactions waiting for the other) fails the call that closes the cycle at once,
   with a message starting `JSON write failed with a deadlock`. Either failure marks its transaction rollback-only
   before the exception is thrown, so catching the exception does not save the transaction: its outermost commit
@@ -2595,8 +2608,10 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   `UnexpectedRollbackException`.
 - A commit that changed something writes and forces one journal record before it returns, so it waits for the
   disk on the committing thread, which is often the server's main thread.
-- Read-modify-write code uses `updateIf` or `REPEATABLE_READ` (see above); at the default isolation it can lose
-  an update.
+- A read inside `DataOperator#transaction(...)` can wait for another transaction's table lock, for at most 5
+  seconds, as a 6.2.5 `transaction(...)` callback waited for its operator's lock.
+- In a `@Transactional` method, read-modify-write code uses `updateIf` or `REPEATABLE_READ` (see above); at the
+  default isolation it can lose an update. Inside `DataOperator#transaction(...)` it cannot.
 - A `REQUIRES_NEW` or `NOT_SUPPORTED` method on the same thread does not wait for its caller's table locks (see
   above).
 - A joined `@Transactional` method's accepted failure marks the whole transaction rollback-only (see above and the
@@ -2644,7 +2659,8 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   succeed. No common setup is known to do this (ext4, xfs, NFS, NTFS and APFS are fine).
 
 中文补充：JSON 事务（6.3.0）——暂存、原子、持久。在 `datasource.type: json` 下，`DataOperator#transaction(...)` 的保证变得更强，
-`@Transactional` 也像在 SQLite、MySQL 上一样生效。没有任何东西被拒绝：6.2.5 中调用 JSON `transaction(...)` 的模块无需修改。
+`@Transactional` 也像在 SQLite、MySQL 上一样生效。事务调用不会被拒绝：6.2.5 中调用 JSON `transaction(...)` 的模块无需修改；特别是，读写同一张表的两个 `transaction(...)` 回调
+仍然一个接一个地运行，与 6.2.5 相同（见下文“`transaction(...)` 在第一次读取时锁表”）。
 这是 6.3.0 中不设两步迁移期的改动（维护者 2026-10-18 决定）。本节中的“表”指一个插件的一种实体类型，即一个 `@Table`、一个存放
 `<id>.json` 文件的文件夹。
 
@@ -2668,12 +2684,18 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - **`commit` 返回即持久。** `commit` 返回之前，记录该事务全部改动的日志记录已写入并强制落盘，下次启动时重放。什么都没改的事务不写任何
   东西，也不强制任何落盘。Windows 和 macOS 上的限定条件见下文“按平台的持久性”。
 - **表写锁。** 事务内对某张表的第一次写入会锁住该表，其他写入者要等到事务结束，所以别人不会覆盖事务未提交的改动，也不会插入事务的两次
-  写入之间。默认隔离级别下的读取从不等待表锁。
-- **“先读后写”需要 `updateIf` 或更严格的隔离级别。** 默认隔离级别下，两个事务可以读到同一个值，后者再按读到的旧值算出新值写入：这种
+  写入之间。默认隔离级别的 `@Transactional` 事务中的读取从不等待表锁。
+- **`transaction(...)` 在第一次读取时锁表。** 由 `DataOperator#transaction(...)`（两个重载都是）开启的事务，在第一次读取或写入
+  某张表时就锁住它（与 `REPEATABLE_READ` 相同），直到事务结束。因此读写同一张表的两个 `transaction(...)` 回调一个接一个地运行，
+  与 6.2.5 相同（6.2.5 中每个回调持有其操作器的锁），其中的“先读后写”不会丢失更新。代价也与 6.2.5 相同：`transaction(...)` 中的
+  读取可能等待持有该表的另一个事务，最多 5 秒（与写入一样有上限，见下；6.2.5 的锁等待没有上限）。加入活动事务的 `transaction(...)`
+  （在 `@Transactional` 方法或外层 `transaction(...)` 中调用）沿用该事务的隔离级别，与 Spring 中加入现有事务的作用域相同：在默认
+  隔离级别的 `@Transactional` 方法中，它的读取不加表锁。默认隔离级别的 `@Transactional` 不在第一次读取时锁表。
+- **在 `@Transactional` 中，“先读后写”需要 `updateIf` 或更严格的隔离级别。** 默认隔离级别下，两个 `@Transactional` 事务可以读到同一个值，后者再按读到的旧值算出新值写入：这种
   丢失更新不会被阻止。凭读到的值计算写入的代码应使用 `DataOperator#updateIf`（检查与写入在表锁下一起完成），或
-  `@Transactional(isolation = Isolation.REPEATABLE_READ)` / `Isolation.SERIALIZABLE`，它们在第一次读取时就锁表。
-- **有上限的等待。** 写入遇到被锁的表，最多等待 5 秒，或者等到事务的 `@Transactional(timeout = ...)` 截止时间（如果更早），然后抛出
-  `DataAccessException`，消息以 `JSON write failed with a lock-wait timeout` 开头，该写入不生效。若这次等待会形成环（两个事务互相等待），
+  `@Transactional(isolation = Isolation.REPEATABLE_READ)` / `Isolation.SERIALIZABLE`，它们像 `DataOperator#transaction(...)` 一样在第一次读取时就锁表。
+- **有上限的等待。** 写入（或在第一次读取时锁表的读取）遇到被锁的表，最多等待 5 秒，或者等到事务的 `@Transactional(timeout = ...)` 截止时间（如果更早），然后抛出
+  `DataAccessException`，消息以 `JSON write failed with a lock-wait timeout` 开头（等待中的读取也是这段文字），该调用不生效。若这次等待会形成环（两个事务互相等待），
   闭环的那次调用立即失败，消息以 `JSON write failed with a deadlock` 开头。这两种失败都会在抛出异常之前把所在事务标记为只能回滚，
   因此捕获该异常并不能挽救事务：最外层提交会回滚该事务写入的全部内容，并抛出 `UnexpectedRollbackException`。该事务持有的表锁保留到它结束为止。
   事务外的普通写入遵循同一等待规则；这样的写入失败时只是失败。
@@ -2705,7 +2727,9 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - 事务可能因锁等待超时或死锁而失败并回滚，框架不会重试。在事务内捕获该错误并不能挽救事务：提交会回滚并抛出
   `UnexpectedRollbackException`。
 - 改动了数据的提交会在返回前写入并强制落盘一条日志记录，即在提交线程（常常是服务器主线程）上等待磁盘。
-- “先读后写”的代码使用 `updateIf` 或 `REPEATABLE_READ`（见上）；默认隔离级别下它可能丢失更新。
+- `DataOperator#transaction(...)` 中的读取可能等待另一个事务的表锁，最多 5 秒，与 6.2.5 中 `transaction(...)` 回调等待其操作器的锁相同。
+- 在 `@Transactional` 方法中，“先读后写”的代码使用 `updateIf` 或 `REPEATABLE_READ`（见上）；默认隔离级别下它可能丢失更新。在
+  `DataOperator#transaction(...)` 中不会。
 - 同一线程上的 `REQUIRES_NEW` 或 `NOT_SUPPORTED` 方法不会等待其调用方的表锁（见上）。
 - 加入方方法被规则认可的失败会把整个事务标记为仅回滚（见上与下一小节）。
 - 一个 `@Table` 值只对应一个实体类。同一插件的两个实体类若声明了相同的 `@Table` 值，会得到两份独立的缓存和两把互不排斥的表锁
