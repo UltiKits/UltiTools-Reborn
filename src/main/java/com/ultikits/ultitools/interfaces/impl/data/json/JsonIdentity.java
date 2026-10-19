@@ -165,8 +165,10 @@ public final class JsonIdentity {
      * so the next call runs recovery again.
      *
      * @throws DataAccessException naming the file if a committed record is damaged
-     *                             ({@code DATA_INTEGRITY_VIOLATION}, question 8 option A), or
-     *                             {@code DATA_PERSISTENCE_FAILED} if a journal or table file cannot
+     *                             ({@code DATA_INTEGRITY_VIOLATION}, question 8 option A), naming the
+     *                             file, table and id if a committed record holds an id this file
+     *                             system cannot name ({@code DATA_PERSISTENCE_FAILED}, question 12
+     *                             option A), or {@code DATA_PERSISTENCE_FAILED} if a journal or table file cannot
      *                             be read, written or deleted, or a table or journal directory
      *                             cannot be forced to disk; either way the identity stays closed
      *                             and the next request runs recovery again

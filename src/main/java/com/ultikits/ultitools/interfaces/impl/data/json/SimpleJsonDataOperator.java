@@ -7,6 +7,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -422,6 +423,25 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     }
 
     /**
+     * Refuses a new id whose file {@code <id>.json} the insert must not create (question 12 A of
+     * the Phase 20.4 decisions): a Windows device name with or without an extension, a trailing
+     * dot or space, {@code .} or {@code ..}, a control character, a path separator, a file name
+     * longer than 255 UTF-8 bytes, or a name this server's file system rejects (on Windows,
+     * {@code < > : " | ? *}). See {@link JsonFileNames}. Called only for a key the insert creates,
+     * so an existing file whose name these rules would refuse keeps working.
+     */
+    private void requireCreatableKey(Object key) {
+        String id = String.valueOf(key);
+        String refusal = JsonFileNames.creationRefusal(Paths.get(storeLocation), id);
+        if (refusal != null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to insert into JSON table '" + tableName() + "' an entity whose id cannot name its file:"
+                            + " id '" + JsonFileNames.shown(id) + "': " + refusal + ". Use ids made of lowercase letters,"
+                            + " digits, '-' and '_'; a UUID string always works.");
+        }
+    }
+
+    /**
      * Builds the "SQL column name -&gt; Java field name" mapping from the entity class's
      * {@code @Column} annotations. Collected along the inheritance chain, so the
      * {@code @Column("id")} inherited from {@code BaseDataEntity} is included too.
@@ -684,6 +704,15 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         T stored = detach(obj);
         Object key = obj.getId();
         requireStorableKey(key);
+        // Put-if-absent against what the caller sees (inside a transaction, a key it has staged a
+        // delete for is free again, so a delete followed by an insert of the same id stages the
+        // new entry). This table's write lock is held, so no other writer can create or remove
+        // the key between this check and the put below. Only a key this insert creates must meet
+        // the file name rules; an existing one keeps its file.
+        boolean exists = readVisible(current -> mergedGet(current, key)) != null;
+        if (!exists) {
+            requireCreatableKey(key);
+        }
         if (transaction == null) {
             publishPlainWrite(() -> {
                 if (cache.putIfAbsent(key, stored) == null) {
@@ -693,9 +722,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             });
             return;
         }
-        // Put-if-absent against what this transaction sees: a key it has staged a delete for is
-        // free again, so a delete followed by an insert of the same id stages the new entry.
-        if (readVisible(current -> mergedGet(current, key)) == null) {
+        if (!exists) {
             transaction.overlayForWrite(this).put(key, stored);
         }
     }

@@ -11,6 +11,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
@@ -339,8 +340,14 @@ final class JsonJournal {
      * before any table file or record is changed. The record is never deleted, skipped or applied:
      * recovery keeps refusing until the server operator moves the file out of the journal
      * directory, and then applies the remaining records.
+     * <p>
+     * A committed record holding an id this server's file system cannot name (a JSON data folder
+     * copied from Linux to Windows with an id containing {@code :}, for example) is refused the same
+     * way, before any table file or record is changed, with an error naming the record, the table and
+     * the id (question 12 A of the Phase 20.4 decisions).
      *
-     * @throws DataAccessException if a committed record is damaged; the message names the file
+     * @throws DataAccessException if a committed record is damaged, or holds an id this file system
+     *                             cannot name; the message names the file
      * @throws IOException         if a file cannot be read, written, moved or deleted, or a
      *                             directory cannot be forced to disk
      */
@@ -351,8 +358,9 @@ final class JsonJournal {
         deleteTemporaries();
         fire(RECOVERY_TEMPS_DELETED);
         List<Record> records = listCommitted();
+        requireNameable(records);
         for (int i = 0; i < records.size(); i++) {
-            writeEntityFiles(PHASE_RECOVERY, records.get(i).entries());
+            writeEntityFiles(PHASE_RECOVERY, records.get(i).entries(), records.get(i).file());
             if (i < records.size() - 1) {
                 fire(RECOVERY_BETWEEN_RECORDS);
             }
@@ -396,12 +404,23 @@ final class JsonJournal {
      *
      * @param sequence K, from {@link #nextSequence()}
      * @param entries  the captured after-images and deletes
-     * @throws IOException if a record or entity file cannot be written, moved or deleted, or a
-     *                     directory cannot be forced to disk
+     * @throws IOException if an entry's id names a file this file system cannot name (checked
+     *                     before record K is written, so nothing is written), a record or entity
+     *                     file cannot be written, moved or deleted, or a directory cannot be forced
+     *                     to disk
      */
     void checkpoint(long sequence, List<Entry> entries) throws IOException {
+        for (Entry entry : entries) {
+            try {
+                entityFileOf(entry);
+            } catch (InvalidPathException invalid) {
+                throw new IOException("The checkpoint cannot write the entry of " + unnameable(entry, invalid)
+                        + "; no checkpoint record was written.", invalid);
+            }
+        }
         writeRecord(sequence, Kind.CHECKPOINT, entries);
-        writeEntityFiles(PHASE_CHECKPOINT, entries);
+        writeEntityFiles(PHASE_CHECKPOINT, entries,
+                directory.resolve(recordFileName(sequence, COMMITTED_SUFFIX)));
         List<RecordFile> older = new ArrayList<>();
         RecordFile own = null;
         for (RecordFile file : listRecordFiles()) {
@@ -445,17 +464,26 @@ final class JsonJournal {
      * failure to force one propagates, after the files are in place, so the caller deletes no
      * journal record. No file other than {@code <key>.json} is ever created in a table directory.
      *
-     * @param phase   {@link #PHASE_RECOVERY} or {@link #PHASE_CHECKPOINT}; prefixes the steps
-     * @param entries the changes to apply
-     * @throws IOException if a file cannot be written, moved or deleted, or a table directory
-     *                     cannot be forced to disk
+     * @param phase      {@link #PHASE_RECOVERY} or {@link #PHASE_CHECKPOINT}; prefixes the steps
+     * @param entries    the changes to apply
+     * @param recordFile the committed record the entries come from, named in a failure
+     * @throws IOException if an entry's id names a file this file system cannot name (named with
+     *                     the record, the table and the id; never an unchecked
+     *                     {@link InvalidPathException}), a file cannot be written, moved or
+     *                     deleted, or a table directory cannot be forced to disk
      */
-    void writeEntityFiles(String phase, List<Entry> entries) throws IOException {
+    void writeEntityFiles(String phase, List<Entry> entries, Path recordFile) throws IOException {
         Set<Path> touched = new LinkedHashSet<>();
         for (int i = 0; i < entries.size(); i++) {
             Entry entry = entries.get(i);
-            Path tableDirectory = identityRoot.resolve(entry.table());
-            Path target = JsonFileNames.entityFile(tableDirectory, entry.key());
+            Path target;
+            try {
+                target = entityFileOf(entry);
+            } catch (InvalidPathException invalid) {
+                throw new IOException("The JSON journal record " + recordFile.toAbsolutePath()
+                        + " holds the entry of " + unnameable(entry, invalid) + ".", invalid);
+            }
+            Path tableDirectory = target.getParent();
             if (entry.isDelete()) {
                 Files.deleteIfExists(target);
             } else {
@@ -493,6 +521,44 @@ final class JsonJournal {
     }
 
     // ===== Internals =====
+
+    /**
+     * The entity file {@code <identity root>/<table>/<key>.json} of {@code entry}.
+     *
+     * @throws InvalidPathException if this file system cannot name it
+     */
+    private Path entityFileOf(Entry entry) {
+        return JsonFileNames.entityFile(identityRoot.resolve(entry.table()), entry.key());
+    }
+
+    /** Names {@code entry}'s table and id for a message about a file name this file system rejects. */
+    private static String unnameable(Entry entry, InvalidPathException invalid) {
+        return "table '" + entry.table() + "', id '" + JsonFileNames.shown(entry.key())
+                + "': this server's file system cannot name its file (" + invalid.getMessage() + ")";
+    }
+
+    /**
+     * Refuses recovery, before any file changes, if a committed record holds an id this file
+     * system cannot name: the same remedy as a damaged record, so the error names the record and
+     * where to move it.
+     */
+    private void requireNameable(List<Record> records) {
+        for (Record record : records) {
+            for (Entry entry : record.entries()) {
+                try {
+                    entityFileOf(entry);
+                } catch (InvalidPathException invalid) {
+                    throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED,
+                            "The JSON journal record " + record.file().toAbsolutePath() + " cannot be applied on this"
+                                    + " server: it holds the entry of " + unnameable(entry, invalid) + ". No table file"
+                                    + " was changed. This plugin's JSON data stays closed until the file is moved out of "
+                                    + directory.toAbsolutePath() + "; that record's changes are then lost, as for a"
+                                    + " damaged record. To keep them, apply the record on a server whose file system"
+                                    + " can name the file, such as the one that wrote it.", invalid);
+                }
+            }
+        }
+    }
 
     private Path writeTemporaryEntityFile(String afterImage) throws IOException {
         // Not remembered for a parent force: a temporary file only ever moves into a table
