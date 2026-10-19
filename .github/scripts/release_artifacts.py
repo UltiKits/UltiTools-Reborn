@@ -14,6 +14,16 @@ place that defines what "the same bytes" means:
   compare   classify assets already on a release (downloaded into a directory) against the
             manifest: identical, partial or absent (reconcilable) or mismatch (never replaced)
 
+Framework publication (publish-packages.yml, after a release with the retained assets is published):
+
+  repository-state  read the primary JAR and POM at their coordinate in a Maven repository (Maven Central, or
+                    GitHub Packages with a bearer token taken from an environment variable) and classify them
+                    against the manifest: absent, identical, or a refused mismatch or partial coordinate
+  central-inputs    validate the downloaded retained files, their source commit and tag and the four detached
+                    signatures, then write the private registrar list and compile the release-only Maven core
+                    extension (.github/scripts/maven) into an ephemeral helper JAR; nothing product is built
+  central-recheck   re-hash every listed file and re-verify the signatures after publication
+
 The manifest is public: it names files by basename and carries no local path, no approval
 text and no receipt. Authority stays in the separate receipts, which are never uploaded.
 
@@ -28,8 +38,10 @@ Module publication (module-release.sh, called by each module's existing publish.
   catalogue-state          observe the UltiCloud catalogue before any write
   catalogue-readback       confirm the catalogue serves the accepted bytes at level 630 after an upload
 
-Standard library only. The helper never runs a build, only runs read-only git commands and makes no network
-write; the module commands read the npm registry and the public catalogue API over https. Exit codes: 0 ok,
+Standard library only. The helper never runs a product build, only runs read-only git commands and makes no
+network write; the module commands read the npm registry and the public catalogue API over https, and
+repository-state reads Maven repositories over https. central-inputs and central-recheck run gpg --verify, and
+central-inputs compiles the small registrar source with the installed JDK's javac. Exit codes: 0 ok,
 1 refused, 2 usage error; compare uses 3 when the remote holds an identical subset that a retry may complete;
 the catalogue commands use 4 for a transport, authentication or server error, which is never evidence that
 something is absent.
@@ -41,6 +53,7 @@ import io
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -441,6 +454,20 @@ def check_source(manifest, checkout, pom_bytes, problems):
 
 # ------------------------------------------------------------------------ receipts
 
+def check_tag(manifest, tag, checkout, problems):
+    """The release tag must be v<version> and, in the checkout, name exactly the accepted source commit."""
+    if tag != "v" + manifest["version"]:
+        problems.add("tag_mismatch", "tag %r is not v%s" % (tag, manifest["version"]))
+        return
+    if not checkout:
+        problems.add("tag_unverified", "checking the tag needs --source-checkout")
+        return
+    target = git_text(Path(checkout), "rev-parse", "-q", "--verify", "refs/tags/%s^{commit}" % tag)
+    if target != manifest["source_head"]:
+        problems.add("tag_mismatch", "tag %s names %r, the accepted source is %s" % (tag, target,
+                                                                                  manifest["source_head"]))
+
+
 def find_boolean_approvals(value, where):
     found = []
     if isinstance(value, dict):
@@ -699,6 +726,13 @@ def validated(args, problems):
     manifest_sha = sha256_bytes(raw)
     if getattr(args, "source_checkout", None):
         check_source(manifest, Path(args.source_checkout), (contents or {}).get("pom"), problems)
+    expected_head = getattr(args, "expected_source_head", None)
+    if expected_head is not None and expected_head != manifest["source_head"]:
+        problems.add("source_head_mismatch", "the run is at %r, the accepted source is %s" % (
+            expected_head, manifest["source_head"]))
+    tag = getattr(args, "tag", None)
+    if tag is not None:
+        check_tag(manifest, tag, getattr(args, "source_checkout", None), problems)
     authority = getattr(args, "authority_receipt", None)
     uat = getattr(args, "uat_receipt", None)
     if authority or uat:
@@ -817,6 +851,331 @@ def cmd_compare(args):
     return {"identical": 0, "mismatch": 1}.get(status, 3)
 
 
+# ------------------------------------------------------------ framework publication
+#
+# publish-packages.yml publishes the retained, accepted files of a published release; it never builds. The
+# commands below check those files again in the credentialed job, observe the target repositories before and
+# after a write, and prepare the Central handoff: a private list of the exact files and a release-only Maven
+# core extension (.github/scripts/maven) that assigns them to the project Maven reads from the retained POM, so
+# the existing central-publishing-maven-plugin publishes those bytes and nothing a build would produce.
+
+REGISTRAR_DIR = Path(os.path.abspath(__file__)).parent / "maven"
+REGISTRAR_SOURCE = "RetainedArtifactsParticipant.java"
+REGISTRAR_DESCRIPTOR = "components.xml"
+REGISTRAR_CLASS = "com/ultikits/release/RetainedArtifactsParticipant.class"
+REGISTRAR_IMPLEMENTATION = "com.ultikits.release.RetainedArtifactsParticipant"
+REGISTRAR_FORMAT = "ultitools-retained-artifacts/1"
+REGISTRAR_FIELDS = ("role", "type", "classifier", "file", "bytes", "sha256")
+# (entry role, Maven type, classifier, manifest role of the payload, file-name suffix)
+REGISTRAR_LAYOUT = (
+    ("pom", "pom", "", "pom", ""),
+    ("primary", "jar", "", "primary", ""),
+    ("sources", "jar", "sources", "sources", ""),
+    ("javadoc", "jar", "javadoc", "javadoc", ""),
+    ("pom-signature", "pom.asc", "", "pom", ".asc"),
+    ("primary-signature", "jar.asc", "", "primary", ".asc"),
+    ("sources-signature", "jar.asc", "sources", "sources", ".asc"),
+    ("javadoc-signature", "jar.asc", "javadoc", "javadoc", ".asc"),
+)
+ARMOR_HEADER = b"-----BEGIN PGP SIGNATURE-----"
+REPOSITORY_LIMIT = 512 << 20
+SIGNATURE_FAILURES = ("BADSIG", "ERRSIG", "EXPSIG", "EXPKEYSIG", "REVKEYSIG", "NO_PUBKEY")
+
+
+def cmd_repository_state(args):
+    """Classify the primary JAR and POM at their coordinate in a Maven repository against the manifest."""
+    problems = Problems()
+    manifest, _ = load_manifest(args.manifest, problems)
+    if manifest is None:
+        problems.emit()
+        return 1
+    artifact_id = args.artifact_id
+    if artifact_id not in (manifest["artifact_id"], manifest["artifact_id"].lower()):
+        problems.add("artifact_id", "%r is neither the manifest artifactId nor its lower-case form" % artifact_id)
+    base = args.base_url.rstrip("/")
+    if not base.startswith("https://"):
+        problems.add("base_url", "the repository URL must be https")
+    authorization = None
+    if args.token_env:
+        token = os.environ.get(args.token_env, "")
+        if not token:
+            problems.add("token_missing", "the environment variable %s is empty" % args.token_env)
+        authorization = "Bearer " + token
+    if problems:
+        problems.emit()
+        return 1
+    expected = dict((a["role"], a["sha256"]) for a in manifest["artifacts"])
+    version = manifest["version"]
+    coordinate = "%s:%s:%s" % (manifest["group_id"], artifact_id, version)
+    observed = {}
+    try:
+        for role, extension in (("primary", ".jar"), ("pom", ".pom")):
+            url = "%s/%s/%s/%s/%s-%s%s" % (base, manifest["group_id"].replace(".", "/"), artifact_id, version,
+                                           artifact_id, version, extension)
+            status, body = https_get(url, REPOSITORY_LIMIT, accept="*/*", authorization=authorization)
+            if status == 404:
+                observed[role] = "absent"
+            elif status == 200:
+                observed[role] = "identical" if sha256_bytes(body) == expected[role] else "different"
+            else:
+                raise FetchError("the %s request answered HTTP %d" % (role, status))
+    except FetchError as exc:
+        sys.stderr.write("error: repository_unreadable: %s (never read as absent)\n" % exc)
+        return 4
+    states = set(observed.values())
+    if "different" in states:
+        problems.add("remote_mismatch", "%s holds bytes that differ from the accepted files; a published coordinate"
+                     " is never replaced" % coordinate)
+    elif len(states) > 1:
+        problems.add("remote_partial", "%s holds only part of the coordinate (%s)" % (
+            coordinate, ", ".join("%s %s" % item for item in sorted(observed.items()))))
+    if problems:
+        problems.emit()
+        return 1
+    print("STATE=%s" % states.pop())
+    return 0
+
+
+def check_publication_paths(inputs, work, scratch, checkout, problems):
+    """Retained inputs, helper output and publisher scratch must be disjoint, link-free and new where written."""
+    named = [("inputs", inputs), ("work", work), ("scratch", scratch)]
+    if checkout:
+        named.append(("source checkout", checkout))
+    resolved = []
+    for name, path in named:
+        absolute = os.path.abspath(str(path))
+        if os.path.realpath(absolute) != absolute:
+            problems.add("path_link", "the %s path resolves through a symbolic link" % name)
+        resolved.append((name, absolute.rstrip(os.sep) or os.sep))
+    for index, (first, a) in enumerate(resolved):
+        for second, b in resolved[index + 1:]:
+            if a == b or a.startswith(b + os.sep) or b.startswith(a + os.sep):
+                problems.add("path_overlap", "the %s and %s paths overlap; they must stay disjoint" % (first, second))
+    for name, path in (("work", work), ("scratch", scratch)):
+        if os.path.lexists(str(path)):
+            problems.add("%s_dir_exists" % name, "the %s directory must not exist yet" % name)
+        elif not os.path.isdir(os.path.dirname(os.path.abspath(str(path)))):
+            problems.add("%s_parent_missing" % name, "the parent of the %s directory must exist" % name)
+    folder = Path(os.path.abspath(str(inputs)))
+    for directory in [folder] + list(folder.parents):
+        if os.path.lexists(str(directory / ".mvn")):
+            problems.add("maven_config_dir", "a .mvn directory at or above the inputs would configure Maven")
+            break
+
+
+def check_inputs_listing(manifest, folder, problems):
+    expected = set(a["filename"] for a in manifest["artifacts"])
+    expected |= set(name + ".asc" for name in list(expected))
+    expected.add(manifest_name(manifest["artifact_id"], manifest["version"]))
+    try:
+        actual = set(os.listdir(str(folder)))
+    except OSError:
+        problems.add("inputs_unreadable", "the inputs directory cannot be listed")
+        return
+    if actual != expected:
+        problems.add("inputs_listing", "the inputs directory must hold exactly the manifest, the four retained files "
+                     "and their signatures (unexpected: %s; missing: %s)" % (
+                         ", ".join(sorted(actual - expected)) or "none", ", ".join(sorted(expected - actual)) or "none"))
+
+
+def verify_signatures(manifest, folder, gpg, problems):
+    """Verify each detached signature with gpg; return the one signing key fingerprint, or None."""
+    fingerprints = set()
+    for artifact in manifest["artifacts"]:
+        name = artifact["filename"]
+        signature = read_regular(Path(folder) / (name + ".asc"), problems, name + ".asc")
+        if signature is None:
+            continue
+        if not signature.startswith(ARMOR_HEADER):
+            problems.add("signature_format", "%s.asc is not an ASCII-armoured detached signature" % name)
+            continue
+        try:
+            proc = subprocess.run([gpg, "--batch", "--no-tty", "--status-fd", "1", "--verify",
+                                   str(Path(folder) / (name + ".asc")), str(Path(folder) / name)],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError:
+            problems.add("gpg_unavailable", "gpg cannot be run")
+            return None
+        status = [line.split() for line in proc.stdout.decode("utf-8", "replace").splitlines()
+                  if line.startswith("[GNUPG:] ")]
+        words = [fields[1] for fields in status if len(fields) > 1]
+        valid = [fields for fields in status if len(fields) > 2 and fields[1] == "VALIDSIG"]
+        if proc.returncode != 0 or "GOODSIG" not in words or any(w in SIGNATURE_FAILURES for w in words) \
+                or len(valid) != 1:
+            problems.add("signature_invalid", "%s.asc does not verify as one good signature over %s" % (name, name))
+            continue
+        fingerprints.add(valid[0][-1].upper())
+    if len(fingerprints) > 1:
+        problems.add("signature_signer", "the detached signatures were made by different keys")
+        return None
+    return fingerprints.pop() if fingerprints else None
+
+
+def registrar_entries(manifest, folder):
+    """The eight registrar entries in order: (role, type, classifier, absolute path)."""
+    names = payload_names(manifest["artifact_id"], manifest["version"])
+    return [(role, kind, classifier, os.path.join(os.path.abspath(str(folder)), names[payload] + suffix))
+            for role, kind, classifier, payload, suffix in REGISTRAR_LAYOUT]
+
+
+def check_descriptor(data, problems):
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        problems.add("registrar_descriptor", "components.xml does not parse")
+        return
+    components = root.findall("components/component")
+    if b"<!DOCTYPE" in data or len(components) != 1 \
+            or components[0].findtext("role") != "org.apache.maven.AbstractMavenLifecycleParticipant" \
+            or components[0].findtext("role-hint") != "retained-artifacts" \
+            or components[0].findtext("implementation") != REGISTRAR_IMPLEMENTATION:
+        problems.add("registrar_descriptor", "components.xml must declare exactly the retained-artifacts participant")
+
+
+def build_registrar_jar(work, lib, problems):
+    """Compile only the registrar source against the active Maven distribution and package the helper JAR."""
+    source = REGISTRAR_DIR / REGISTRAR_SOURCE
+    descriptor = read_regular(REGISTRAR_DIR / REGISTRAR_DESCRIPTOR, problems, "registrar descriptor")
+    if read_regular(source, problems, "registrar source") is None or descriptor is None:
+        return None
+    check_descriptor(descriptor, problems)
+    java_home = os.environ.get("JAVA_HOME")
+    javac = os.path.join(java_home, "bin", "javac") if java_home else None
+    if not javac or not os.path.isfile(javac):
+        javac = shutil.which("javac")
+    if not javac:
+        problems.add("javac_missing", "the installed JDK's javac is required to compile the registrar")
+    if problems:
+        return None
+    classes = Path(work) / "classes"
+    os.mkdir(str(classes), 0o700)
+    proc = subprocess.run([javac, "--release", "8", "-proc:none", "-implicit:none", "-encoding", "UTF-8", "-nowarn",
+                           "-Xlint:-options", "-cp", os.path.join(str(lib), "*"), "-d", str(classes), str(source)],
+                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if proc.returncode != 0:
+        problems.add("registrar_compile", proc.stdout.decode("utf-8", "replace").strip()[-2000:])
+        return None
+    compiled = sorted(str(p.relative_to(classes)).replace(os.sep, "/") for p in classes.rglob("*") if p.is_file())
+    if compiled != [REGISTRAR_CLASS]:
+        problems.add("registrar_compile", "expected exactly %s, got %s" % (REGISTRAR_CLASS, compiled))
+        return None
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in (("META-INF/plexus/components.xml", descriptor),
+                           (REGISTRAR_CLASS, (classes / REGISTRAR_CLASS).read_bytes())):
+            archive.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), data)
+    jar = Path(work) / "retained-artifacts-helper.jar"
+    write_private(jar, buffer.getvalue())
+    return jar
+
+
+def write_private(path, data):
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def cmd_central_inputs(args):
+    """Validate the downloaded retained files and signatures, then write the registrar list and helper JAR."""
+    problems = Problems()
+    manifest, _ = validated(args, problems)
+    if manifest is None:
+        problems.emit()
+        return 1
+    folder = Path(os.path.abspath(args.manifest)).parent
+    work, scratch = Path(os.path.abspath(args.work_dir)), Path(os.path.abspath(args.scratch_dir))
+    check_inputs_listing(manifest, folder, problems)
+    check_publication_paths(folder, work, scratch, args.source_checkout, problems)
+    lib = Path(args.maven_home) / "lib" if args.maven_home else None
+    if lib is None or not lib.is_dir() or not list(lib.glob("maven-core*.jar")):
+        problems.add("maven_home", "--maven-home must name the active Maven distribution (lib/maven-core*.jar)")
+    fingerprint = verify_signatures(manifest, folder, args.gpg, problems)
+    entries = registrar_entries(manifest, folder)
+    for _, _, _, path in entries + [("", "", "", str(work)), ("", "", "", str(scratch))]:
+        if any(ord(c) < 0x21 or ord(c) > 0x7e for c in path) or "\\" in path:
+            problems.add("path_format", "paths handed to Maven must be printable ASCII without spaces or backslashes")
+            break
+    if problems or fingerprint is None:
+        if not problems:
+            problems.add("signature_invalid", "no detached signature verified")
+        problems.emit()
+        return 1
+    lines = ["# Written by release_artifacts.py central-inputs for RetainedArtifactsParticipant; private, never uploaded.",
+             "format=" + REGISTRAR_FORMAT, "group_id=" + manifest["group_id"], "artifact_id=" + manifest["artifact_id"],
+             "version=" + manifest["version"], "packaging=jar", "count=%d" % len(entries)]
+    for index, (role, kind, classifier, path) in enumerate(entries, 1):
+        data = read_regular(path, problems, os.path.basename(path))
+        if data is None:
+            break
+        values = (role, kind, classifier, path, str(len(data)), sha256_bytes(data))
+        lines += ["artifact.%d.%s=%s" % (index, field, value) for field, value in zip(REGISTRAR_FIELDS, values)]
+    if problems:
+        problems.emit()
+        return 1
+    os.mkdir(str(work), 0o700)
+    os.mkdir(str(scratch), 0o700)
+    properties = work / "registrar.properties"
+    write_private(properties, ("\n".join(lines) + "\n").encode("ascii"))
+    jar = build_registrar_jar(work, lib, problems)
+    if jar is None:
+        problems.emit()
+        return 1
+    fields = (("RETAINED_POM", entries[0][3]), ("PROPERTIES", str(properties)), ("HELPER_JAR", str(jar)),
+              ("HELPER_JAR_SHA256", sha256_bytes(jar.read_bytes())), ("STAGING_DIR", str(scratch / "staging")),
+              ("DEFERRED_DIR", str(scratch / "deferred")), ("OUTPUT_DIR", str(scratch / "output")),
+              ("SIGNER_FINGERPRINT", fingerprint), ("VERSION", manifest["version"]))
+    if args.shell:
+        emit_kv(fields)
+    else:
+        print(json.dumps(dict(fields), sort_keys=True))
+    return 0
+
+
+def cmd_central_recheck(args):
+    """After publication: every listed file is unchanged and every signature still verifies."""
+    problems = Problems()
+    manifest, _ = validated(args, problems)
+    if manifest is None:
+        problems.emit()
+        return 1
+    folder = Path(os.path.abspath(args.manifest)).parent
+    raw = read_regular(args.properties, problems, "registrar list")
+    listed = {}
+    for line in (raw or b"").decode("ascii", "replace").splitlines():
+        if line and not line.startswith("#"):
+            key, _, value = line.partition("=")
+            listed[key] = value
+    entries = registrar_entries(manifest, folder)
+    accepted = dict((a["role"], a["sha256"]) for a in manifest["artifacts"])
+    for index, (role, kind, classifier, path) in enumerate(entries, 1):
+        prefix = "artifact.%d." % index
+        if (listed.get(prefix + "role"), listed.get(prefix + "type"), listed.get(prefix + "classifier"),
+                listed.get(prefix + "file")) != (role, kind, classifier, path):
+            problems.add("registrar_list", "entry %d does not name %s" % (index, os.path.basename(path)))
+            continue
+        data = read_regular(path, problems, os.path.basename(path))
+        if data is None:
+            continue
+        if str(len(data)) != listed.get(prefix + "bytes"):
+            problems.add("bytes_mismatch", "%s changed size after it was listed" % os.path.basename(path))
+        if sha256_bytes(data) != listed.get(prefix + "sha256"):
+            problems.add("sha256_mismatch", "%s changed after it was listed" % os.path.basename(path))
+        payload = REGISTRAR_LAYOUT[index - 1]
+        if not payload[4] and listed.get(prefix + "sha256") != accepted.get(payload[3]):
+            problems.add("sha256_mismatch", "the listed %s digest is not the accepted one" % role)
+    verify_signatures(manifest, folder, args.gpg, problems)
+    if problems:
+        problems.emit()
+        return 1
+    print("RECHECK=ok")
+    return 0
+
+
 # ------------------------------------------------------------- module publication
 #
 # The commands below serve module-release.sh, the shared adapter every module's existing publish.yml calls on
@@ -889,12 +1248,17 @@ def package_metadata_sha256(doc):
     return hashlib.sha256(canonical_json(package_metadata_projection(doc)).encode("ascii")).hexdigest()
 
 
-def https_get(url, limit):
-    """GET over https; return (status, body). 4xx statuses are returned; transport errors raise FetchError."""
+def https_get(url, limit, accept="application/json", authorization=None):
+    """GET over https; return (status, body). 4xx statuses are returned; transport errors raise FetchError.
+
+    An authorization value is sent as an unredirected header: urllib does not copy it to a redirect target, so
+    a token for one host is never handed to the storage host a repository redirects a download to.
+    """
     if not url.startswith("https://"):
         raise FetchError("refusing a non-https URL")
-    request = urllib.request.Request(url, headers={"User-Agent": "ultitools-module-release",
-                                                   "Accept": "application/json"})
+    request = urllib.request.Request(url, headers={"User-Agent": "ultitools-module-release", "Accept": accept})
+    if authorization:
+        request.add_unredirected_header("Authorization", authorization)
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             final = response.geturl() if hasattr(response, "geturl") else url
@@ -1304,6 +1668,8 @@ def main(argv=None):
     validate.add_argument("--source-checkout")
     validate.add_argument("--authority-receipt")
     validate.add_argument("--uat-receipt")
+    validate.add_argument("--expected-source-head", help="the commit the run is at (GITHUB_SHA)")
+    validate.add_argument("--tag", help="the release tag; must be v<version> naming the accepted source")
     validate.add_argument("--shell", action="store_true", help="print KEY=VALUE lines of validated fields")
     stage = sub.add_parser("stage", help="print the retained files to upload, in manifest order")
     stage.add_argument("--manifest", required=True)
@@ -1312,6 +1678,25 @@ def main(argv=None):
     compare.add_argument("--remote-dir", required=True)
     compare.add_argument("--release-json", help="output of gh release view --json tagName,targetCommitish,isDraft,assets")
     compare.add_argument("--shell", action="store_true", help="print STATUS, DRAFT and MISSING lines")
+    repo_state = sub.add_parser("repository-state", help="classify the coordinate in a Maven repository")
+    repo_state.add_argument("--manifest", required=True)
+    repo_state.add_argument("--base-url", required=True)
+    repo_state.add_argument("--artifact-id", required=True)
+    repo_state.add_argument("--token-env", help="name of the environment variable holding a bearer token")
+    central = sub.add_parser("central-inputs", help="validate retained files and signatures; prepare the registrar")
+    central.add_argument("--manifest", required=True)
+    central.add_argument("--source-checkout", required=True)
+    central.add_argument("--expected-source-head", required=True)
+    central.add_argument("--tag", required=True)
+    central.add_argument("--maven-home", required=True)
+    central.add_argument("--work-dir", required=True)
+    central.add_argument("--scratch-dir", required=True)
+    central.add_argument("--gpg", default="gpg")
+    central.add_argument("--shell", action="store_true", help="print KEY=VALUE lines")
+    recheck = sub.add_parser("central-recheck", help="re-hash the listed files and re-verify the signatures")
+    recheck.add_argument("--manifest", required=True)
+    recheck.add_argument("--properties", required=True)
+    recheck.add_argument("--gpg", default="gpg")
     dispatch = sub.add_parser("dispatch-inputs", help="workflow_dispatch input checks for module publication")
     dispatch_sub = dispatch.add_subparsers(dest="action")
     verify = dispatch_sub.add_parser("verify", help="check GITHUB_EVENT_PATH inputs and the runner identity")
@@ -1355,6 +1740,8 @@ def main(argv=None):
     cat_back.add_argument("--no-level-before", required=True)
     args = parser.parse_args(argv)
     handlers = {"retain": cmd_retain, "validate": cmd_validate, "stage": cmd_stage, "compare": cmd_compare,
+                "repository-state": cmd_repository_state, "central-inputs": cmd_central_inputs,
+                "central-recheck": cmd_central_recheck,
                 "module-release-state": cmd_module_release_state, "module-verify-assets": cmd_module_verify_assets,
                 "module-ref-sha": cmd_module_ref_sha, "catalogue-state": cmd_catalogue_state,
                 "catalogue-readback": cmd_catalogue_readback}

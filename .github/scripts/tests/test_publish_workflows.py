@@ -517,21 +517,68 @@ def plugin_file(extension):
         artifact, version, extension))
 
 
+POM_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
+
+
+def repository_file(group, artifact, version, extension):
+    return local_repository().joinpath(*group.split(".")) / artifact / version / ("%s-%s.%s" % (
+        artifact, version, extension))
+
+
+def pom_model(group, artifact, version, depth=0):
+    """(properties, dependencies) of a POM in the local repository, with parent properties merged."""
+    path = repository_file(group, artifact, version, "pom")
+    if depth > 6 or not path.is_file():
+        return {}, []
+    root = ET.fromstring(path.read_bytes())
+    properties = {}
+    parent = root.find("m:parent", POM_NS)
+    if parent is not None:
+        properties.update(pom_model(parent.findtext("m:groupId", "", POM_NS).strip(),
+                                    parent.findtext("m:artifactId", "", POM_NS).strip(),
+                                    parent.findtext("m:version", "", POM_NS).strip(), depth + 1)[0])
+    project_version = (root.findtext("m:version", "", POM_NS) or version).strip()
+    properties.update({"project.version": project_version, "project.parent.version": version})
+    declared = root.find("m:properties", POM_NS)
+    for node in (list(declared) if declared is not None else []):
+        properties[node.tag.split("}", 1)[-1]] = (node.text or "").strip()
+    return properties, root.findall("m:dependencies/m:dependency", POM_NS)
+
+
+def expand(value, properties):
+    for _ in range(10):
+        match = re.search(r"\$\{([^}]+)\}", value)
+        if not match or match.group(1) not in properties:
+            break
+        value = value.replace(match.group(0), properties[match.group(1)])
+    return value
+
+
 def plugin_runtime_jars():
-    """The plugin JAR plus each of its directly declared compile/runtime dependencies found locally."""
-    jars = [plugin_file("jar")]
-    root = ET.fromstring(plugin_file("pom").read_bytes())
-    ns = {"m": "http://maven.apache.org/POM/4.0.0"}
-    for dep in root.findall("m:dependencies/m:dependency", ns):
-        scope = (dep.findtext("m:scope", "", ns) or "compile").strip()
-        version = (dep.findtext("m:version", "", ns) or "").strip()
-        if scope not in ("compile", "runtime") or not version or "$" in version:
-            continue
-        group = dep.findtext("m:groupId", "", ns).strip()
-        artifact = dep.findtext("m:artifactId", "", ns).strip()
-        jar = local_repository().joinpath(*group.split(".")) / artifact / version / ("%s-%s.jar" % (artifact, version))
-        if jar.is_file():
-            jars.append(jar)
+    """The plugin JAR plus its compile/runtime dependencies two levels deep, as far as the local repository
+    holds them. Maven itself puts the plugin's whole runtime closure into the plugin realm; the probe only
+    approximates that closure for its classpath and fails loudly if a class it needs is absent."""
+    jars, seen = [plugin_file("jar")], set()
+    frontier = [PLUGIN_COORDS]
+    for _ in range(2):
+        following = []
+        for group, artifact, version in frontier:
+            properties, dependencies = pom_model(group, artifact, version)
+            for dep in dependencies:
+                scope = (dep.findtext("m:scope", "", POM_NS) or "compile").strip()
+                if scope not in ("compile", "runtime") or (dep.findtext("m:optional", "", POM_NS) or "").strip() == "true":
+                    continue
+                coords = (expand(dep.findtext("m:groupId", "", POM_NS).strip(), properties),
+                          expand(dep.findtext("m:artifactId", "", POM_NS).strip(), properties),
+                          expand((dep.findtext("m:version", "", POM_NS) or "").strip(), properties))
+                if not coords[2] or "$" in "".join(coords) or coords[:2] in seen:
+                    continue
+                seen.add(coords[:2])
+                jar = repository_file(coords[0], coords[1], coords[2], "jar")
+                if jar.is_file():
+                    jars.append(jar)
+                    following.append(coords)
+        frontier = following
     return jars
 
 
@@ -1383,7 +1430,11 @@ class ActualCentralHandoffTests(unittest.TestCase):
         add("missing-key", missing, pom, "properties_keys")
         other_version = case / "props-version"
         other_version.write_text(good.replace("version=%s\n" % VERSION, "version=6.3.1\n"), encoding="ascii")
-        add("version", other_version, pom, "properties_identity")
+        add("other-version", other_version, pom, "project_identity")
+        snapshot_list = case / "props-snapshot"
+        snapshot_list.write_text(good.replace("version=%s\n" % VERSION, "version=%s-SNAPSHOT\n" % VERSION),
+                                 encoding="ascii")
+        add("snapshot-list", snapshot_list, pom, "properties_identity")
         elsewhere = case / "elsewhere"
         elsewhere.mkdir()
         shutil.copyfile(str(inputs / LAYOUT[7][3]), str(elsewhere / LAYOUT[7][3]))
@@ -1401,7 +1452,7 @@ class ActualCentralHandoffTests(unittest.TestCase):
         (snapshot_dir / PAYLOADS["pom"]).write_bytes(Path(pom).read_bytes().replace(
             ("<version>%s</version>" % VERSION).encode(), ("<version>%s-SNAPSHOT</version>" % VERSION).encode(), 1))
         add("snapshot-project", values["PROPERTIES"], snapshot_dir / PAYLOADS["pom"], "project_identity")
-        linked = case / "props-link"
+        linked = case / "list-link"
         os.symlink(values["PROPERTIES"], str(linked))
         add("linked-list", linked, pom, "properties_file")
         add("control-valid", values["PROPERTIES"], pom, None)
@@ -1650,6 +1701,15 @@ runpy.run_path(args[0], run_name="__main__")
 FORBIDDEN_GOALS = ("clean", "compile", "package", "verify", "install", "deploy", "versions:set", "test")
 
 
+def assert_private_agent(env):
+    """Refuse to run workflow steps whose gpg would reach the real user's agent or keyring."""
+    real = subprocess.run(["gpgconf", "--list-dirs", "agent-socket"], stdout=subprocess.PIPE).stdout.strip()
+    fixture = subprocess.run(["gpgconf", "--list-dirs", "agent-socket"], env=env, stdout=subprocess.PIPE).stdout.strip()
+    home = subprocess.run(["gpgconf", "--list-dirs", "homedir"], env=env, stdout=subprocess.PIPE).stdout.strip()
+    if not fixture or fixture == real or not home.decode().startswith(env["GNUPGHOME"]):
+        raise AssertionError("refusing to run: the fixture's gpg would use the real agent or keyring")
+
+
 class PublishWorkflowFixture(object):
     """One release event: the accepted checkout, a release carrying the five retained assets, a fake GitHub
     Packages store and a fake Maven Central, and fresh runner directories for each job."""
@@ -1673,17 +1733,21 @@ class PublishWorkflowFixture(object):
             make_executable(self.root / "bin" / name, text)
         self.settings = self.root / "empty-settings.xml"
         self.settings.write_text("<settings/>\n", encoding="ascii")
-        gnupg = self.root / "home" / ".gnupg"
-        shutil.copytree(str(release.gnupg), str(gnupg), ignore=shutil.ignore_patterns("S.*", "*.lock"))
-        os.chmod(str(gnupg), 0o700)
+        # The key setup-java would import from the secret: a throwaway key in this runner's own keyring.
+        # GNUPGHOME must differ from $HOME/.gnupg: GnuPG treats $HOME/.gnupg as the default home and would
+        # talk to the real user's agent socket. The guard refuses to run if that ever happens.
+        self.gnupg = self.root / "gnupg"
+        make_key(self.gnupg, ReleaseFixture.SIGNER)
+        (self.root / "home" / ".gnupg").mkdir(mode=0o700)
         self.head = release.head
         self.vars = {"PUBLISH_TO_CENTRAL": "true"}
         self.extra_env = {}
+        assert_private_agent(self.env(self.root / "runners"))
 
     def env(self, runner):
         env = {"PATH": "%s:%s" % (self.root / "bin", os.environ.get("PATH", "/usr/bin:/bin")),
-               "HOME": str(self.root / "home"), "LANG": "C.UTF-8", "GIT_CONFIG_NOSYSTEM": "1",
-               "GITHUB_WORKSPACE": str(self.release.checkout), "GITHUB_SHA": self.head,
+               "HOME": str(self.root / "home"), "GNUPGHOME": str(self.root / "gnupg"), "LANG": "C.UTF-8",
+               "GIT_CONFIG_NOSYSTEM": "1", "GITHUB_WORKSPACE": str(self.release.checkout), "GITHUB_SHA": self.head,
                "GITHUB_REF": "refs/tags/" + TAG, "GITHUB_REF_NAME": TAG, "GITHUB_EVENT_NAME": "release",
                "GITHUB_REPOSITORY": "UltiKits/UltiTools-Reborn", "GITHUB_ACTOR": "fixture-actor",
                "RUNNER_TEMP": str(runner), "FAKE_LOG": str(self.log), "FAKE_STATE": str(self.state),
@@ -1747,7 +1811,12 @@ class PublishWorkflowTests(unittest.TestCase):
         self.fixture = PublishWorkflowFixture(self.release, tempfile.mkdtemp(prefix="wf-", dir=self.tmp))
 
     def tearDown(self):
-        kill_agent(self.fixture.root / "home" / ".gnupg")
+        kill_agent(self.fixture.gnupg)
+
+    @staticmethod
+    def failed_step(result):
+        failed = [name for name, outcome, _ in result.steps if outcome == "failure"]
+        return failed[0] if len(failed) == 1 else failed
 
     def retained_digest(self, name):
         return sha256_file(self.release.retained / name)
@@ -1811,7 +1880,7 @@ class PublishWorkflowTests(unittest.TestCase):
         for name in PAYLOADS.values():
             self.assertEqual(expected[name], self.retained_digest(name))
             self.assertEqual(sha256_file(gh_inputs / name), self.retained_digest(name))
-        verify = subprocess.run([REAL_GPG, "--homedir", str(self.fixture.root / "home" / ".gnupg"), "--batch",
+        verify = subprocess.run([REAL_GPG, "--homedir", str(self.fixture.gnupg), "--batch",
                                  "--verify", str(central_inputs / (PAYLOADS["primary"] + ".asc")),
                                  str(central_inputs / PAYLOADS["primary"])], stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
@@ -1843,17 +1912,20 @@ class PublishWorkflowTests(unittest.TestCase):
                 for job in ("publish-github", "publish-central"):
                     result = fixture.run(job)
                     self.assertEqual(result.status, "failure", result.log)
+                    self.assertEqual(self.failed_step(result), "📥 Download and verify the retained release files",
+                                     result.log)
                 self.assertEqual(fixture.mvn_goal_calls("deploy:deploy-file"), [])
                 self.assertEqual(fixture.entries("real-mvn"), [])
                 self.assertFalse((fixture.state / "ghp").exists())
                 self.assert_no_lifecycle_build()
-                kill_agent(fixture.root / "home" / ".gnupg")
+                kill_agent(fixture.gnupg)
 
     def test_source_head_mismatch_blocks_both_jobs(self):
         self.fixture.head = self.release.base_head
         for job in ("publish-github", "publish-central"):
             result = self.fixture.run(job)
             self.assertEqual(result.status, "failure", result.log)
+            self.assertEqual(self.failed_step(result), "📥 Download and verify the retained release files")
             self.assertIn("source_head_mismatch", result.log)
         self.assertEqual(self.fixture.mvn_goal_calls("deploy:deploy-file"), [])
         self.assertEqual(self.fixture.entries("real-mvn"), [])
@@ -1884,29 +1956,29 @@ class PublishWorkflowTests(unittest.TestCase):
             self.assertIn("remote_", result.log)
         self.assertEqual(different.mvn_goal_calls("deploy:deploy-file"), [])
         self.assertEqual(different.entries("real-mvn"), [])
-        kill_agent(different.root / "home" / ".gnupg")
+        kill_agent(different.gnupg)
 
         outage = PublishWorkflowFixture(self.release, tempfile.mkdtemp(prefix="wf-outage", dir=self.tmp))
         outage.extra_env["FAKE_CENTRAL_STATUS"] = "503"
         result = outage.run("publish-central")
         self.assertEqual(result.status, "failure", result.log)
         self.assertEqual(outage.entries("real-mvn"), [])
-        kill_agent(outage.root / "home" / ".gnupg")
+        kill_agent(outage.gnupg)
 
     def test_central_variable_and_key_expiry_guards_are_kept(self):
         self.fixture.vars = {}
         skipped = self.fixture.run("publish-central")
         self.assertEqual(skipped.status, "skipped")
         expired = PublishWorkflowFixture(self.release, tempfile.mkdtemp(prefix="wf-expired", dir=self.tmp))
-        gnupg = expired.root / "home" / ".gnupg"
+        gnupg = expired.gnupg
         kill_agent(gnupg)
         shutil.rmtree(str(gnupg))
         make_key(gnupg, "Expired Fixture <expired@example.invalid>", expired=True)
         result = expired.run("publish-central")
         self.assertEqual(result.status, "failure", result.log)
-        names = [name for name, outcome, _ in result.steps if outcome == "failure"]
-        self.assertEqual(len(names), 1)
-        self.assertIn("expiry", names[0].lower())
+        self.assertEqual(self.failed_step(result), "🔑 Check GPG key expiry", result.log)
+        self.assertIn("2020-01-02", result.log)   # the expiry date: it fails as expired, not as a missing key
+        self.assertNotIn("Download and verify", "".join(n for n, o, _ in result.steps if o == "success"))
         self.assertEqual(expired.entries("real-mvn"), [])
         kill_agent(gnupg)
 
