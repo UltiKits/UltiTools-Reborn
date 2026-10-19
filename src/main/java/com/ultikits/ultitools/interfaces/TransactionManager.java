@@ -158,9 +158,9 @@ public interface TransactionManager {
      * {@code Propagation.NOT_SUPPORTED} (D-09).
      * <p>
      * Deliberately typed to return an opaque {@code Object} rather than a backend-specific
-     * context type: a JDBC-backed manager suspends a {@link Connection}-holding context, a JSON
-     * snapshot manager (02-05) suspends a set of operator snapshots (D-03) - neither shape belongs
-     * on this base interface. Pass whatever this returns to {@link #resume(Object)} to restore it;
+     * context type: a JDBC-backed manager suspends a {@link Connection}-holding context, the JSON
+     * manager suspends the transaction's context, which carries its staged writes and its table
+     * lock holds - neither shape belongs on this base interface. Pass whatever this returns to {@link #resume(Object)} to restore it;
      * the caller must not otherwise inspect or reuse the returned value.
      * <p>
      * The default implementation does not support suspension: it always returns {@code null},
