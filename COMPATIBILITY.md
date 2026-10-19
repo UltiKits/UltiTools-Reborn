@@ -1842,6 +1842,47 @@ This section governs the third kind.
   嵌套作用域所做的改动见本文后面两个小节）。没有签名变化。见 `FEATURES.md` 中的
   `ultitools.storage.transaction-failure-paths`。
 
+- `WhereCondition` comparisons other than `EQUAL` now take effect on SQLite and MySQL (#675).
+  6.2.5's SQLite and MySQL operators ignored the comparison and matched every condition by
+  equality; JSON already applied it. As of 6.3.0, `getAll`, `exist`, `page`, `del` and `updateIf`
+  apply it on every backend with the meanings below, and no table is changed. `INCLUDE`,
+  `STARTSWITH` and `ENDSWITH` match the value literally, as text: every character, including `%`,
+  `_`, `!` and `\`, stands for itself, on SQLite, MySQL and JSON alike. Letter case follows the
+  backend: case-insensitive on SQLite and on MySQL's default collation, case-sensitive on JSON.
+  `GREATER` and `LESS` on a `byte`, `short`, `int`, `long`, `float` or `double` field (or its
+  wrapper) compare numbers of that type. On SQLite that holds also in a column left on the default
+  `VARCHAR(255)` type, with 64-bit integer precision. On MySQL such a default text column is
+  compared the way MySQL compares text with a number, in double precision, so whole numbers beyond
+  ±9,007,199,254,740,992 (2^53) compare approximately there; declare the column with a numeric
+  `type` (for example `@Column(value = "stamp", type = "BIGINT")`) where exact results matter. On
+  JSON the values are compared as `double`, which is also approximate beyond
+  ±9,007,199,254,740,992. A field of any other type is compared as the database compares the stored
+  text. Earlier 6.3.0 snapshots treated `%` and `_` as wildcards and compared SQLite text columns as
+  text; no release did. `EQUAL`, `getLike` and `Query#like` are unchanged. `exist(...)`,
+  `exist(entity)` and an `eq`-only `Query#exists()` threw `ClassCastException` on SQLite from 6.2.x
+  on, because sqlite-jdbc reports `COUNT(*)` as an `Integer`; they now answer normally. Measured on
+  the fifteen modules' `master` and UltiTools-External-Example (2026-10-19), no `src/main` code uses
+  `INCLUDE`, `STARTSWITH`, `ENDSWITH`, `GREATER`, `LESS`, the `comparison(...)` builder method,
+  `getLike` or `LikeType` (13 files there use `WhereCondition`, all with the default `EQUAL`), so no
+  shipped module changes behaviour. See `ultitools.storage.where-comparisons` in `FEATURES.md`.
+
+  中文补充：`EQUAL` 以外的 `WhereCondition` 比较方式现在在 SQLite 和 MySQL 上生效（#675）。6.2.5 的 SQLite 与 MySQL
+  实现忽略比较方式，所有条件都按相等匹配；JSON 本来就会应用它。自 6.3.0 起，`getAll`、`exist`、`page`、`del` 和
+  `updateIf` 在所有后端按以下含义应用比较方式，且不改动任何表。`INCLUDE`、`STARTSWITH` 和 `ENDSWITH` 把值作为文本字面匹配：
+  包括 `%`、`_`、`!` 和 `\` 在内的每个字符都只代表它自己，SQLite、MySQL 和 JSON 一致。字母大小写取决于后端：
+  SQLite 和 MySQL 默认排序规则下不区分大小写，JSON 区分。`GREATER` 和 `LESS` 用于 `byte`、`short`、`int`、`long`、
+  `float` 或 `double` 字段（或其包装类型）时，按该类型的数值比较。在 SQLite 上，列保持默认 `VARCHAR(255)` 类型时同样如此，
+  整数保持 64 位精度。在 MySQL 上，这种默认文本列按 MySQL 比较文本与数字的方式以双精度比较，超出
+  ±9,007,199,254,740,992（2^53）的整数在那里只是近似比较；需要精确结果时，请为该列声明数值 `type`（例如
+  `@Column(value = "stamp", type = "BIGINT")`）。在 JSON 上按 `double` 比较，超出 ±9,007,199,254,740,992 时同样是近似的。
+  其他类型的字段按数据库比较所存文本的方式比较。本周期较早的 6.3.0 快照把 `%` 和 `_` 当作通配符，并在 SQLite
+  上把文本列按文本比较；没有任何正式版本如此。`EQUAL`、`getLike` 和 `Query#like` 不变。`exist(...)`、`exist(entity)`
+  以及只含 `eq` 条件的 `Query#exists()` 自 6.2.x 起在 SQLite 上会抛出 `ClassCastException`（sqlite-jdbc 把
+  `COUNT(*)` 报告为 `Integer`），现在能正常返回结果。在十五个模块的 `master` 与 UltiTools-External-Example 上测得
+  （2026-10-19）：`src/main` 中没有代码使用 `INCLUDE`、`STARTSWITH`、`ENDSWITH`、`GREATER`、`LESS`、`comparison(...)`
+  构建方法、`getLike` 或 `LikeType`（其中 13 个文件使用 `WhereCondition`，都用默认的 `EQUAL`），因此没有已发布模块的行为发生变化。
+  见 `FEATURES.md` 中的 `ultitools.storage.where-comparisons`。
+
 - `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
   `PluginManager#unregister(UltiToolsPlugin)` delisting the module (#507). `getPluginList()` used to return the manager's live internal `ArrayList`, which callers had
   to mutate to delist a module `unregister` had unloaded, and which a reader on another thread (the
