@@ -40,7 +40,7 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
      * integer through {@code CAST(column AS BIGINT)}, a {@code double} field (or its wrapper) as a
      * 64-bit floating-point number through {@code CAST(column AS DOUBLE)}, and a {@code float} field
      * (or its wrapper) through {@code CAST(CAST(CAST(column AS REAL) AS VARCHAR) AS DOUBLE)}, which
-     * {@link #orderedComparisonPlaceholder(Class)} applies to the value as well. Every other type is
+     * {@link #orderedComparisonPlaceholder(Class, Object)} applies to the value as well. Every other type is
      * compared as stored.
      * <p>
      * A field left on the default {@code @Column} type is a {@code VARCHAR(255)} column, which SQLite
