@@ -1128,9 +1128,12 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- MySQL JDBC and protobuf are supplied by Paper, not declared or downloaded here.
+        <!-- MySQL JDBC and protobuf are supplied by Paper at runtime, not declared or downloaded here.
              The framework has no protobuf references; a plugin version pin cannot override Paper.
-             MySQL JDBC 与 protobuf 由 Paper 提供；框架不引用 protobuf，插件版本声明不能覆盖 Paper。 -->
+             The test-scope MySQL and SQLite drivers declared next to h2 exist only for real-engine
+             tests; they are never shaded and production keeps using Paper's copies.
+             MySQL JDBC 与 protobuf 由 Paper 在运行时提供；框架不引用 protobuf，插件版本声明不能覆盖 Paper。
+             测试范围的驱动只用于真实数据库测试，不会被打包。 -->
         <!-- Java-WebSocket - Paper libraries 自动下载 -->
         <dependency>
             <groupId>org.java-websocket</groupId>
@@ -1263,6 +1266,28 @@
             <artifactId>h2</artifactId>
             <version>2.2.224</version>
             <scope>test</scope>
+        </dependency>
+        <!-- Real-engine JDBC drivers for tests only: the same versions Paper 1.21.11 declares
+             runtimeOnly, so tests exercise the drivers production loads. Test scope is never
+             shaded; production keeps using Paper's copies. protobuf-java is excluded because
+             only Connector/J's X DevAPI uses it. -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>3.49.1.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <version>9.2.0</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.google.protobuf</groupId>
+                    <artifactId>protobuf-java</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <!-- ByteBuddy for AOP proxy support - Paper libraries 自动下载 -->
         <dependency>
