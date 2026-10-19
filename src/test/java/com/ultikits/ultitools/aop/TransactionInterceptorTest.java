@@ -528,10 +528,10 @@ class TransactionInterceptorTest {
         }
 
         @Test
-        @DisplayName("Should join existing transaction")
+        @DisplayName("Should join an existing transaction in a participation scope: begin(), proceed(), commit() "
+                + "(20.4-DECISIONS.md Question 9 A)")
         void shouldJoinExistingTransaction() throws Throwable {
             Method method = PropagationService.class.getMethod("required");
-            Object target = new PropagationService();
 
             when(mockInvocation.getMethod()).thenReturn(method);
             when(mockInvocation.proceed()).thenReturn("required");
@@ -540,7 +540,32 @@ class TransactionInterceptorTest {
             Object result = interceptor.invoke(mockInvocation);
 
             assertEquals("required", result);
-            verify(transactionManager, never()).begin();
+            InOrder order = inOrder(transactionManager, mockInvocation);
+            order.verify(transactionManager).begin();
+            order.verify(mockInvocation).proceed();
+            order.verify(transactionManager).commit();
+            verify(transactionManager, never()).rollback();
+        }
+
+        @Test
+        @DisplayName("A joined method whose body fails marks the transaction: begin() then rollback(), never "
+                + "commit(), and the body's exception is rethrown as the same instance (Question 9 A)")
+        void shouldMarkTheJoinedTransactionWhenTheBodyFails() throws Throwable {
+            Method method = PropagationService.class.getMethod("required");
+            IllegalStateException failure = new IllegalStateException("joined body fails");
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenThrow(failure);
+            when(transactionManager.hasActiveTransaction()).thenReturn(true);
+
+            Throwable thrown = assertThrows(IllegalStateException.class, () -> interceptor.invoke(mockInvocation));
+
+            assertSame(failure, thrown);
+            InOrder order = inOrder(transactionManager);
+            order.verify(transactionManager).begin();
+            order.verify(transactionManager).rollback();
+            verify(transactionManager, times(1)).begin();
+            verify(transactionManager, times(1)).rollback();
             verify(transactionManager, never()).commit();
         }
     }

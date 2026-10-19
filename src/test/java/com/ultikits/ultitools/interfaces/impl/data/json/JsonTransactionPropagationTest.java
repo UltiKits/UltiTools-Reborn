@@ -51,8 +51,9 @@ import com.ultikits.ultitools.manager.PluginManager;
  * The beans are built in a container wired through the production {@code PluginManager.wireAop},
  * reached by reflection, with {@code UltiTools.getDataStore()} answering a real {@link JsonStore}
  * over a temporary folder. The interceptor decides every propagation from
- * {@code hasActiveTransaction}, {@code suspend} and {@code resume}, exactly as on SQLite and MySQL;
- * the JSON manager supplies those primitives. Self-invocation is intercepted (the proxy is a
+ * {@code hasActiveTransaction}, {@code suspend} and {@code resume}, and runs a method that joins an
+ * active transaction in a {@code begin}/{@code commit}-or-{@code rollback} participation scope,
+ * exactly as on SQLite and MySQL; the JSON manager supplies those primitives. Self-invocation is intercepted (the proxy is a
  * subclass of the bean), so each outer method calls its inner method directly.
  * <p>
  * Every case ends with {@link #assertNothingLeftBehind}: no transaction context on the thread that
@@ -170,14 +171,16 @@ class JsonTransactionPropagationTest {
         }
 
         @Test
-        @DisplayName("A joined @Transactional REQUIRED method opens no scope of its own: its failure, caught by the outer, does not mark the outer (D-08; same interceptor path as JDBC)")
-        void joinedRequiredMethodFailureCaughtByTheOuterDoesNotMarkIt() {
-            bean.outerCatchesAJoinedRequiredFailure();
+        @DisplayName("A joined REQUIRED method's failure caught by the outer marks the transaction rollback-only; the outer commit throws UnexpectedRollbackException and applies nothing (20.4-DECISIONS.md Question 9 A)")
+        void joinedRequiredMethodFailureCaughtByTheOuterMarksItRollbackOnly() {
+            Throwable thrown = catchThrowable(bean::outerCatchesAJoinedRequiredFailure);
 
-            assertThat(name(rows.getById("jf-outer"))).isEqualTo("outer");
-            assertThat(label(others.getById("jf-inner")))
-                    .as("the joined method's write is part of the outer transaction").isEqualTo("inner");
-            assertThat(commitRecords()).isEqualTo(1);
+            assertThat(thrown).as("the outer commit").isInstanceOf(UnexpectedRollbackException.class);
+            assertThat(rows.getById("jf-outer")).as("the outer method's write").isNull();
+            assertThat(others.getById("jf-inner")).as("the failed joined method's write").isNull();
+            assertThat(commitRecords()).as("commit records written").isZero();
+            assertThat(journalSteps).as("no commit record is written for a rolled-back transaction")
+                    .doesNotContain("commit.recordWritten");
             assertNothingLeftBehind();
         }
     }
@@ -648,7 +651,7 @@ class JsonTransactionPropagationTest {
             try {
                 innerRequiredWritesThenFails();
             } catch (IllegalStateException expected) {
-                // A joined REQUIRED method has no begin or rollback of its own.
+                // The joined method's failure has marked the transaction rollback-only.
             }
         }
 
