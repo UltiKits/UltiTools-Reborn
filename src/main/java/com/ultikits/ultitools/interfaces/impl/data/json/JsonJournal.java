@@ -455,7 +455,7 @@ final class JsonJournal {
         for (int i = 0; i < entries.size(); i++) {
             Entry entry = entries.get(i);
             Path tableDirectory = identityRoot.resolve(entry.table());
-            Path target = tableDirectory.resolve(entry.key() + ".json");
+            Path target = JsonFileNames.entityFile(tableDirectory, entry.key());
             if (entry.isDelete()) {
                 Files.deleteIfExists(target);
             } else {
