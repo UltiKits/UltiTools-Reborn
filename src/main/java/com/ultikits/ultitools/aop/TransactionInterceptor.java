@@ -78,7 +78,7 @@ public class TransactionInterceptor implements MethodInterceptor {
                 if (!existingTx) {
                     return executeInNewTransaction(invocation, tx);
                 }
-                return invocation.proceed();
+                return executeAsParticipant(invocation, tx);
 
             case REQUIRES_NEW: {
                 // D-09: always suspend whatever is active (a no-op returning null if nothing is),
@@ -159,6 +159,56 @@ public class TransactionInterceptor implements MethodInterceptor {
             }
             throw e;
         }
+    }
+
+    /**
+     * Executes the invocation as a participant in the transaction already active on this thread.
+     * <p>
+     * {@code begin()} joins the active transaction (one more nesting level). When the body returns,
+     * {@code commit()} leaves that level. When the body throws an exception the method's own rules
+     * accept ({@link #shouldRollback}), {@code rollback()} at the nested level marks the whole
+     * transaction rollback-only without ending it; any other exception leaves it with {@code
+     * commit()}. The body's exception is always rethrown unchanged, with a failure of that
+     * completion call attached as suppressed. The method's isolation, read-only and timeout
+     * settings are not applied: they belong to the transaction that began it.
+     */
+    // PMD.AvoidCatchingThrowable: an Error raised by the body must leave the participation level
+    // too, and a failure of that completion call must not replace the body's failure; both are
+    // rethrown or attached, never swallowed.
+    // PMD.CompareObjectsWithEquals: deliberate reference identity - addSuppressed rejects the very
+    // same instance (self-suppression), and that rejection would replace the body's failure.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CompareObjectsWithEquals"})
+    private Object executeAsParticipant(MethodInvocation invocation, Transactional tx) throws Throwable {
+        String methodName = invocation.getMethod().getDeclaringClass().getSimpleName() + "." +
+                invocation.getMethod().getName();
+
+        LOGGER.fine("Joining the active transaction for: " + methodName);
+
+        transactionManager.begin();
+
+        Object result;
+        try {
+            result = invocation.proceed();
+        } catch (Throwable e) {
+            try {
+                if (shouldRollback(e, tx)) {
+                    LOGGER.log(Level.FINE, "Marking the joined transaction rollback-only for: " + methodName
+                            + " due to: " + e.getMessage());
+                    transactionManager.rollback();
+                } else {
+                    LOGGER.fine("Leaving the joined transaction committable despite exception for: " + methodName);
+                    transactionManager.commit();
+                }
+            } catch (Throwable completionFailure) {
+                if (completionFailure != e) {
+                    e.addSuppressed(completionFailure);
+                }
+            }
+            throw e;
+        }
+        transactionManager.commit();
+        LOGGER.fine("Left the joined transaction for: " + methodName);
+        return result;
     }
 
     /**
