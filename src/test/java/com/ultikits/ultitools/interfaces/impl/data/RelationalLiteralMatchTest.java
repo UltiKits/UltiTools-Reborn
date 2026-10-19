@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.interfaces.impl.data;
 
 import static org.assertj.core.api.SoftAssertions.assertSoftly;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -85,11 +84,6 @@ class RelationalLiteralMatchTest {
             new Case(Comparison.STARTSWITH, "%"),
             new Case(Comparison.INCLUDE, "orld"),
             new Case(Comparison.INCLUDE, "zzz")));
-
-    static final String EXIST_PENDING = "Real-SQLite exist is pending the existence-count decision "
-            + "(existence-count-fix in .planning/phases/20.5-relational-query-and-commit-outcome/20.5-DECISIONS.md): "
-            + "exist reads COUNT(*) as a Long and sqlite-jdbc reports an Integer, so it throws ClassCastException "
-            + "on real SQLite for every condition. Plan 20.5-02 removes this assumption.";
 
     /** One stored row: {@code label} holds the fixture text, {@code marker} is what updateIf changes. */
     @Table(TABLE)
@@ -269,11 +263,6 @@ class RelationalLiteralMatchTest {
         /** Whether the backend's LIKE ignores letter case. */
         abstract boolean caseInsensitive();
 
-        /** Why this lane skips the exist builder, or {@code null} when it runs it. */
-        String existSkipReason() {
-            return null;
-        }
-
         /**
          * The table's stored definition, read from the engine, or an empty string when the lane
          * has no table definition to read.
@@ -341,8 +330,6 @@ class RelationalLiteralMatchTest {
         @Test
         @DisplayName("exist is true exactly when a literal match exists")
         void existMatchesLiterally() {
-            String skipReason = existSkipReason();
-            assumeTrue(skipReason == null, skipReason);
             assertSoftly(softly -> {
                 for (Case testCase : CASES) {
                     List<LiteralRow> rows = insertFixture();
@@ -513,11 +500,6 @@ class RelationalLiteralMatchTest {
         @Override
         boolean caseInsensitive() {
             return true;
-        }
-
-        @Override
-        String existSkipReason() {
-            return EXIST_PENDING;
         }
 
         @Override

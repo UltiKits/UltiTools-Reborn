@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -30,6 +31,11 @@ import com.zaxxer.hikari.HikariDataSource;
  * driver uses for {@code COUNT(*)}. sqlite-jdbc, the driver Paper bundles, reports an
  * {@code Integer}; H2 reports a {@code Long}. Before 6.3.0, {@code exist} read the count as a
  * {@code Long}, so on real SQLite it threw {@code ClassCastException} instead of answering.
+ * <p>
+ * Every existence entry point is checked on real SQLite: {@code exist(WhereCondition...)},
+ * {@code exist(entity)}, and {@code Query#exists()} with only {@code eq} conditions, which delegates
+ * to {@code exist}. The same three checks run on {@code SQLiteDataOperator} over H2 in MySQL mode
+ * as a control: the operator is the same, only the driver differs.
  */
 @DisplayName("Existence check counts rows on every relational driver")
 class RelationalExistenceCheckTest {
@@ -59,6 +65,8 @@ class RelationalExistenceCheckTest {
 
     private HikariDataSource sqlitePool;
     private SQLiteDataOperator<ExistenceRow> sqliteOperator;
+    private HikariDataSource h2Pool;
+    private SQLiteDataOperator<ExistenceRow> h2Operator;
 
     @BeforeAll
     static void mockServer() {
@@ -74,11 +82,14 @@ class RelationalExistenceCheckTest {
     void open() {
         sqlitePool = RelationalTestEngines.realSqlite(tempDir.toFile());
         sqliteOperator = new SQLiteDataOperator<>(sqlitePool, ExistenceRow.class);
+        h2Pool = RelationalTestEngines.h2MysqlMode("existence_h2_" + UUID.randomUUID().toString().replace("-", ""));
+        h2Operator = new SQLiteDataOperator<>(h2Pool, ExistenceRow.class);
     }
 
     @AfterEach
     void close() {
         sqlitePool.close();
+        h2Pool.close();
     }
 
     static WhereCondition labelEquals(String value) {
@@ -103,5 +114,68 @@ class RelationalExistenceCheckTest {
         }).as("exist on the sqlite-jdbc driver").doesNotThrowAnyException();
         assertThat(answers[0]).as("exist label = kept").isTrue();
         assertThat(answers[1]).as("exist label = missing").isFalse();
+    }
+
+    @Test
+    @DisplayName("exist(entity) on real SQLite is true for the stored entity and false for an unstored one")
+    void existByEntityOnRealSqlite() {
+        ExistenceRow stored = row("kept");
+        sqliteOperator.insert(stored);
+        ExistenceRow unstored = row("kept");
+        unstored.setId("not-" + stored.getId());
+        boolean[] answers = new boolean[2];
+
+        assertThatCode(() -> {
+            answers[0] = sqliteOperator.exist(stored);
+            answers[1] = sqliteOperator.exist(unstored);
+        }).as("exist(entity) on the sqlite-jdbc driver").doesNotThrowAnyException();
+        assertThat(stored.getId()).as("id assigned at insert").isNotNull();
+        assertThat(answers[0]).as("exist stored entity").isTrue();
+        assertThat(answers[1]).as("exist unstored entity with another id").isFalse();
+    }
+
+    @Test
+    @DisplayName("An eq-only Query#exists() on real SQLite is true for a stored value and false for none")
+    void queryExistsOnRealSqlite() {
+        sqliteOperator.insert(row("kept"));
+        boolean[] answers = new boolean[2];
+
+        assertThatCode(() -> {
+            answers[0] = sqliteOperator.query().where("label").eq("kept").exists();
+            answers[1] = sqliteOperator.query().where("label").eq("missing").exists();
+        }).as("Query#exists() on the sqlite-jdbc driver").doesNotThrowAnyException();
+        assertThat(answers[0]).as("query label = kept exists").isTrue();
+        assertThat(answers[1]).as("query label = missing exists").isFalse();
+    }
+
+    @Test
+    @DisplayName("Control: exist(WhereCondition...) on H2 in MySQL mode answers the same")
+    void existCountsMatchingRowsOnH2MysqlMode() {
+        h2Operator.insert(row("kept"));
+
+        assertThat(h2Operator.exist(labelEquals("kept"))).as("exist label = kept").isTrue();
+        assertThat(h2Operator.exist(labelEquals("missing"))).as("exist label = missing").isFalse();
+    }
+
+    @Test
+    @DisplayName("Control: exist(entity) on H2 in MySQL mode answers the same")
+    void existByEntityOnH2MysqlMode() {
+        ExistenceRow stored = row("kept");
+        h2Operator.insert(stored);
+        ExistenceRow unstored = row("kept");
+        unstored.setId("not-" + stored.getId());
+
+        assertThat(stored.getId()).as("id assigned at insert").isNotNull();
+        assertThat(h2Operator.exist(stored)).as("exist stored entity").isTrue();
+        assertThat(h2Operator.exist(unstored)).as("exist unstored entity with another id").isFalse();
+    }
+
+    @Test
+    @DisplayName("Control: an eq-only Query#exists() on H2 in MySQL mode answers the same")
+    void queryExistsOnH2MysqlMode() {
+        h2Operator.insert(row("kept"));
+
+        assertThat(h2Operator.query().where("label").eq("kept").exists()).as("query label = kept exists").isTrue();
+        assertThat(h2Operator.query().where("label").eq("missing").exists()).as("query label = missing exists").isFalse();
     }
 }
