@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
@@ -121,6 +122,11 @@ final class JsonJournal {
 
     private static final DirectoryForcer DEFAULT_DIRECTORY_FORCER = JsonJournal::forceDirectoryChannel;
 
+    private static final Mover DEFAULT_MOVER = Files::move;
+
+    /** Whether a failed move is retried on this platform; decided once from {@code os.name}. */
+    private static final boolean DEFAULT_MOVE_RETRY = retriesMovesOn(System.getProperty("os.name"));
+
     /**
      * Test seam: called with a step name at the points named above. A no-op in production; a test
      * installs a callback that pauses, fails or simulates a crash at one step and resets it
@@ -130,6 +136,12 @@ final class JsonJournal {
 
     /** Test seam for the directory force; the default opens the directory and forces it. */
     private static volatile DirectoryForcer directoryForcer = DEFAULT_DIRECTORY_FORCER;
+
+    /** Test seam for every file move the journal makes; the default is {@link Files#move}. */
+    private static volatile Mover mover = DEFAULT_MOVER;
+
+    /** Test seam: whether a failed move is retried; the default follows the operating system. */
+    private static volatile boolean moveRetry = DEFAULT_MOVE_RETRY;
 
     private final Path identityRoot;
     private final Path directory;
@@ -536,20 +548,20 @@ final class JsonJournal {
     /** Renames a record atomically; falls back to a plain move only if the platform refuses. */
     private void move(Path source, Path target) throws IOException {
         try {
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            mover.move(source, target, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException unsupported) {
             logAtomicMoveFallback(unsupported);
-            Files.move(source, target);
+            mover.move(source, target);
         }
     }
 
     /** Moves an entity file into place atomically, replacing the old one. */
     private void moveReplacing(Path source, Path target) throws IOException {
         try {
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            mover.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (AtomicMoveNotSupportedException unsupported) {
             logAtomicMoveFallback(unsupported);
-            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+            mover.move(source, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -614,6 +626,33 @@ final class JsonJournal {
         directoryForcer = DEFAULT_DIRECTORY_FORCER;
     }
 
+    static void installMover(Mover replacement) {
+        mover = replacement == null ? DEFAULT_MOVER : replacement;
+    }
+
+    static void resetMover() {
+        mover = DEFAULT_MOVER;
+    }
+
+    static void installMoveRetry(boolean retry) {
+        moveRetry = retry;
+    }
+
+    static void resetMoveRetry() {
+        moveRetry = DEFAULT_MOVE_RETRY;
+    }
+
+    /**
+     * Whether a journal move that fails is retried on the operating system named {@code osName}
+     * (the {@code os.name} system property).
+     *
+     * @param osName the operating system's name; may be {@code null}
+     * @return whether a failed move is retried there
+     */
+    static boolean retriesMovesOn(String osName) {
+        return false;
+    }
+
     /** A test callback for the named journal steps. */
     interface StepHook {
         void onStep(String step) throws IOException;
@@ -622,6 +661,11 @@ final class JsonJournal {
     /** Forces a directory's entries to disk; replaceable in tests. */
     interface DirectoryForcer {
         void force(Path directory) throws IOException;
+    }
+
+    /** Moves a file; replaceable in tests. */
+    interface Mover {
+        void move(Path source, Path target, CopyOption... options) throws IOException;
     }
 
     /** What a record stands for. */
