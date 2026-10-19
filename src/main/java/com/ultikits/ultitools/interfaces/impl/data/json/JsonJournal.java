@@ -67,8 +67,25 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * committed, then deletes every record at or below its number in ascending order, its own last,
  * so no interruption lets a replay bring an older value back over a newer one.
  * <p>
- * Directory forces are best effort: supported on Linux, not on Windows; a failure is logged once
- * at {@code FINE} and never fails the operation.
+ * <b>Directory forces.</b> After a rename or a deletion the journal forces the directory that holds
+ * it, so the change survives a power loss. A failed force has one of three outcomes:
+ * <ul>
+ *   <li>a directory that cannot be opened for a force ({@link AccessDeniedException}, which
+ *       Windows gives, or {@link UnsupportedOperationException}) is skipped, logged once at
+ *       {@code FINE};</li>
+ *   <li>any other failure is a real I/O error and is logged at {@code WARNING} naming the directory,
+ *       every time. After a commit record's rename, the commit point, the commit still succeeds:
+ *       the transaction survives a server crash, but may not survive a power loss or
+ *       operating-system crash until the next checkpoint completes;</li>
+ *   <li>everywhere else a real failure stops the operation where it happens and is thrown: a
+ *       checkpoint never truncates the journal, and a recovery never deletes an applied record,
+ *       behind a directory that was not forced. The next checkpoint or recovery repeats the
+ *       work.</li>
+ * </ul>
+ * <p>
+ * <b>Moves.</b> On Windows a move another program briefly holds (an antivirus scanner, an indexer,
+ * a backup tool) is retried for at most 150 ms before it fails; elsewhere a move is attempted
+ * once.
  * <p>
  * <b>Threads.</b> {@link #nextSequence()} may be called from any thread. Several
  * {@link #writeRecord(long, Kind, List)} calls may run at once if their sequence numbers differ:
@@ -156,7 +173,7 @@ final class JsonJournal {
     private final Path directory;
     private final Path tempDirectory;
 
-    private final AtomicBoolean directoryForceFailureLogged = new AtomicBoolean();
+    private final AtomicBoolean directoryCannotBeOpenedLogged = new AtomicBoolean();
     private final AtomicBoolean atomicMoveFallbackLogged = new AtomicBoolean();
     private final AtomicBoolean moveRetryLogged = new AtomicBoolean();
 
@@ -203,17 +220,21 @@ final class JsonJournal {
 
     /**
      * Writes and commits one record: {@code <seq>.tmp}, forced, then renamed atomically to
-     * {@code <seq>.commit} (the commit point), then the journal directory forced (best effort).
-     * Creates the journal directory if it is missing.
+     * {@code <seq>.commit} (the commit point), then the journal directory forced. Creates the
+     * journal directory if it is missing.
      * <p>
      * An {@link IOException} before the rename deletes the temporary record and propagates: nothing
      * was committed. Any other throwable propagates and leaves the temporary record for recovery,
-     * as a crash would.
+     * as a crash would. A real failure of the directory force after the rename is logged at
+     * {@code WARNING}; for a {@link Kind#COMMIT} record this method still returns, because the
+     * record is committed, and for a {@link Kind#CHECKPOINT} record the failure propagates, so the
+     * checkpoint writes no entity file.
      *
      * @param sequence the record's number, from {@link #nextSequence()}
      * @param kind     what the record stands for; its label prefixes the record steps
      * @param entries  the record's changes, in the order they are to be applied
-     * @throws IOException if the record could not be committed
+     * @throws IOException if the record could not be committed, or a checkpoint record's directory
+     *                     could not be forced
      */
     void writeRecord(long sequence, Kind kind, List<Entry> entries) throws IOException {
         Objects.requireNonNull(kind, "kind");
@@ -243,7 +264,13 @@ final class JsonJournal {
             throw failure;
         }
         fire(kind.label + RENAMED);
-        forceDirectory(directory);
+        if (kind == Kind.COMMIT) {
+            forceDirectory(directory, "The JSON transaction is committed and survives a server crash, but it may not"
+                    + " survive a power loss or operating-system crash until the next checkpoint completes.");
+        } else {
+            requireDirectoryForced(directory, "The checkpoint stops before writing its entity files; the changed"
+                    + " entries stay pending and the next flush writes them again.");
+        }
         fire(kind.label + DIRECTORY_FORCED);
     }
 
@@ -268,8 +295,9 @@ final class JsonJournal {
      * Brings the identity's table files to the state of its committed records: empties the
      * journal's {@code tmp/} directory and deletes temporary records, verifies <b>every</b>
      * committed record, applies them in ascending order through the entity-file writer, then
-     * deletes the applied records in ascending order. A missing journal directory is an empty
-     * journal; nothing is created.
+     * deletes the applied records in ascending order and forces the journal directory if it
+     * deleted any. A missing journal directory is an empty journal; nothing is created. A real
+     * failure to force a table directory stops recovery before any applied record is deleted.
      * <p>
      * A damaged committed record (question 8 option A of 20.4-DECISIONS.md) makes recovery throw
      * before any table file or record is changed. The record is never deleted, skipped or applied:
@@ -277,7 +305,8 @@ final class JsonJournal {
      * directory, and then applies the remaining records.
      *
      * @throws DataAccessException if a committed record is damaged; the message names the file
-     * @throws IOException         if a file cannot be read, written, moved or deleted
+     * @throws IOException         if a file cannot be read, written, moved or deleted, or a
+     *                             directory cannot be forced to disk
      */
     void recover() throws IOException {
         if (!Files.isDirectory(directory)) {
@@ -293,13 +322,17 @@ final class JsonJournal {
             }
         }
         fire(RECOVERY_RECORDS_APPLIED);
+        boolean deleted = false;
         for (int i = 0; i < records.size(); i++) {
-            Files.deleteIfExists(records.get(i).file());
+            deleted |= Files.deleteIfExists(records.get(i).file());
             if (i < records.size() - 1) {
                 fire(RECOVERY_BETWEEN_DELETIONS);
             }
         }
-        forceDirectory(directory);
+        if (deleted) {
+            requireDirectoryForced(directory, "The applied journal records are deleted but the deletion may not be"
+                    + " on disk; recovery reports a failure and runs again at the next request.");
+        }
     }
 
     /**
@@ -317,10 +350,16 @@ final class JsonJournal {
      * <p>
      * Truncation deletes records by number without reading them. The caller guarantees that every
      * record numbered below K is already reflected in {@code entries} or in the table files.
+     * <p>
+     * A real failure to force a directory stops the checkpoint where it happens: after K's rename
+     * no entity file is written, after the table directories no record is deleted, and after the
+     * truncation the failure is still reported. The caller keeps its entries pending, and the next
+     * checkpoint writes them again.
      *
      * @param sequence K, from {@link #nextSequence()}
      * @param entries  the captured after-images and deletes
-     * @throws IOException if a record or entity file cannot be written, moved or deleted
+     * @throws IOException if a record or entity file cannot be written, moved or deleted, or a
+     *                     directory cannot be forced to disk
      */
     void checkpoint(long sequence, List<Entry> entries) throws IOException {
         writeRecord(sequence, Kind.CHECKPOINT, entries);
@@ -337,19 +376,23 @@ final class JsonJournal {
                 fire(CHECKPOINT_BETWEEN_TRUNCATIONS);
             }
         }
-        forceDirectory(directory);
+        requireDirectoryForced(directory, "The checkpoint's records are deleted but the deletion may not be on disk;"
+                + " the flush reports a failure, the changed entries stay pending and the next flush writes them"
+                + " again.");
     }
 
     /**
      * Applies entries to the table files, in order: a put writes {@code <table>/<key>.json} by
      * writing and forcing a file in the journal's {@code tmp/} directory and moving it into place
      * atomically, replacing the old file; a delete removes the file if present. Then forces every
-     * touched table directory (best effort). No file other than {@code <key>.json} is ever created
-     * in a table directory.
+     * touched table directory; a real failure to force one propagates, after the files are in
+     * place, so the caller deletes no journal record. No file other than {@code <key>.json} is
+     * ever created in a table directory.
      *
      * @param phase   {@link #PHASE_RECOVERY} or {@link #PHASE_CHECKPOINT}; prefixes the steps
      * @param entries the changes to apply
-     * @throws IOException if a file cannot be written, moved or deleted
+     * @throws IOException if a file cannot be written, moved or deleted, or a table directory
+     *                     cannot be forced to disk
      */
     void writeEntityFiles(String phase, List<Entry> entries) throws IOException {
         Set<Path> touched = new LinkedHashSet<>();
@@ -379,9 +422,14 @@ final class JsonJournal {
                 fire(phase + BETWEEN_ENTITY_FILES);
             }
         }
+        String consequence = PHASE_RECOVERY.equals(phase)
+                ? "Recovery stops before deleting the applied journal records; this data stays closed and the next"
+                        + " request runs recovery again."
+                : "The checkpoint stops before truncating the journal; the changed entries stay pending and the next"
+                        + " flush writes them again.";
         for (Path tableDirectory : touched) {
             if (Files.isDirectory(tableDirectory)) {
-                forceDirectory(tableDirectory);
+                requireDirectoryForced(tableDirectory, consequence);
             }
         }
         fire(phase + TABLE_DIRS_FORCED);
@@ -635,15 +683,37 @@ final class JsonJournal {
         }
     }
 
-    /** Forces a directory's entries to disk; a failure is logged once at FINE and never fatal. */
-    private void forceDirectory(Path target) {
+    /**
+     * Forces a directory's entries to disk and classifies a failure (see the class javadoc). A
+     * directory that cannot be opened for a force is skipped and logged once at {@code FINE}; any
+     * other failure is logged at {@code WARNING}, naming the directory and stating
+     * {@code consequence}, and returned.
+     *
+     * @return the real failure, or {@code null} if the directory was forced or cannot be opened
+     */
+    private IOException forceDirectory(Path target, String consequence) {
         try {
             directoryForcer.force(target);
-        } catch (IOException | UnsupportedOperationException failure) {
-            if (directoryForceFailureLogged.compareAndSet(false, true)) {
-                LOGGER.log(Level.FINE, "Could not force the directory " + target.toAbsolutePath()
-                        + " to disk; this platform may not support it. Further failures are not logged.", failure);
+            return null;
+        } catch (AccessDeniedException | UnsupportedOperationException cannotOpen) {
+            if (directoryCannotBeOpenedLogged.compareAndSet(false, true)) {
+                LOGGER.log(Level.FINE, "Could not open the directory " + target.toAbsolutePath()
+                        + " to force it to disk; this platform does not support it. Further failures are not"
+                        + " logged.", cannotOpen);
             }
+            return null;
+        } catch (IOException failure) {
+            LOGGER.log(Level.WARNING, "Could not force the directory " + target.toAbsolutePath() + " to disk ("
+                    + failure + "). " + consequence, failure);
+            return failure;
+        }
+    }
+
+    /** {@link #forceDirectory(Path, String)}, throwing a real failure. */
+    private void requireDirectoryForced(Path target, String consequence) throws IOException {
+        IOException failure = forceDirectory(target, consequence);
+        if (failure != null) {
+            throw failure;
         }
     }
 
