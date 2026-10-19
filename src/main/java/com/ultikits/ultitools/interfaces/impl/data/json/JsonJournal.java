@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -496,8 +497,14 @@ final class JsonJournal {
         return files;
     }
 
+    /**
+     * The file name of record {@code sequence}: the number zero-padded to 19 ASCII digits, then
+     * {@code suffix}. Formatted with {@link Locale#ROOT}: under a default locale with other
+     * digits (Arabic-Indic, for example) the name would not match {@code RECORD_NAME}, and
+     * numbering and recovery would never see the record.
+     */
     static String recordFileName(long sequence, String suffix) {
-        return String.format("%019d", sequence) + suffix;
+        return String.format(Locale.ROOT, "%019d", sequence) + suffix;
     }
 
     private static byte[] encode(long sequence, Kind kind, List<Entry> entries) {
