@@ -2349,7 +2349,13 @@ one `@Table`, one folder of `<id>.json` files.
   before the exception is thrown, so catching the exception does not save the transaction: its outermost commit
   rolls back everything it wrote and throws `UnexpectedRollbackException`. The transaction keeps its table locks
   until it ends. Plain writes outside a transaction follow the same wait rule; such a write that fails just fails.
-- **Read-only.** `readOnly = true` rejects writes.
+- **Read-only.** `readOnly = true` rejects writes. The refusal does not mark the transaction: catching it leaves the
+  transaction committable, as a failed statement does on SQLite and MySQL.
+- **Timeout.** `@Transactional(timeout = ...)` sets a deadline. Every data operation inside the transaction checks it
+  first, and an operation started after it has passed fails with a `DataAccessException` whose message starts
+  `JSON transaction timeout`. That failure marks the transaction rollback-only before it is thrown, as Spring does
+  when a transaction's deadline has passed, so catching it does not save the transaction: the outermost commit rolls
+  back and throws `UnexpectedRollbackException`.
 - **Propagation as on SQLite and MySQL.** `REQUIRES_NEW` and `NOT_SUPPORTED` suspend the active transaction,
   including its staged writes and table locks, and resume it afterwards. One difference: such a method runs on the
   same thread as the caller it suspended, and table locks belong to the thread, so it does not wait for the locks
@@ -2462,7 +2468,10 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   闭环的那次调用立即失败，消息以 `JSON write failed with a deadlock` 开头。这两种失败都会在抛出异常之前把所在事务标记为只能回滚，
   因此捕获该异常并不能挽救事务：最外层提交会回滚该事务写入的全部内容，并抛出 `UnexpectedRollbackException`。该事务持有的表锁保留到它结束为止。
   事务外的普通写入遵循同一等待规则；这样的写入失败时只是失败。
-- **只读。** `readOnly = true` 拒绝写入。
+- **只读。** `readOnly = true` 拒绝写入。这种拒绝不会标记事务：捕获它后事务仍可提交，与 SQLite、MySQL 上一条失败的语句相同。
+- **超时。** `@Transactional(timeout = ...)` 设定截止时间。事务内的每个数据操作都先检查它；截止时间过后开始的操作抛出
+  `DataAccessException`，消息以 `JSON transaction timeout` 开头。该失败在抛出之前把事务标记为只能回滚（与 Spring 在事务截止时间已过时的做法相同），
+  因此捕获它并不能挽救事务：最外层提交会回滚并抛出 `UnexpectedRollbackException`。
 - **传播行为与 SQLite、MySQL 相同。** `REQUIRES_NEW` 与 `NOT_SUPPORTED` 挂起活动事务（连同其暂存的写入和表锁），结束后恢复。唯一的差别：
   这类方法与被它挂起的调用方在同一线程上运行，而表锁归线程所有，所以它不会等待调用方持有的锁；若它写入调用方已暂存的同一个键，最终保留
   的是调用方稍后提交的值。（在 JDBC 后端，内层调用会等待自己调用方的行锁，直到锁等待超时。）

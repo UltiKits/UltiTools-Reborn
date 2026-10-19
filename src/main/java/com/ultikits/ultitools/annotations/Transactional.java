@@ -137,9 +137,10 @@ public @interface Transactional {
      *       data operation inside the transaction checks it before it starts and fails with a
      *       {@code DataAccessException} once it has passed, and every wait for another
      *       transaction's table lock ends at the deadline if that comes before the 5-second
-     *       lock-wait bound; the transaction is then rolled back. A lock wait that fails also
-     *       marks the transaction rollback-only, so a method that catches that failure still ends
-     *       in a rollback and {@code UnexpectedRollbackException}.</li>
+     *       lock-wait bound. Either failure marks the transaction rollback-only before it is
+     *       thrown, as Spring's {@code ResourceHolderSupport#checkTransactionTimeout} does, so a
+     *       method that catches it still ends in a rollback and
+     *       {@code UnexpectedRollbackException}.</li>
      * </ul>
      * A method that leaves this attribute at its default is unaffected on every backend, since
      * the interceptor never calls {@code setTimeout} for it.
