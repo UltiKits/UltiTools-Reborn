@@ -244,7 +244,7 @@ public class HomeService {
     public void teleport(Player player, String name) {
         HomeEntity home = plugin.getDataOperator(HomeEntity.class)
             .query()
-            .where("playerId").eq(player.getUniqueId().toString())
+            .where("player_id").eq(player.getUniqueId().toString())
             .and("name").eq(name)
             .first();
 
@@ -271,7 +271,7 @@ public class HomeService {
     public List<HomeEntity> getHomes(Player player) {
         return plugin.getDataOperator(HomeEntity.class)
             .query()
-            .where("playerId").eq(player.getUniqueId().toString())
+            .where("player_id").eq(player.getUniqueId().toString())
             .orderBy("name")
             .list();
     }
