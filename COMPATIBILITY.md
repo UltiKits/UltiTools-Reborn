@@ -1260,8 +1260,9 @@ request as coming from this server. UltiLogin's `/panel` web login link is its f
   map only, URL-encoded as UTF-8. The list grows only by a documented contract change in a framework
   release; a module cannot widen it.
 - **No valid session** (no `/ulticloud login`, after `/ulticloud logout`, or the saved credential has
-  expired): `NOT_CONNECTED`, no request. A module decides its own fallback; UltiLogin falls back to its
-  anonymous request.
+  expired): `NOT_CONNECTED`, no request. Do not retry anonymously: UltiCloud refuses anonymous
+  `/panel` link creation (HTTP 401) and UUID-only polling (HTTP 400; `requestId` is required).
+  The operator must log the server in to UltiCloud with `/ulticloud login` before requesting a link.
 - **The token is never exposed:** it is not returned, the framework never logs it, and it is not placed
   in an exception message that reaches the caller (a failure of the exchange, including one the JDK
   raises with the header value in its message, is `IO_ERROR` with the message dropped) or in
@@ -1283,7 +1284,9 @@ UltiCloud 凭据代模块发送请求，但**从不把凭据交给模块**：框
 HTTP 交换，不论状态码，由调用方判断。只允许两个请求，按方法精确匹配：`POST /auth/magic-link` 与 `GET /auth/magic-link/poll`；
 其他路径、方法不对，或路径含 `..`、`//`、`\`、`%`、`?`、`#` 时返回 `PATH_NOT_ALLOWED`，不发请求；查询参数只能经 `query`
 映射传入，按 UTF-8 编码。允许列表只会随框架版本中有文档记录的协议变更而扩大，模块无法扩大它。服务器未登录 UltiCloud（未执行
-`/ulticloud login`，或已 `/ulticloud logout`，或保存的凭据已过期）时返回 `NOT_CONNECTED`，不发请求，由模块自行决定回退方式。
+`/ulticloud login`，或已 `/ulticloud logout`，或保存的凭据已过期）时返回 `NOT_CONNECTED`，不发请求。不要匿名重试：UltiCloud
+拒绝匿名创建 `/panel` 链接（HTTP 401）及仅凭玩家 UUID 轮询（HTTP 400，必须提供 `requestId`）。服主必须先通过
+`/ulticloud login` 将服务器登录到 UltiCloud，再请求链接。
 令牌不会被返回，框架自身不会把它写入日志，也不会出现在到达调用方的异常消息（交换失败一律为 `IO_ERROR`，异常消息被丢弃，包括 JDK
 在消息中带出请求头值的情况）或 `toString()` 中；不跟随重定向，凭据不会被转发到其他主机，3xx 作为 `OK` 结果原样返回。两个方法都会阻塞
 网络 I/O（连接超时 10 秒、读取超时 30 秒），在服务器主线程调用时抛出 `IllegalStateException`，请在异步任务中调用。它不写任何

@@ -1,263 +1,214 @@
-# UltiTools-API 6.3.0 Release Notes (draft)
+# UltiTools-API 6.3.0 Release Notes
 
-**Status: draft, unreleased.** This document is prepared alongside Phase 7 (Generational
-Removals) of the 6.3.0 milestone, on the `alpha` branch. It is not a release announcement — no
-tag has been cut, no artifact has been published to Maven Central, and cutting the release
-remains a separate, explicit maintainer decision. It exists so the release, when authorized,
-has accurate notes ready rather than a reconstruction from memory.
+6.3.0 consolidates the framework's command, configuration, transaction, module-lifecycle and
+panel integrations. These notes describe changes against the **released v6.2.5 contents**, not
+commit ancestry. The module EventBus and declarative GUI already existed in 6.2.5; the changes
+below repair and extend them rather than introduce them for the first time.
 
-**Core theme.** 6.3.0 is a correctness-and-consolidation release, not a feature release: several
-annotations and API surfaces the framework declared were silently doing nothing (AOP interceptors
-never wired in, `@ConditionalOnConfig` ignored on one path, config validation never enforced, a
-declarative-GUI repaint pipeline that never repainted). This release wires them up, which is why
-so many entries below are "behavioral changes" rather than API removals — the signatures did not
-move, but what they now actually do did.
+**Prepared for 6.3.0; not a publication announcement.** A formal version in the POM does not by
+itself mean a tag, GitHub release or Maven Central artifact has been published.
 
-## Breaking: removed APIs
+## Before upgrading
 
-A downstream module JAR **compiled against 6.2.5 and not recompiled** either continues to load and
-run unaffected, or fails in one of two ways:
+- Back up the server configuration and module data. For JSON storage, back up `.ultitools-journal`
+  together with the tables; never delete that journal, and run only one server per data folder.
+- Install module builds compiled for UltiTools-API 6.3.0 with module `plugin.yml` declaring
+  `api-version: 630`. **If you rely on modules, stay on 6.2.5 until 6.3.0 builds of every module
+  you use are published.** Upgrading only the framework leaves the old modules unloaded.
+- Replace the framework and affected module JARs with the server stopped, then restart.
+  `/ul reload` reloads configuration, not JARs.
+- The framework supports **Paper 1.19.2 build 163 or newer**, not plain Spigot. Use Java 17 below
+  Paper 1.20.5, and Java 21 from Paper 1.20.5. Java 8 bytecode is not a Java 8 server-runtime promise.
+- UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade require **Paper 1.21 or newer**;
+  their inventory screens can fail on older supported framework servers (see known issues).
 
-- A class that references a removed API is skipped at module scan, with one `SEVERE` summary naming
-  the module and the skipped class; the rest of that module loads.
-- A main class that overrides `unregisterSelf()` or `reloadSelf()`, both `final` in 6.3.0, fails
-  with `IncompatibleClassChangeError` when it is loaded, and the whole module is refused at load:
-  one `SEVERE` line names the module JAR and says it was built against an older UltiTools-API
-  version. Any other module that names it in `@PluginDependency(depends = ...)` is then refused, as
-  for any missing hard dependency; every other module still loads.
+### Module catalogue availability
 
-To fix the second case, a module author moves the override's work to `onUnregister()` or
-`onReload()`, removes every `super.unregisterSelf()` and `super.reloadSelf()` call, deletes an
-override that only logs, and recompiles against 6.3.0; see
-[Third occurrence: 6.2.5 → 6.3.0, a MINOR](COMPATIBILITY.md#third-occurrence-625--630-a-minor) in
-`COMPATIBILITY.md`. A server operator installs a release of the module built for 6.3.0. Full
-per-symbol reasoning, replacements, and the exact downstream failure shape for every entry below
-live in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md); the generated,
-cumulative list of every deprecated/announced/removed member is
-[`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
+**As checked on 2026-10-20, `/upm` has no new 6.3.0 (`api-version: 630`) modules to offer.**
+The public catalogue listed all 15 active modules; for every module,
+`GET /plugin/<id>/latest?apiLevel=630&minApiLevel=630` returned HTTP 409 (no compatible version).
+The same modules' unfiltered latest requests returned HTTP 200 with their older versions;
+an invalid API-level request returned HTTP 400. This is an availability observation, not an
+inference from a successful build or publication workflow.
 
-### `AbstractCommandExecutor` — the one removal with real downstream users
+Every module build currently offered by that catalogue predates 6.3.0 and is refused by 6.3.0 at
+startup: each overrides the now-`final` `unregisterSelf()`. Operators who rely on modules must stay
+on 6.2.5 until 6.3.0 builds of every module they use are published. Upgrading only the framework
+leaves those modules unloaded. Wait for compatible builds in the catalogue before installing them
+through `/upm`, and check catalogue availability again when upgrading.
 
-`abstracts.AbstractCommandExecutor` and its misspelled empty `@Deprecated` shim
-`AbstractCommendExecutor` are gone. This is the only removal in 6.3.0 with real, currently
-maintained downstream users — 15 files across 6 repositories
-(`Modules/UltiEconomy`, `Modules/UltiBot`, `Modules/UltiChat`, `Modules/UltiKits`,
-`Modules/UltiMenu`, `Tooling/UltiTools-External-Example`) — and it is removed **ahead of those
-repositories' own publication**, on an explicit maintainer decision recorded in
-`compatibility/records/6.3.0.md` and `.planning/phases/07-generational-removals/07-DOWNSTREAM-PREFLIGHT.md`.
-Merging this removal to `-SNAPSHOT` `alpha` is not releasing; **all six downstream modules must be
-migrated, merged, and published before a 6.3.0 tag is cut** — that is now a hard precondition of
-the 6.3.0 framework release gate, not something this removal itself satisfies.
+## Breaking API changes and migration
 
-Replacement: `abstracts.command.BaseCommandExecutor`. See `COMPATIBILITY.md`'s "Migrating off
-`AbstractCommandExecutor`" section for the full migration guide.
+Recompile downstream modules against 6.3.0 with the dependency kept `provided` (Maven) or
+`compileOnly` (Gradle). The [upgrade checklist](COMPATIBILITY.md#upgrade-checklist-moving-a-module-from-625-to-630),
+[removal registry](compatibility/DEPRECATIONS.md) and
+[per-change record](compatibility/records/6.3.0.md) contain the full contracts and replacements.
+Notable changes include:
 
-**What an un-recompiled downstream JAR sees**, observed on a real Paper 1.21.1 server (plan 07-04)
-and reproduced by this removal (plan 07-15):
+- `AbstractCommandExecutor` and its misspelled `AbstractCommendExecutor` shim are removed.
+  Extend `abstracts.command.BaseCommandExecutor` and implement `handleHelp(CommandSender)`.
+- `UltiToolsPlugin.unregisterSelf()` and `reloadSelf()` are now `final`. Move overrides to
+  `onUnregister()` and `onReload()` and remove calls to the old superclass lifecycle methods.
+  An old main class overriding either final method is refused with `IncompatibleClassChangeError`;
+  modules with a hard dependency on it are also refused.
+- Removed types include `AbstractDataEntity` (use `BaseDataEntity<ID>`), `PagingPage` (use
+  `BasePaginationPage`), `OkCancelPage` (use `BaseConfirmationPage`), `VersionWrapper` and
+  `DefaultVersionWrapper` (use `XVersionUtils`).
+- Removed registration APIs include the six-argument `UltiToolsPlugin` constructor, the old
+  seven-argument `PluginManager.register(...)`, package-based command/listener registration
+  overloads, and `ListenerManager.register(UltiToolsPlugin, Listener)`. Use the current constructors
+  and class-based/module-based registration APIs listed in the registry.
+- `TempListener.player(...)` and `PlayerTempListener` are removed; use `TempListener.common(...)`
+  with a filter. The ineffective `@OptionalParam` annotation is removed without replacement.
+- The old CGLIB factory and proxy-creation APIs are removed; proxy construction uses ByteBuddy
+  through `AopProxyResolver`. `Propagation.NESTED` is removed.
+- `UltiTools#getEconomy()` is removed; use `EconomyUtils.getEconomy()` or its wrapper methods.
+  The archived Adventure audience provider is removed; use Paper's native Adventure audiences.
+- `AbstractConfigEntity#getConfig()` is removed. Use `isPresentInFile(...)` for presence checks,
+  declared fields for values, and the explicit save APIs below.
+- The ineffective declarative GUI builder pairs `Container.background`/`getBackground` and
+  `GridView.rows`/`getMaxRows` are removed. `GuiRenderer.initialize` now takes a `Supplier<Widget>`.
+- Per-viewer log-stream `start`/`stop`/`pause`/`resume` APIs are removed rather than pretending to
+  control delivery without browser identity; these remote actions are rejected.
 
-```
-SEVERE: Module '<module>' skipped N class(es) that failed to load during startup and continued
-loading without them: <Command1>, <Command2>, .... This usually means the module was built
-against an older UltiTools-API version -- see COMPATIBILITY.md for the list of APIs removed or
-changed in this release.
-```
+There is no universal two-outcome rule for an old JAR: a class with an unavailable superclass can
+be skipped during scanning, an override of a newly final lifecycle method can refuse the module,
+and an old invocation of a removed method can fail only when executed with `NoSuchMethodError`.
+Consult the exact per-symbol record rather than treating successful startup as proof of compatibility.
 
-The module still loads and enables — `Done (...)!` still prints — with exactly its
-`AbstractCommandExecutor`-derived command classes silently absent from the command table, and this
-one named `SEVERE` line pointing at `COMPATIBILITY.md`.
+## Configuration and language files
 
-### Everything else: zero measured downstream references
+- Operator-written configuration is not automatically repaired or overwritten. Invalid values
+  are reported and refused (or use a declared default in memory where documented), not saved back
+  as defaults. Unsupported or invalid constraints can refuse the affected module or reload.
+- Configuration writes declare the keys they own and refuse a write if unrelated bytes cannot
+  be preserved or the file changed since it was read. Read the warning, correct the named layout,
+  or reload after an external edit, then retry. See the configuration chapter of `COMPATIBILITY.md`
+  for supported YAML layouts, atomic-write fallback and recovery limits.
+- `save()` persists only module changes. Operator commands use `saveOperatorChange(...)` or
+  `saveOperatorMapEntry(...)` for the named changes; `OperatorFiles` covers module-managed files.
+  **No configuration save happens automatically at shutdown, unload or replacement.**
+- `ConfigConverter<T>` with `@ConfigConverterFor` is the new conversion extension point. Legacy
+  parsers remain deprecated in 6.3.0 and are announced for removal in 6.4.0. Register converters for
+  unsupported declared field types before configuration initialization.
+- Configuration-bound `@Scheduled` and `@CmdCD` support live configuration values. Declare
+  `api-version: 630`, keep bound scheduled methods synchronous and remove the bound field's
+  redundant `@Range`; the binding defines its accepted range.
+- To leave a text value blank, write `key: ''`; deleting a key requests its default on next start.
+- Official language files are framework-owned and may be replaced on upgrade with a backup and
+  log message. To customise text, copy a language file under a new name and select that copy;
+  custom files remain operator-owned. Framework messages follow the selected `language`.
 
-Every other removal below was deprecated for at least one full MINOR release (or qualified for the
-same-release exception described in `COMPATIBILITY.md`) and, at removal time, had zero measured
-references across the 17 in-house module repositories, 4 tooling projects, and Libraries under the
-UltiKits organization, and zero references across all 16 pre-built module JARs already deployed on
-the maintainer's local dev server.
+## Transactions, persistence and dependency injection
 
-- **Version adaptation.** The `VersionWrapper` interface (all 14 default methods) and
-  `DefaultVersionWrapper`, its implementation, are gone, along with all three
-  `getVersionWrapper()` accessors (`UltiTools`, the static one on `UltiToolsPlugin`, and the
-  `@Bean`-registered one on `UltiToolsBean`). Replacement: `utils.XVersionUtils`, a strict
-  superset.
-- **Data and GUI base classes.** `AbstractDataEntity` is gone; `BaseDataEntity<ID>` now owns its
-  `id` field directly instead of inheriting it. `PagingPage` is gone
-  (replacement: `BasePaginationPage`). `OkCancelPage` is gone (replacement:
-  `BaseConfirmationPage`; the framework's own `InventoryConfirm` migrated in the same change).
-- **Listeners and registration.** `TempListener.player(Class)`, its nested
-  `TempListener$PlayerTempListenerBuilder`, and `PlayerTempListener` are gone (replacement:
-  `TempListener.common(Class)` narrowed with `.filter(Function)`). `@OptionalParam` is gone with
-  no replacement — it was never implemented and had no effect on command parsing.
-- **Plugin construction and registration.** `UltiToolsPlugin`'s six-argument constructor is gone
-  (replacement: the seven-argument constructor, passing `resourceFolderPath` explicitly).
-  `PluginManager`'s seven-argument `register(...)` overload and its private with-args
-  `initializePlugin` are gone — this overload never worked on any released version (Phase 1
-  D-15) and used the same-release exception. `CommandManager`'s two `register(CommandExecutor,
-  ...)` overloads and its `registerAll(UltiToolsPlugin, String)` are gone (replacement:
-  `register(UltiToolsPlugin, Class, ...)` / `registerAll(UltiToolsPlugin)`).
-  `ListenerManager.register(UltiToolsPlugin, Listener)` and
-  `registerAll(UltiToolsPlugin, String)` are gone (replacement: `register(UltiToolsPlugin,
-  Class)` / `registerAll(UltiToolsPlugin)`, the latter also honouring `manualRegister()`).
-- **AOP.** `aop.CglibProxyFactory` is gone — it could never work on a Paper server without a JVM
-  flag Paper does not set. `aop.ProxyFactory.createProxy(T)` / `createProxy(Class<T>, T)` and
-  `aop.AopProxyBeanPostProcessor` are gone — neither reached a tagged release, or shipped with
-  zero callers. `annotations.Propagation.NESTED` is gone — implementable, but dropped on
-  controllability rather than impossibility (savepoint behaviour depends on whichever
-  `sqlite-jdbc` version the server's own Paper build ships). Replacement for proxy creation:
-  `aop.ProxyFactory.createProxyClass(Class<T>, Set<Method>)` via `AopProxyResolver`.
+- `@Transactional` is wired through the AOP path for MySQL, SQLite and JSON. Rollback rules select
+  the shallowest matching exception type; `REQUIRES_NEW` and `NOT_SUPPORTED` suspend the outer scope.
+- JSON transactions stage changes, publish atomically across a plugin's tables and recover through
+  the journal after a crash. Durability and filesystem-specific limits are documented in
+  [JSON transactions](COMPATIBILITY.md#json-transactions-630--staged-atomic-and-durable).
+  Ordinary writes and programmatic transaction reads can wait up to five seconds for table locks.
+  For a read-modify-write in an annotated JSON transaction, use `updateIf` or `REPEATABLE_READ`.
+- A joined `@Transactional` method that throws an exception requiring rollback under its rollback
+  rules, or a failing nested `DataOperator#transaction(...)` scope, marks the whole transaction
+  rollback-only even if its caller catches the exception. The outermost commit rolls back and
+  throws `UnexpectedRollbackException`.
+- JSON reads return detached copies; persist changes with `update(...)`. An unconditional `del()`
+  is refused instead of deleting a whole table. Access to another module's entity operator is refused.
+- ByteBuddy replaces CGLIB. Detect proxies through `ProxyFactory.isProxyClass(...)`, not class names.
+  Required injection failures and unproxyable required AOP contracts refuse module load.
+- `@Service(priority)` resolves same-type candidates (higher wins); an exact tie is refused.
+  `registerSingleton` applies injection, lifecycle callbacks and bean post-processors.
+- `scanBasePackageClasses`, composed stereotypes, the module's scan switches and conditional
+  listener registration take effect. Missing dependencies and cycles refuse affected modules;
+  a module JAR without `name:` is refused instead of sharing another module's storage.
+- Name-based class-loading filters are removed; they were not a sandbox. Module JAR validation
+  retains the 100 MB size and 10,000-entry limits. Install only modules you trust.
 
-### Internal-only removal, not a public-API event
+## Commands, tasks, GUI and module lifecycle
 
-The seven-type WIRE-17 WebSocket dispatch cluster (`websocket.MessageHandlerRegistry`,
-`websocket.WebSocketMessageHandler`, and the five `websocket.handlers.*` implementations) is
-deleted. All seven carried `@ApiStatus.Internal` and none carried `@Deprecated`, so per
-`COMPATIBILITY.md`'s own policy this is not a compatibility event and does not appear on the
-removal list above — it is included here for completeness, because japicmp still needed exclusion
-entries for it (bytecode does not see `@ApiStatus`). Replacement, for anyone who was reaching into
-internal API anyway: `UltiPanelWebSocketClient`, the `PluginInitiationUtils` inbound-message
-dispatch table, and `PanelResponderRegistry` for a module claiming its own request/response
-responder.
+- **Synchronous commands now run at dispatch on the primary thread**, not one tick later.
+  From an inventory click handler, defer inventory changes and command dispatch with `runTask`.
+  Nested command dispatch is immediate; a command dispatching itself meets its usage lock/cooldown
+  on the same tick, and uncontrolled recursion can overflow the stack. Async bodies remain async.
+- Inherited `@CmdMapping` and `@Scheduled` methods are recognised. `@CmdTarget` uses override with
+  narrowing; a widening or lateral override refuses the command class. Tab completion checks
+  permission before contributing suggestions or invoking a suggestion method.
+- Cooldowns are scoped to executor instances; `@UsageLimit` releases acquired locks on refused
+  dispatches as well as completed ones. `ContainConsole()` now defaults to `true`.
+  `@AsyncCommand.timeout()` stops waiting and reports the timeout; the body can continue in the background.
+- Declarative GUI state changes now repaint, grid placement supports general widget types, and
+  clicks in the player's inventory no longer reach GUI-only handlers.
+- Unload/reload lifecycle hooks retain framework cleanup; `getPluginList()` returns an
+  unmodifiable snapshot. Module replacement is observed at restart before the update is committed;
+  an unsuccessful load can restore the retained previous JAR.
+- A failed `@PlayerCache` save does not stop other quit cleanup. The entry is still removed and the
+  framework does not retry the save: modules needing stronger guarantees must persist/retry themselves.
 
-## Behavioral changes (no signature change, different runtime behavior)
+## UltiCloud and remote management
 
-These do not show up in a diff of method signatures and `japicmp` cannot detect them. Full detail,
-worked before/after examples, and measurement evidence for every item below are in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
+### Immediate owner-authenticated `/panel` link cutover
 
-**AOP and proxying.**
+**Server-associated `/panel` magic-link creation requires the authenticated server owner immediately:
+there is no anonymous fallback and no grace period.** Connect the server with `/ulticloud login`
+before requesting a link. This does not require every player opening the link to own the server.
+Ordinary website account login, browser magic-link verification and the in-game `/login` command
+remain unchanged.
 
-- The AOP engine switched from CGLIB to ByteBuddy; generated proxy class names changed shape
-  (`Foo$$EnhancerByCGLIB$$xxxx` → `Foo$ByteBuddy$xxxx`). Detect a proxy with
-  `ProxyFactory.isProxyClass(Class<?>)`, not by pattern-matching the class name.
-- `@Transactional` moves from silently doing nothing to being wired end to end on all three
-  storage backends. `rollbackFor`/`noRollbackFor` now resolve by shallowest-inheritance-depth
-  match instead of `noRollbackFor` winning unconditionally. `REQUIRES_NEW`/`NOT_SUPPORTED` now
-  genuinely suspend the outer transaction. On `datasource.type: json`, transactions
-  (`DataOperator#transaction(...)` and `@Transactional`) are now staged per transaction, visible to
-  other threads only at commit and at one instant across a plugin's tables, atomic across those tables
-  and across a crash, and durable once `commit` returns; a plain JSON write can wait up to 5 seconds
-  for a transaction's table lock; a transaction begun by `DataOperator#transaction(...)` locks each
-  table at its first read, as 6.2.5 ran each callback alone per operator, so a read inside it can wait
-  too; and a `@Transactional` method that computes a write from a value it read uses `updateIf`
-  or `REPEATABLE_READ`. On every backend, a `@Transactional` method that joins an active transaction
-  and throws an exception its rollback rules accept marks the whole transaction rollback-only even if
-  the caller catches it, and the outermost commit rolls back and throws `UnexpectedRollbackException`.
-  Server operators: the JSON storage guidance in `COMPATIBILITY.md` ("JSON transactions (6.3.0)") covers
-  backing up the `.ultitools-journal` folder with the tables, running one server per data folder, and
-  what "durable once `commit` returns" means on Linux, Windows and macOS.
-- `@ExceptionCatch` can now refuse to load a module: a `final` bean class fails if anything asks
-  to intercept it, including an inherited `@ExceptionCatch` method.
-- A `final` bean carrying an AOP annotation it merely inherits, and an unresolvable required
-  `@Autowired` dependency, both now fail module load instead of degrading silently.
-- Same-type bean resolution now adjudicates ties by `@Service(priority)` (higher wins) and
-  refuses an exact tie rather than picking one arbitrarily.
-- `registerSingleton` now fully assembles its argument through the same
-  autowire/`@PostConstruct`/`BeanPostProcessor` pipeline as every other bean, and can refuse an
-  AOP-annotated instance under the same rules.
+`UltiCloudRequests` sends `POST /auth/magic-link` and `GET /auth/magic-link/poll` with the server
+credential. Poll by `requestId`, not player UUID; UUID-only polling is no longer supported.
+Handle `NOT_CONNECTED` without retrying anonymously, and call the helper off the primary thread.
+The [cloud-login guide](https://dev.ultikits.com/guide/advanced/cloud-login) documents this contract.
 
-**Commands.**
+### Other remote changes
 
-- `@CmdMapping` methods declared on a command executor's superclass are now registered — they
-  were previously silently ignored.
-- `@CmdTarget` class/method composition changed from an undocumented intersection-vs-override
-  split between the two command-executor generations to one shared override-with-narrowing rule;
-  a widening or lateral method-level override now refuses that command class at load.
-- Command-validator side effects (cooldown ticking, usage-limit acquire/release) moved into the
-  validator chain itself; an unenforceable `@CmdCD`/`@UsageLimit` now refuses to load.
-  `BaseCommandExecutor#executeCommand` gained a fourth parameter as part of this change.
-- `@UsageLimit` now actually serialises concurrent invocations as its name promises;
-  `ContainConsole()`'s default flipped to `true`.
-- `@CmdParam.suggest`'s resolution contract widened from three steps to four; an unknown `@key`
-  now refuses to load instead of silently falling through.
-- Tab completion now filters a `@CmdMapping` by permission before it can contribute a suggestion
-  or be reflectively invoked.
-- `@AsyncCommand.timeout()` is now honoured; the default path's double async dispatch is removed.
+- Eight `ultipanel.capabilities.*` switches gate panel operations. Monitoring, logs, player events
+  and file reads default on; file writes, deletions, command execution and server-property access
+  default off. Enable only the capabilities the operator wants.
+- Remote paths are resolved before use and constrained to editable roots; recursive deletion
+  requires an explicit request. Deleting a symbolic link removes the link, not its target;
+  recursive deletion does not follow links. Protected-file aliases are refused.
+- The command blocklist is operator-editable. A malformed list is rejected as a whole with a
+  warning and the defaults retained; an explicit empty list remains valid.
+- Remote file refusals are recorded as `DENIED` in the remote action log. Server-property edits
+  and other file writes use their respective capability switches.
+- Cloud login/logout, token refresh and WebSocket work are scoped to one session: retired work
+  cannot reactivate a logged-out session. Credentials move to the server's `.ultikits` credential
+  store. If an old and a malformed current store coexist, neither identity is overwritten;
+  correct the current document before retrying.
+- The framework's log stream mirrors console output on Paper 1.20.5 and newer. On Paper 1.19.2
+  to 1.20.4 the console mirror is unavailable: startup warns and the stream carries plugin lines
+  only. Neither case fixes the panel browser's live-connection defects listed below.
 
-**Persistence and data.**
+## Known issues and workarounds
 
-- `del()` called with no conditions is now refused outright (a security fix, no migration
-  period) — it previously emptied the entire table.
-- Entity ownership is now enforced: `getDataOperator(Class)` on another module's entity now
-  throws `DataAccessException`/`ENTITY_NOT_OWNED` instead of silently handing over that module's
-  real operator.
-- A module JAR whose `plugin.yml` has no `name:` key now refuses to load instead of sharing
-  `sqliteDB/unknown.db` with every other name-less module ever deployed.
-- `TransactionManager.getConnection()`/`setIsolationLevel(int)`/`setReadOnly(boolean)` are now
-  `@Deprecated` `default` methods rather than abstract ones; `DataStore.getOperator(...)` (both
-  overloads) and four `SimpleTempListener` constructors are newly deprecated, not yet
-  removal-eligible.
+These limitations are tracked for 6.4.0. Module and panel entries are ecosystem limitations, not
+claims that this framework release repairs those separately delivered products.
 
-**Container, injection, and module loading.**
+| Affected product / symptom | What to do meanwhile | Tracking |
+|---|---|---|
+| Framework: `/upm check` can say no updates during the first seconds of startup | Wait for the console's startup update-check result, then retry. | [#663](https://github.com/UltiKits/UltiTools-Reborn/issues/663) |
+| Framework: a module requiring Paper 1.21 or newer can, on older Paper, be misreported as built against an older framework | Check the module's server requirement before blaming its framework build. | [#658](https://github.com/UltiKits/UltiTools-Reborn/issues/658) |
+| UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade inventory screens can fail on older Paper | Run these five modules on Paper 1.21 or newer. | [#655](https://github.com/UltiKits/UltiTools-Reborn/issues/655) |
+| Framework: a partial module reload repeats its result twice in the log and once in the reply | Read the first result; ignore the duplicates. | [#665](https://github.com/UltiKits/UltiTools-Reborn/issues/665) |
+| Framework: reload/config wording may imply a restart or mix languages; YAML-anchor comments may expand after a language change | Correct the named invalid value and run `/ul reload`; the refused panel edit wrote nothing and needs no restart. | [#598](https://github.com/UltiKits/UltiTools-Reborn/issues/598) |
+| UltiEconomy: a process stop between debit and credit can lose a transfer without a log entry | No module workaround; after an unclean stop, check reported missing transfers and correct balances manually. | [#44](https://github.com/UltiKits/UltiEconomy/issues/44) |
+| UltiEconomy: transfer/refund failure replies can be misleading; a note redemption without a balance row can give no reply and retain the note | After a database problem, inspect balances and logs before paying again. | [#45](https://github.com/UltiKits/UltiEconomy/issues/45) |
+| UltiLogin: console/panel `logadmin reset` can expose the new password in logs | Reset passwords in game, where logging is masked, and keep logs private. | [#57](https://github.com/UltiKits/UltiLogin/issues/57) |
+| UltiWorlds: failed PvP persistence can leave the live flag changed until the next player enters that world | Repeat the command and confirm the live and saved values agree. | [#58](https://github.com/UltiKits/UltiWorlds/issues/58) |
+| Panel: plugin configuration editor is blank/unavailable | Edit configuration files directly on the server. | [#123](https://github.com/UltiKits/UltiPanelFrontend/issues/123) |
+| Panel: Settings says saved before the server accepts; some of its 14 settings do not exist on every server | Check the actual server setting; do not treat the success message as confirmation. | [#124](https://github.com/UltiKits/UltiPanelFrontend/issues/124), [#125](https://github.com/UltiKits/UltiPanelFrontend/issues/125) |
+| Panel: no browser live push, no remote command output, and the management status strip says Disconnected even when online | Read output in the server console and use the dashboard for online state. | [#127](https://github.com/UltiKits/UltiPanelFrontend/issues/127), [#128](https://github.com/UltiKits/UltiPanelFrontend/issues/128), [#131](https://github.com/UltiKits/UltiPanelFrontend/issues/131) |
+| Panel: a refused command still reports Command execution request sent | Check `ultipanel.capabilities.commands` and the server console; commands default off. | [#55](https://github.com/UltiKits/ultipanel-api-worker/issues/55) |
+| Panel: legacy paid activation-code redemption for permanent Pro is unavailable or fails | No verified self-service workaround. Eligible holders' historical permanent Pro entitlement remains supported; the complete repair is deferred to 6.4.0 and redemption may remain unavailable until then. The historical inventory's authority and completeness are not established. | [#60](https://github.com/UltiKits/ultipanel-api-worker/issues/60) |
+| Developer CLI: `ultikits versions list` prints undefined fields | Look up module versions in the panel or catalogue web page. | [#2](https://github.com/UltiKits/ultikits-cli/issues/2) |
 
-- `scanBasePackageClasses()` now takes effect; package-source resolution becomes additive rather
-  than first-match-wins.
-- The `eventListener`/`cmdExecutor`/`config` `@AliasFor` switches on `@UltiToolsModule` now take
-  effect. `@ConditionalOnConfig` is now honoured on the listener package-scan path.
-- Composed stereotype annotations more than one meta-level above `@Component` are now recognised.
-- Config validation goes live: a violating value now refuses the affected module at load instead
-  of loading with an invalid config silently accepted.
-- A dependency cycle or missing dependency now refuses the affected modules instead of degrading
-  silently. A module JAR failing validation never reaches the classpath.
-- Both plugin registration entry points now produce identical containers; an external connector's
-  beans now receive the connector's own `JavaPlugin`, not the framework's.
-- `ComponentScanner`'s failure and skip diagnostics now carry a level and a stack trace.
-- `supported()` is derived from shipped language files and now participates in language
-  resolution.
+## Further reference
 
-**Declarative GUI.**
-
-- The repaint pipeline actually repaints now — before 6.3.0, a change to widget state after
-  first render silently never showed up. `GuiRenderer.initialize`'s signature changes to accept a
-  `Supplier<Widget>` instead of a single `Widget`.
-- A click on the player's own inventory (the lower half of a split view) can no longer reach a
-  declarative-GUI click handler meant for the GUI's own inventory.
-- `GridView` now positions any widget type using parent data written at render time, not just the
-  types it originally special-cased.
-- Two declarative-GUI builder-method pairs (`Container#background`/`Container.Builder#background`,
-  `GridView#getMaxRows`/`GridView.Builder#rows`) are removed rather than given a guessed
-  implementation — they were previously accepted and silently ignored.
-
-**Remote/panel surface.**
-
-- Eight `ultipanel.capabilities.*` switches now gate every panel-facing capability, with a split
-  default (read capabilities default open, write/execute capabilities default closed).
-- A recursive directory delete through the remote file API now requires an explicit
-  `recursive: true`; the remote file `list` response now marks refused entries instead of
-  silently omitting them.
-- The remote command blocklist becomes fully operator-editable, with no unoverridable floor.
-- `CommandExecutionManager.isCommandAllowed` and `FileOperationManager.isPathAllowed` change
-  return type from `boolean` to `AccessDecision` (an internal, non-public-API change; recorded
-  here because `japicmp` reports it, not because it is a compatibility event for module authors).
-- A remote file request now uses the object it authorizes: `read`, `write`, `list` and `delete` resolve the
-  requested path on the filesystem once, so a `..` after a symbolic link, a link whose target lies outside every
-  editable root and a dangling or looping link can no longer reach an unauthorized file, a path that cannot be
-  located safely is refused, and a `list` marks an alias to an outside file `OUTSIDE_ROOTS` (#672).
-- A panel `delete` of a symbolic link removes only the link, never its target, whether the link points to a file,
-  to a directory (with `recursive` absent, `false` or `true`) or to nothing, and a recursive `delete` of a directory
-  never follows a link inside the deleted tree: the link is removed and its target is untouched (#672).
-- A symbolic link inside an editable root that points to a protected file (a credential file, the remote action
-  log's directory) is refused like that file, and a `list` marks it `PROTECTED_CREDENTIAL` (#672).
-- Every refused remote file request is one `DENIED` entry in the remote action log, including a refusal reached
-  while the path is resolved on disk; a permitted request that then fails for an ordinary reason stays one
-  `ALLOWED` entry (#672).
-- `update_config` is gated by the target it routes to: a `server_properties` target needs only
-  `ultipanel.capabilities.server-properties`, every other target only `ultipanel.capabilities.file-write` (#672).
-- A malformed `ultipanel.commands.blocklist` (not a list, or a list with an element that is not a string) is
-  ignored as a whole with one warning and the default blocklist stays in force, instead of installing an empty
-  or partial one; an explicit `[]` stays valid (#672).
-- When both the pre-6.3.0 credential file and the current one exist, the old file is removed only after the
-  current file reads as a credential document; otherwise both are kept, a warning names both paths, and no
-  identity or token is written until the current file is fixed (#672).
-
-## Where to look for more detail
-
-- [`COMPATIBILITY.md`](COMPATIBILITY.md) — version-number policy, when an API becomes eligible
-  for removal, the two same-release exceptions, the `AbstractCommandExecutor` migration guide,
-  and the two binary-incompatibility post-mortems this project has had before.
-- [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md) — this cycle's full
-  behavioural record: every item above, with its replacement, its evidence, and the exact
-  downstream failure shape.
-- [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md) — the generated, cumulative
-  registry of every deprecated, announced, and removed member across the project's history.
-
-If your module references any removed API, or you disagree with this policy, please open a
-[GitHub issue](https://github.com/UltiKits/UltiTools-Reborn/issues) before this release is tagged.
+- [COMPATIBILITY.md](COMPATIBILITY.md): migration checklist, configuration write rules, support
+  matrix, transaction durability limits and runtime dependency ownership.
+- [compatibility/records/6.3.0.md](compatibility/records/6.3.0.md): exact removals and runtime changes.
+- [compatibility/DEPRECATIONS.md](compatibility/DEPRECATIONS.md): cumulative generated registry.
+- XSeries is no longer shaded into the framework; modules using it declare it themselves as
+  `provided`/`compileOnly`. Paper loads the framework's declared libraries and supplies Gson,
+  MySQL Connector/J, protobuf and slf4j. The framework's build uses JDK 21 with Java 8 bytecode;
+  it does not establish a separate runtime floor for dependencies supplied by Paper.
