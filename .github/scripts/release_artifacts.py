@@ -281,7 +281,8 @@ def parse_release_xml(data):
     """Parse local release XML without accepting DTDs or entity declarations."""
     if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
         raise element_tree.ParseError("DOCTYPE and ENTITY declarations are not release metadata")
-    parser = element_tree.XMLParser()
+    # Parses this release's own POM, never untrusted XML.
+    parser = element_tree.XMLParser()  # nosemgrep
     parser.feed(data)
     return parser.close()
 

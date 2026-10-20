@@ -111,6 +111,10 @@ if "verify" in argv:
         [("index.html", b"<html></html>"), ("com/ultikits/ultitools/UltiTools.html", b"<html></html>")])
     # The publication POM the real flatten-maven-plugin made from this tree's pom.xml (see real_flattened_pom).
     shutil.copyfile(os.environ["FAKE_FLATTENED_POM"], str(root / ".flattened-pom.xml"))
+    if variant == "untracked-build-file":
+        build = root / "build"
+        build.mkdir(exist_ok=True)
+        (build / "test-output.json").write_text("{}\n")
     if variant == "dirty-tree":
         with open(str(root / "pom.xml"), "a") as fh:
             fh.write("<!-- rewritten by the build -->\n")
@@ -595,6 +599,29 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertIsNone(self.fx.release_assets())
         self.assertEqual(self.fx.git_raw("tag", "-l", TAG), "")
         self.assertEqual(self.fx.git_raw("--git-dir", str(self.fx.origin), "tag", "-l", TAG, cwd=self.fx.root), "")
+
+    def test_prepare_retains_files_when_build_leaves_untracked_output(self):
+        result = self.prepare(env={"FAKE_MVN_VARIANT": "untracked-build-file"})
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assertEqual(sorted(p.name for p in self.retain.iterdir()), sorted(PAYLOADS + (MANIFEST,)))
+        for name in (PRIMARY, SOURCES, JAVADOC):
+            self.assertEqual((self.retain / name).read_bytes(), (self.fx.work / "target" / name).read_bytes())
+        self.assertEqual(self.fx.git_raw("status", "--porcelain"), "?? build/")
+        self.assertEqual(self.fx.gh_writes(), [])
+
+    def test_prepare_refuses_tracked_changes_made_by_build(self):
+        result = self.prepare(env={"FAKE_MVN_VARIANT": "dirty-tree"})
+        self.assert_blocked_without_writes(result, "The build changed tracked files; the bytes no longer match")
+        self.assertFalse(self.retain.exists())
+        self.assertEqual(self.fx.git_raw("status", "--porcelain"), "M pom.xml")
+
+    def test_dry_run_succeeds_when_build_leaves_untracked_output(self):
+        result = self.fx.run_release("--dry-run", env={"FAKE_MVN_VARIANT": "untracked-build-file"})
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assertEqual(self.fx.git_raw("status", "--porcelain"), "?? build/")
+        self.assertEqual(self.fx.gh_writes(), [])
+        self.assertIn("not acceptance evidence", result.stdout.decode())
+        self.assertFalse(self.retain.exists())
 
     def test_prepare_manifest_binds_source_and_raw_bytes(self):
         manifest_path = self.prepared()

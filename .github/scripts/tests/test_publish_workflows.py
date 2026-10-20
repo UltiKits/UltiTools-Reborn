@@ -611,7 +611,8 @@ def parse_local_pom(data):
     """Read local Maven metadata, refusing DTD and entity declarations before parsing."""
     if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
         raise ValueError("a local POM must not declare DTDs or entities")
-    parser = element_tree.XMLParser()
+    # Parses trusted local Maven POMs and test fixtures, never untrusted XML.
+    parser = element_tree.XMLParser()  # nosemgrep
     parser.feed(data)
     return parser.close()
 

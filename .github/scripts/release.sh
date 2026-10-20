@@ -259,9 +259,9 @@ build_candidate() {
     echo "▶ Verifying and building (mvn -B clean verify, including tests)"
     mvn -B clean verify
     # A build that rewrites a tracked file no longer matches the commit it claims to come from.
-    if [ -n "$(git status --porcelain)" ]; then
+    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
         die "The build changed tracked files; the bytes no longer match ${LOCAL_SHA:0:12}.
-$(git status --porcelain)"
+$(git status --porcelain --untracked-files=no)"
     fi
     [ "$(git rev-parse HEAD)" = "$LOCAL_SHA" ] || die "HEAD moved during the build."
 }
