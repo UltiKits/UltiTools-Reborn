@@ -1184,7 +1184,7 @@
         <dependency>
             <groupId>me.clip</groupId>
             <artifactId>placeholderapi</artifactId>
-            <version>2.11.6</version>
+            <version>2.12.3</version>
             <scope>provided</scope>
         </dependency>
         <!-- XSeries for cross-version compatibility (1.8.8 - 1.21+). provided scope (D-23/D-24,
