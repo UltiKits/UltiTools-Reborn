@@ -1,8 +1,13 @@
 package com.ultikits.ultitools.manager;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -11,76 +16,216 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.io.File;
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.ToLongFunction;
 import java.util.logging.Level;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * 服务器监控管理器
- * 负责收集服务器状态信息并通过WebSocket发送
+ * Server monitor manager.
+ * Responsible for collecting server status information and sending it via WebSocket.
  */
 @ApiStatus.Internal
 public class ServerMonitorManager {
     private UltiPanelWebSocketClient webSocketClient;
     /**
-     * 发送线程池。<b>不能是 final</b>：{@link #stopMonitoring()} 会 shutdown 它，而
-     * {@code ScheduledExecutorService} 一经 shutdown 就永久失效。logout 之后再 login
-     * 是一条完全正常的路径，那时 {@link #startMonitoring()} 必须拿到一个可用的池，
-     * 否则 {@code scheduleAtFixedRate} 直接抛 {@code RejectedExecutionException}。
+     * Send thread pool. <b>Must not be final</b>: {@link #stopMonitoring()} shuts it down, and
+     * once a {@code ScheduledExecutorService} is shut down it is permanently dead. Logging out
+     * and back in is a perfectly normal path, and at that point {@link #startMonitoring()} must
+     * obtain a usable pool -- otherwise {@code scheduleAtFixedRate} throws {@code
+     * RejectedExecutionException} directly.
      */
     private ScheduledExecutorService scheduler;
     private boolean isMonitoring = false;
     private int tickCount = 0;
 
-    // TPS计算相关
+    // TPS calculation related
     private long lastTick = System.currentTimeMillis();
-    private final long[] tpsHistory1m = new long[60];   // 1分钟TPS历史
-    private final long[] tpsHistory5m = new long[300];  // 5分钟TPS历史
-    private final long[] tpsHistory15m = new long[900]; // 15分钟TPS历史
+    private final long[] tpsHistory1m = new long[60];   // 1-minute TPS history
+    private final long[] tpsHistory5m = new long[300];  // 5-minute TPS history
+    private final long[] tpsHistory15m = new long[900]; // 15-minute TPS history
     private int historyIndex = 0;
 
-    // CPU采样（在Bukkit主线程定期采样，batch_update线程读取）
+    // CPU sampling (sampled periodically on the Bukkit main thread, read by the batch_update thread)
     private volatile double lastCpuUsage = 0.0;
 
-    /** 世界/玩家/插件状态的采样周期，单位 tick。100 tick = 5 秒，与 batch_update 的发送节拍一致。 */
+    /** Sampling period for world/player/plugin status, in ticks. 100 ticks = 5 seconds, matching batch_update's send cadence. */
     private static final long SNAPSHOT_INTERVAL_TICKS = 100L;
 
     /**
-     * 主线程采出来的服务器状态快照，异步发送线程只读它。
+     * Polling granularity for {@link #maybeSendLogsOnly()}'s scheduled check, in milliseconds
+     * (Gate-2 finding, round 11). Narrowed from 1 second to bound the worst-case overshoot past a
+     * configured {@code batchConfig.interval} to roughly this value, rather than up to a full
+     * second -- see the call site's own comment for the numeric evidence and the reasoning for not
+     * instead dynamically rescheduling this task to track the transmitter's own live interval.
+     */
+    private static final long LOG_FLUSH_POLL_INTERVAL_MS = 100L;
+
+    /**
+     * A server-state snapshot sampled on the main thread; the async send thread only ever reads
+     * it.
      * <p>
-     * <b>这是 issue #179 的全部要点。</b>在它存在之前，{@code sendBatchUpdate} 跑在普通
-     * {@code ScheduledThreadPool} 上，却在那里直接调 {@code Bukkit.getWorlds()}、
-     * {@code world.getLoadedChunks()}、{@code Bukkit.getOnlinePlayers()}、
-     * {@code player.getLocation()} —— 全是 Paper 明确不支持在异步线程上碰的可变世界状态，
-     * 表现为偶发的并发修改异常或读到撕裂的数据。
+     * <b>This is the entire point of issue #179.</b> Before this field existed, {@code
+     * sendBatchUpdate} ran on a plain {@code ScheduledThreadPool} but called {@code
+     * Bukkit.getWorlds()}, {@code world.getLoadedChunks()}, {@code Bukkit.getOnlinePlayers()},
+     * {@code player.getLocation()} directly from there -- all mutable world state Paper
+     * explicitly does not support touching from an async thread, surfacing as intermittent
+     * concurrent-modification exceptions or torn reads.
      * <p>
-     * 同一个类里的 TPS/CPU 采样<b>已经</b>正确地 hop 到了 {@code runTaskTimer}，说明契约当时
-     * 就被识别到了，只是只应用了一半。本字段把剩下那一半补齐，沿用完全相同的模式。
+     * TPS/CPU sampling in this same class <b>already</b> correctly hopped over to {@code
+     * runTaskTimer}, showing the contract was recognized at the time -- just only half applied.
+     * This field fills in the other half, following the exact same pattern.
      * <p>
-     * 代价是数据最多陈旧一个采样周期（5 秒）。这是刻意选的：另一条路是让异步线程用
-     * {@code callSyncMethod().get()} 同步等主线程，那会让监控的存活依赖主线程的健康度，
-     * 而服务器卡顿时恰恰是最需要监控还能说话的时候。
+     * The cost is that data can be stale by up to one sampling period (5 seconds). This is a
+     * deliberate choice: the alternative would have the async thread synchronously wait on the
+     * main thread via {@code callSyncMethod().get()}, which would make monitoring's liveness
+     * depend on the main thread's health -- precisely when the server is lagging is exactly when
+     * monitoring most needs to still be able to speak.
      */
     private volatile ServerStateSnapshot stateSnapshot = ServerStateSnapshot.EMPTY;
 
-    /** 主线程上的两个定时任务，{@link #stopMonitoring()} 需要能取消它们。 */
+    /** The two main-thread scheduled tasks; {@link #stopMonitoring()} needs to be able to cancel them. */
     private BukkitTask tpsTask;
     private BukkitTask snapshotTask;
+
+    /**
+     * Wall-clock timestamp of the last time queued logs were actually drained into a
+     * {@code batch_update} message, in external-drain mode (Gate-2 finding: with monitoring
+     * enabled -- the shipped default -- {@link #sendBatchUpdate()} runs on its own hardcoded
+     * 5-second tick, completely independent of {@link UltiPanelLogTransmitter}'s own configured
+     * batch-send interval.
+     * Before this field existed, that meant the panel's live {@code batchConfig.interval} action
+     * (#432) had NO observable effect whenever monitoring was on, because the monitor drained the
+     * queue every 5 seconds regardless of what interval was configured. Gating the drain itself by
+     * this timestamp makes the configured interval govern how often logs actually go out, even
+     * though {@code sendBatchUpdate()} itself still ticks every 5 seconds for status/metrics).
+     * Starts at {@code 0} so the very first tick after {@link #startMonitoring()} always drains.
+     * <p>
+     * {@link AtomicLong}, not a plain {@code volatile long} (Gate-2 finding, round 4): two
+     * independently-scheduled tasks ({@link #sendBatchUpdate()}'s 5-second tick and
+     * {@link #maybeSendLogsOnly()}'s 1-second tick) can become due in the SAME window (e.g. a
+     * 1000ms configured interval), and {@code volatile} only guarantees visibility, not that a
+     * "read, compare, then write" sequence is atomic -- both threads could pass the elapsed-time
+     * check before either updates the field, both call {@link UltiPanelLogTransmitter#drainQueue}
+     * concurrently against the same queue, and split one batch of records across two separate
+     * {@code log_batch}/{@code batch_update} frames with interleaved {@code poll()} calls,
+     * scrambling delivery order across the two frames. {@link #claimLogFlushWindow(long, int)}
+     * uses {@link AtomicLong#compareAndSet} so only ONE of the two competing callers ever wins a
+     * given window; the loser skips draining entirely rather than draining a partial, racing
+     * subset.
+     */
+    private final AtomicLong lastLogFlushMs = new AtomicLong(0L);
+
+    /**
+     * Guards the ACTUAL drain-and-send operation ({@link #drainAndSendLogsOnly}) across all
+     * THREE paths that can trigger one: {@link #sendBatchUpdate()}'s 5-second tick,
+     * {@link #maybeSendLogsOnly()}'s 1-second tick, and {@link #drainLogsNow()}'s size-triggered,
+     * event-driven call (Gate-2 finding, round 7). {@link #claimLogFlushWindow(long, int)}'s CAS
+     * only arbitrates between the two TIME-based paths against each other; {@code drainLogsNow()}
+     * deliberately does not participate in that CAS at all (it is not time-gated), so without a
+     * separate mutual-exclusion lock it could run concurrently with whichever time-based path just
+     * won the CAS, and the two would poll() the same queue at once, splitting one logical batch
+     * across two frames with no ordering guarantee between them. This lock is orthogonal to the
+     * CAS: the CAS decides WHETHER a time-based path may proceed at all; this lock decides that
+     * only ONE drain (whichever path triggered it) is ever in flight at a time.
+     */
+    private final Object logDrainLock = new Object();
+
+    /**
+     * The file whose filesystem backs the {@code diskUsage} metric -- the server root (the working
+     * directory the Paper process was started in), matching {@link FileOperationManager}'s own
+     * {@code serverRoot} convention. Package-private and mutable only so tests can point it at a
+     * controlled location; production code never reassigns it (D-14, #436).
+     */
+    private File diskUsageRoot = new File(System.getProperty("user.dir"));
+
+    /**
+     * Seam over {@link File#getTotalSpace()}, so "the filesystem reports zero total space" (D-14)
+     * is deterministic in tests without needing an actual zero-capacity filesystem. Defaults to the
+     * real method reference.
+     */
+    private ToLongFunction<File> totalSpaceReader = File::getTotalSpace;
+
+    /**
+     * Seam over {@link File#getFreeSpace()} (WR-03) -- includes space reserved for the
+     * filesystem's own root/superuser allocation, matching what {@code df}'s own {@code Use%}
+     * column treats as "used" (total minus this value). Distinct from {@link #usableSpaceReader}
+     * ({@link File#getUsableSpace()}), which EXCLUDES that reservation -- the two diverge on a
+     * real ext4 volume with a nonzero reserved-block percentage.
+     */
+    private ToLongFunction<File> freeSpaceReader = File::getFreeSpace;
+
+    /** Seam over {@link File#getUsableSpace()}, same rationale as {@link #totalSpaceReader}. */
+    private ToLongFunction<File> usableSpaceReader = File::getUsableSpace;
 
     public ServerMonitorManager() {
         this.scheduler = Executors.newScheduledThreadPool(2);
     }
 
     /**
-     * 一次主线程采样的结果。字段全部 final，构造完成后不再改动，通过 volatile 字段发布，
-     * 因此读线程看到的要么是上一份完整快照、要么是这一份完整快照，不会看到半份。
+     * Exposes {@link #logDrainLock} so {@link LogStreamManager#initialize} can wire
+     * {@link UltiPanelLogTransmitter#setExternalDrainCoordinationLock} to the SAME lock object
+     * this class's own drain paths already synchronize on (Gate-2 finding, round 9).
+     * Package-private -- this is internal cross-class coordination, not a public API.
+     */
+    Object getLogDrainLock() {
+        return logDrainLock;
+    }
+
+    /**
+     * Atomically claims the current log-flush window if (and only if) {@code intervalMs} has
+     * elapsed since the last successful claim, advancing {@link #lastLogFlushMs} to {@code now}
+     * as part of the same compare-and-set. Returns {@code false} without side effects if the
+     * interval has not elapsed, OR if a concurrently-running competing task already claimed this
+     * exact window first (Gate-2 finding, round 4 -- see {@link #lastLogFlushMs}'s own javadoc).
+     *
+     * @param now the caller's own {@link System#currentTimeMillis()} snapshot
+     * @param intervalMs the currently configured batch-send interval
+     * @return {@code true} only for the caller that should proceed to drain and send
+     */
+    private boolean claimLogFlushWindow(long now, int intervalMs) {
+        long previous = lastLogFlushMs.get();
+        if (now - previous < intervalMs) {
+            return false;
+        }
+        return lastLogFlushMs.compareAndSet(previous, now);
+    }
+
+    /**
+     * Test seam: point the disk-usage reading at a different root (e.g. a real temp directory).
+     * Production code never calls this.
+     */
+    void setDiskUsageRoot(File diskUsageRoot) {
+        this.diskUsageRoot = diskUsageRoot;
+    }
+
+    /**
+     * Test seam: inject fake total/free/usable-space readers (e.g. to force the
+     * zero-total-space outcome deterministically, or to pin a known used-percentage without
+     * depending on the real filesystem's actual free space). Production code never calls this.
+     */
+    void setDiskSpaceReaders(ToLongFunction<File> totalSpaceReader, ToLongFunction<File> freeSpaceReader,
+            ToLongFunction<File> usableSpaceReader) {
+        this.totalSpaceReader = totalSpaceReader;
+        this.freeSpaceReader = freeSpaceReader;
+        this.usableSpaceReader = usableSpaceReader;
+    }
+
+    /**
+     * The result of one main-thread sample. Every field is final and never changed after
+     * construction, published via a volatile field, so a reading thread sees either the
+     * previous complete snapshot or this complete snapshot, never a half-built one.
      * <p>
-     * 其中三个 {@link JsonArray} 在发布之后<b>绝不可再被修改</b>——它们会被直接塞进待发送的
-     * 消息里，序列化只读不写，所以共享实例是安全的；一旦有人在发布后 add 一笔，这个前提就没了。
+     * The three {@link JsonArray} fields <b>must never be mutated again after being
+     * published</b> -- they are pushed directly into the outgoing message and serialization is
+     * read-only, so sharing the instance is safe; the moment anyone calls {@code add} on one
+     * after publication, that precondition no longer holds.
      */
     private static final class ServerStateSnapshot {
         static final ServerStateSnapshot EMPTY = new ServerStateSnapshot(
@@ -112,63 +257,109 @@ public class ServerMonitorManager {
     }
     
     /**
-     * 设置WebSocket客户端
-     * @param client WebSocket客户端
+     * Set the WebSocket client.
+     * @param client the WebSocket client
      */
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
         this.webSocketClient = client;
     }
-    
+
     /**
-     * 开始监控服务器状态
+     * Start monitoring server status.
      */
     public void startMonitoring() {
         if (isMonitoring) {
             return;
         }
-        
+
         isMonitoring = true;
-        // 上一轮 stopMonitoring 把池关掉了就换一个新的——见字段上的说明。
+        lastLogFlushMs.set(0L); // always drain on the first tick of a fresh monitoring session
+        // If the previous stopMonitoring() shut the pool down, swap in a fresh one -- see the
+        // note on the field.
         if (scheduler == null || scheduler.isShutdown()) {
             scheduler = Executors.newScheduledThreadPool(2);
         }
-        UltiTools.getInstance().getLogger().log(Level.INFO, "启动服务器状态监控");
-        
-        // 等待WebSocket连接建立后，立即发送初始状态
-        Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
-            if (webSocketClient != null && webSocketClient.isConnected()) {
-                sendBatchUpdate();
-            }
-        }, 20L); // 等待1秒
+        UltiTools.getInstance().getLogger().log(Level.INFO, FrameworkText.text("启动服务器状态监控"));
 
-        // 启用日志传输器的外部排空模式（日志将由batch_update统一发送）
+        // Send the initial status as soon as the WebSocket connection is established
+        // Every scheduler call here goes through the #621 check: startMonitoring() is reached from
+        // a completing handshake on the WebSocket thread, which may run while UltiTools disables.
+        PluginInitiationUtils.scheduleUnlessDisabling("initial server status",
+            () -> Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+                if (webSocketClient != null && webSocketClient.isConnected()) {
+                    sendBatchUpdate();
+                }
+            }, 20L)); // Wait 1 second
+
+        // Enable the log transmitter's external drain mode (logs will be sent uniformly via
+        // batch_update). Defensive only -- the PRIMARY point this is applied from is
+        // LogStreamManager#initialize() itself (Gate-2 finding, round 4): wireManagers() calls
+        // startMonitoring() BEFORE the very first transmitter exists, so this check would see
+        // null and never retry on first boot, and every reconnect rebuilds a fresh transmitter
+        // through initialize() while this method early-returns above (isMonitoring already
+        // true) without ever reaching that new instance. This call stays here only for the case
+        // where a transmitter genuinely already exists when startMonitoring() runs.
         LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
         if (lsm != null && lsm.getLogTransmitter() != null) {
             lsm.getLogTransmitter().setExternalDrainMode(true);
         }
 
-        // 每5秒发送一次batch_update（包含status、metrics，每12个tick包含plugins，每次包含logs）
-        // 注意：这条线程**只负责发送**，一切 Bukkit 状态都来自主线程采好的快照。见 issue #179。
+        // Send a batch_update every 5 seconds (includes status and metrics; includes plugins
+        // every 12th tick; includes logs every time it is due per lastLogFlushMs).
+        // Note: this thread **only sends** -- every piece of Bukkit state comes from the
+        // main-thread-sampled snapshot. See issue #179.
         scheduler.scheduleAtFixedRate(this::sendBatchUpdate, 5, 5, TimeUnit.SECONDS);
 
-        // 启动TPS计算 + CPU采样任务（每秒）
-        tpsTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
+        // Gate-2 finding (round 3): sendBatchUpdate()'s own logs inclusion is gated by
+        // lastLogFlushMs, but that gate was only ever CHECKED on sendBatchUpdate()'s own fixed
+        // 5-second tick, so a configured interval was still quantized up to a multiple of 5
+        // seconds (1000ms drained no faster than every 5s; 7000ms drained roughly every 10s,
+        // not 7). This second task checks the SAME lastLogFlushMs gate at a finer granularity,
+        // independent of sendBatchUpdate()'s own tick -- see maybeSendLogsOnly()'s own javadoc
+        // for why sharing the one field is race-safe and does not double-send. Cancelled
+        // implicitly by stopMonitoring()'s scheduler.shutdown(), same as the task above --
+        // neither is tracked in its own field.
+        //
+        // Gate-2 finding (round 11): the ORIGINAL granularity here was a flat 1-second tick, which
+        // itself still rounds delivery UP to its own next tick for any configured interval that is
+        // not a whole multiple of one second -- a 1500ms interval drained roughly every 2000ms, and
+        // a 1001ms interval could take nearly twice its own requested value. Rather than replace
+        // this fixed-rate check with a dynamically-rescheduled task tracking the transmitter's own
+        // live interval (the reviewer's other suggested option) -- which would need new live
+        // rescheduling wiring between this class and UltiPanelLogTransmitter every time
+        // setIntervalMs() runs, for a purely cosmetic latency improvement on a log-streaming
+        // feature, not a correctness path -- this task's own polling granularity is narrowed from
+        // 1 second to LOG_FLUSH_POLL_INTERVAL_MS, tightening the worst-case overshoot bound from up
+        // to ~1000ms to up to ~100ms against any interval at or above MIN_INTERVAL_MS (1000ms):
+        // roughly a 10x reduction, at the cost of a 10x cheaper-call frequency increase on a
+        // no-op-in-the-common-case CAS check (claimLogFlushWindow returns false immediately
+        // whenever the interval has not yet elapsed).
+        scheduler.scheduleAtFixedRate(this::maybeSendLogsOnly,
+                LOG_FLUSH_POLL_INTERVAL_MS, LOG_FLUSH_POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
-        // 世界/玩家/插件状态的采样任务（每5秒，主线程）。
-        // 刻意不并进上面那个 1Hz 的任务：world.getLoadedChunks() 会分配一个装下所有已加载区块
-        // 的数组，大服上并不便宜，按 1Hz 采就是凭空把这份开销放大 5 倍。100 tick 与今天实际的
-        // 采样频率一致，只是换到了正确的线程上。
-        snapshotTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::refreshStateSnapshot,
-                0L, SNAPSHOT_INTERVAL_TICKS);
+        // Start the TPS calculation + CPU sampling task (every second)
+        tpsTask = PluginInitiationUtils.scheduleUnlessDisabling("TPS sampling",
+            () -> Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L));
+
+        // World/player/plugin status sampling task (every 5 seconds, main thread).
+        // Deliberately not folded into the 1Hz task above: world.getLoadedChunks() allocates an
+        // array holding every loaded chunk, which is not cheap on a large server -- sampling it
+        // at 1Hz would inflate that cost by a factor of 5 for no reason. 100 ticks matches
+        // today's actual sampling frequency, just moved to the correct thread.
+        snapshotTask = PluginInitiationUtils.scheduleUnlessDisabling("state snapshot",
+            () -> Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::refreshStateSnapshot,
+                0L, SNAPSHOT_INTERVAL_TICKS));
     }
 
     /**
-     * 停止监控
+     * Stop monitoring.
      * <p>
-     * 除了关掉发送线程，还要取消两个主线程定时任务。原先这里只 {@code scheduler.shutdown()}，
-     * 那在采样搬到主线程<b>之前</b>是够的——遍历世界那份开销本来就长在发送线程上，关掉发送
-     * 就一起没了。搬家之后不取消的话，「停止监控」会变成「不再发送、但照样每 5 秒遍历一遍
-     * 所有世界和区块」，而且是在主线程上。见 PR #265 的评审。
+     * Besides shutting down the send thread, the two main-thread scheduled tasks must also be
+     * cancelled. This used to be just {@code scheduler.shutdown()}, which was enough
+     * <b>before</b> sampling moved to the main thread -- the cost of iterating every world lived
+     * on the send thread, so shutting down sending removed it too. After the move, not
+     * cancelling turns "stop monitoring" into "stop sending, but still iterate every world and
+     * chunk every 5 seconds" -- and now on the main thread. See the PR #265 review.
      */
     public void stopMonitoring() {
         if (!isMonitoring) {
@@ -181,7 +372,7 @@ public class ServerMonitorManager {
         cancelTask(tpsTask);
         tpsTask = null;
         scheduler.shutdown();
-        UltiTools.getInstance().getLogger().log(Level.INFO, "停止服务器状态监控");
+        UltiTools.getInstance().getLogger().log(Level.INFO, FrameworkText.text("停止服务器状态监控"));
     }
 
     private static void cancelTask(BukkitTask task) {
@@ -189,55 +380,57 @@ public class ServerMonitorManager {
             try {
                 task.cancel();
             } catch (Exception e) {
-                // 把异常本身交给 logger 而不是拼 getMessage()：既保住栈，也避免在日志调用点
-                // 无条件做字符串拼接（PMD 的 PreserveStackTrace / GuardLogStatement 都盯这一点）。
-                UltiTools.getInstance().getLogger().log(Level.FINE, "取消监控任务时出错", e);
+                // Hand the exception itself to the logger instead of concatenating getMessage():
+                // this preserves the stack trace and avoids unconditional string concatenation at
+                // the log call site (both PMD's PreserveStackTrace and GuardLogStatement watch for this).
+                UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("取消监控任务时出错"), e);
             }
         }
     }
-    
+
     /**
-     * 发送服务器状态信息
+     * Send server status information.
      */
     public void sendServerStatus() {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送服务器状态");
+                PanelConnectionLog.log(Level.WARNING, FrameworkText.text("WebSocket未连接，无法发送服务器状态"));
                 return;
             }
-            
+
             JsonObject message = new JsonObject();
             message.addProperty("type", "server_status");
             message.addProperty("serverId", webSocketClient.getServerId());
             message.addProperty("timestamp", System.currentTimeMillis());
-            
+
             JsonObject data = getCurrentServerStatusData();
             message.add("data", data);
-            
-            // 发送消息
+
+            // Send the message
             webSocketClient.sendMessage(message);
-            
-            // 日志里的玩家数同样取自快照——这句也跑在异步线程上，直接读 Bukkit 是同一个毛病。
+
+            // The player count in the log line also comes from the snapshot -- this line also
+            // runs on the async thread, so reading Bukkit directly here would be the same defect.
             ServerStateSnapshot snapshot = currentSnapshot();
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                String.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB",
+            PanelConnectionLog.log(Level.FINE,
+                FrameworkText.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB",
                     snapshot.playerCount, snapshot.maxPlayers,
                     calculateTPS()[0],
                     (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024,
                     Runtime.getRuntime().maxMemory() / 1024 / 1024));
-            
+
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送服务器状态失败: " + e.getMessage(), e);
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送服务器状态失败: %s", e.getMessage()), e);
         }
     }
     
     /**
-     * 提取版本号
+     * Extract the version number.
      */
     private String extractVersionNumber(String fullVersion) {
         try {
-            // 尝试从版本字符串中提取数字版本号
-            // 例如: "git-Bukkit-abc123 (MC: 1.20.1)" -> "1.20.1"
+            // Try to extract the numeric version from the version string
+            // e.g.: "git-Bukkit-abc123 (MC: 1.20.1)" -> "1.20.1"
             if (fullVersion.contains("MC: ")) {
                 int start = fullVersion.indexOf("MC: ") + 4;
                 int end = fullVersion.indexOf(")", start);
@@ -245,28 +438,28 @@ public class ServerMonitorManager {
                     return fullVersion.substring(start, end);
                 }
             }
-            
-            // 如果无法提取，返回Bukkit版本
+
+            // If it cannot be extracted, return the Bukkit version
             String bukkitVersion = Bukkit.getBukkitVersion();
             if (bukkitVersion.contains("-")) {
                 return bukkitVersion.split("-")[0];
             }
-            
+
             return bukkitVersion;
         } catch (Exception e) {
             return "Unknown";
         }
     }
-    
+
     /**
-     * 获取CPU使用率（返回缓存值，由定期采样更新）
+     * Get the CPU usage (returns the cached value, updated by periodic sampling).
      */
     private double getCPUUsage() {
         return lastCpuUsage;
     }
 
     /**
-     * 采样CPU使用率并更新缓存值
+     * Sample CPU usage and update the cached value.
      */
     private void sampleCpuUsage() {
         try {
@@ -280,55 +473,57 @@ public class ServerMonitorManager {
                 }
             }
 
-            // 备选方案：使用系统负载
+            // Fallback: use the system load average
             double systemLoad = osBean.getSystemLoadAverage();
             if (systemLoad >= 0) {
                 int processors = osBean.getAvailableProcessors();
                 lastCpuUsage = Math.min((systemLoad / processors) * 100, 100);
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE, "无法获取CPU使用率: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.format("无法获取CPU使用率: %s", e.getMessage()));
         }
     }
-    
+
     /**
-     * 发送带请求ID的服务器状态信息（响应后端请求）
+     * Send server status information with a request ID (in response to a backend request).
      */
     public void sendServerStatusWithRequestId(String requestId) {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送服务器状态");
+                PanelConnectionLog.log(Level.WARNING, FrameworkText.text("WebSocket未连接，无法发送服务器状态"));
                 return;
             }
-            
+
             JsonObject message = new JsonObject();
             message.addProperty("type", "server_status");
             message.addProperty("serverId", webSocketClient.getServerId());
             message.addProperty("timestamp", System.currentTimeMillis());
-            message.addProperty("requestId", requestId); // 包含请求ID
-            
+            message.addProperty("requestId", requestId); // Includes the request ID
+
             JsonObject data = getCurrentServerStatusData();
             message.add("data", data);
-            
-            // 发送消息
+
+            // Send the message
             webSocketClient.sendMessage(message);
-            
-            UltiTools.getInstance().getLogger().log(Level.INFO, 
-                String.format("已响应服务器状态请求，请求ID: %s", requestId));
-            
+
+            PanelConnectionLog.log(Level.INFO, 
+                FrameworkText.format("已响应服务器状态请求，请求ID: %s", requestId));
+
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "响应服务器状态请求失败: " + e.getMessage(), e);
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("响应服务器状态请求失败: %s", e.getMessage()), e);
         }
     }
     
     /**
-     * 在主线程上采一份服务器状态快照。
+     * Samples a server-state snapshot on the main thread.
      * <p>
-     * <b>只能在 Bukkit 主线程调用。</b>非主线程调用会被拒绝并记 SEVERE —— 这是防御性的第二道
-     * 闸：调度已经保证了线程，但这个类的历史正是「契约被识别了，只应用了一半」，把契约写进
-     * 代码里比写进注释里可靠。
+     * <b>May only be called on the Bukkit main thread.</b> A call from a non-main thread is
+     * refused and logged as SEVERE -- this is a second, defensive gate: scheduling already
+     * guarantees the thread, but this class's own history is exactly "the contract was
+     * recognized, only half applied", and writing the contract into the code is more reliable
+     * than writing it into a comment.
      *
-     * @return 新的快照；若不在主线程则返回 {@code null}
+     * @return the new snapshot; {@code null} if not on the main thread
      */
     private ServerStateSnapshot sampleServerState() {
         if (!isOnPrimaryThreadOrComplain()) {
@@ -389,8 +584,10 @@ public class ServerMonitorManager {
             plugins.add(pluginInfo);
         }
 
-        // 计数一律取自上面刚构造好的数组，而不是再问一次 Bukkit：既少两次遍历，
-        // 也让「playerCount 与 onlinePlayers 长度一致」由构造保证，而不是靠「同一 tick 内不会变」这条推理。
+        // Counts are always taken from the arrays just constructed above, rather than asking
+        // Bukkit again: this avoids two extra iterations, and it lets "playerCount matches
+        // onlinePlayers' length" be guaranteed by construction, instead of relying on the
+        // reasoning "it won't change within the same tick".
         return new ServerStateSnapshot(
                 onlinePlayers.size(),
                 Bukkit.getMaxPlayers(),
@@ -404,36 +601,42 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 线程契约的唯一检查点：不在主线程就记 SEVERE 并返回 false。
+     * The single check point for the thread contract: logs SEVERE and returns false when not on
+     * the main thread.
      * <p>
-     * 这个类的历史正是「契约被识别了，只应用了一半」，所以把契约写成运行时可观测的信号，
-     * 比写进注释可靠——真机上只要日志里出现这句，就说明调度被改错了。
+     * This class's own history is exactly "the contract was recognized, only half applied", so
+     * the contract is written as a runtime-observable signal rather than trusted to a comment --
+     * on a real server, this line appearing in the log is proof that scheduling was broken.
      */
     private boolean isOnPrimaryThreadOrComplain() {
         if (Bukkit.isPrimaryThread()) {
             return true;
         }
         UltiTools.getInstance().getLogger().log(Level.SEVERE,
-            "[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。");
+            FrameworkText.text("[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。"));
         return false;
     }
 
     /**
-     * 主线程定时任务的入口：采样并发布快照。
+     * Entry point for the main-thread scheduled task: samples and publishes the snapshot.
      * <p>
-     * 包级可见，供测试直接驱动。
+     * Package-visible so tests can drive it directly.
      */
     void refreshStateSnapshot() {
-        // 线程契约的检查放在连接判断**之前**：断连时也要抓得住「跑错线程」这件事，
-        // 否则这道防御闸在最需要它的场景（连不上、于是走到各种异常路径）反而是哑的。
+        // The thread-contract check runs **before** the connection check: even when
+        // disconnected, "running on the wrong thread" must still be caught -- otherwise this
+        // defensive gate would be mute exactly in the scenario that needs it most (unable to
+        // connect, falling through various exception paths).
         if (!isOnPrimaryThreadOrComplain()) {
             return;
         }
 
-        // 没有连接就不采样。这一条不是省电，是保持修复前的行为：原先 sendBatchUpdate 在
-        // !isConnected 时是**先返回、再遍历**的，所以永久断连的服务器一次遍历都不做。
-        // 采样搬到主线程之后若不带上这个判断，断连反而变成了每 5 秒白遍历一遍所有世界和区块。
-        // 见 PR #265 的评审。
+        // Skip sampling when there is no connection. This isn't about saving power -- it
+        // preserves pre-fix behavior: sendBatchUpdate used to **return first, iterate second**
+        // when !isConnected, so a permanently disconnected server never iterated at all. If this
+        // check weren't carried over after moving sampling to the main thread, a disconnected
+        // server would instead iterate every world and chunk for nothing, every 5 seconds. See
+        // the PR #265 review.
         if (webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
@@ -443,22 +646,25 @@ public class ServerMonitorManager {
                 stateSnapshot = snapshot;
             }
         } catch (Exception e) {
-            // 与 cancelTask 保持一致：异常交给 logger，不在调用点拼 getMessage()。
+            // Same convention as cancelTask: hand the exception itself to the logger instead of
+            // concatenating getMessage() at the call site.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "[ServerMonitor] 采样服务器状态失败", e);
+                FrameworkText.text("[ServerMonitor] 采样服务器状态失败"), e);
         }
     }
 
-    /** 供测试断言「到底采过样没有」——比从外部观察发出去的 JSON 更直接。 */
+    /** Lets tests assert whether sampling has actually happened yet -- more direct than observing the emitted JSON externally. */
     boolean hasSampledState() {
         return stateSnapshot != ServerStateSnapshot.EMPTY;
     }
 
     /**
-     * 取当前快照供发送线程使用。
+     * Gets the current snapshot for the send thread to use.
      * <p>
-     * 若还一次都没采过、而调用方恰好就在主线程上，就地补采一次——否则连接建立后的第一帧
-     * 会是一片零，以及 {@code sendServerStatusWithRequestId} 这类按需请求在监控启动前会返回空数据。
+     * If sampling has never happened even once and the caller happens to be on the main thread,
+     * sample once right here -- otherwise the first frame after the connection is established
+     * would be all zeroes, and on-demand requests like {@code sendServerStatusWithRequestId}
+     * would return empty data before monitoring has started.
      */
     private ServerStateSnapshot currentSnapshot() {
         ServerStateSnapshot snapshot = stateSnapshot;
@@ -473,64 +679,65 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 获取当前服务器状态数据
+     * Gets the current server status data.
      * <p>
-     * 所有 Bukkit 派生的字段都取自主线程采好的快照（见 {@link #stateSnapshot}）；
-     * 本方法本身可以在任意线程调用。Runtime 内存、JVM 运行时长、TPS、CPU 不属于 Bukkit 状态，
-     * 就地读取即可——TPS 与 CPU 早已由主线程的 1Hz 任务维护。
+     * Every Bukkit-derived field comes from the main-thread-sampled snapshot (see {@link
+     * #stateSnapshot}); this method itself may be called from any thread. Runtime memory, JVM
+     * uptime, TPS and CPU are not Bukkit state and are read in place -- TPS and CPU are already
+     * maintained by the main thread's 1Hz task.
      */
     private JsonObject getCurrentServerStatusData() {
         ServerStateSnapshot snapshot = currentSnapshot();
         JsonObject data = new JsonObject();
 
-        // 玩家信息
+        // Player information
         data.addProperty("playerCount", snapshot.playerCount);
         data.addProperty("maxPlayers", snapshot.maxPlayers);
         data.addProperty("onlineMode", snapshot.onlineMode);
 
-        // 服务器版本信息
+        // Server version information
         data.addProperty("serverVersion", snapshot.serverVersion);
 
-        // TPS信息
+        // TPS information
         JsonArray tpsArray = new JsonArray();
         double[] tps = calculateTPS();
         for (double tpsValue : tps) {
             tpsArray.add(Math.round(tpsValue * 10.0) / 10.0);
         }
         data.add("tps", tpsArray);
-        
-        // 内存信息
+
+        // Memory information
         Runtime runtime = Runtime.getRuntime();
         long maxMemory = runtime.maxMemory() / 1024 / 1024; // MB
         long totalMemory = runtime.totalMemory() / 1024 / 1024; // MB
         long freeMemory = runtime.freeMemory() / 1024 / 1024; // MB
         long usedMemory = totalMemory - freeMemory;
-        
+
         JsonObject memory = new JsonObject();
         memory.addProperty("used", usedMemory);
         memory.addProperty("max", maxMemory);
         memory.addProperty("free", maxMemory - usedMemory);
         data.add("memory", memory);
-        
-        // CPU使用率
+
+        // CPU usage
         double cpuUsage = getCPUUsage();
         data.addProperty("cpu", Math.round(cpuUsage * 10.0) / 10.0);
-        
-        // 运行时间
+
+        // Uptime
         data.addProperty("uptime", ManagementFactory.getRuntimeMXBean().getUptime());
-        
-        // 世界列表 (enriched objects) —— 主线程采样，此处只引用
+
+        // World list (enriched objects) -- sampled on the main thread, only referenced here
         data.add("worlds", snapshot.worlds);
 
-        // Online player details —— 同上
+        // Online player details -- same as above
         data.add("onlinePlayers", snapshot.onlinePlayers);
 
         return data;
     }
     
     /**
-     * 发送batch_update消息，合并status、metrics、plugins、logs到单条WebSocket帧
-     * 每5秒调用一次，plugins每12个tick（60秒）包含一次
+     * Sends the batch_update message, merging status, metrics, plugins and logs into a single
+     * WebSocket frame. Called every 5 seconds; plugins is included once every 12th tick (60 seconds).
      */
     private void sendBatchUpdate() {
         try {
@@ -545,70 +752,253 @@ public class ServerMonitorManager {
 
             JsonObject data = new JsonObject();
 
-            // 始终包含status
+            // status is always included
             data.add("status", getCurrentServerStatusData());
 
-            // 始终包含metrics
+            // metrics is always included
             data.add("metrics", getCurrentMetricsData());
 
-            // 每12个tick（60秒）包含plugins（Worker expects raw array, not wrapper object）
+            // plugins is included every 12th tick (60 seconds) (Worker expects raw array, not wrapper object)
             if (tickCount % 12 == 0) {
                 data.add("plugins", getCurrentPluginArray());
             }
 
-            // 从日志传输器排空日志
-            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
-            if (lsm != null && lsm.getLogTransmitter() != null) {
-                JsonArray logs = lsm.getLogTransmitter().drainQueue(50);
-                if (logs.size() > 0) {
-                    data.add("logs", logs);
+            // Gate-2 finding (round 9): logDrainLock is now held from the logs-drain all the way
+            // through this method's own final sendMessage() call, not just the drainQueue() call
+            // -- fresh evidence showed a size-triggered caller could otherwise acquire the lock
+            // AFTER this method released it (right after draining) but BEFORE this method's own
+            // combined frame -- which carries those same just-drained, OLDER records -- actually
+            // reached webSocketClient.sendMessage(), so a newer logs-only frame could be sent
+            // first. Widening the lock to cover the send closes that window; the errors-drain in
+            // between is harmless to include (it does not itself race against anything).
+            synchronized (logDrainLock) {
+                UltiPanelLogTransmitter drainedFrom = null;
+                JsonArray drainedLogs = null;
+                // Drain logs from the log transmitter -- whether to drain is decided by the LOGS
+                // capability switch (D-12). The gate must sit before drainQueue(...), not after
+                // the result is obtained only to be thrown away: drain-then-discard is still the
+                // shape of "already collected into memory, just not sent out", which D-12
+                // explicitly rejects as a half-measure disable.
+                if (Capability.LOGS.isEnabled()) {
+                    LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+                    if (lsm != null && lsm.getLogTransmitter() != null) {
+                        UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+                        long now = System.currentTimeMillis();
+                        // Gate-2 P1: honour the transmitter's own configured interval even though
+                        // this method's own tick is a hardcoded 5 seconds -- see lastLogFlushMs's
+                        // javadoc. Entries keep accumulating in the queue between flushes (bounded
+                        // by UltiPanelLogTransmitter's own MAX_QUEUE_SIZE overflow protection);
+                        // nothing is lost, delivery is just batched at the configured cadence.
+                        // Gate-2 round 4: claimLogFlushWindow() atomically decides the winner
+                        // against maybeSendLogsOnly()'s own competing 1-second task -- only the
+                        // winner drains.
+                        if (claimLogFlushWindow(now, transmitter.getIntervalMs())) {
+                            // Gate-2 finding (round 5): drainQueue's own cap must follow the
+                            // transmitter's configured batchSize, not a hardcoded constant -- now
+                            // that externalDrainMode is reliably enabled (round 4's init-order
+                            // fix), this WAS the path a live batchConfig.size change actually went
+                            // through, and a hardcoded value here silently overrode it.
+                            JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
+                            if (logs.size() > 0) {
+                                data.add("logs", logs);
+                                drainedFrom = transmitter;
+                                drainedLogs = logs;
+                            }
+                        }
+                    }
                 }
-            }
 
-            // 从错误报告收集器排空错误
-            ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
-            if (erc != null) {
-                JsonArray errors = erc.drainErrors(10);
-                if (errors.size() > 0) {
-                    data.add("errors", errors);
+                // Drain errors from the error report collector -- deliberately unaffected by any
+                // Capability (D-07): error-reporting keeps its own pre-existing
+                // ultipanel.logging.error-reporting.enabled key and its pre-existing default;
+                // moving it under the capability switch would silently change a key an operator
+                // may already have set by hand. ErrorReportCollector already gates on that key
+                // itself at the collection layer, so draining an empty queue just yields an
+                // empty array.
+                ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
+                if (erc != null) {
+                    JsonArray errors = erc.drainErrors(10);
+                    if (errors.size() > 0) {
+                        data.add("errors", errors);
+                    }
                 }
-            }
 
-            message.add("data", data);
-            webSocketClient.sendMessage(message);
+                message.add("data", data);
+                sendKeepingUndeliveredLogs(message, drainedFrom, drainedLogs);
+            }
 
             tickCount++;
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
+            PanelConnectionLog.log(Level.WARNING,
                 "Failed to send batch update: " + e.getMessage(), e);
         }
     }
 
     /**
-     * 获取当前插件列表数组
+     * Checks the log-drain interval gate at a {@link #LOG_FLUSH_POLL_INTERVAL_MS} granularity
+     * (narrowed from 1 second in round 11), independent of {@link #sendBatchUpdate()}'s own fixed
+     * 5-second tick (Gate-2 finding, round 3).
      * <p>
-     * 取自主线程采好的快照。{@code Bukkit.getPluginManager().getPlugins()} 同样不该在异步线程上遍历。
+     * Both this method and {@link #sendBatchUpdate()} call {@link #claimLogFlushWindow(long, int)}
+     * against the SAME {@link #lastLogFlushMs} field, so only one of the two competing scheduled
+     * tasks ever drains for a given window (Gate-2 finding, round 4 -- see
+     * {@link #lastLogFlushMs}'s own javadoc for why a plain {@code volatile long} check-then-write
+     * was not race-safe here).
+     * <p>
+     * Sends a {@code batch_update} message carrying ONLY {@code data.logs} when logs are both due
+     * and non-empty -- not a new message type: the Worker's own handler
+     * (`websocket-server.ts` `case 'batch_update'`) already guards every field with
+     * {@code if (batch.X)}, so a partial batch_update is an already-supported shape, not a
+     * protocol change.
+     */
+    private void maybeSendLogsOnly() {
+        try {
+            if (webSocketClient == null || !webSocketClient.isConnected()) {
+                return;
+            }
+            if (!Capability.LOGS.isEnabled()) {
+                return;
+            }
+            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+            if (lsm == null || lsm.getLogTransmitter() == null) {
+                return;
+            }
+            UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+            long now = System.currentTimeMillis();
+            if (!claimLogFlushWindow(now, transmitter.getIntervalMs())) {
+                return;
+            }
+
+            drainAndSendLogsOnly(transmitter);
+        } catch (Exception e) {
+            PanelConnectionLog.log(Level.WARNING,
+                "Failed to send log-only batch update: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Immediately drains and sends whatever is currently queued, without waiting for either
+     * {@link #sendBatchUpdate()}'s 5-second tick or {@link #maybeSendLogsOnly()}'s 1-second tick
+     * (Gate-2 finding, round 6). Registered as {@link UltiPanelLogTransmitter}'s
+     * {@code externalSizeThresholdCallback} from {@link LogStreamManager#initialize}: under
+     * external drain mode, {@code addToBatch()}'s own size-threshold trigger is otherwise
+     * silently swallowed by {@code sendBatch()}'s own early return, so a configured
+     * {@code batchSize} never shortened delivery latency while monitoring was active, and a
+     * sustained burst could fill the transmitter's queue cap and start discarding old entries
+     * despite repeatedly crossing the threshold.
+     * <p>
+     * Deliberately does NOT go through {@link #claimLogFlushWindow(long, int)}'s interval gate:
+     * that gate rate-limits the two TIME-based tasks against the configured interval, but this
+     * trigger is queue-DEPTH-based, a different reason to drain, and the whole point is to bypass
+     * waiting for the interval when the queue is already at capacity risk. {@code drainQueue} is
+     * safe to call concurrently with the other two tasks ({@code ConcurrentLinkedQueue#poll} is
+     * atomic per call) -- a near-simultaneous interval-triggered drain and this size-triggered one
+     * would, at worst, split one burst across two frames rather than lose or duplicate any entry.
+     * {@link #lastLogFlushMs} is still advanced afterwards so the interval-based tasks do not
+     * immediately re-fire for the records this call already sent.
+     */
+    void drainLogsNow() {
+        try {
+            if (webSocketClient == null || !webSocketClient.isConnected()) {
+                return;
+            }
+            if (!Capability.LOGS.isEnabled()) {
+                return;
+            }
+            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+            if (lsm == null || lsm.getLogTransmitter() == null) {
+                return;
+            }
+            UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+            drainAndSendLogsOnly(transmitter);
+            lastLogFlushMs.set(System.currentTimeMillis());
+        } catch (Exception e) {
+            PanelConnectionLog.log(Level.WARNING,
+                "Failed to send size-triggered log batch: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Drains up to {@code transmitter}'s configured {@code batchSize} and, if non-empty, sends a
+     * {@code batch_update} message carrying ONLY {@code data.logs} -- shared by
+     * {@link #maybeSendLogsOnly()} and {@link #drainLogsNow()} (Gate-2 finding, round 6
+     * extraction). Not a new message type: the Worker's own handler (`websocket-server.ts`
+     * `case 'batch_update'`) already guards every field with {@code if (batch.X)}, so a partial
+     * batch_update is an already-supported shape, not a protocol change. Callers are responsible
+     * for their own connectivity/capability checks and for advancing {@link #lastLogFlushMs}.
+     * <p>
+     * Holds {@link #logDrainLock} for its whole body (Gate-2 finding, round 7): the poll-and-send
+     * sequence itself must be mutually exclusive across all three callers, not just gated by
+     * {@link #claimLogFlushWindow(long, int)}'s CAS (which only arbitrates the two TIME-based
+     * callers against each other and is not even consulted by {@link #drainLogsNow()}).
+     */
+    private void drainAndSendLogsOnly(UltiPanelLogTransmitter transmitter) {
+        synchronized (logDrainLock) {
+            // Gate-2 finding (round 5): follow the transmitter's own configured batchSize rather
+            // than a hardcoded constant.
+            JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
+            if (logs.size() == 0) {
+                return;
+            }
+
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "batch_update");
+            message.addProperty("serverId", webSocketClient.getServerId());
+            message.addProperty("timestamp", System.currentTimeMillis());
+            JsonObject data = new JsonObject();
+            data.add("logs", logs);
+            message.add("data", data);
+            sendKeepingUndeliveredLogs(message, transmitter, logs);
+        }
+    }
+
+    /**
+     * Sends a {@code batch_update} frame and, when it carried log records and did not go out, hands
+     * them back to the transmitter so the next drain sends them before anything newer (#486). The
+     * frame did not go out if {@code sendMessage} threw -- the exception still propagates to the
+     * caller's own handler -- or if the client no longer reports itself connected afterwards, which
+     * is what the closed-socket path of {@code sendMessage} leaves behind. Called with
+     * {@link #logDrainLock} held, so the hand-back cannot interleave with another drain.
+     */
+    private void sendKeepingUndeliveredLogs(JsonObject message, UltiPanelLogTransmitter transmitter,
+                                            JsonArray logs) {
+        boolean sent = false;
+        try {
+            webSocketClient.sendMessage(message);
+            sent = webSocketClient.isConnected();
+        } finally {
+            if (!sent && transmitter != null) {
+                transmitter.holdUndelivered(logs);
+            }
+        }
+    }
+
+    /**
+     * Gets the current plugin list array.
+     * <p>
+     * Taken from the main-thread-sampled snapshot. {@code Bukkit.getPluginManager().getPlugins()}
+     * likewise should not be iterated from an async thread.
      */
     private JsonArray getCurrentPluginArray() {
         return currentSnapshot().plugins;
     }
 
     /**
-     * 获取当前性能统计数据
+     * Gets the current performance metrics data.
      * <p>
-     * Bukkit 派生的字段取自快照；Runtime 内存与 TPS 就地计算。
+     * Bukkit-derived fields come from the snapshot; Runtime memory and TPS are computed in place.
      */
     private JsonObject getCurrentMetricsData() {
         ServerStateSnapshot snapshot = currentSnapshot();
         JsonObject data = new JsonObject();
 
-        // 玩家活动统计
+        // Player activity statistics
         JsonObject playerActivity = new JsonObject();
         playerActivity.addProperty("currentOnline", snapshot.playerCount);
         playerActivity.addProperty("maxPlayers", snapshot.maxPlayers);
         data.add("playerActivity", playerActivity);
 
-        // 服务器性能
+        // Server performance
         JsonObject serverPerformance = new JsonObject();
         double[] tps = calculateTPS();
         double avgTPS = 0;
@@ -624,13 +1014,13 @@ public class ServerMonitorManager {
         double memoryUsage = ((double) usedMemory / maxMemory) * 100;
         serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
 
-        serverPerformance.addProperty("diskUsage", 0.0);
+        serverPerformance.addProperty("diskUsage", computeDiskUsage());
 
         data.add("serverPerformance", serverPerformance);
 
-        // 插件使用情况
+        // Plugin usage
         JsonObject pluginUsage = new JsonObject();
-        pluginUsage.addProperty("enabledPlugins", snapshot.pluginCount);
+        pluginUsage.addProperty("enabledPlugins", countEnabledPlugins(snapshot.plugins));
         pluginUsage.addProperty("loadedWorlds", snapshot.worldCount);
         data.add("pluginUsage", pluginUsage);
 
@@ -638,7 +1028,60 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 发送性能统计数据（独立消息，用于on-demand请求）
+     * The used percentage of the filesystem holding {@link #diskUsageRoot}, matching {@code df}'s
+     * own {@code Use%} convention (WR-03) rather than a straight {@code (total - usable) / total}:
+     * {@code used = total - free} (via {@link #freeSpaceReader}, {@link File#getFreeSpace()} --
+     * INCLUDES space reserved for the filesystem's own root/superuser allocation), and the
+     * percentage is {@code used / (used + avail)} with {@code avail} from
+     * {@link #usableSpaceReader} ({@link File#getUsableSpace()} -- EXCLUDES that reservation).
+     * The earlier {@code (total - usable) / total} formula measured roughly one percentage point
+     * higher than {@code df} on a real ext4 volume with its default ~5% reserved-block
+     * allocation, at or past this metric's own documented one-point UAT tolerance -- see this
+     * plan's gate record for the real-machine measurement. Rounded to two decimals exactly like
+     * {@code memoryUsage} above (D-14, #436). A filesystem reporting zero total space, or a
+     * used+avail denominator of zero, is a stated outcome -- {@code 0.0} -- not a division error.
+     */
+    private double computeDiskUsage() {
+        long total = totalSpaceReader.applyAsLong(diskUsageRoot);
+        if (total <= 0) {
+            return 0.0;
+        }
+        long free = freeSpaceReader.applyAsLong(diskUsageRoot);
+        long usable = usableSpaceReader.applyAsLong(diskUsageRoot);
+        long used = total - free;
+        long denominator = used + usable;
+        if (denominator <= 0) {
+            return 0.0;
+        }
+        double usedPercent = ((double) used / denominator) * 100;
+        return Math.round(usedPercent * 100.0) / 100.0;
+    }
+
+    /**
+     * Counts entries in {@code plugins} whose {@code enabled} field is {@code true} -- the
+     * per-plugin flag {@link #sampleServerState()} already captures for every installed plugin
+     * (D-14, #437: {@code enabledPlugins} must count plugins that are enabled, not every plugin
+     * installed). Package-private and pure so it is unit-testable directly against a synthetic
+     * {@link JsonArray} without needing a multi-plugin MockBukkit fixture.
+     *
+     * @param plugins the snapshot's plugin array; each element is expected to be a {@link
+     *                JsonObject} carrying a boolean {@code enabled} field
+     * @return the number of entries whose {@code enabled} field is {@code true}; {@code 0} for an
+     *         empty array
+     */
+    static int countEnabledPlugins(JsonArray plugins) {
+        int count = 0;
+        for (JsonElement element : plugins) {
+            JsonObject plugin = element.getAsJsonObject();
+            if (plugin.has("enabled") && plugin.get("enabled").getAsBoolean()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Sends performance metrics data (standalone message, for on-demand requests).
      */
     public void sendMetricsData() {
         try {
@@ -653,12 +1096,12 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送性能数据失败: %s", e.getMessage()));
         }
     }
-    
+
     /**
-     * 发送性能统计数据（带请求ID，用于响应后端请求）
+     * Sends performance metrics data with a request ID (in response to a backend request).
      */
     public void sendMetricsDataWithRequestId(String requestId) {
         try {
@@ -674,36 +1117,36 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送性能数据失败: %s", e.getMessage()));
         }
     }
-    
+
     /**
-     * 更新TPS计算 + CPU采样 - 每秒执行一次（20 ticks）
+     * Updates the TPS calculation + CPU sampling -- runs once per second (20 ticks).
      */
     private void updateTpsAndCpu() {
         long currentTime = System.currentTimeMillis();
         long timeDiff = currentTime - lastTick;
 
-        // CPU采样（每次调用都采样，让JVM有足够数据返回非-1值）
+        // CPU sampling (sampled on every call, so the JVM has enough data to return a non-(-1) value)
         sampleCpuUsage();
-        
+
         // Task runs every 20 ticks. At 20 TPS, timeDiff ≈ 1000ms.
         // TPS = 20 ticks * (1000ms / actual_elapsed_ms)
         double currentTPS = 20000.0 / Math.max(timeDiff, 50.0);
-        currentTPS = Math.min(currentTPS, 20.0); // 限制最大TPS为20
-        
-        // 存储到历史数组
-        long tpsAsLong = Math.round(currentTPS * 100); // 存储为百分制整数
+        currentTPS = Math.min(currentTPS, 20.0); // Cap the max TPS at 20
+
+        // Store into the history arrays
+        long tpsAsLong = Math.round(currentTPS * 100); // Stored as an integer scaled by 100
         tpsHistory1m[historyIndex % tpsHistory1m.length] = tpsAsLong;
         tpsHistory5m[historyIndex % tpsHistory5m.length] = tpsAsLong;
         tpsHistory15m[historyIndex % tpsHistory15m.length] = tpsAsLong;
-        
+
         historyIndex++;
         lastTick = currentTime;
-        
+
         UltiTools.getInstance().getLogger().log(Level.FINEST, 
-            String.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
+            FrameworkText.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
     }
     
     /**
@@ -718,78 +1161,78 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 计算TPS - 返回 [1分钟, 5分钟, 15分钟] 平均值
+     * Calculates TPS -- returns the [1-minute, 5-minute, 15-minute] averages.
      */
     private double[] calculateTPS() {
         double[] tps = new double[3];
-        
-        // 1分钟TPS平均值
+
+        // 1-minute TPS average
         tps[0] = calculateAverageTPS(tpsHistory1m, Math.min(historyIndex, tpsHistory1m.length));
-        
-        // 5分钟TPS平均值
+
+        // 5-minute TPS average
         tps[1] = calculateAverageTPS(tpsHistory5m, Math.min(historyIndex, tpsHistory5m.length));
-        
-        // 15分钟TPS平均值
+
+        // 15-minute TPS average
         tps[2] = calculateAverageTPS(tpsHistory15m, Math.min(historyIndex, tpsHistory15m.length));
-        
-        // 如果没有足够的历史数据，使用实时计算的TPS
+
+        // If there isn't enough history yet, fall back to the realtime-computed TPS
         if (historyIndex < 60) {
             double realtimeTPS = calculateRealtimeTPS();
-            if (historyIndex < 1) tps[0] = realtimeTPS;  // 至少需要1秒数据
-            if (historyIndex < 60) tps[1] = realtimeTPS; // 至少需要60秒数据
-            if (historyIndex < 300) tps[2] = realtimeTPS; // 至少需要300秒数据
+            if (historyIndex < 1) tps[0] = realtimeTPS;  // Needs at least 1 second of data
+            if (historyIndex < 60) tps[1] = realtimeTPS; // Needs at least 60 seconds of data
+            if (historyIndex < 300) tps[2] = realtimeTPS; // Needs at least 300 seconds of data
         }
         
         return tps;
     }
     
     /**
-     * 计算历史TPS的平均值
+     * Calculates the average of a history-of-TPS array.
      */
     private double calculateAverageTPS(long[] history, int count) {
         if (count == 0) return 20.0;
-        
+
         long sum = 0;
         for (int i = 0; i < count; i++) {
             sum += history[i];
         }
-        
-        return (sum / (double) count) / 100.0; // 转回小数形式
+
+        return (sum / (double) count) / 100.0; // Convert back to decimal form
     }
-    
+
     /**
-     * 计算实时TPS（基于最近的历史记录）
+     * Calculates the realtime TPS (based on the most recent history entry).
      */
     private double calculateRealtimeTPS() {
-        // 如果有历史数据，使用最近的TPS记录
+        // If history data exists, use the most recent TPS record
         if (historyIndex > 0) {
             int recentIndex = (historyIndex - 1) % tpsHistory1m.length;
-            return tpsHistory1m[recentIndex] / 100.0; // 转回小数形式
+            return tpsHistory1m[recentIndex] / 100.0; // Convert back to decimal form
         }
-        
-        // 如果没有历史数据，返回默认值
+
+        // If there is no history data, return the default value
         return 20.0;
     }
-    
+
     /**
-     * 发送玩家事件
+     * Sends a player event.
      */
     public void sendPlayerEvent(String eventType, Player player, JsonObject additionalData) {
         try {
             JsonObject message = new JsonObject();
             message.addProperty("type", "player_event");
-            
+
             JsonObject data = new JsonObject();
             data.addProperty("eventType", eventType);
-            
-            // 玩家信息
+
+            // Player information
             JsonObject playerInfo = new JsonObject();
             playerInfo.addProperty("uuid", player.getUniqueId().toString());
             playerInfo.addProperty("name", player.getName());
             playerInfo.addProperty("ip", player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
             data.add("player", playerInfo);
-            
-            // 位置信息
+
+            // Location information
             if (player.getLocation() != null) {
                 JsonObject location = new JsonObject();
                 location.addProperty("world", player.getWorld().getName());
@@ -798,8 +1241,8 @@ public class ServerMonitorManager {
                 location.addProperty("z", Math.round(player.getLocation().getZ() * 100.0) / 100.0);
                 data.add("location", location);
             }
-            
-            // 添加额外数据
+
+            // Add additional data
             if (additionalData != null) {
                 for (String key : additionalData.keySet()) {
                     data.add(key, additionalData.get(key));
@@ -814,7 +1257,7 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送玩家事件失败: " + e.getMessage());
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送玩家事件失败: %s", e.getMessage()));
         }
     }
     

@@ -1,0 +1,24 @@
+# Kit display name (supports color codes) / 礼包显示名称（支持颜色代码）
+displayName: "&a新手礼包"
+# Description lines / 描述
+description:
+  - "&7新手专属礼包"
+  - "&7包含基础装备和工具"
+# Display icon material / 显示图标材质
+icon: GRASS_BLOCK
+# Price (0 = free, requires Vault) / 价格（0为免费，需要Vault）
+price: 0
+# Minimum level required (0 = none) / 最低等级要求（0为无要求）
+levelRequired: 0
+# Permission required (empty = none) / 需要的权限（空为无要求）
+permission: ""
+# Can be claimed multiple times / 是否可重复领取
+reBuyable: false
+# Cooldown in seconds between claims (only if reBuyable) / 重复领取冷却秒数
+cooldown: 0
+# Commands executed as the player on claim / 领取时以玩家身份执行的命令
+playerCommands: []
+# Commands executed as console on claim / 领取时以控制台身份执行的命令
+consoleCommands: []
+# Serialized items (set via /kits edit, do not modify manually) / 序列化物品数据
+items: ""

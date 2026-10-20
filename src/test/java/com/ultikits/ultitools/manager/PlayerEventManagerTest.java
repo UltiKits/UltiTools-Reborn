@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
@@ -15,7 +16,11 @@ import java.lang.reflect.Method;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -192,9 +197,14 @@ class PlayerEventManagerTest {
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
+        // GATE-06 (issue #345): the previous body called onPlayerJoin() with no assertion (the
+        // "// NOPMD - uses Mockito verify()" comment was stale -- no verify() call was present).
+        // With webSocketClient nulled by reflection, mockWebSocketClient is now an orphaned mock:
+        // verifyNoInteractions on it is a real check that the null-client path never reaches the
+        // client at all, rather than merely completing without throwing.
         @Test
         @DisplayName("WebSocket 为 null 时不应该抛出异常")
-        void shouldNotThrowWhenWebSocketNull() throws Exception { // NOPMD - uses Mockito verify()
+        void shouldNotThrowWhenWebSocketNull() throws Exception {
             // Arrange
             Field clientField = PlayerEventManager.class.getDeclaredField("webSocketClient");
             clientField.setAccessible(true);
@@ -203,8 +213,9 @@ class PlayerEventManagerTest {
             PlayerMock player = server.addPlayer();
             PlayerJoinEvent event = new PlayerJoinEvent(player, "joined");
 
-            // Act - 不应该抛出异常
+            // Act & Assert
             playerEventManager.onPlayerJoin(event);
+            verifyNoInteractions(mockWebSocketClient);
         }
     }
 
@@ -244,6 +255,11 @@ class PlayerEventManagerTest {
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
+        // GATE-06 (issue #345): named site (manager/PlayerEventManagerTest.java:249). The previous
+        // body called onPlayerQuit() with no assertion. With webSocketClient nulled by reflection,
+        // mockWebSocketClient is now an orphaned mock: verifyNoInteractions on it is a real check
+        // that the null-client path never reaches the client at all, rather than merely completing
+        // without throwing.
         @Test
         @DisplayName("WebSocket 为 null 时不应该抛出异常")
         void shouldNotThrowWhenWebSocketNull() throws Exception {
@@ -255,8 +271,9 @@ class PlayerEventManagerTest {
             PlayerMock player = server.addPlayer();
             PlayerQuitEvent event = new PlayerQuitEvent(player, "quit");
 
-            // Act - 不应该抛出异常
+            // Act & Assert
             playerEventManager.onPlayerQuit(event);
+            verifyNoInteractions(mockWebSocketClient);
         }
     }
 
@@ -336,6 +353,12 @@ class PlayerEventManagerTest {
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
+        // GATE-06 (issue #345): the same assert-nothing shape as the join/quit siblings, found in
+        // this file during re-resolution and fixed for consistency though not itself one of the
+        // 13 named sites -- see 08-GATE06-TRIAGE.md. With webSocketClient nulled by reflection,
+        // mockWebSocketClient is now an orphaned mock: verifyNoInteractions on it is a real check
+        // that the null-client path never reaches the client at all, rather than merely completing
+        // without throwing.
         @Test
         @DisplayName("WebSocket 为 null 时不应该抛出异常")
         void shouldNotThrowWhenWebSocketNull() throws Exception {
@@ -345,11 +368,12 @@ class PlayerEventManagerTest {
             clientField.set(playerEventManager, null);
 
             PlayerMock player = server.addPlayer();
-            org.bukkit.event.player.PlayerChatEvent event = 
+            org.bukkit.event.player.PlayerChatEvent event =
                 new org.bukkit.event.player.PlayerChatEvent(player, "Hello");
 
-            // Act - 不应该抛出异常
+            // Act & Assert
             playerEventManager.onPlayerChat(event);
+            verifyNoInteractions(mockWebSocketClient);
         }
 
         @Test
@@ -590,5 +614,171 @@ class PlayerEventManagerTest {
             assertThat(method.isAnnotationPresent(org.bukkit.event.EventHandler.class)).isTrue();
         }
     }
-}
 
+    /**
+     * 从已删除的 {@code EnhancedPlayerEventListener} 迁移过来的四个处理器（#387）。
+     * <p>
+     * 原类带着 {@code @EventListener} 却从未被注册，七个处理器一次也没触发过。它自己的 16 个单元测试
+     * 全绿——因为那些测试直接调用方法，从不检验方法会不会被调用。这里改测它们在真正注册的
+     * {@code PlayerEventManager} 上的行为，并沿用同一套连接性守卫与竞态断言。
+     * <p>
+     * 其中 death 用 Mockito 造事件而非真实构造：1.21 的
+     * {@code PlayerDeathEvent} 构造函数要求一个 {@code DamageSource}，与本组要验证的东西无关。
+     */
+    @Nested
+    @DisplayName("从 EnhancedPlayerEventListener 迁移的处理器")
+    class MigratedHandlers {
+
+        private void shutdownDuringConnectivityCheck() {
+            when(mockWebSocketClient.isConnected()).thenAnswer(invocation -> {
+                playerEventManager.shutdown();
+                return true;
+            });
+        }
+
+        private PlayerDeathEvent deathEventFor(PlayerMock player) {
+            PlayerDeathEvent event = mock(PlayerDeathEvent.class);
+            when(event.getEntity()).thenReturn(player);
+            when(event.getDeathMessage()).thenReturn("died");
+            return event;
+        }
+
+        @Test
+        @DisplayName("death：已连接时发送")
+        void deathSendsWhenConnected() {
+            PlayerMock player = server.addPlayer();
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            playerEventManager.onPlayerDeath(deathEventFor(player));
+
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("death：未连接时不发送")
+        void deathDoesNotSendWhenDisconnected() {
+            PlayerMock player = server.addPlayer();
+            when(mockWebSocketClient.isConnected()).thenReturn(false);
+
+            playerEventManager.onPlayerDeath(deathEventFor(player));
+
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("death：检查通过之后被 shutdown，不得抛 NPE")
+        void deathSurvivesConcurrentShutdown() {
+            PlayerMock player = server.addPlayer();
+            PlayerDeathEvent event = deathEventFor(player);
+            shutdownDuringConnectivityCheck();
+
+            assertThatCode(() -> playerEventManager.onPlayerDeath(event))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("kick：已连接时发送")
+        void kickSendsWhenConnected() {
+            PlayerMock player = server.addPlayer();
+            PlayerKickEvent event = new PlayerKickEvent(player, "left", "kicked");
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            playerEventManager.onPlayerKick(event);
+
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("kick：未连接时不发送")
+        void kickDoesNotSendWhenDisconnected() {
+            PlayerMock player = server.addPlayer();
+            PlayerKickEvent event = new PlayerKickEvent(player, "left", "kicked");
+            when(mockWebSocketClient.isConnected()).thenReturn(false);
+
+            playerEventManager.onPlayerKick(event);
+
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("kick：检查通过之后被 shutdown，不得抛 NPE")
+        void kickSurvivesConcurrentShutdown() {
+            PlayerMock player = server.addPlayer();
+            PlayerKickEvent event = new PlayerKickEvent(player, "left", "kicked");
+            shutdownDuringConnectivityCheck();
+
+            assertThatCode(() -> playerEventManager.onPlayerKick(event))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("command：已连接时发送")
+        void commandSendsWhenConnected() {
+            PlayerMock player = server.addPlayer();
+            PlayerCommandPreprocessEvent event = new PlayerCommandPreprocessEvent(player, "/spawn");
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            playerEventManager.onPlayerCommandPreprocess(event);
+
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("command：未连接时不发送")
+        void commandDoesNotSendWhenDisconnected() {
+            PlayerMock player = server.addPlayer();
+            PlayerCommandPreprocessEvent event = new PlayerCommandPreprocessEvent(player, "/spawn");
+            when(mockWebSocketClient.isConnected()).thenReturn(false);
+
+            playerEventManager.onPlayerCommandPreprocess(event);
+
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("command：检查通过之后被 shutdown，不得抛 NPE")
+        void commandSurvivesConcurrentShutdown() {
+            PlayerMock player = server.addPlayer();
+            PlayerCommandPreprocessEvent event = new PlayerCommandPreprocessEvent(player, "/spawn");
+            shutdownDuringConnectivityCheck();
+
+            assertThatCode(() -> playerEventManager.onPlayerCommandPreprocess(event))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("world_change：已连接时发送")
+        void worldChangeSendsWhenConnected() {
+            PlayerMock player = server.addPlayer();
+            PlayerChangedWorldEvent event = new PlayerChangedWorldEvent(player, player.getWorld());
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            playerEventManager.onPlayerChangedWorld(event);
+
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("world_change：未连接时不发送")
+        void worldChangeDoesNotSendWhenDisconnected() {
+            PlayerMock player = server.addPlayer();
+            PlayerChangedWorldEvent event = new PlayerChangedWorldEvent(player, player.getWorld());
+            when(mockWebSocketClient.isConnected()).thenReturn(false);
+
+            playerEventManager.onPlayerChangedWorld(event);
+
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("world_change：检查通过之后被 shutdown，不得抛 NPE")
+        void worldChangeSurvivesConcurrentShutdown() {
+            PlayerMock player = server.addPlayer();
+            PlayerChangedWorldEvent event = new PlayerChangedWorldEvent(player, player.getWorld());
+            shutdownDuringConnectivityCheck();
+
+            assertThatCode(() -> playerEventManager.onPlayerChangedWorld(event))
+                    .doesNotThrowAnyException();
+        }
+    }
+}

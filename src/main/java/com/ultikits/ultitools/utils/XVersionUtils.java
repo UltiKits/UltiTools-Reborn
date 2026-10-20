@@ -26,10 +26,6 @@ import java.util.Optional;
  * Cross-version compatibility utility class using XSeries.
  * Replaces the old VersionWrapper dynamic loading mechanism.
  * Minimum supported version: 1.13+
- * <p>
- * 使用 XSeries 实现跨版本兼容的工具类。
- * 替代旧的 VersionWrapper 动态加载机制。
- * 最低支持版本: 1.13+
  *
  * @author wisdomme
  * @since 6.2.0
@@ -42,8 +38,6 @@ public final class XVersionUtils {
 
     /**
      * Get colored stained glass pane.
-     * <p>
-     * 获取彩色玻璃板
      *
      * @param color the color
      * @return colored glass pane ItemStack
@@ -56,8 +50,6 @@ public final class XVersionUtils {
 
     /**
      * Get colored wool.
-     * <p>
-     * 获取彩色羊毛
      *
      * @param color the color
      * @return colored wool ItemStack
@@ -70,8 +62,6 @@ public final class XVersionUtils {
 
     /**
      * Get oak sign.
-     * <p>
-     * 获取告示牌
      *
      * @return sign ItemStack
      */
@@ -81,8 +71,6 @@ public final class XVersionUtils {
 
     /**
      * Get ender eye.
-     * <p>
-     * 获取末影之眼
      *
      * @return ender eye ItemStack
      */
@@ -92,8 +80,6 @@ public final class XVersionUtils {
 
     /**
      * Get email material (paper for unread, filled map for read).
-     * <p>
-     * 获取邮件材质（未读为纸，已读为填充地图）
      *
      * @param isRead whether the email is read
      * @return email material ItemStack
@@ -104,8 +90,6 @@ public final class XVersionUtils {
 
     /**
      * Get player head.
-     * <p>
-     * 获取玩家头颅
      *
      * @param player the player
      * @return player head ItemStack
@@ -116,8 +100,6 @@ public final class XVersionUtils {
 
     /**
      * Get grass block.
-     * <p>
-     * 获取草方块
      *
      * @return grass block ItemStack
      */
@@ -127,8 +109,6 @@ public final class XVersionUtils {
 
     /**
      * Register a new scoreboard objective.
-     * <p>
-     * 注册计分板对象
      *
      * @param scoreboard  the scoreboard
      * @param name        objective name
@@ -146,8 +126,6 @@ public final class XVersionUtils {
 
     /**
      * Get sound using XSound for cross-version compatibility.
-     * <p>
-     * 使用 XSound 获取跨版本兼容的声音
      *
      * @param sound the sound enum
      * @return the bukkit Sound, or null if not found
@@ -159,8 +137,6 @@ public final class XVersionUtils {
 
     /**
      * Get colored bed.
-     * <p>
-     * 获取彩色床
      *
      * @param bedColor the bed color
      * @return bed ItemStack
@@ -173,8 +149,6 @@ public final class XVersionUtils {
 
     /**
      * Get item durability.
-     * <p>
-     * 获取物品耐久度
      *
      * @param itemStack the item
      * @return remaining durability
@@ -189,8 +163,6 @@ public final class XVersionUtils {
 
     /**
      * Get item in player's hand.
-     * <p>
-     * 获取玩家手中的物品
      *
      * @param player     the player
      * @param isMainHand whether to get main hand item
@@ -202,8 +174,6 @@ public final class XVersionUtils {
 
     /**
      * Send action bar message to player.
-     * <p>
-     * 给玩家发送 Action Bar 消息
      *
      * @param player  the player
      * @param message the message
@@ -214,8 +184,6 @@ public final class XVersionUtils {
 
     /**
      * Set player list header and footer.
-     * <p>
-     * 设置玩家列表页眉页脚
      *
      * @param player the player
      * @param header header text
@@ -227,8 +195,6 @@ public final class XVersionUtils {
 
     /**
      * Get block face direction.
-     * <p>
-     * 获取方块朝向
      *
      * @param placedBlock the placed block
      * @return the block face

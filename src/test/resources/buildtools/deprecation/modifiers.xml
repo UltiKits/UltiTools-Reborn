@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Two MODIFIED methods on the same real emitter schema captured for
+  removed-member-multi-param.xml (07-03, Task 1): one whose old-side access modifier is PRIVATE
+  (the shape documented for the D-02 allowlist entry in 07-JAPICMP-BASELINE.md - METHOD_NOW_STATIC,
+  PRIVATE -> PUBLIC), one whose old-side is PUBLIC (the shape independently captured live for
+  TransactionManager#getConnection() while its <exclude> entry was temporarily removed - see
+  07-03-SUMMARY.md).
+-->
+<japicmp xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" accessModifier="PROTECTED"
+         xsi:noNamespaceSchemaLocation="japicmp.xsd">
+    <classes>
+        <class binaryCompatible="true" changeStatus="MODIFIED"
+               fullyQualifiedName="com.ultikits.ultitools.commands.tabcomplete.SomeCompleter"
+               javaObjectSerializationCompatible="NOT_SERIALIZABLE" sourceCompatible="true">
+            <compatibilityChanges/>
+            <constructors/>
+            <fields/>
+            <methods>
+                <method binaryCompatible="false" changeStatus="MODIFIED" name="wasPrivateNowPublicStatic"
+                        newLineNumber="40" oldLineNumber="40" sourceCompatible="false">
+                    <compatibilityChanges>
+                        <compatibilityChange binaryCompatible="false" sourceCompatible="false" type="METHOD_NOW_STATIC"/>
+                    </compatibilityChanges>
+                    <modifiers>
+                        <modifier changeStatus="UNCHANGED" newValue="NON_FINAL" oldValue="NON_FINAL"/>
+                        <modifier changeStatus="MODIFIED" newValue="STATIC" oldValue="NON_STATIC"/>
+                        <modifier changeStatus="MODIFIED" newValue="PUBLIC" oldValue="PRIVATE"/>
+                        <modifier changeStatus="UNCHANGED" newValue="NON_ABSTRACT" oldValue="NON_ABSTRACT"/>
+                        <modifier changeStatus="UNCHANGED" newValue="NON_BRIDGE" oldValue="NON_BRIDGE"/>
+                        <modifier changeStatus="UNCHANGED" newValue="NON_SYNTHETIC" oldValue="NON_SYNTHETIC"/>
+                    </modifiers>
+                    <parameters>
+                        <parameter binaryCompatible="true" changeStatus="UNCHANGED" sourceCompatible="true"
+                                   templateName="N/A" type="java.lang.Object"/>
+                        <parameter binaryCompatible="true" changeStatus="UNCHANGED" sourceCompatible="true"
+                                   templateName="N/A" type="java.lang.String"/>
+                    </parameters>
+                    <returnType binaryCompatible="true" changeStatus="UNCHANGED" newValue="java.util.List"
+                                oldValue="java.util.List" sourceCompatible="true"/>
+                </method>
+                <method binaryCompatible="false" changeStatus="MODIFIED" name="wasPublicStillPublic"
+                        newLineNumber="34" oldLineNumber="34" sourceCompatible="false">
+                    <compatibilityChanges>
+                        <compatibilityChange binaryCompatible="false" sourceCompatible="false" type="METHOD_ABSTRACT_NOW_DEFAULT"/>
+                    </compatibilityChanges>
+                    <modifiers>
+                        <modifier changeStatus="UNCHANGED" newValue="NON_FINAL" oldValue="NON_FINAL"/>
+                        <modifier changeStatus="UNCHANGED" newValue="NON_STATIC" oldValue="NON_STATIC"/>
+                        <modifier changeStatus="UNCHANGED" newValue="PUBLIC" oldValue="PUBLIC"/>
+                        <modifier changeStatus="MODIFIED" newValue="NON_ABSTRACT" oldValue="ABSTRACT"/>
+                        <modifier changeStatus="UNCHANGED" newValue="NON_BRIDGE" oldValue="NON_BRIDGE"/>
+                        <modifier changeStatus="UNCHANGED" newValue="NON_SYNTHETIC" oldValue="NON_SYNTHETIC"/>
+                    </modifiers>
+                    <parameters/>
+                    <returnType binaryCompatible="true" changeStatus="UNCHANGED" newValue="java.sql.Connection"
+                                oldValue="java.sql.Connection" sourceCompatible="true"/>
+                </method>
+            </methods>
+            <modifiers>
+                <modifier changeStatus="UNCHANGED" newValue="NON_FINAL" oldValue="NON_FINAL"/>
+                <modifier changeStatus="UNCHANGED" newValue="NON_STATIC" oldValue="NON_STATIC"/>
+                <modifier changeStatus="UNCHANGED" newValue="PUBLIC" oldValue="PUBLIC"/>
+                <modifier changeStatus="UNCHANGED" newValue="NON_ABSTRACT" oldValue="NON_ABSTRACT"/>
+                <modifier changeStatus="UNCHANGED" newValue="NON_SYNTHETIC" oldValue="NON_SYNTHETIC"/>
+            </modifiers>
+        </class>
+    </classes>
+</japicmp>

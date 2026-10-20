@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.services.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -10,11 +11,11 @@ import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import org.bukkit.Location;
-import org.bukkit.Sound;
 import org.bukkit.World;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,7 +24,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.manager.PluginManager;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -48,16 +51,12 @@ class InMemeryTeleportServiceTest {
         // Mock logger
         Logger mockLogger = mock(Logger.class);
 
-        // Mock VersionWrapper
-        VersionWrapper mockVersionWrapper = mock(VersionWrapper.class);
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
-            when(ultiTools.getVersionWrapper()).thenReturn(mockVersionWrapper);
             // i18n 原先在 6 个用例里各打一遍、内容完全相同。提到发布之前既消掉重复，
             // 也让这 6 处不再在「mock 已全进程可见」的窗口里打桩。见 issue #256。
             lenient().when(ultiTools.i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
         });
-        when(mockVersionWrapper.getSound(any())).thenReturn(Sound.ENTITY_ENDERMAN_TELEPORT);
 
         teleportService = new InMemeryTeleportService();
         
@@ -71,7 +70,7 @@ class InMemeryTeleportServiceTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
     
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
     private void clearStaticMaps() {
         try {
             Field teleportingPlayersField = InMemeryTeleportService.class.getDeclaredField("teleportingPlayers");
@@ -110,13 +109,20 @@ class InMemeryTeleportServiceTest {
     class GetNameTests {
 
         @Test
-        @DisplayName("应该返回正确的服务名称")
+        @DisplayName("the display name is an English identifier, like the sibling DefaultEmailService's")
         void shouldReturnCorrectName() {
             // Act
             String name = teleportService.getName();
 
-            // Assert
-            assertThat(name).isEqualTo("传送服务");
+            // Assert: no Han, CJK punctuation or full-width form (#556)
+            assertThat(name).isEqualTo("TeleportService");
+            assertThat(name).doesNotContainPattern("[\\p{IsHan}\\u3000-\\u303F\\uFF00-\\uFFEF]");
+        }
+
+        @Test
+        @DisplayName("the resource folder keeps its pre-6.3.0 name, so an existing install keeps its folder")
+        void resourceFolderNameIsUnchanged() {
+            assertThat(teleportService.getResourceFolderName()).isEqualTo("传送服务");
         }
     }
 
@@ -302,7 +308,7 @@ class InMemeryTeleportServiceTest {
 
         @Test
         @DisplayName("应该将玩家添加到传送中列表")
-        @SuppressWarnings("unchecked")
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
         void shouldAddPlayerToTeleportingList() throws Exception {
             // Arrange
             PlayerMock player = server.addPlayer();
@@ -696,6 +702,164 @@ class InMemeryTeleportServiceTest {
             // Assert
             assertThat(InMemeryTeleportService.getTeleportingStatus(playerUUID1)).isNull();
             assertThat(InMemeryTeleportService.getTeleportingStatus(playerUUID2)).isNull();
+        }
+    }
+
+    /**
+     * GEN-08 / D-03: {@code teleportingPlayers}/{@code locationMap}/{@code inMemoryLocationRecord}
+     * are now {@code ConcurrentHashMap}s (a live race with the async movement-check {@code
+     * runTaskTimerAsynchronously} loop at :48, T-05-16) registered with the live {@link
+     * PlayerCacheManager}, so a quitting player's entries are pruned through the real quit path
+     * -- {@link PlayerCacheManager#onPlayerQuit(UUID)} -- rather than never at all. These
+     * assertions fail on the pre-migration build.
+     */
+    @Nested
+    @DisplayName("PlayerCacheManager quit-based sweep and concurrency (GEN-08, D-03, T-05-16)")
+    class PlayerCacheSweepAndConcurrencyTests {
+
+        private PlayerCacheManager liveManager;
+
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        @BeforeEach
+        void wireLiveManager() throws Exception {
+            // playerCacheRegistered is a STATIC flag (one InMemeryTeleportService instance
+            // "registers" on behalf of every instance -- see that field's javadoc), so a PRIOR
+            // test in this nested class latching it true would otherwise make every later
+            // test's ensurePlayerCacheRegistered() a permanent no-op against a DIFFERENT
+            // liveManager than the one this test wired. Reset it so each test starts clean.
+            Field registeredField = InMemeryTeleportService.class.getDeclaredField("playerCacheRegistered");
+            registeredField.setAccessible(true);
+            registeredField.setBoolean(null, false);
+
+            liveManager = new PlayerCacheManager();
+            UltiTools currentInstance = UltiTools.getInstance();
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            when(currentInstance.getPluginManager()).thenReturn(mockPluginManager);
+        }
+
+        @Test
+        @DisplayName("Each of the three per-player maps loses the quitting player's entry; another player's survives")
+        void allThreeMapsLoseQuittingPlayerEntryOtherPlayerUntouched() {
+            PlayerMock quittingPlayer = server.addPlayer();
+            PlayerMock otherPlayer = server.addPlayer();
+            World world = quittingPlayer.getWorld();
+            Location target = new Location(world, 10, 64, 10);
+
+            // teleport()/delayTeleport() both write their respective maps AND trigger lazy
+            // first-use registration with the live manager wired above.
+            teleportService.teleport(quittingPlayer, target);
+            teleportService.teleport(otherPlayer, target);
+            teleportService.delayTeleport(quittingPlayer, target, 5);
+            teleportService.delayTeleport(otherPlayer, target, 5);
+            InMemeryTeleportService.checkPlayerMovement(quittingPlayer.getUniqueId());
+            InMemeryTeleportService.checkPlayerMovement(otherPlayer.getUniqueId());
+
+            assertThat(teleportService.getLastTeleportLocation(quittingPlayer.getUniqueId())).isPresent();
+            assertThat(InMemeryTeleportService.getTeleportingStatus(quittingPlayer.getUniqueId())).isTrue();
+
+            liveManager.onPlayerQuit(quittingPlayer.getUniqueId());
+
+            assertThat(teleportService.getLastTeleportLocation(quittingPlayer.getUniqueId()))
+                    .withFailMessage("inMemoryLocationRecord must lose the quitting player's entry")
+                    .isEmpty();
+            assertThat(InMemeryTeleportService.getTeleportingStatus(quittingPlayer.getUniqueId()))
+                    .withFailMessage("teleportingPlayers must lose the quitting player's entry")
+                    .isNull();
+
+            assertThat(teleportService.getLastTeleportLocation(otherPlayer.getUniqueId()))
+                    .withFailMessage("a sweep triggered by one player's quit must not touch another player's entry")
+                    .isPresent();
+            assertThat(InMemeryTeleportService.getTeleportingStatus(otherPlayer.getUniqueId()))
+                    .withFailMessage("a sweep triggered by one player's quit must not touch another player's entry")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("Sweeping the same quitting player twice removes nothing further and throws nothing")
+        void sweepingSamePlayerTwiceIsIdempotent() {
+            PlayerMock player = server.addPlayer();
+            World world = player.getWorld();
+            teleportService.teleport(player, new Location(world, 5, 64, 5));
+
+            liveManager.onPlayerQuit(player.getUniqueId());
+            assertThatCode(() -> liveManager.onPlayerQuit(player.getUniqueId())).doesNotThrowAnyException();
+
+            assertThat(teleportService.getLastTeleportLocation(player.getUniqueId())).isEmpty();
+        }
+
+        @Test
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        @DisplayName("Concurrent writes to all three maps from two threads complete without exception or lost updates")
+        void concurrentWritesCompleteWithoutExceptionOrLostUpdates() throws Exception {
+            int keysPerThread = 50;
+            UUID[] threadAKeys = new UUID[keysPerThread];
+            UUID[] threadBKeys = new UUID[keysPerThread];
+            for (int i = 0; i < keysPerThread; i++) {
+                threadAKeys[i] = UUID.randomUUID();
+                threadBKeys[i] = UUID.randomUUID();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, Boolean> teleportingPlayers = (Map<UUID, Boolean>) rawStaticField("teleportingPlayers");
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> locationMap = (Map<UUID, String>) rawStaticField("locationMap");
+            @SuppressWarnings("unchecked")
+            Map<UUID, Location> inMemoryLocationRecord = (Map<UUID, Location>) rawStaticField("inMemoryLocationRecord");
+
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch go = new CountDownLatch(1);
+            Thread threadA = new Thread(() -> writeAllThreeMaps(
+                    teleportingPlayers, locationMap, inMemoryLocationRecord, threadAKeys, ready, go));
+            Thread threadB = new Thread(() -> writeAllThreeMaps(
+                    teleportingPlayers, locationMap, inMemoryLocationRecord, threadBKeys, ready, go));
+
+            threadA.start();
+            threadB.start();
+            ready.await();
+            go.countDown();
+            threadA.join(TimeUnit.SECONDS.toMillis(10));
+            threadB.join(TimeUnit.SECONDS.toMillis(10));
+
+            assertThat(teleportingPlayers).hasSize(keysPerThread * 2);
+            assertThat(locationMap).hasSize(keysPerThread * 2);
+            assertThat(inMemoryLocationRecord).hasSize(keysPerThread * 2);
+            for (UUID key : threadAKeys) {
+                assertThat(teleportingPlayers).containsKey(key);
+                assertThat(locationMap).containsKey(key);
+                assertThat(inMemoryLocationRecord).containsKey(key);
+            }
+            for (UUID key : threadBKeys) {
+                assertThat(teleportingPlayers).containsKey(key);
+                assertThat(locationMap).containsKey(key);
+                assertThat(inMemoryLocationRecord).containsKey(key);
+            }
+        }
+
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        private Object rawStaticField(String name) throws Exception {
+            Field field = InMemeryTeleportService.class.getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(null);
+        }
+
+        private void writeAllThreeMaps(Map<UUID, Boolean> teleportingPlayers, Map<UUID, String> locationMap,
+                                        Map<UUID, Location> inMemoryLocationRecord, UUID[] keys,
+                                        CountDownLatch ready, CountDownLatch go) {
+            ready.countDown();
+            try {
+                go.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            for (UUID key : keys) {
+                teleportingPlayers.put(key, true);
+                locationMap.put(key, "loc-" + key);
+                // A null world is fine here -- this test asserts map-level thread safety, not
+                // Location semantics, and Bukkit's Location constructor accepts a null world.
+                inMemoryLocationRecord.put(key, new Location(null, 1, 64, 1));
+            }
         }
     }
 }

@@ -13,14 +13,59 @@ import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.services.NotificationService;
 import com.ultikits.ultitools.utils.XVersionUtils;
 import com.ultikits.ultitools.widgets.Toast;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 @Service
 public class InMemoryNotificationService implements NotificationService {
-    private static final Map<UUID, BossBar> atedPlayer = new HashMap<>();
+    @PlayerCache
+    private static final Map<UUID, BossBar> atedPlayer = new ConcurrentHashMap<>();
+
+    /**
+     * True once ANY instance of this class has registered {@link #atedPlayer} -- a static field
+     * shared by every instance -- with the live {@link PlayerCacheManager} for quit-based
+     * sweeping (GEN-08, D-03). Deliberately a STATIC flag, not per-instance: registering the
+     * same static field once per constructed instance would track it once per instance too,
+     * sweeping it redundantly on every quit (harmless, since {@link PlayerCacheManager
+     * #registerBean} removes the same map reference each time -- but silently relying on that
+     * idempotency rather than registering exactly once is worse than being explicit, per this
+     * migration's own plan). Set lazily from {@link #sendBossBarNotification(Player, String,
+     * int, BossBar, Sound)} -- the write path -- rather than the constructor, mirroring {@code
+     * CooldownValidator}'s identical lazy-first-use rationale.
+     */
+    private static volatile boolean playerCacheRegistered = false;
+
+    /**
+     * Attempts lazy first-use registration of THIS instance -- as the reference-identity handle
+     * for the shared static {@link #atedPlayer} field -- with the live {@link
+     * PlayerCacheManager} singleton. Guarded by the STATIC {@link #playerCacheRegistered} flag
+     * so only the first instance to reach {@link #sendBossBarNotification(Player, String, int,
+     * BossBar, Sound)} registers; every later instance's call is a cheap no-op. Safe to call
+     * unconditionally on every invocation: also a cheap, safely-no-op-on-failure retry when the
+     * core plugin is not yet live (see {@link #playerCacheRegistered}'s javadoc).
+     */
+    private void ensurePlayerCacheRegistered() {
+        if (playerCacheRegistered) {
+            return;
+        }
+        UltiTools instance = UltiTools.getInstance();
+        // Checking getPluginManager() too, not just getInstance(), matters especially here:
+        // playerCacheRegistered is a STATIC flag shared by every instance, so an earlier test
+        // (or an earlier caller) reaching this method while getInstance() is stubbed but
+        // getPluginManager() is not would otherwise latch it true forever, permanently skipping
+        // the retry a later, genuinely-live chain would have needed.
+        if (instance == null || instance.getPluginManager() == null) {
+            return;
+        }
+        PlayerCacheManager.tryRegister(this);
+        playerCacheRegistered = true;
+    }
 
     @Override
     public String getName() {
@@ -58,6 +103,7 @@ public class InMemoryNotificationService implements NotificationService {
 
     @Override
     public boolean sendBossBarNotification(Player player, String message, int seconds, BossBar bossBar, Sound sound) {
+        ensurePlayerCacheRegistered();
         try {
             BossBar activeBossBar;
             if (atedPlayer.containsKey(player.getUniqueId())) {

@@ -12,22 +12,23 @@ import org.jetbrains.annotations.Nullable;
 import java.util.*;
 
 /**
- * RenderNodeDiffer 实现了 RenderNode 树的 diff 算法。
+ * RenderNodeDiffer implements the diff algorithm for the RenderNode tree.
  * <p>
- * 算法基于 key 的比较：
+ * The algorithm is based on comparing keys:
  * <ul>
- * <li>如果旧节点和新节点有相同的 key，则认为是同一个节点（可能更新）</li>
- * <li>如果没有 key，则使用 slotIndex 进行比较</li>
- * <li>新增、删除、更新的节点都会被记录在 DiffResult 中</li>
+ * <li>if an old node and a new node share the same key, they are treated as the same node
+ * (possibly updated)</li>
+ * <li>without a key, slotIndex is used for the comparison instead</li>
+ * <li>added, removed, and updated nodes are all recorded in the DiffResult</li>
  * </ul>
  *
- * <p><strong>算法步骤：</strong></p>
+ * <p><strong>Algorithm steps:</strong></p>
  * <ol>
- * <li>构建旧节点的 key → node 映射</li>
- * <li>遍历新节点列表，匹配旧节点</li>
- * <li>记录匹配的节点（更新或移动）</li>
- * <li>记录未匹配的节点（新增）</li>
- * <li>记录未匹配的旧节点（删除）</li>
+ * <li>build a key -> node map for the old nodes</li>
+ * <li>iterate the new node list, matching against the old nodes</li>
+ * <li>record matched nodes (update or move)</li>
+ * <li>record unmatched new nodes (added)</li>
+ * <li>record unmatched old nodes (removed)</li>
  * </ol>
  *
  * @author UltiTools Team
@@ -37,36 +38,36 @@ import java.util.*;
 public class RenderNodeDiffer {
 
     /**
-     * 比较两组 RenderNode，返回差异结果。
+     * Compares two sets of RenderNodes and returns the difference.
      *
-     * @param oldNodes 旧的 RenderNode 列表
-     * @param newNodes 新的 RenderNode 列表
-     * @return DiffResult 包含所有变更
+     * @param oldNodes the old list of RenderNodes
+     * @param newNodes the new list of RenderNodes
+     * @return a DiffResult holding every change
      */
     @NotNull
     public DiffResult diff(@NotNull List<RenderNode> oldNodes, @NotNull List<RenderNode> newNodes) {
         DiffResult.Builder builder = DiffResult.builder();
         Map<NodeKey, RenderNode> oldNodeMap = new HashMap<>();
 
-        // 构建旧节点的映射
+        // Build the old-node map
         for (RenderNode node : oldNodes) {
             oldNodeMap.put(NodeKey.from(node), node);
         }
 
-        // 跟踪已匹配的旧节点
+        // Track which old nodes have been matched
         Set<RenderNode> matchedOldNodes = new HashSet<>();
 
-        // 遍历新节点
+        // Iterate the new nodes
         for (RenderNode newNode : newNodes) {
             RenderNode oldNode = oldNodeMap.get(NodeKey.from(newNode));
 
             if (oldNode == null) {
-                // 新增节点
+                // A new node
                 if (newNode.getIcon() != null) {
                     builder.addAdded(newNode);
                 }
             } else {
-                // 匹配到旧节点
+                // Matched to an old node
                 matchedOldNodes.add(oldNode);
 
                 if (hasChanged(oldNode, newNode)) {
@@ -79,7 +80,7 @@ public class RenderNodeDiffer {
             }
         }
 
-        // 找出被删除的节点
+        // Find the removed nodes
         for (RenderNode oldNode : oldNodes) {
             if (!matchedOldNodes.contains(oldNode) && oldNode.getIcon() != null) {
                 builder.addRemoved(oldNode);
@@ -90,11 +91,11 @@ public class RenderNodeDiffer {
     }
 
     /**
-     * 比较单个节点的变化。
+     * Compares a single node for changes.
      *
-     * @param oldNode 旧节点
-     * @param newNode 新节点
-     * @return 如果有变化返回 true
+     * @param oldNode the old node
+     * @param newNode the new node
+     * @return true if it changed
      */
     private boolean hasChanged(@NotNull RenderNode oldNode, @NotNull RenderNode newNode) {
         Icon oldIcon = oldNode.getIcon();
@@ -108,21 +109,21 @@ public class RenderNodeDiffer {
     }
 
     /**
-     * 比较两个 Icon 是否相等。
+     * Compares two Icons for equality.
      * <p>
-     * 注意：这里的比较是基于显示效果的，不是基于对象引用。
+     * Note: this comparison is based on visual effect, not object identity.
      *
-     * @param a 第一个 Icon
-     * @param b 第二个 Icon
-     * @return 如果相等返回 true
+     * @param a the first Icon
+     * @param b the second Icon
+     * @return true if they are equal
      */
     private boolean iconsEqual(@NotNull Icon a, @NotNull Icon b) {
-        // 比较 ItemStack
+        // Compare the ItemStack
         if (!a.getItem().equals(b.getItem())) {
             return false;
         }
 
-        // 比较显示名称
+        // Compare the display name
         ItemMeta aMeta = a.getItem().getItemMeta();
         Component aName = (aMeta != null && aMeta.hasDisplayName()) ? aMeta.displayName() : null;
 
@@ -133,7 +134,7 @@ public class RenderNodeDiffer {
     }
 
     /**
-     * 用于标识 RenderNode 的键。
+     * The key used to identify a RenderNode.
      */
     private static class NodeKey {
         @Nullable
@@ -157,7 +158,7 @@ public class RenderNodeDiffer {
             if (!(o instanceof NodeKey))
                 return false;
             NodeKey other = (NodeKey) o;
-            // 优先使用 slotKey，如果没有则使用 slotIndex
+            // Prefer slotKey; fall back to slotIndex when there is none
             if (slotKey != null && other.slotKey != null) {
                 return slotKey.equals(other.slotKey);
             }

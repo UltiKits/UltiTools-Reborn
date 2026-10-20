@@ -10,11 +10,11 @@ import org.jetbrains.annotations.Nullable;
 import java.util.function.Consumer;
 
 /**
- * ItemDisplay 是一个展示物品的 Widget。
+ * ItemDisplay is a Widget that displays an item.
  * <p>
- * 它是最基本的渲染 Widget，将一个 ItemStack 显示在指定的槽位。
+ * It is the most basic render Widget, showing a single ItemStack at a given slot.
  *
- * <p><strong>使用示例：</strong></p>
+ * <p><strong>Usage example:</strong></p>
  * <pre>{@code
  * ItemDisplay.builder(itemStack)
  *     .slot(10)
@@ -49,10 +49,10 @@ public class ItemDisplay extends RenderObjectWidget {
     }
 
     /**
-     * 创建 Builder。
+     * Creates a Builder.
      *
-     * @param itemStack 物品
-     * @return Builder
+     * @param itemStack the item
+     * @return the Builder
      */
     @NotNull
     public static Builder builder(@NotNull ItemStack itemStack) {

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -18,6 +19,8 @@ import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
+import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
 /**
  * Comprehensive tests for SimpleContainer covering all functionality.
@@ -103,6 +106,23 @@ class SimpleContainerComprehensiveTest {
             // Then
             assertTrue(service.isParentPostConstructCalled());
             assertTrue(service.isChildPostConstructCalled());
+        }
+
+        @Test
+        @DisplayName("GATE-05 group two (08-21): should throw ContainerException when a @PostConstruct method itself throws")
+        void testPostConstructFailureThrowsContainerException() {
+            // Given
+            container.registerBean(ThrowingPostConstructService.class);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean(ThrowingPostConstructService.class));
+
+            // Then
+            assertEquals(ErrorCode.BEAN_CREATION_FAILED, exception.getErrorCode());
+            assertNotNull(exception.getCause(),
+                    "the cause is the only pointer to what actually failed inside the @PostConstruct method");
+            assertTrue(exception.getMessage().contains("init"));
         }
     }
 
@@ -283,6 +303,28 @@ class SimpleContainerComprehensiveTest {
             // Then
             assertTrue(container.isPrototype("prototypeService"));
             assertFalse(container.isSingleton("prototypeService"));
+        }
+
+        @Test
+        @DisplayName("GATE-05 group two (08-21): should throw ContainerException for a self-referential prototype bean")
+        void testCircularPrototypeDependencyThrowsContainerException() {
+            // Given - a prototype bean whose sole constructor requires an instance of itself.
+            // getBean(Class) resolves the constructor parameter's exact-class self-match by
+            // delegating to getBean(String) (SimpleContainer.java:466), which re-enters the same
+            // bean name while it is still in currentlyCreating -- exercising the check directly,
+            // not through setter-injection's three-level cache (which only resolves singleton
+            // circularity, never prototype).
+            BeanDefinition definition = new BeanDefinition(SelfReferentialPrototype.class);
+            definition.setScope(SimpleContainer.BeanScope.PROTOTYPE);
+            container.registerBeanDefinition("selfReferentialPrototype", definition);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean("selfReferentialPrototype"));
+
+            // Then
+            assertEquals(ErrorCode.CIRCULAR_DEPENDENCY, exception.getErrorCode());
+            assertTrue(exception.getMessage().contains("selfReferentialPrototype"));
         }
     }
 
@@ -510,6 +552,121 @@ class SimpleContainerComprehensiveTest {
         }
     }
 
+    @Nested
+    @DisplayName("Constructor Injection Failure Tests")
+    class ConstructorInjectionFailureTests {
+
+        @Test
+        @DisplayName("Should throw ContainerException when the bean class has no usable constructor")
+        void testNoUsableConstructorThrows() {
+            // Given - an interface has no constructors at all, so
+            // createBeanWithConstructorInjection's best-constructor search comes up empty
+            container.registerBean(NoConstructorInterface.class);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean(NoConstructorInterface.class));
+
+            // Then
+            assertTrue(exception.getMessage().contains("No constructor found for: "));
+            assertTrue(exception.getMessage().contains(NoConstructorInterface.class.getName()));
+        }
+
+        @Test
+        @DisplayName("Should throw ContainerException when a constructor parameter cannot be resolved")
+        void testUnresolvableConstructorParameterThrows() {
+            // Given - UnresolvableConstructorDependency is never registered
+            container.registerBean(UnresolvableConstructorBean.class);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean(UnresolvableConstructorBean.class));
+
+            // Then
+            assertTrue(exception.getMessage().contains(UnresolvableConstructorDependency.class.getName()));
+            assertTrue(exception.getMessage().contains(UnresolvableConstructorBean.class.getName()));
+        }
+
+        @Test
+        @DisplayName("Should surface the original throwable as the cause when the constructor itself throws")
+        void testThrowingConstructorPreservesCause() {
+            // Given - the dependency resolves, but the constructor body throws
+            container.registerType(SimpleConstructorDependency.class, new SimpleConstructorDependency());
+            container.registerBean(ThrowingConstructorBean.class);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean(ThrowingConstructorBean.class));
+
+            // Then
+            assertNotNull(exception.getCause(),
+                    "the cause is the only pointer to what actually failed inside the constructor");
+        }
+
+        @Test
+        @DisplayName("Should create the bean normally when all constructor parameters resolve")
+        void testResolvableConstructorSucceeds() {
+            // Given
+            container.registerType(SimpleConstructorDependency.class, new SimpleConstructorDependency());
+            container.registerBean(ResolvableConstructorBean.class);
+
+            // When
+            ResolvableConstructorBean bean = container.getBean(ResolvableConstructorBean.class);
+
+            // Then
+            assertNotNull(bean);
+            assertNotNull(bean.getDependency());
+        }
+
+        @Test
+        @DisplayName("GATE-05 group two (08-21): should throw ContainerException when a no-arg constructor's own body throws")
+        void testThrowingNoArgConstructorThrowsContainerException() {
+            // Given - unlike ThrowingConstructorBean above (which has a parameter and is
+            // therefore routed through createBeanWithConstructorInjection, whose own catch
+            // already wraps in ContainerException), this bean's sole constructor takes no
+            // arguments, so createBean's own "try no-arg constructor first" branch invokes it
+            // directly via Constructor.newInstance() -- exercising createBean's final
+            // catch (Exception e) clause (SimpleContainer.java:944) rather than
+            // createBeanWithConstructorInjection's.
+            container.registerBean(ThrowingNoArgConstructorBean.class);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean(ThrowingNoArgConstructorBean.class));
+
+            // Then
+            assertEquals(ErrorCode.BEAN_CREATION_FAILED, exception.getErrorCode());
+            assertNotNull(exception.getCause(),
+                    "the cause is the only pointer to what actually failed inside the no-arg constructor");
+        }
+    }
+
+    @Nested
+    @DisplayName("GATE-05 group two (08-21): registerBean(Class) failure routing")
+    class RegisterBeanFailureTests {
+
+        @Test
+        @DisplayName("Should throw ContainerException when the bean type has no derivable name")
+        void testRegisterBeanWithAnonymousClassThrowsContainerException() {
+            // Given - an anonymous class's getSimpleName() is "", so getBeanName's
+            // decapitalized-default fallback (className.charAt(0)) throws
+            // StringIndexOutOfBoundsException, caught by registerBean's own try/catch
+            // (SimpleContainer.java:654).
+            Object anonymous = new Object() { };
+            @SuppressWarnings("unchecked")
+            Class<Object> anonymousClass = (Class<Object>) anonymous.getClass();
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.registerBean(anonymousClass));
+
+            // Then
+            assertEquals(ErrorCode.BEAN_CREATION_FAILED, exception.getErrorCode());
+            assertNotNull(exception.getCause());
+            assertTrue(exception.getMessage().contains("Failed to register bean"));
+        }
+    }
+
     // Test helper classes
     public static class LifecycleService {
         private boolean postConstructCalled = false;
@@ -531,6 +688,18 @@ class SimpleContainerComprehensiveTest {
 
         public boolean isPreDestroyCalled() {
             return preDestroyCalled;
+        }
+    }
+
+    /**
+     * GATE-05 group two (08-21) fixture: a @PostConstruct method whose body itself throws,
+     * exercising SimpleContainer.invokePostConstructMethods's own catch (Exception e) clause
+     * directly, rather than the constructor-injection path other fixtures in this file exercise.
+     */
+    public static class ThrowingPostConstructService {
+        @PostConstruct
+        public void init() {
+            throw new IllegalStateException("post-construct deliberately fails");
         }
     }
 
@@ -673,6 +842,16 @@ class SimpleContainerComprehensiveTest {
         }
     }
 
+    /**
+     * GATE-05 group two (08-21) fixture: a constructor that depends on its own type, used to
+     * force the prototype circular-dependency check at SimpleContainer.java:388.
+     */
+    public static class SelfReferentialPrototype {
+        @SuppressWarnings("PMD.UnusedFormalParameter")
+        public SelfReferentialPrototype(SelfReferentialPrototype self) {
+        }
+    }
+
     public static class TestServiceB {
         public String getName() {
             return "TestServiceB";
@@ -705,6 +884,62 @@ class SimpleContainerComprehensiveTest {
     public static class TestFactory {
         public TestServiceA createService() {
             return new TestServiceA();
+        }
+    }
+
+    // Fixtures for ConstructorInjectionFailureTests -- exercise
+    // createBeanWithConstructorInjection through the full container.getBean(Class) path.
+    public interface NoConstructorInterface {
+        // Interfaces have zero declared constructors, so this reaches the
+        // "no usable constructor" branch of createBeanWithConstructorInjection.
+    }
+
+    public static class UnresolvableConstructorDependency {
+        // Deliberately never registered with the container.
+    }
+
+    public static class UnresolvableConstructorBean {
+        // The parameter's presence -- not its use -- is the point: it forces the container's
+        // constructor-injection resolver down the "dependency type cannot be resolved" branch.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
+        public UnresolvableConstructorBean(UnresolvableConstructorDependency dependency) {
+            // Never reached: the dependency cannot be resolved.
+        }
+    }
+
+    public static class SimpleConstructorDependency {
+        // A plain, resolvable dependency.
+    }
+
+    public static class ThrowingConstructorBean {
+        // The parameter's presence -- not its use -- is the point: it forces the container
+        // through constructor injection before the constructor body deliberately fails.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
+        public ThrowingConstructorBean(SimpleConstructorDependency dependency) {
+            throw new IllegalStateException("constructor body deliberately fails");
+        }
+    }
+
+    /**
+     * GATE-05 group two (08-21) fixture: a no-arg constructor whose own body throws, so
+     * createBean's own no-arg newInstance() call fails directly -- unlike
+     * {@link ThrowingConstructorBean}, this never reaches createBeanWithConstructorInjection.
+     */
+    public static class ThrowingNoArgConstructorBean {
+        public ThrowingNoArgConstructorBean() {
+            throw new IllegalStateException("no-arg constructor body deliberately fails");
+        }
+    }
+
+    public static class ResolvableConstructorBean {
+        private final SimpleConstructorDependency dependency;
+
+        public ResolvableConstructorBean(SimpleConstructorDependency dependency) {
+            this.dependency = dependency;
+        }
+
+        public SimpleConstructorDependency getDependency() {
+            return dependency;
         }
     }
 }

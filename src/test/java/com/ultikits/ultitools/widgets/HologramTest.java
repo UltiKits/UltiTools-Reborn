@@ -71,6 +71,7 @@ class HologramTest {
 
         @Test
         @DisplayName("构造函数应该正确初始化 lines 字段")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void constructorShouldInitializeLinesField() throws Exception {
             String[] lines = {"Line 1", "Line 2", "Line 3"};
             Hologram hologram = new Hologram(lines);

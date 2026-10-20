@@ -2,61 +2,81 @@ package com.ultikits.ultitools.utils;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Bean 复制工具类
+ * Bean copy utility class.
  * <p>
- * 替代 hutool BeanUtil.copyProperties()
- * 
+ * Replaces hutool BeanUtil.copyProperties().
+ *
  * @author wisdomme
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Copies private fields between bean instances -- see 08-GATE05-TRIAGE.md
 public final class BeanCopyUtil {
+
+    /** Primitive type to its wrapper class; see {@link #boxed(Class)}. */
+    private static final Map<Class<?>, Class<?>> PRIMITIVE_TO_WRAPPER;
+
+    static {
+        Map<Class<?>, Class<?>> map = new HashMap<>();
+        map.put(boolean.class, Boolean.class);
+        map.put(char.class, Character.class);
+        map.put(byte.class, Byte.class);
+        map.put(short.class, Short.class);
+        map.put(int.class, Integer.class);
+        map.put(long.class, Long.class);
+        map.put(float.class, Float.class);
+        map.put(double.class, Double.class);
+        PRIMITIVE_TO_WRAPPER = Collections.unmodifiableMap(map);
+    }
     
     private BeanCopyUtil() {
         throw new UnsupportedOperationException("Utility class");
     }
     
     /**
-     * 复制属性
+     * Copies properties.
      *
-     * @param source 源对象
-     * @param target 目标对象
+     * @param source the source object
+     * @param target the target object
      */
     public static void copyProperties(Object source, Object target) {
         copyProperties(source, target, false);
     }
     
     /**
-     * 复制属性
+     * Copies properties.
      *
-     * @param source          源对象
-     * @param target          目标对象
-     * @param ignoreNullValue 是否忽略 null 值
+     * @param source          the source object
+     * @param target          the target object
+     * @param ignoreNullValue whether to ignore null values
      */
     public static void copyProperties(Object source, Object target, boolean ignoreNullValue) {
         copyProperties(source, target, ignoreNullValue, (String[]) null);
     }
     
     /**
-     * 复制属性，排除指定字段
+     * Copies properties, excluding the specified fields.
      *
-     * @param source         源对象
-     * @param target         目标对象
-     * @param ignoreFields   要排除的字段名
+     * @param source         the source object
+     * @param target         the target object
+     * @param ignoreFields   the field names to exclude
      */
     public static void copyProperties(Object source, Object target, String... ignoreFields) {
         copyProperties(source, target, false, ignoreFields);
     }
     
     /**
-     * 复制属性
+     * Copies properties.
      *
-     * @param source          源对象
-     * @param target          目标对象
-     * @param ignoreNullValue 是否忽略 null 值
-     * @param ignoreFields    要排除的字段名
+     * @param source          the source object
+     * @param target          the target object
+     * @param ignoreNullValue whether to ignore null values
+     * @param ignoreFields    the field names to exclude
      */
     public static void copyProperties(Object source, Object target, boolean ignoreNullValue, String... ignoreFields) {
         if (source == null || target == null) {
@@ -64,7 +84,7 @@ public final class BeanCopyUtil {
         }
 
         java.util.Set<String> ignoreSet = ignoreFields == null ?
-            java.util.Collections.emptySet() :
+            Collections.emptySet() :
             new java.util.HashSet<>(java.util.Arrays.asList(ignoreFields));
 
         List<Field> sourceFields = ReflectionUtil.getAllFields(source.getClass());
@@ -107,7 +127,7 @@ public final class BeanCopyUtil {
                 return;
             }
 
-            if (value != null && !targetField.getType().isAssignableFrom(value.getClass())) {
+            if (value != null && !boxed(targetField.getType()).isAssignableFrom(value.getClass())) {
                 value = convertValue(value, targetField.getType());
                 if (value == null) {
                     return;
@@ -116,17 +136,17 @@ public final class BeanCopyUtil {
 
             targetField.set(target, value);
         } catch (IllegalAccessException e) {
-            // 忽略无法访问的字段
+            // Ignore a field that cannot be accessed.
         }
     }
     
     /**
-     * 复制到新实例
+     * Copies to a new instance.
      *
-     * @param source      源对象
-     * @param targetClass 目标类
-     * @param <T>         目标类型
-     * @return 新实例
+     * @param source      the source object
+     * @param targetClass the target class
+     * @param <T>         the target type
+     * @return the new instance
      */
     public static <T> T copyToNewInstance(Object source, Class<T> targetClass) {
         if (source == null) {
@@ -139,14 +159,14 @@ public final class BeanCopyUtil {
     }
     
     /**
-     * 基本类型转换
+     * Converts a basic type.
      */
     private static Object convertValue(Object value, Class<?> targetType) {
         if (value == null) {
             return null;
         }
 
-        if (targetType.isAssignableFrom(value.getClass())) {
+        if (boxed(targetType).isAssignableFrom(value.getClass())) {
             return value;
         }
 
@@ -159,6 +179,20 @@ public final class BeanCopyUtil {
         }
 
         return null;
+    }
+
+    /**
+     * Returns the wrapper class of a primitive type, or the type itself otherwise.
+     * <p>
+     * {@link Field#get} always boxes, so a {@code boolean} field reads as a {@code Boolean} and
+     * {@code boolean.class.isAssignableFrom(Boolean.class)} is {@code false}. Deciding
+     * assignability against the primitive type sent every {@code boolean} and {@code char} value
+     * to {@link #convertValue}, which had no branch for either and dropped the write (#520). The
+     * numeric primitives only survived because {@link #convertNumber} happens to cover them.
+     */
+    private static Class<?> boxed(Class<?> type) {
+        Class<?> wrapper = PRIMITIVE_TO_WRAPPER.get(type);
+        return wrapper != null ? wrapper : type;
     }
 
     private static Object convertNumber(Number num, Class<?> targetType) {

@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ListenerManager;
@@ -50,6 +52,8 @@ public class ExternalPluginIntegrationTest {
         // Set up mock Bukkit server
         Server mockServer = mock(Server.class);
         when(mockServer.getLogger()).thenReturn(Logger.getLogger("MockServer"));
+        lenient().when(mockServer.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
+        lenient().when(mockServer.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
         setStaticField(Bukkit.class, "server", mockServer);
 
         // Set up mock UltiTools with real managers
@@ -62,6 +66,11 @@ public class ExternalPluginIntegrationTest {
         when(mockUltiTools.getListenerManager()).thenReturn(listenerManager);
         when(mockUltiTools.getEventBus()).thenReturn(eventBus);
         when(mockUltiTools.getPluginManager()).thenReturn(new PluginManager());
+        // wireAop (02-01) resolves a DataSource through UltiTools.getInstance().getDataStore() for
+        // the @Transactional advisor. CALLS_REAL_METHODS lets the interface's own default
+        // getDataSource(DataScope) run and throw UnsupportedOperationException - wireAop's existing
+        // graceful "declare unavailable" fallback - instead of a bare mock's null surfacing as an NPE.
+        when(mockUltiTools.getDataStore()).thenReturn(mock(DataStore.class, CALLS_REAL_METHODS));
 
         setStaticField(UltiTools.class, "ultiTools", mockUltiTools);
     }
@@ -214,26 +223,53 @@ public class ExternalPluginIntegrationTest {
                     .doesNotThrowAnyException();
         }
 
+        // GATE-06 (issue #345): both tests below called register then unregister with no
+        // assertion, so a bug that registered a command/listener for an adapter with no beans
+        // at all -- e.g. a loop-guard regression that iterates once even over an empty container
+        // -- would pass silently. The name promises "registers nothing"; the fix reads the
+        // manager's own tracking map by reflection (no public getter exists) and asserts that
+        // promise directly, then confirms unregister on an empty registration is a genuine no-op
+        // rather than merely "didn't throw".
         @Test
-        void commandManager_registerAllExternal_withEmptyContainer_registersNothing() {
+        void commandManager_registerAllExternal_withEmptyContainer_registersNothing() throws Exception {
             ExternalPluginAdapter adapter = new ExternalPluginAdapter(mockExternalPlugin);
             SimpleContainer emptyContext = new SimpleContainer();
             emptyContext.refresh();
             adapter.setContext(emptyContext);
 
             commandManager.registerAllExternal(adapter);
-            commandManager.unregisterAllExternal(adapter.getPluginName());
+
+            Field externalCommandMapField = CommandManager.class.getDeclaredField("externalCommandMap");
+            externalCommandMapField.setAccessible(true); // NOPMD
+            Map<String, ?> externalCommandMap = (Map<String, ?>) externalCommandMapField.get(commandManager);
+            assertThat(externalCommandMap)
+                    .as("an empty container must not add a tracking entry for the plugin")
+                    .doesNotContainKey(adapter.getPluginName());
+
+            assertThatCode(() -> commandManager.unregisterAllExternal(adapter.getPluginName()))
+                    .as("unregistering a plugin that never registered anything must not throw")
+                    .doesNotThrowAnyException();
         }
 
         @Test
-        void listenerManager_registerAllExternal_withEmptyContainer_registersNothing() {
+        void listenerManager_registerAllExternal_withEmptyContainer_registersNothing() throws Exception {
             ExternalPluginAdapter adapter = new ExternalPluginAdapter(mockExternalPlugin);
             SimpleContainer emptyContext = new SimpleContainer();
             emptyContext.refresh();
             adapter.setContext(emptyContext);
 
             listenerManager.registerAllExternal(adapter);
-            listenerManager.unregisterAllExternal(adapter.getPluginName());
+
+            Field externalListenerMapField = ListenerManager.class.getDeclaredField("externalListenerMap");
+            externalListenerMapField.setAccessible(true); // NOPMD
+            Map<String, ?> externalListenerMap = (Map<String, ?>) externalListenerMapField.get(listenerManager);
+            assertThat(externalListenerMap)
+                    .as("an empty container must not add a tracking entry for the plugin")
+                    .doesNotContainKey(adapter.getPluginName());
+
+            assertThatCode(() -> listenerManager.unregisterAllExternal(adapter.getPluginName()))
+                    .as("unregistering a plugin that never registered anything must not throw")
+                    .doesNotThrowAnyException();
         }
     }
 
@@ -289,6 +325,42 @@ public class ExternalPluginIntegrationTest {
             pm.registerExternal(adapter);
 
             assertThat(adapter.getContext()).isNotNull();
+            // Pins call site 3 (registerExternal): if PluginManager.wireAop(context) is ever
+            // removed from that path, external plugins silently lose @ExceptionCatch/@Transactional
+            // again while modules keep it, breaking the parity this task establishes. See issue #190.
+            assertThat(adapter.getContext().getAopProxyResolver()).isNotNull();
+        }
+
+        @Test
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        void registerExternal_setsContainerDisplayName_forModuleScanDiagnostics()
+                throws Exception {
+            JavaPlugin plugin = createMockPlugin("DiagName", "com.ext.diag.Main");
+            ExternalPluginAdapter adapter = new ExternalPluginAdapter(plugin);
+
+            DependenceManagers mockDepManagers = mock(DependenceManagers.class);
+            SimpleContainer parentContext = new SimpleContainer();
+            parentContext.refresh();
+            when(mockDepManagers.getContext()).thenReturn(parentContext);
+            when(mockUltiTools.getDependenceManagers()).thenReturn(mockDepManagers);
+
+            PluginManager pm = new PluginManager();
+            when(mockUltiTools.getPluginManager()).thenReturn(pm);
+
+            pm.registerExternal(adapter);
+
+            // Pins call site 3 (registerExternal) for the 07-21 D-19 diagnostic identifier,
+            // exactly as the wireAop assertion above pins call site 3 for AOP parity.
+            // assemblePluginContainer sets it for both UltiToolsPlugin load paths;
+            // registerExternal does not go through that method, so it must set it itself.
+            // With displayName null, ModuleScanDiagnostics' isBlank guard drops every
+            // recordSkippedClass call AND suppresses emitSummary, so a bean-creation-time
+            // linkage failure on this path would emit no SEVERE module summary at all --
+            // the operator-matchable signature compatibility/records/6.3.0.md documents.
+            // displayName has no getter, so the field is read directly.
+            Field displayName = SimpleContainer.class.getDeclaredField("displayName");
+            displayName.setAccessible(true);
+            assertThat(displayName.get(adapter.getContext())).isEqualTo("DiagName");
         }
 
         @Test

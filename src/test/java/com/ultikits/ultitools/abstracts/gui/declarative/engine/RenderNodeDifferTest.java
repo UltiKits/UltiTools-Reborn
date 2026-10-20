@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+
 import com.ultikits.ultitools.abstracts.gui.declarative.core.DiffResult;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.SlotKey;
@@ -25,12 +27,13 @@ public class RenderNodeDifferTest {
 
     @BeforeEach
     void setUp() {
+        MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
     }
 
     @AfterEach
     void tearDown() {
-        MockBukkit.unmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     @Test

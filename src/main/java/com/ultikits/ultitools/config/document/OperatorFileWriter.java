@@ -1,0 +1,1509 @@
+package com.ultikits.ultitools.config.document;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.Reader;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.logging.Logger;
+import java.util.regex.Pattern;
+
+import org.jetbrains.annotations.ApiStatus;
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.error.YAMLException;
+import org.yaml.snakeyaml.nodes.MappingNode;
+import org.yaml.snakeyaml.nodes.Node;
+import org.yaml.snakeyaml.nodes.NodeTuple;
+import org.yaml.snakeyaml.nodes.ScalarNode;
+import org.yaml.snakeyaml.nodes.SequenceNode;
+import org.yaml.snakeyaml.nodes.Tag;
+import org.yaml.snakeyaml.reader.UnicodeReader;
+import org.yaml.snakeyaml.representer.Representer;
+
+/**
+ * The write gate for operator-editable config files: the one way the framework changes such a file
+ * automatically (maintainer decisions of 2026-10-04: "operator-written configuration is never overwritten
+ * automatically" and "what code may write, by file type").
+ * <p>
+ * <b>Why it cannot overwrite operator content.</b> Every call declares the paths it owns ({@link OwnedPaths}).
+ * The gate reads the file at write time through {@link ConfigDocument#load(Path)}, applies the caller's edit
+ * to that fresh document, renders the whole document, and then <em>verifies the result instead of trusting
+ * the renderer</em>:
+ * <ol>
+ *   <li>the rendered text parses back to exactly the edited values, and outside the owned value paths the
+ *       edited values equal the file's;</li>
+ *   <li>owned spans are computed on both sides from SnakeYAML node marks: a value path's span runs from its
+ *       key's line to the last line of its value, plus the comment lines directly above the key when the key
+ *       is inserted or removed or its comment is owned; an owned comment's span is those comment lines - or,
+ *       for a framework comment run ({@link OwnedPaths.Builder#frameworkComment(List, int)}), only the run's last
+ *       lines, so the comment lines above the run are unowned and must come out unchanged (#604); an inserted key
+ *       whose nearest key in the file is a section the operator left with no value ({@code messages:}, nothing after
+ *       the colon but a comment) also owns that section's one line, and the section's value may change only from
+ *       nothing to a mapping holding exactly the inserted keys - the line keeps the key as written, the comment text and
+ *       its line terminator, and only its whitespace may be normalized: a space before the colon, the spaces before the
+ *       comment, and trailing spaces after the comment or at the end of a line without one (#620; owned-span rule
+ *       revision 3, maintainer decision 2026-10-06). A section written as an empty
+ *       value ({@code ~}, {@code null}, {@code {}}) is the operator's value and is never owned this way;</li>
+ *   <li>the lines outside the owned spans - each compared as text including its line terminator - are the
+ *       same sequence on both sides (the line diff restricted to unowned lines; stricter than a plain
+ *       longest-common-subsequence diff, which could match an unowned line against an owned one);</li>
+ *   <li>byte-order mark and final line break are unchanged;</li>
+ *   <li>no owned span shares a line with a node of a path it does not own (a flow collection holding an
+ *       owned and an unowned key on one line is refused, not partially rewritten).</li>
+ * </ol>
+ * A file using YAML anchors, aliases or merge keys is refused before the edit is applied: the renderer
+ * cannot write one back without expanding or moving shared content. A runtime failure of the YAML library while the
+ * edit is applied, while the document is rendered or while the rendering is parsed back (an {@code EmitterException}
+ * for a layout it cannot emit, for example) is refused the same way (#624). If any check fails nothing is written,
+ * one WARNING names the absolute file, the keys the write would have changed (a key below a secret-shaped key
+ * is redacted) and the reason - never a value - and the caller keeps its in-memory value. Layout is never
+ * normalized and no operator value, key or comment is repaired to make a write pass.
+ * <p>
+ * When the caller passes the fingerprint of the bytes it last read and the file no longer holds them, the
+ * outcome is {@link Outcome#FILE_CHANGED}. Immediately before publishing, after rendering and verifying, the
+ * gate reads the target again - after the new content is staged, under the lock every load and write holds - and
+ * abandons the write when the bytes moved; the residual window between that read and the atomic rename cannot be
+ * closed between an editor and the JVM. Publication goes through
+ * {@link AtomicConfigWriter}; a file the gate read absent is created exclusively (a hard link of the staged file,
+ * or a re-check and a move that does not replace where links are refused), so a file that appeared meanwhile
+ * is never replaced. Files that are unreadable or unparseable are never written.
+ *
+ * @since 6.3.0
+ */
+@ApiStatus.Internal
+public final class OperatorFileWriter {
+
+    /** The expected fingerprint of a file that was absent when the caller read it. */
+    public static final String ABSENT = "absent";
+
+    private static final Logger LOGGER = Logger.getLogger(OperatorFileWriter.class.getName());
+    private static final List<String> SECRET_WORDS = Arrays.asList("password", "secret", "token", "credential",
+            "apikey", "api_key", "key", "auth", "private", "cert");
+    private static final String ANCHORED = "the file uses YAML anchors, aliases or merge keys";
+    private static final String READING = "reading the file";
+    private static final String EDITING = "editing the document";
+    private static final String RENDERING = "rendering the document";
+    private static final String CHECKING = "checking the rendered document";
+    private static final String COMMENT_NOT_LOCATED = "the comment of a key this write owns cannot be located in the file";
+    /** Files already named in an anchored-file warning this server run (canonical paths). */
+    private static final Set<Path> WARNED_ANCHORED = ConcurrentHashMap.newKeySet();
+    /**
+     * Test seam: called with each {@link Step} of every gated write, so a test can throw a runtime failure there as the
+     * YAML library would; empty in production.
+     */
+    static final AtomicReference<Consumer<Step>> FAULT = new AtomicReference<>();
+
+    /** The steps of a gated write that call into the YAML library, as the fault seam names them. */
+    enum Step {
+        /** Applying the caller's edit to the freshly read document. */
+        EDIT,
+        /** Rendering the edited document. */
+        RENDER,
+        /** Parsing the rendered text back for the self-check. */
+        SELF_CHECK
+    }
+
+    private OperatorFileWriter() {
+    }
+
+    /** What a write did. */
+    public enum Outcome {
+        /** The edited file was published. */
+        WRITTEN,
+        /** The edit changed nothing; the file was not touched. */
+        UNCHANGED,
+        /** The file was not what the caller read, or it moved before publishing; nothing was written. */
+        FILE_CHANGED,
+        /** The write would have changed bytes it does not own, or the file cannot be written safely. */
+        REFUSED
+    }
+
+    /** The outcome of one write, its one-phrase reason, and the document now on disk when there is one. */
+    public static final class Result {
+
+        private final Outcome outcome;
+        private final String reason;
+        private final ConfigDocument document;
+        private final String fingerprint;
+        private final String readFingerprint;
+
+        private Result(Outcome outcome, String reason, ConfigDocument document) {
+            this(outcome, reason, document, null, null);
+        }
+
+        private Result(Outcome outcome, String reason, ConfigDocument document, String fingerprint, String readFingerprint) {
+            this.outcome = outcome;
+            this.reason = reason;
+            this.document = document;
+            this.fingerprint = fingerprint;
+            this.readFingerprint = readFingerprint;
+        }
+
+        /**
+         * What happened.
+         *
+         * @return the outcome
+         */
+        public Outcome outcome() {
+            return outcome;
+        }
+
+        /**
+         * Why nothing was written, as a phrase without any value; empty when written or unchanged.
+         *
+         * @return the reason
+         */
+        public String reason() {
+            return reason;
+        }
+
+        /**
+         * The edited document, which is what the file now holds, for {@link Outcome#WRITTEN} and
+         * {@link Outcome#UNCHANGED}; {@code null} otherwise.
+         *
+         * @return the document or {@code null}
+         */
+        public ConfigDocument document() {
+            return document;
+        }
+
+        /**
+         * The SHA-256 (lower-case hex, as {@link ConfigLoadResult#fingerprint()}) of the bytes the gate wrote, or of
+         * the bytes it read when nothing needed writing; {@code null} when it did not apply the edit. A caller records
+         * this, never a fresh read of the file, as the bytes it last saw, so an edit made after them stays visible.
+         *
+         * @return the fingerprint or {@code null}
+         */
+        public String fingerprint() {
+            return fingerprint;
+        }
+
+        /**
+         * The SHA-256 (lower-case hex, or {@link OperatorFileWriter#ABSENT}) of the bytes the gate read and verified the edit against -
+         * for {@link Outcome#WRITTEN}, the bytes the file held immediately before it was replaced; {@code null} when
+         * it did not apply the edit. A caller that compares this with the bytes it last bound can tell whether the
+         * file it wrote still held only what the caller had read, or also an edit made since.
+         *
+         * @return the fingerprint of the bytes read, or {@code null}
+         */
+        public String readFingerprint() {
+            return readFingerprint;
+        }
+
+        /**
+         * Whether the file now holds the edited document.
+         *
+         * @return whether the outcome is written or unchanged
+         */
+        public boolean applied() {
+            return outcome == Outcome.WRITTEN || outcome == Outcome.UNCHANGED;
+        }
+    }
+
+    /**
+     * Applies {@code edit} to the file as it is now and publishes the result only when every byte outside
+     * {@code owned} stays as it is (see the class description for why this cannot overwrite operator content).
+     *
+     * @param file                the config file
+     * @param owned               what this write may change
+     * @param expectedFingerprint the SHA-256 (lower-case hex) of the bytes the caller last read, as
+     *                            {@link ConfigLoadResult#fingerprint()} reports it, {@link #ABSENT} for a file
+     *                            that was absent, or {@code null} for no expectation
+     * @param edit                the change, applied to a freshly read document; it must change only owned paths
+     * @return the outcome; a refusal or a changed file has already been logged once
+     * @throws IOException if staging or publishing the verified text fails (the target is then as
+     *                     {@link AtomicConfigWriter} leaves it)
+     */
+    public static Result write(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit)
+            throws IOException {
+        return write(file, owned, expectedFingerprint, edit, null);
+    }
+
+    /** As {@link #write(Path, OwnedPaths, String, Consumer)}, with the publication steps as a test seam ({@code null}: real). */
+    static Result write(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
+            AtomicConfigWriter.FileOperations files) throws IOException {
+        return stage(file, owned, expectedFingerprint, edit, files).commit();
+    }
+
+    /**
+     * As {@link #write(Path, OwnedPaths, String, Consumer)}, but stops once the verified content is staged (written and
+     * forced to a temporary file beside the target), so several files can be prepared before any of them is replaced.
+     * {@link Staged#commit()} then performs the last-moment check - the target must still hold exactly the bytes the
+     * write was verified against, read again under the lock every load and write holds - and the replacement or the
+     * exclusive creation; {@link Staged#discard()} releases a staged file that will not be committed. Every check of the
+     * class description applies unchanged, so a staged write cannot overwrite operator content either: a file saved
+     * between staging and commit is kept and the commit reports {@link Outcome#FILE_CHANGED}.
+     *
+     * @param file                the config file
+     * @param owned               what this write may change
+     * @param expectedFingerprint as for {@link #write(Path, OwnedPaths, String, Consumer)}
+     * @param edit                the change, applied to a freshly read document; it must change only owned paths
+     * @return the staged write; when nothing needed staging, it already holds its result ({@link Staged#isPending()} is
+     *         {@code false}) - a refusal or a changed file has then already been logged once
+     * @throws IOException if staging the verified text fails
+     */
+    public static Staged stage(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit)
+            throws IOException {
+        return stage(file, owned, expectedFingerprint, edit, null);
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // Every refusal of the write gate is decided here, in the order the class describes.
+    static Staged stage(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
+            AtomicConfigWriter.FileOperations files) throws IOException {
+        Path absolute = file.toAbsolutePath();
+        Snapshot snapshot;
+        ConfigDocument candidate;
+        List<String> keys;
+        String rendered;
+        // What the gate is doing, so a runtime failure's refusal names the step that failed (gate-1 F7, 17-74).
+        String step = READING;
+        try {
+            snapshot = Snapshot.read(file, owned, expectedFingerprint);
+            if (snapshot.failure != null) {
+                if (ANCHORED.equals(snapshot.reason)) {
+                    return Staged.settled(refuseAnchored(absolute, owned));
+                }
+                return Staged.settled(fail(snapshot.failure, absolute, owned, wouldChange(snapshot, owned, edit),
+                        snapshot.reason));
+            }
+            candidate = snapshot.candidate;
+            step = EDITING;
+            fault(Step.EDIT);
+            edit.accept(candidate);
+            Changes changes = Changes.of(snapshot.original, candidate, owned);
+            keys = describe(changes.values, changes.comments);
+            if (!owned.isWholeFile() && changes.isEmpty()) {
+                return Staged.settled(PlainData.plainEquals(snapshot.original.toPlain(), candidate.toPlain())
+                        ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint)
+                        : refuse(absolute, owned, keys, "the write would change keys it does not own"));
+            }
+            EmptySections sections = owned.isWholeFile() ? EmptySections.NONE
+                    : EmptySections.of(snapshot.text, snapshot.original, candidate, changes);
+            if (sections.refusal != null) {
+                return Staged.settled(refuse(absolute, owned, keys, sections.refusal));
+            }
+            step = RENDERING;
+            fault(Step.RENDER);
+            rendered = candidate.render();
+            if (rendered.equals(snapshot.text)) {
+                return Staged.settled(new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint));
+            }
+            step = CHECKING;
+            String failure = owned.isWholeFile()
+                    ? verifyValues(snapshot.original, candidate, rendered, Collections.<List<String>>emptyList(),
+                            Collections.<List<String>>emptyList(), true)
+                    : verify(snapshot.text, rendered, snapshot.original, candidate, changes, owned, sections.expanded);
+            if (failure != null) {
+                return Staged.settled(refuse(absolute, owned, keys, failure));
+            }
+        } catch (RuntimeException failure) {
+            // A runtime failure while the file is read, the edit applied, the document rendered or the rendering checked -
+            // an EmitterException for a layout the YAML library cannot emit, a YAMLException, a ClassCastException from
+            // its composer, or any other unchecked failure there - is the gate's refusal like every other layout it
+            // cannot keep (#624): nothing is written and the reason names the keys, the step and the failure's class,
+            // never its message, which may quote the file.
+            return Staged.settled(refuse(absolute, owned, Collections.<String>emptyList(),
+                    runtimeFailure(owned, step, failure)));
+        }
+        if (ABSENT.equals(snapshot.fingerprint)) {
+            Path parent = absolute.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+        }
+        AtomicConfigWriter.StagedWrite temporary = files == null ? AtomicConfigWriter.stage(file, rendered)
+                : AtomicConfigWriter.stage(file, rendered, files);
+        return new Staged(file, absolute, owned, keys, rendered, candidate, snapshot.fingerprint,
+                ABSENT.equals(snapshot.fingerprint) ? null : snapshot.text, temporary);
+    }
+
+    /**
+     * For a write that cannot start because the file changed: what it would have changed in the file as it is now, to
+     * name in the warning; empty when that cannot be told. Nothing is written. A newer file using anchors is never
+     * edited, not even in memory (review round 2 IN-R2-01), and an edit the YAML library cannot apply names the owned keys
+     * instead (#624).
+     */
+    private static List<String> wouldChange(Snapshot snapshot, OwnedPaths owned, Consumer<ConfigDocument> edit) {
+        if (!snapshot.parsed || snapshot.failure != Outcome.FILE_CHANGED || owned.isWholeFile()
+                || usesAnchors(compose(snapshot.text))) {
+            return Collections.emptyList();
+        }
+        try {
+            edit.accept(snapshot.candidate);
+            Changes changes = Changes.of(snapshot.original, snapshot.candidate, owned);
+            return describe(changes.values, changes.comments);
+        } catch (RuntimeException failure) {
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * The refusal reason for a runtime failure inside a gated write (#624): the keys, the step that failed and the
+     * failure's class, never a value.
+     */
+    private static String runtimeFailure(OwnedPaths owned, String step, RuntimeException failure) {
+        String keys = owned.isWholeFile() ? "the whole file" : String.join(", ", describe(owned.values(), owned.comments()));
+        return "the file cannot be written at " + keys + ": " + step + " failed (" + failure.getClass().getSimpleName() + ")";
+    }
+
+    /**
+     * A verified write whose content is staged and not yet published - or, when nothing needed staging, the write's
+     * settled result. Publishing re-reads the target under the lock every load and write holds, immediately before the
+     * replacement, and replaces it only while it still holds exactly the bytes the write was verified against (an edit
+     * saved while the content was being staged or while other files were being prepared is seen and kept: review round
+     * 1 IN-01, plan 17-65); a file the gate read absent is created exclusively, never replacing one that appeared.
+     * <p>
+     * A commit ends in one of three states, and {@link #restore()} acts only on bytes the write still owns in that state
+     * (#673: a failed commit grants no permission to bypass the file-ownership check):
+     * <ul>
+     *   <li><b>published</b> - the target was replaced or created; the file holds this write's bytes until someone else
+     *       writes it.</li>
+     *   <li><b>unpublished</b> - nothing was replaced: the file changed or appeared before the commit, or the commit failed
+     *       with any failure other than {@link AtomicConfigWriter.RestoreFailedException}. {@link AtomicConfigWriter}
+     *       then leaves the target holding exactly what it held (a failed move, a failure before the target was opened,
+     *       a failed in-place write that was put back from its backup) and a failed creation creates nothing, so no byte
+     *       of this write is on disk and the file belongs to whoever writes it next - an operator's save included.</li>
+     *   <li><b>not put back</b> - the in-place write failed after the target was opened and putting it back failed too
+     *       ({@link AtomicConfigWriter.RestoreFailedException}): the target may hold part of this write, its backup is
+     *       kept and one SEVERE names both. Only the operator decides what the file should hold; nothing here writes or
+     *       deletes it again.</li>
+     * </ul>
+     */
+    public static final class Staged {
+
+        private final Result settled;
+        private final Path file;
+        private final Path absolute;
+        private final OwnedPaths owned;
+        private final List<String> keys;
+        private final String rendered;
+        private final ConfigDocument candidate;
+        private final String read;
+        private final String readText;
+        private final AtomicConfigWriter.StagedWrite temporary;
+        private boolean finished;
+        /** Whether this write replaced or created the target (the published state). */
+        private boolean published;
+        /**
+         * Whether the commit failed with {@link AtomicConfigWriter.RestoreFailedException}: the target may hold part of
+         * this write and its backup is kept (the not-put-back state). Set only from that exception; every other failure
+         * leaves the write unpublished with no byte of it on disk.
+         */
+        private boolean notPutBack;
+
+        private Staged(Path file, Path absolute, OwnedPaths owned, List<String> keys, String rendered,
+                ConfigDocument candidate, String read, String readText, AtomicConfigWriter.StagedWrite temporary) {
+            this.settled = null;
+            this.file = file;
+            this.absolute = absolute;
+            this.owned = owned;
+            this.keys = keys;
+            this.rendered = rendered;
+            this.candidate = candidate;
+            this.read = read;
+            this.readText = readText;
+            this.temporary = temporary;
+        }
+
+        private Staged(Result settled) {
+            this.settled = settled;
+            this.file = null;
+            this.absolute = null;
+            this.owned = null;
+            this.keys = null;
+            this.rendered = null;
+            this.candidate = null;
+            this.read = null;
+            this.readText = null;
+            this.temporary = null;
+            this.finished = true;
+        }
+
+        static Staged settled(Result result) {
+            return new Staged(result);
+        }
+
+        /**
+         * Whether verified content is staged and waits for {@link #commit()}.
+         *
+         * @return {@code false} when the write was settled without staging (refused, file changed, or unchanged)
+         */
+        public boolean isPending() {
+            return settled == null;
+        }
+
+        /**
+         * The text the staged content was verified against - exactly what the file held when the gate read it - so a
+         * caller undoing a published write can put back precisely those bytes.
+         *
+         * @return the text read, or {@code null} when the file was absent or nothing is staged
+         */
+        public String readText() {
+            return readText;
+        }
+
+        /**
+         * The settled result of a write that needed no staging, or {@code null} while content is staged.
+         *
+         * @return the result or {@code null}
+         */
+        public Result settledResult() {
+            return settled;
+        }
+
+        /**
+         * Publishes the staged content when the target still holds exactly the bytes the write was verified against
+         * (or, for a file the gate read absent, while no file exists there); otherwise the staged file is released and
+         * the result is {@link Outcome#FILE_CHANGED}, logged once. A write that needed no staging returns its settled
+         * result. A staged write is committed at most once.
+         * <p>
+         * The exception {@link AtomicConfigWriter} throws decides the state a failed commit leaves (class description):
+         * a {@link AtomicConfigWriter.RestoreFailedException} records that the target was not put back; any other failure
+         * leaves the write unpublished. The failure is rethrown unchanged either way.
+         *
+         * @return the outcome: {@link Outcome#WRITTEN} when published
+         * @throws IOException if the replacement or the creation fails (the target is then as
+         *                     {@link AtomicConfigWriter} leaves it)
+         */
+        public Result commit() throws IOException {
+            if (settled != null) {
+                return settled;
+            }
+            if (finished) {
+                throw new IllegalStateException("A staged config write is committed or discarded only once");
+            }
+            finished = true;
+            boolean creating = ABSENT.equals(read);
+            synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+                try {
+                    byte[] now = readOrNull(file);
+                    if (creating && now == null) {
+                        temporary.commitAsNewFile();
+                        published = true;
+                    } else if (!creating && now != null && ConfigDocument.sha256(now).equals(read)) {
+                        temporary.commit();
+                        published = true;
+                    }
+                } catch (FileAlreadyExistsException appeared) {
+                    // A file appeared at the target after the re-read: it is left as it is, and this is reported below.
+                    LOGGER.fine("Config creation lost the race to an existing file at " + absolute);
+                } catch (AtomicConfigWriter.RestoreFailedException failedPutBack) {
+                    // The only failure after which bytes of this write may remain in the target (#622).
+                    notPutBack = true;
+                    throw failedPutBack;
+                } finally {
+                    if (!published) {
+                        temporary.discard();
+                    }
+                }
+            }
+            if (published) {
+                return written(rendered, candidate, read);
+            }
+            return changed(absolute, owned, keys, creating ? "a file appeared while the new content was being prepared"
+                    : "the file changed while the new content was being prepared");
+        }
+
+        /**
+         * Undoes this write after its batch failed, acting only on bytes the write still owns (class description, #673):
+         * <ul>
+         *   <li>unpublished - nothing is read, written or deleted: no byte of this write is on disk, so whatever the file
+         *       holds now, an operator's save made while the batch was failing included, is kept;</li>
+         *   <li>not put back - the file is read under the lock and never written or deleted: the SEVERE the failed
+         *       put-back logged, the kept backup and the entity's "changed since it was read" protection until a reload
+         *       stand, and the operator decides what the file holds;</li>
+         *   <li>published - the text the write was verified against is put back (or the file it created removed) through
+         *       the same last-moment check as the commit, only while the file still holds exactly what this write put
+         *       there. A file that changed after this write replaced it - an operator's save - is kept as it is, and one
+         *       WARNING names it (17-65 review round 1 R65-I3).</li>
+         * </ul>
+         *
+         * @return whether the file now holds what it held before this write (also when nothing needed undoing); after a
+         *         failed put-back, {@code true} only when the file holds exactly those bytes again
+         * @throws IOException if reading the file or putting the text back fails
+         */
+        public boolean restore() throws IOException {
+            if (!published && !notPutBack) {
+                return true;
+            }
+            synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+                byte[] now = readOrNull(file);
+                String nowFingerprint = now == null ? ABSENT : ConfigDocument.sha256(now);
+                boolean holdsRead = nowFingerprint.equals(read);
+                if (holdsRead || notPutBack) {
+                    // After a failed put-back nothing is written or deleted again; the result only reports what it holds.
+                    return holdsRead;
+                }
+                String writtenFingerprint = ConfigDocument.sha256(rendered.getBytes(StandardCharsets.UTF_8));
+                if (!nowFingerprint.equals(writtenFingerprint)) {
+                    LOGGER.warning("Configuration file " + absolute + " was not restored after a failed write: it changed"
+                            + " after this write replaced it, so it is kept as it is now. Keys this write had changed: "
+                            + String.join(", ", keys.isEmpty() ? describe(owned.values(), owned.comments()) : keys) + ".");
+                    return false;
+                }
+                if (readText == null) {
+                    Files.deleteIfExists(file);
+                } else {
+                    AtomicConfigWriter.write(file, readText);
+                }
+                published = false;
+                return true;
+            }
+        }
+
+        /**
+         * Releases staged content that will not be committed; nothing on disk other than the staged temporary file is
+         * touched. Does nothing after {@link #commit()} or for a settled write.
+         *
+         * @return whether no staged temporary file is left behind
+         */
+        public boolean discard() {
+            if (finished) {
+                return true;
+            }
+            finished = true;
+            return temporary.discard();
+        }
+    }
+
+    private static void fault(Step step) {
+        Consumer<Step> fault = FAULT.get();
+        if (fault != null) {
+            fault.accept(step);
+        }
+    }
+
+    private static Result written(String rendered, ConfigDocument candidate, String read) {
+        return new Result(Outcome.WRITTEN, "", candidate, ConfigDocument.sha256(rendered.getBytes(StandardCharsets.UTF_8)), read);
+    }
+
+    private static Result fail(Outcome outcome, Path absolute, OwnedPaths owned, List<String> keys, String reason) {
+        return outcome == Outcome.FILE_CHANGED ? changed(absolute, owned, keys, reason) : refuse(absolute, owned, keys, reason);
+    }
+
+    /** An anchored file is refused on every write but named once per file per server run. */
+    private static Result refuseAnchored(Path absolute, OwnedPaths owned) {
+        Path canonical = absolute.normalize();
+        try {
+            canonical = absolute.toRealPath();
+        } catch (IOException | SecurityException e) {
+            LOGGER.fine("Using the normalized path of " + absolute + " for its anchored-file warning");
+        }
+        if (WARNED_ANCHORED.add(canonical)) {
+            warn(absolute, owned, Collections.<String>emptyList(), ANCHORED
+                    + " (named once per server run; the declared defaults are used for keys the file lacks)");
+        }
+        return new Result(Outcome.REFUSED, ANCHORED, null);
+    }
+
+    /** Forgets which anchored files were named, for tests that start a fresh "server run". */
+    static void resetAnchorWarnings() {
+        WARNED_ANCHORED.clear();
+    }
+
+    private static Result refuse(Path absolute, OwnedPaths owned, List<String> keys, String reason) {
+        warn(absolute, owned, keys, reason);
+        return new Result(Outcome.REFUSED, reason, null);
+    }
+
+    private static Result changed(Path absolute, OwnedPaths owned, List<String> keys, String reason) {
+        warn(absolute, owned, keys, reason);
+        return new Result(Outcome.FILE_CHANGED, reason, null);
+    }
+
+    private static void warn(Path absolute, OwnedPaths owned, List<String> keys, String reason) {
+        List<String> named = keys;
+        if (named.isEmpty()) {
+            named = owned.isWholeFile() ? Collections.singletonList("the whole file")
+                    : describe(owned.values(), owned.comments());
+        }
+        // Values are deliberately omitted: any key may hold a credential.
+        LOGGER.warning("Configuration file " + absolute + " was not written: " + reason
+                + ". Keys this write would have changed: " + String.join(", ", named)
+                + ". The values in memory are used; the file is unchanged.");
+    }
+
+    /** The file as the gate read it at write time, or why the write cannot start. */
+    private static final class Snapshot {
+
+        private static final String UNREADABLE = "the file cannot be read or parsed";
+
+        private String text = "";
+        private String fingerprint = ABSENT;
+        private ConfigDocument original = ConfigDocument.empty();
+        private ConfigDocument candidate = ConfigDocument.empty();
+        private boolean absent = true;
+        /** Whether the file was read and parsed (original and candidate are the file's, not empty placeholders). */
+        private boolean parsed;
+        private Outcome failure;
+        private String reason;
+
+        static Snapshot read(Path file, OwnedPaths owned, String expectedFingerprint) {
+            Snapshot snapshot = new Snapshot();
+            ConfigLoadResult loaded = ConfigDocument.load(file);
+            if (loaded.state() == ConfigLoadResult.State.LOADED) {
+                snapshot.readLoaded(file, loaded);
+            } else if (loaded.state() != ConfigLoadResult.State.ABSENT) {
+                snapshot.fail(Outcome.REFUSED, UNREADABLE);
+            }
+            if (snapshot.failure == null) {
+                snapshot.checkPreconditions(owned, expectedFingerprint);
+            }
+            return snapshot;
+        }
+
+        /** Reads the bytes the load parsed; a second read that differs means the file moved in between. */
+        private void readLoaded(Path file, ConfigLoadResult loaded) {
+            absent = false;
+            byte[] bytes;
+            try {
+                bytes = readOrNull(file);
+            } catch (IOException e) {
+                fail(Outcome.REFUSED, UNREADABLE);
+                return;
+            }
+            fingerprint = bytes == null ? ABSENT : ConfigDocument.sha256(bytes);
+            if (!fingerprint.equals(loaded.fingerprint())) {
+                fail(Outcome.FILE_CHANGED, "the file changed while it was being read");
+                return;
+            }
+            text = decode(bytes);
+            candidate = text == null ? null : parseOrNull(text);
+            if (candidate == null) {
+                fail(Outcome.REFUSED, UNREADABLE);
+                return;
+            }
+            original = loaded.document();
+            parsed = true;
+        }
+
+        private void checkPreconditions(OwnedPaths owned, String expectedFingerprint) {
+            if (expectedFingerprint != null && !expectedFingerprint.equals(fingerprint)) {
+                fail(Outcome.FILE_CHANGED, "the file changed after it was read");
+            } else if (owned.isWholeFile() && !absent) {
+                fail(Outcome.REFUSED, "the whole file may be written only when it does not exist");
+            } else if (!absent && usesAnchors(compose(text))) {
+                fail(Outcome.REFUSED, ANCHORED);
+            }
+        }
+
+        private void fail(Outcome outcome, String why) {
+            failure = outcome;
+            reason = why;
+        }
+    }
+
+    /** The owned paths the edit actually changed: values (inserted, set or removed) and comments. */
+    private static final class Changes {
+
+        private final List<List<String>> values = new ArrayList<>();
+        private final List<List<String>> comments = new ArrayList<>();
+
+        static Changes of(ConfigDocument original, ConfigDocument candidate, OwnedPaths owned) {
+            Changes changes = new Changes();
+            for (List<String> path : owned.values()) {
+                if (original.contains(path) != candidate.contains(path)
+                        || !PlainData.plainEquals(original.get(path), candidate.get(path))) {
+                    changes.values.add(path);
+                }
+            }
+            for (List<String> path : owned.comments()) {
+                if (candidate.contains(path) && !original.blockComment(path).equals(candidate.blockComment(path))) {
+                    changes.comments.add(path);
+                }
+            }
+            return changes;
+        }
+
+        boolean isEmpty() {
+            return values.isEmpty() && comments.isEmpty();
+        }
+    }
+
+    /**
+     * The sections an insert finds empty (#620, #610 item 2). For every value path the edit inserts, the nearest key
+     * above it that the file already holds is its section. When the write does not own that section and the file holds
+     * it with no value:
+     * <ul>
+     *   <li><b>left with no value</b> - a block key followed on its line by the colon and nothing else, a comment
+     *       allowed ({@code messages:}, {@code messages:   # note}), the shape deleting every child leaves - the section
+     *       is <em>expanded</em>: the write owns that one line, its value may become a mapping holding only the inserted
+     *       keys, and {@link #markExpandedSection} keeps the operator's key text, comment and line terminator on it
+     *       (owned-span rule revision 3, maintainer decision 2026-10-06: deleting every child is most likely accidental,
+     *       so the framework keeps the section complete);</li>
+     *   <li><b>written as an explicit empty value</b> - {@code ~}, {@code null}, {@code !!null} or {@code {}} on a block
+     *       key - the operator's own value, never reinterpreted as "left empty": the write is refused before rendering
+     *       (it was refused before as well, by the checks below, with reasons that did not say what to change) with a
+     *       reason that names the section and its line, never its value, and says what the operator can change.</li>
+     * </ul>
+     * Any other section - a flow collection holding the key, an explicit {@code ?} key, a scalar - is not owned and is
+     * left to the existing checks, which refuse a change to it.
+     */
+    private static final class EmptySections {
+
+        static final EmptySections NONE = new EmptySections();
+        /** The rest of a section line after its key, terminator removed, when the key was left with no value. */
+        private static final Pattern NO_VALUE = Pattern.compile("[ \t]*:(?:[ \t]*|[ \t]+#.*)");
+
+        private final List<List<String>> expanded = new ArrayList<>();
+        private String refusal;
+
+        @SuppressWarnings("PMD.NPathComplexity") // Each inserted path is classified on its own; every exit is one shape's verdict.
+        static EmptySections of(String text, ConfigDocument original, ConfigDocument candidate, Changes changes) {
+            EmptySections result = new EmptySections();
+            Node tree = null;
+            List<String> lines = null;
+            for (List<String> path : changes.values) {
+                if (original.contains(path) || !candidate.contains(path)) {
+                    continue;
+                }
+                List<String> section = nearestHeldAncestor(original, path);
+                if (section == null || result.expanded.contains(section) || ownedAbove(changes.values, section)) {
+                    continue;
+                }
+                Object value = original.get(section);
+                boolean emptyMapping = value instanceof Map && ((Map<?, ?>) value).isEmpty();
+                if (value != null && !emptyMapping) {
+                    continue;
+                }
+                if (lines == null) {
+                    tree = compose(text);
+                    lines = lines(text);
+                }
+                NodeTuple tuple = tree == null ? null : find(tree, section);
+                if (tuple == null || !onBlockKeyLine(tuple, lines, hasByteOrderMark(text))) {
+                    continue;
+                }
+                if (value == null && ConfigDocument.writtenWithNoValue(tuple.getValueNode())) {
+                    // No value written (the one shared predicate, gate-1 F1): expanded when its line holds nothing after
+                    // the colon but a comment; any other layout is left to the checks below.
+                    if (endsAfterColon(tuple, lines, hasByteOrderMark(text))) {
+                        result.expanded.add(section);
+                    }
+                } else if (value == null && tuple.getValueNode() instanceof ScalarNode
+                        || emptyMapping && isFlow(tuple.getValueNode())) {
+                    // #610 item 2: the operator's own empty value; say what to change, never the value (wording rule,
+                    // revision 0, plan 17-75).
+                    result.refusal = "the section " + redacted(section) + " (line "
+                            + (tuple.getKeyNode().getStartMark().getLine() + 1) + ") is written as an explicit empty value,"
+                            + " which the framework does not change; to have keys added below it, delete that value so the"
+                            + " line ends after the colon, or add the keys by hand";
+                    return result;
+                }
+            }
+            return result;
+        }
+
+        private static List<String> nearestHeldAncestor(ConfigDocument original, List<String> path) {
+            for (int k = path.size() - 1; k >= 1; k--) {
+                if (original.contains(path.subList(0, k))) {
+                    return path.subList(0, k);
+                }
+            }
+            return null;
+        }
+
+        /** Whether a value path the write changes is the section itself or a key above it (its line is owned anyway). */
+        private static boolean ownedAbove(List<List<String>> changed, List<String> section) {
+            for (List<String> path : changed) {
+                if (path.size() <= section.size() && section.subList(0, path.size()).equals(path)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** A single-line key starting its line (only indentation, or the byte-order mark, before it). */
+        private static boolean onBlockKeyLine(NodeTuple tuple, List<String> lines, boolean byteOrderMark) {
+            Node key = tuple.getKeyNode();
+            int line = key.getStartMark().getLine();
+            if (key.getEndMark().getLine() != line || line >= lines.size()) {
+                return false;
+            }
+            int start = key.getStartMark().getColumn() + (line == 0 && byteOrderMark ? 1 : 0);
+            String before = lines.get(line).substring(0, Math.min(start, lines.get(line).length()));
+            return before.replace("﻿", "").trim().isEmpty();
+        }
+
+        /** Whether the section key's line holds nothing after the colon but spaces and, optionally, a comment. */
+        private static boolean endsAfterColon(NodeTuple tuple, List<String> lines, boolean byteOrderMark) {
+            Node key = tuple.getKeyNode();
+            int line = key.getStartMark().getLine();
+            String[] parts = sectionLineParts(lines.get(line), key, line == 0 && byteOrderMark);
+            String text = lines.get(line);
+            String rest = text.substring(parts[0].length(), text.length() - parts[2].length());
+            return NO_VALUE.matcher(rest).matches();
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------- checks
+
+    private static String verify(String text, String rendered, ConfigDocument original, ConfigDocument candidate,
+            Changes changes, OwnedPaths owned, List<List<String>> expanded) {
+        String failure = verifyValues(original, candidate, rendered, changes.values, expanded, false);
+        if (failure != null) {
+            return failure;
+        }
+        Node before = compose(text);
+        Node after = compose(rendered);
+        // An empty document (a 0-byte, blank or comment-only file, or one the edit empties) has no node tree; it is
+        // compared as an empty mapping (owned-span self-check revision 2, 17-65 review round 2 R2-02/R2-04).
+        if (before == null && !original.toPlain().isEmpty() || after == null && !candidate.toPlain().isEmpty()) {
+            return "the rendered text would not parse back";
+        }
+        // A 0-byte file has no last line, so it has no final line break to keep (same revision as above).
+        if (hasByteOrderMark(text) != hasByteOrderMark(rendered)
+                || !text.isEmpty() && endsWithLineBreak(text) != endsWithLineBreak(rendered)) {
+            return "the file's layout would change (byte-order mark or final line break)";
+        }
+        Side left = new Side(original, before, lines(text));
+        Side right = new Side(candidate, after, lines(rendered));
+        failure = markSpans(left, right, changes, owned);
+        for (int i = 0; failure == null && i < expanded.size(); i++) {
+            failure = markExpandedSection(left, right, expanded.get(i), hasByteOrderMark(text), hasByteOrderMark(rendered));
+        }
+        return failure != null ? failure : compareUnowned(left, right);
+    }
+
+    /**
+     * The owned span of an expanded section ({@link EmptySections}, #620): its key line on both sides and nothing else -
+     * the inserted keys below it are marked as inserted values by {@link #markSpans}. On both sides that line may hold no
+     * node of another path, and the rendered line must keep the operator's bytes of it: the text up to the end of the
+     * key, the comment after the colon (without trailing spaces), and the line terminator. Only whitespace on the line may
+     * change: a space before the colon, the spaces before the comment, and trailing spaces after the comment or at the end
+     * of a line without one - every render of such a line writes {@code key: # comment} (gate-1 F2 of plan 17-75 stated
+     * this exactly); a last line without a line break gains one, as check 3 allows.
+     */
+    private static String markExpandedSection(Side left, Side right, List<String> section, boolean leftBom, boolean rightBom) {
+        NodeTuple before = find(left.tree, section);
+        NodeTuple after = find(right.tree, section);
+        if (before == null || after == null || !(after.getValueNode() instanceof MappingNode) || isFlow(after.getValueNode())) {
+            return "a key this write owns cannot be located in the file";
+        }
+        int line = before.getKeyNode().getStartMark().getLine();
+        int renderedLine = after.getKeyNode().getStartMark().getLine();
+        String failure = left.markSectionLine(section, line);
+        if (failure == null) {
+            failure = right.markSectionLine(section, renderedLine);
+        }
+        if (failure != null) {
+            return failure;
+        }
+        String[] was = sectionLineParts(left.lines.get(line), before.getKeyNode(), line == 0 && leftBom);
+        String[] now = sectionLineParts(right.lines.get(renderedLine), after.getKeyNode(), renderedLine == 0 && rightBom);
+        boolean sameEnd = was[2].equals(now[2]) || was[2].isEmpty() && line == left.lines.size() - 1 && isLineBreak(now[2]);
+        return was[0].equals(now[0]) && was[1].equals(now[1]) && sameEnd ? null
+                : "the section line of a key this write inserts would change beyond its key and comment (line " + (line + 1) + ")";
+    }
+
+    /**
+     * A section line split into the text up to the end of its key, the comment after its colon ({@code ""} when none)
+     * and its line terminator; {@code null} parts are never returned. The comment is everything from the first {@code #}
+     * after the colon to the end of the line, without trailing spaces.
+     */
+    private static String[] sectionLineParts(String line, Node key, boolean byteOrderMark) {
+        int end = line.length();
+        while (end > 0 && "\r\n\u0085  ".indexOf(line.charAt(end - 1)) >= 0) {
+            end--;
+        }
+        int keyEnd = Math.min(end, key.getEndMark().getColumn() + (byteOrderMark ? 1 : 0));
+        String rest = line.substring(keyEnd, end);
+        int hash = rest.indexOf('#');
+        String comment = hash < 0 ? "" : rest.substring(hash).replaceAll("[ \t]+$", "");
+        return new String[] {line.substring(0, keyEnd), comment, line.substring(end)};
+    }
+
+    /** Checks 2 and 5: marks every owned span on both sides, refusing a span that shares a line with an unowned key. */
+    @SuppressWarnings("PMD.NPathComplexity") // Value and comment spans are marked on both sides, each refusal kept separate.
+    private static String markSpans(Side left, Side right, Changes changes, OwnedPaths owned) {
+        for (List<String> path : changes.values) {
+            boolean present = left.document.contains(path);
+            boolean stays = right.document.contains(path);
+            int[] comment = present && stays && changes.comments.contains(path)
+                    ? ownedCommentLines(owned, left, right, path) : new int[] {0, 0};
+            if (comment == null) {
+                return COMMENT_NOT_LOCATED;
+            }
+            String failure = null;
+            if (present) {
+                failure = left.markValue(path, stays ? comment[0] : commentLineCount(left.document, path));
+            }
+            if (failure == null && stays) {
+                // An inserted key may have needed new parent mappings; the outermost new one is the span.
+                List<String> span = present ? path : topmostAbsentPrefix(left.document, path);
+                failure = right.markValue(span, present ? comment[1] : commentLineCount(right.document, span));
+            }
+            if (failure != null) {
+                return failure;
+            }
+        }
+        for (List<String> path : changes.comments) {
+            if (!changes.values.contains(path)) {
+                int[] comment = ownedCommentLines(owned, left, right, path);
+                String failure = comment == null ? COMMENT_NOT_LOCATED : left.markComment(path, comment[0]);
+                if (failure == null) {
+                    failure = right.markComment(path, comment[1]);
+                }
+                if (failure != null) {
+                    return failure;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The owned comment lines directly above the key at {@code path}, before and after the edit: the whole comment,
+     * or - for a framework comment run - the run's length in the file as read and the length of what replaced it.
+     * The comment lines above a run are the same count on both sides and unowned, so check 3 requires them unchanged.
+     *
+     * @return {@code {before, after}}, or {@code null} when the run does not fit the comment on either side
+     */
+    private static int[] ownedCommentLines(OwnedPaths owned, Side left, Side right, List<String> path) {
+        int before = commentLineCount(left.document, path);
+        int after = commentLineCount(right.document, path);
+        Integer run = owned.commentRun(path);
+        if (run == null) {
+            return new int[] {before, after};
+        }
+        int kept = before - run;
+        return kept < 0 || after < kept ? null : new int[] {run, after - kept};
+    }
+
+    /** Check 3: the unowned lines of both sides are the same sequence, each line with its terminator. */
+    private static String compareUnowned(Side left, Side right) {
+        List<Integer> beforeKept = unowned(left.owned);
+        List<Integer> afterKept = unowned(right.owned);
+        for (int i = 0; i < Math.max(beforeKept.size(), afterKept.size()); i++) {
+            if (i >= beforeKept.size() || i >= afterKept.size()
+                    || !sameLine(left.lines, beforeKept.get(i), left.owned, right.lines, afterKept.get(i), right.owned)) {
+                int line = i < beforeKept.size() ? beforeKept.get(i) : left.lines.size() - 1;
+                return "the file's layout outside the keys this write owns would change (line " + (line + 1) + ")";
+            }
+        }
+        return null;
+    }
+
+    /** One side of the comparison: its document, node tree, lines, nodes by line and owned-line marks. */
+    private static final class Side {
+
+        private final ConfigDocument document;
+        private final Node tree;
+        private final List<String> lines;
+        private final boolean[] owned;
+        private final Map<Integer, List<List<Object>>> nodes;
+
+        Side(ConfigDocument document, Node tree, List<String> lines) {
+            this.document = document;
+            this.tree = tree;
+            this.lines = lines;
+            this.owned = new boolean[lines.size()];
+            this.nodes = nodesByLine(tree, lines);
+        }
+
+        /**
+         * Marks the span of the key at {@code path} - key line to the last line of its value, plus the
+         * {@code commentLines} owned comment lines directly above it - and returns a reason when a line of that
+         * span also holds a node of a path the write does not own, or the comment is not where it belongs.
+         */
+        String markValue(List<String> path, int commentLines) {
+            NodeTuple tuple = find(tree, path);
+            if (tuple == null) {
+                return "a key this write owns cannot be located in the file";
+            }
+            int keyLine = tuple.getKeyNode().getStartMark().getLine();
+            int last = Math.max(lastLine(tuple.getKeyNode(), lines), lastLine(tuple.getValueNode(), lines));
+            int first = keyLine - commentLines;
+            if (!commentOrBlank(lines, first, keyLine)) {
+                return COMMENT_NOT_LOCATED;
+            }
+            for (int line = first; line <= last; line++) {
+                List<List<Object>> here = nodes.get(line);
+                for (List<Object> other : here == null ? Collections.<List<Object>>emptyList() : here) {
+                    if (!startsWith(other, path)) {
+                        return "a key this write owns shares line " + (line + 1) + " with a key it does not own";
+                    }
+                }
+            }
+            mark(first, last + 1);
+            return null;
+        }
+
+        /** Marks the {@code commentLines} owned comment lines directly above the key at {@code path}. */
+        String markComment(List<String> path, int commentLines) {
+            NodeTuple tuple = find(tree, path);
+            if (tuple == null) {
+                return "a key this write owns cannot be located in the file";
+            }
+            int keyLine = tuple.getKeyNode().getStartMark().getLine();
+            int first = keyLine - commentLines;
+            if (!commentOrBlank(lines, first, keyLine)) {
+                return COMMENT_NOT_LOCATED;
+            }
+            mark(first, keyLine);
+            return null;
+        }
+
+        /**
+         * Marks the key line of an expanded section ({@link EmptySections}): only that one line, and only when every node
+         * on it is the section's own key or value - so a flow collection or a second key on the line is never owned.
+         */
+        String markSectionLine(List<String> section, int line) {
+            List<List<Object>> here = nodes.get(line);
+            for (List<Object> other : here == null ? Collections.<List<Object>>emptyList() : here) {
+                if (!new ArrayList<Object>(section).equals(other)) {
+                    return "a key this write owns shares line " + (line + 1) + " with a key it does not own";
+                }
+            }
+            mark(line, line + 1);
+            return null;
+        }
+
+        private void mark(int from, int to) {
+            for (int line = Math.max(0, from); line < Math.min(to, owned.length); line++) {
+                owned[line] = true;
+            }
+        }
+    }
+
+    /**
+     * Whether an unowned line is unchanged: equal text including its terminator. One separator is not
+     * operator content: the last line of a file without a final line break gains a line break when owned
+     * lines are inserted after it (and loses it when the owned lines after it are removed); the line's own
+     * text stays byte for byte, and check 4 keeps the file's final line break as it was.
+     */
+    private static boolean sameLine(List<String> before, int b, boolean[] beforeOwned, List<String> after, int a,
+            boolean[] afterOwned) {
+        String left = before.get(b);
+        String right = after.get(a);
+        if (left.equals(right)) {
+            return true;
+        }
+        boolean appended = b == before.size() - 1 && !endsWithLineBreak(left) && a + 1 < after.size()
+                && afterOwned[a + 1] && right.startsWith(left) && isLineBreak(right.substring(left.length()));
+        boolean truncated = a == after.size() - 1 && !endsWithLineBreak(right) && b + 1 < before.size()
+                && beforeOwned[b + 1] && left.startsWith(right) && isLineBreak(left.substring(right.length()));
+        return appended || truncated;
+    }
+
+    private static boolean isLineBreak(String text) {
+        return "\n".equals(text) || "\r\n".equals(text) || "\r".equals(text);
+    }
+
+    /**
+     * Check 1: the rendered text holds exactly the edited values, and the edit stayed inside its paths. An expanded
+     * section ({@link EmptySections}) held {@code null} and must now hold nothing but the inserted keys: once they are
+     * stripped it is an empty mapping, which is read back as the {@code null} it was.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Parse-back, value equality and the owned-path strip are independent checks.
+    private static String verifyValues(ConfigDocument original, ConfigDocument candidate, String rendered,
+            List<List<String>> changedValues, List<List<String>> expanded, boolean wholeFile) {
+        fault(Step.SELF_CHECK);
+        ConfigDocument reparsed = parseOrNull(rendered);
+        if (reparsed == null) {
+            return "the rendered text would not parse back";
+        }
+        if (!PlainData.plainEquals(reparsed.toPlain(), candidate.toPlain())) {
+            return "the rendered text would not hold the intended values";
+        }
+        if (wholeFile) {
+            return null;
+        }
+        Map<String, Object> before = original.toPlain();
+        Map<String, Object> after = candidate.toPlain();
+        for (List<String> path : changedValues) {
+            strip(before, after, path);
+        }
+        for (List<String> section : expanded) {
+            Object now = lookup(after, section);
+            Object parent = lookup(after, section.subList(0, section.size() - 1));
+            if (containsPath(before, section) && lookup(before, section) == null && now instanceof Map
+                    && ((Map<?, ?>) now).isEmpty() && parent instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> holder = (Map<String, Object>) parent;
+                holder.put(section.get(section.size() - 1), null);
+            }
+        }
+        return PlainData.plainEquals(before, after) ? null : "the write would change keys it does not own";
+    }
+
+    private static void strip(Map<String, Object> before, Map<String, Object> after, List<String> path) {
+        remove(before, path);
+        remove(after, path);
+        // A mapping the edit created only to hold the owned key is part of that key.
+        for (int k = path.size() - 1; k >= 1; k--) {
+            List<String> prefix = path.subList(0, k);
+            pruneCreatedMapping(before, after, prefix);
+            pruneCreatedMapping(after, before, prefix);
+        }
+    }
+
+    private static void pruneCreatedMapping(Map<String, Object> tree, Map<String, Object> other, List<String> prefix) {
+        Object value = lookup(tree, prefix);
+        if (value instanceof Map && ((Map<?, ?>) value).isEmpty() && lookup(other, prefix) == null
+                && !containsPath(other, prefix)) {
+            remove(tree, prefix);
+        }
+    }
+
+    private static Object lookup(Map<String, Object> tree, List<String> path) {
+        Object current = tree;
+        for (String key : path) {
+            if (!(current instanceof Map)) {
+                return null;
+            }
+            current = ((Map<?, ?>) current).get(key);
+        }
+        return current;
+    }
+
+    private static boolean containsPath(Map<String, Object> tree, List<String> path) {
+        Object current = tree;
+        for (String key : path) {
+            if (!(current instanceof Map) || !((Map<?, ?>) current).containsKey(key)) {
+                return false;
+            }
+            current = ((Map<?, ?>) current).get(key);
+        }
+        return true;
+    }
+
+    private static void remove(Map<String, Object> tree, List<String> path) {
+        Object parent = lookup(tree, path.subList(0, path.size() - 1));
+        if (parent instanceof Map) {
+            ((Map<?, ?>) parent).remove(path.get(path.size() - 1));
+        }
+    }
+
+    private static List<String> topmostAbsentPrefix(ConfigDocument original, List<String> path) {
+        for (int k = 1; k <= path.size(); k++) {
+            if (!original.contains(path.subList(0, k))) {
+                return path.subList(0, k);
+            }
+        }
+        return path;
+    }
+
+    /**
+     * How many lines directly above the key at {@code path} are its own comment in {@code document}: the
+     * comment lines {@link ConfigDocument#blockComment(List)} reports, without the blank lines above them
+     * (those are kept by every comment write). The file header and a deeper-indented trailing comment of the
+     * previous section are not part of a key's comment, so they are never owned through it.
+     */
+    private static int commentLineCount(ConfigDocument document, List<String> path) {
+        List<String> comment = document.blockComment(path);
+        int leadingBlank = 0;
+        while (leadingBlank < comment.size() && comment.get(leadingBlank) == null) {
+            leadingBlank++;
+        }
+        return comment.size() - leadingBlank;
+    }
+
+    /** Whether every line in {@code [from, to)} is a comment line or blank; {@code false} when out of range. */
+    private static boolean commentOrBlank(List<String> lines, int from, int to) {
+        if (from < 0 || to > lines.size()) {
+            return false;
+        }
+        for (int i = from; i < to; i++) {
+            String text = lines.get(i).trim();
+            if (text.startsWith("\uFEFF")) {
+                text = text.substring(1).trim();
+            }
+            if (!text.isEmpty() && text.charAt(0) != '#') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The last line of {@code node} in {@code lines}. A block scalar ({@code |}, {@code >}) ends at its last content
+     * line: SnakeYAML's end mark lies after the line breaks it consumed, which include the blank or whitespace-only
+     * lines that follow a clipped or stripped value; those lines are the operator's separators, not the value, and are
+     * never owned. With keep chomping ({@code |+}, {@code >+}) the blank lines the value keeps stay part of it (owned-span
+     * rule revision 1, review round 1 IN-02).
+     */
+    private static int lastLine(Node node, List<String> lines) {
+        if (node instanceof ScalarNode || isFlow(node)) {
+            int start = node.getStartMark().getLine();
+            int line = node.getEndMark().getLine();
+            line = node.getEndMark().getColumn() == 0 && line > start ? line - 1 : line;
+            return node instanceof ScalarNode ? withoutSeparatorLines((ScalarNode) node, start, line, lines) : line;
+        }
+        int last = node.getStartMark().getLine();
+        if (node instanceof MappingNode) {
+            for (NodeTuple tuple : ((MappingNode) node).getValue()) {
+                last = Math.max(last, Math.max(lastLine(tuple.getKeyNode(), lines), lastLine(tuple.getValueNode(), lines)));
+            }
+        } else if (node instanceof SequenceNode) {
+            for (Node element : ((SequenceNode) node).getValue()) {
+                last = Math.max(last, lastLine(element, lines));
+            }
+        }
+        return last;
+    }
+
+    private static int withoutSeparatorLines(ScalarNode scalar, int start, int end, List<String> lines) {
+        if (scalar.getScalarStyle() != DumperOptions.ScalarStyle.LITERAL
+                && scalar.getScalarStyle() != DumperOptions.ScalarStyle.FOLDED) {
+            return end;
+        }
+        // The value keeps one trailing line break per kept blank line, plus the content's own (keep chomping).
+        String value = scalar.getValue();
+        int kept = 0;
+        for (int i = value.length() - 1; i >= 0 && value.charAt(i) == '\n'; i--) {
+            kept++;
+        }
+        int keptBlankLines = Math.max(0, kept - 1);
+        int last = Math.min(end, lines.size() - 1);
+        int blank = 0;
+        while (last - blank > start && lines.get(last - blank).trim().isEmpty()) {
+            blank++;
+        }
+        return last - Math.max(0, blank - keptBlankLines);
+    }
+
+    private static boolean isFlow(Node node) {
+        return node instanceof MappingNode && ((MappingNode) node).getFlowStyle() == DumperOptions.FlowStyle.FLOW
+                || node instanceof SequenceNode && ((SequenceNode) node).getFlowStyle() == DumperOptions.FlowStyle.FLOW;
+    }
+
+    /** The tuple of the key at {@code path} (the last duplicate wins, as on read), or {@code null}. */
+    private static NodeTuple find(Node tree, List<String> path) {
+        Node current = tree;
+        NodeTuple found = null;
+        for (String key : path) {
+            if (!(current instanceof MappingNode)) {
+                return null;
+            }
+            found = null;
+            for (NodeTuple tuple : ((MappingNode) current).getValue()) {
+                if (!Tag.MERGE.equals(tuple.getKeyNode().getTag()) && key.equals(identity(tuple.getKeyNode()))) {
+                    found = tuple;
+                }
+            }
+            if (found == null) {
+                return null;
+            }
+            current = found.getValueNode();
+        }
+        return found;
+    }
+
+    /** For every line, the paths of the nodes on it: keys, scalars and flow collections (a list index is an Integer). */
+    private static Map<Integer, List<List<Object>>> nodesByLine(Node tree, List<String> lines) {
+        Map<Integer, List<List<Object>>> result = new LinkedHashMap<>();
+        collect(tree, new ArrayList<Object>(), result, lines);
+        return result;
+    }
+
+    private static void collect(Node node, List<Object> path, Map<Integer, List<List<Object>>> result, List<String> lines) {
+        if (node instanceof ScalarNode || isFlow(node)) {
+            record(node, path, result, lines);
+        }
+        if (node instanceof MappingNode) {
+            for (NodeTuple tuple : ((MappingNode) node).getValue()) {
+                List<Object> child = new ArrayList<>(path);
+                child.add(identity(tuple.getKeyNode()));
+                record(tuple.getKeyNode(), child, result, lines);
+                collect(tuple.getValueNode(), child, result, lines);
+            }
+        } else if (node instanceof SequenceNode) {
+            List<Node> elements = ((SequenceNode) node).getValue();
+            for (int i = 0; i < elements.size(); i++) {
+                List<Object> child = new ArrayList<>(path);
+                child.add(i);
+                collect(elements.get(i), child, result, lines);
+            }
+        }
+    }
+
+    private static void record(Node node, List<Object> path, Map<Integer, List<List<Object>>> result, List<String> lines) {
+        int last = lastLine(node, lines);
+        for (int line = node.getStartMark().getLine(); line <= last; line++) {
+            List<List<Object>> here = result.get(line);
+            if (here == null) {
+                here = new ArrayList<>();
+                result.put(line, here);
+            }
+            here.add(path);
+        }
+    }
+
+    private static boolean startsWith(List<Object> path, List<String> prefix) {
+        if (path.size() < prefix.size()) {
+            return false;
+        }
+        for (int i = 0; i < prefix.size(); i++) {
+            if (!prefix.get(i).equals(path.get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<Integer> unowned(boolean[] owned) {
+        List<Integer> result = new ArrayList<>();
+        for (int i = 0; i < owned.length; i++) {
+            if (!owned[i]) {
+                result.add(i);
+            }
+        }
+        return result;
+    }
+
+    /** Anchors, aliases (a node reached twice) and merge keys; an empty document ({@code null} tree) has none. */
+    private static boolean usesAnchors(Node tree) {
+        return tree != null && usesAnchors(tree, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
+    }
+
+    private static boolean usesAnchors(Node node, Set<Node> seen) {
+        if (!seen.add(node) || node.getAnchor() != null) {
+            return true;
+        }
+        if (node instanceof MappingNode) {
+            for (NodeTuple tuple : ((MappingNode) node).getValue()) {
+                if (Tag.MERGE.equals(tuple.getKeyNode().getTag()) || usesAnchors(tuple.getKeyNode(), seen)
+                        || usesAnchors(tuple.getValueNode(), seen)) {
+                    return true;
+                }
+            }
+        } else if (node instanceof SequenceNode) {
+            for (Node element : ((SequenceNode) node).getValue()) {
+                if (usesAnchors(element, seen)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // --------------------------------------------------------------------------------------------- helpers
+
+    /**
+     * Splits {@code text} after every line break SnakeYAML counts ({@code \r\n}, {@code \r}, {@code \n},
+     * U+0085, U+2028, U+2029), keeping the break with its line, so a node mark's line indexes this list.
+     */
+    static List<String> lines(String text) {
+        List<String> result = new ArrayList<>();
+        int start = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\r' && i + 1 < text.length() && text.charAt(i + 1) == '\n') {
+                i++;
+            }
+            if (c == '\r' || c == '\n' || c == '\u0085' || c == '\u2028' || c == '\u2029') {
+                result.add(text.substring(start, i + 1));
+                start = i + 1;
+            }
+        }
+        if (start < text.length()) {
+            result.add(text.substring(start));
+        }
+        return result;
+    }
+
+    private static boolean hasByteOrderMark(String text) {
+        return text.startsWith("\uFEFF");
+    }
+
+    private static boolean endsWithLineBreak(String text) {
+        if (text.isEmpty()) {
+            return false;
+        }
+        char c = text.charAt(text.length() - 1);
+        return c == '\n' || c == '\r' || c == '\u0085' || c == '\u2028' || c == '\u2029';
+    }
+
+    private static Node compose(String text) {
+        try (Reader reader = new UnicodeReader(new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)))) {
+            DumperOptions options = new DumperOptions();
+            return new Yaml(new ConfigDocument.NodeConstructor(), new Representer(options), options,
+                    ConfigDocument.loaderOptions()).compose(reader);
+        } catch (YAMLException | IOException e) {
+            return null;
+        }
+    }
+
+    private static String identity(Node key) {
+        try {
+            return String.valueOf(new ConfigDocument.NodeConstructor().construct(key));
+        } catch (YAMLException e) {
+            return "\u0000unconstructable";
+        }
+    }
+
+    private static ConfigDocument parseOrNull(String text) {
+        try {
+            return ConfigDocument.parse(text);
+        } catch (ConfigParseException | RuntimeException | StackOverflowError e) {
+            return null;
+        }
+    }
+
+    private static byte[] readOrNull(Path file) throws IOException {
+        try {
+            return Files.readAllBytes(AtomicConfigWriter.resolve(file));
+        } catch (NoSuchFileException e) {
+            return null;
+        }
+    }
+
+    private static String decode(byte[] bytes) {
+        try {
+            return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException e) {
+            return null;
+        }
+    }
+
+    /** Key names for a warning: a key below a secret-shaped key is redacted; comment paths are marked. */
+    private static List<String> describe(List<List<String>> values, List<List<String>> comments) {
+        List<String> result = new ArrayList<>();
+        for (List<String> path : values) {
+            result.add(redacted(path));
+        }
+        for (List<String> path : comments) {
+            if (!values.contains(path)) {
+                result.add(redacted(path) + " (comment)");
+            }
+        }
+        return result;
+    }
+
+    private static String redacted(List<String> path) {
+        StringBuilder text = new StringBuilder();
+        boolean secret = false;
+        for (String key : path) {
+            if (text.length() > 0) {
+                text.append('.');
+            }
+            text.append(secret ? "<redacted>" : key);
+            String lower = key.toLowerCase(Locale.ROOT);
+            for (String word : SECRET_WORDS) {
+                secret |= lower.contains(word);
+            }
+        }
+        return text.toString();
+    }
+}

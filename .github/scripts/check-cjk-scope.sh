@@ -1,0 +1,633 @@
+#!/usr/bin/env bash
+#
+# check-cjk-scope.sh — D-11's CJK gate (GATE-02's machine-checkable acceptance criterion).
+#
+# GATE-02's original wording — "no Chinese-only comment without English remains" — cannot be
+# checked by a machine. "Zero CJK inside the covered scope, outside a three-item allowlist" can.
+# This script IS that check.
+#
+# Detection contract (do not change this without also updating the allowlist and this comment):
+#   A character is in the contract when its Unicode Script property is Han, or it is in CJK
+#   Symbols and Punctuation (U+3000-U+303F), or in Halfwidth and Fullwidth Forms (U+FF00-U+FFEF),
+#   matched with `grep -P '[\p{sc:Han}\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'`. Script=Han covers the
+#   CJK Unified Ideographs block (U+4E00-U+9FFF), its extensions (Extension A U+3400-U+4DBF and the
+#   supplementary-plane blocks from U+20000), the compatibility ideographs (U+F900-U+FAFF,
+#   U+2F800-U+2FA1F) and the radicals.
+#
+#   `\p{sc:Han}`, not `\p{Han}` (UltiTools-Reborn#588): from PCRE2 10.40 a bare `\p{Han}` matches
+#   the Script_Extensions property, which also takes in Script=Common characters used with Han
+#   text -- U+30FB inside the kana block, U+3190-U+319F, U+3220-U+3247 and others (246 code points
+#   measured with PCRE2 10.42). `sc:` reads the Script property only.
+#
+#   The module language guards read the same properties (I18nSourceScanner#containsCjk in each
+#   module: Character.UnicodeScript.HAN || U+3000-U+303F || U+FF00-U+FFEF, iterating code points;
+#   kana is out there too), widened together in 6.3.0 by the maintainer's decision of 2026-09-29
+#   (UltiRemoteBag#44). Same properties does not mean the same code points on every machine: the
+#   Unicode version follows the toolchain -- PCRE2 on the CI runner here, the JDK in the modules --
+#   so an ideograph a newer Unicode version adds (for example Unicode 15's U+31350-U+323AF, known
+#   to JDK 21 and not to PCRE2 10.42) matches on one side before the other. Before 6.3.0 the range
+#   was U+4E00-U+9FFF only, the range of CONTEXT.md's original 5,210-line measurement.
+#
+#   Explicitly OUT of the contract:
+#     - Hiragana / Katakana (kana)            U+3040-U+30FF
+#     - Script=Common characters that only list Han in their script extensions (U+30FB, U+3231 ...)
+#   Halfwidth katakana (U+FF65-U+FF9F) and halfwidth Hangul (U+FFA0-U+FFDC) lie inside U+FF00-U+FFEF
+#   and are matched, exactly as the module guards match them.
+#   Changing the contract is a deliberate edit, not a silent drift — --self-test pins it in both
+#   directions (assertion 4a: kana must not match; 4b and 8: punctuation, full-width forms and one
+#   planted character per added Han range must; 9: Script=Common characters with Han in their
+#   script extensions must not, Han ideographs must).
+#
+#   A pattern the local grep cannot compile (grep exit status 2: an unknown property on an old
+#   PCRE2, or no -P support at all) fails the gate instead of passing it: every grep that uses the
+#   contract goes through cjk_grep(), which turns status 2 into an error naming the pattern and
+#   exit status 2, and the pattern is compiled once before any scan (assertion 10).
+#
+#   The script forces a UTF-8 locale before any matching so the range behaves identically on a
+#   runner whose default locale is C/POSIX, where grep's byte-oriented matching would otherwise
+#   split multi-byte UTF-8 characters instead of matching whole code points.
+#
+# Scope enumeration:
+#   Candidate files come from `git ls-files -- <scope>`, never a bare `find` or a recursive `grep`
+#   over the working tree — this keeps untracked and gitignored paths out of the scan and makes
+#   the file list deterministic. Default scope is three areas: src/main/java, .github/workflows,
+#   and the buildtools test package (src/test/java/com/ultikits/ultitools/buildtools).
+#
+#   Scope correction (08-17, "08-SAME-LINE-CJK-RESIDUE.md" DECISIVE MEASUREMENT section): the
+#   default scope used to be src/main (which also pulls in src/main/resources). GATE-02 and
+#   ROADMAP criterion 2 are about "src/main comments and javadoc ... and the published
+#   sources/javadoc jars carry that form" — an argument about the published Java artifacts.
+#   src/main/resources/config.yml and plugin.yml ship in neither jar, and config.yml specifically
+#   mixes genuinely-legacy Chinese-only comments with comment lines the framework itself writes
+#   at runtime from Capability.getCommentLines() (deliberately bilingual, matching the three
+#   already-allowlisted UltiTools.java constants' pattern) — converting the whole file would
+#   either miss that runtime-generated portion or contradict it. Narrowed to src/main/java, which
+#   is unambiguously in criterion 2's scope and contains no such runtime-generated content.
+#   This is a deliberate scope narrowing, not a silent one — see the commit that made this change.
+#
+#   Two structural exclusions apply regardless of --scope:
+#     - lang/*.json catalogue files (src/main/resources/lang/{en,zh}.json) are never scanned.
+#       These are i18n message catalogues, not documentation or comments — the root monorepo
+#       CLAUDE.md names them as a hard, project-wide exemption category alongside contributor
+#       names and target-language link labels. D-08/D-11's three-item allowlist covers the
+#       *i18n("...") call-site literals* in Java source; the catalogue files themselves are a
+#       different thing and are excluded here at the enumeration level rather than via an
+#       allowlist entry, so the "exactly three allowlist entries" invariant stays intact.
+#     - .github/scripts/testdata/ (this script's own fixtures) is always excluded. The fixtures
+#       under that directory contain CJK by design, to prove the gate fires and to prove it
+#       exempts — if they were in scope they would permanently fail the gate they exist to test.
+#
+# String-literal exclusion for .java files (08-17, "DECISIVE MEASUREMENT" section of
+# "08-SAME-LINE-CJK-RESIDUE.md"): GATE-02 and ROADMAP criterion 2 are about *comments and
+# javadoc*: "src/main comments and javadoc are English-first ... and the published sources/javadoc
+# jars carry that form." A CJK string literal is neither a comment nor javadoc, is not in either
+# published jar, and this phase's own rule R2/C-03 (08-BATCH-CONVERSION-RULES.md,
+# 08-CONTROL-DOC-CORRECTIONS.md) already treats translating one as a behaviour change out of
+# scope, since it may be user-facing output that belongs in lang/*.json instead. The scanner
+# previously counted string-literal CJK anyway, because it never distinguished a comment line from
+# a string line — this measured 158 such violations across the repository before this fix, which
+# is the gate measuring a superset of what GATE-02 actually requires.
+#
+# java_comment_text() walks each complete Java file before Unicode matching. It retains only
+# comment spans, carrying block, string, char and escape state across ASCII-only lines as well.
+# Non-comment bytes are masked and line boundaries retained; diagnostics and allowlist matching
+# still use the original source line. YAML keeps its existing whole-line policy: echoed workflow
+# text remains in scope. This lexical pass is deliberately independent of the comment-only diff
+# gate, whose conservative refusal contract serves a different purpose.
+#
+# Allowlist format: .github/cjk-allowlist.txt, one `<path-glob>:<extended-regex>` pair per
+# non-comment line, split on the FIRST colon. An entry exempts a LINE, not a file — the path glob
+# still lets every other line in that file fail the gate. See that file's own header for the
+# three authorised entries.
+#
+# Usage:
+#   check-cjk-scope.sh [--allowlist <path>] [--scope <path> ...]
+#                       [--report-only] [--max-violations <n>] [--self-test]
+#
+#   --allowlist <path>     Path to the allowlist file (default: .github/cjk-allowlist.txt)
+#   --scope <path>         Repeatable. Overrides the three default scopes entirely when given.
+#   --report-only          Print violations, always exit 0 (for measurement/inspection).
+#   --max-violations <n>   Exit 0 while the violation count is at or below n (migration aid;
+#                           lets the gate be introduced before the conversion finishes). Default 0.
+#   --self-test             Run the fixture self-test (see .github/scripts/testdata/) and exit.
+#
+# Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
+#             2 = matcher/helper/read, file-enumeration or result-sort failure; 64 = usage error.
+#
+# Wired into maven-ci.yml (see the "CJK Comment/Javadoc Scope Gate" step, plan 08-18) — invoked
+# there with no threshold flag, so the zero-violation default applies. The migration aid
+# (--max-violations) existed only to let the gate be introduced before GATE-02's conversion
+# batches finished (08-04..08-17); the conversion is now finished and the gate is live and
+# required on both alpha and main. IN-01 (08-REVIEW.md): this header previously said "NOT wired
+# into maven-ci.yml yet" after the wiring had already landed -- corrected here to match.
+#
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Locale: force UTF-8 so the Unicode range in CJK_RANGE matches whole code
+# points rather than raw bytes, regardless of the runner's ambient locale.
+# ---------------------------------------------------------------------------
+if locale -a 2>/dev/null | grep -qiE '^C\.utf-?8$'; then
+    export LC_ALL=C.UTF-8
+elif locale -a 2>/dev/null | grep -qiE '^en_US\.utf-?8$'; then
+    export LC_ALL=en_US.UTF-8
+else
+    # Neither is listed by `locale -a` on this runner. Force C.UTF-8 anyway as the best-effort
+    # choice — most modern glibc systems honor it even when locale -a does not enumerate it.
+    export LC_ALL=C.UTF-8
+fi
+
+# The sole detection contract. See the header above before touching this.
+CJK_RANGE='[\p{sc:Han}\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'
+
+# cjk_grep [GREP-OPTIONS...] [FILE...] — `grep -P <options> -e "$CJK_RANGE" -- <files>` (stdin when
+# no file is given), with exit status 2 (the pattern does not compile, or a file cannot be read)
+# turned into a failure of the gate: an error naming the pattern on stderr, then exit 2 from the
+# shell it runs in. Status 0 and 1 (match, no match) are returned as grep gives them. Never call
+# grep with CJK_RANGE directly, and never inside a pipeline: a bare `if grep ...` reads status 2 as
+# "no match", which passes the gate, and an exit inside a pipeline ends only that pipeline's
+# subshell (#588).
+cjk_grep() {
+    local opts=() status=0
+    while [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; do
+        opts+=("$1")
+        shift
+    done
+    grep -P "${opts[@]}" -e "$CJK_RANGE" -- "$@" || status=$?
+    if [ "$status" -ge 2 ]; then
+        echo "ERROR: grep could not run the CJK contract pattern '${CJK_RANGE}' (exit ${status}${1:+, file $*}); the gate fails closed." >&2
+        exit 2
+    fi
+    return "$status"
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+
+ALLOWLIST=".github/cjk-allowlist.txt"
+SCOPES=()
+REPORT_ONLY=0
+MAX_VIOLATIONS=0
+SELF_TEST=0
+
+usage() {
+    cat >&2 <<'USAGE'
+Usage: check-cjk-scope.sh [--allowlist <path>] [--scope <path> ...]
+                           [--report-only] [--max-violations <n>] [--self-test]
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --allowlist)      ALLOWLIST="$2"; shift 2 ;;
+        --scope)          SCOPES+=("$2"); shift 2 ;;
+        --report-only)    REPORT_ONLY=1; shift ;;
+        --max-violations) MAX_VIOLATIONS="$2"; shift 2 ;;
+        --self-test)      SELF_TEST=1; shift ;;
+        -h|--help)        usage; exit 0 ;;
+        *)
+            echo "Unknown flag: $1" >&2
+            usage
+            exit 64
+            ;;
+    esac
+done
+
+if [ ${#SCOPES[@]} -eq 0 ]; then
+    SCOPES=(
+        "src/main/java"
+        ".github/workflows"
+        "src/test/java/com/ultikits/ultitools/buildtools"
+    )
+fi
+
+cd "$REPO_ROOT"
+
+# ---------------------------------------------------------------------------
+# Allowlist
+# ---------------------------------------------------------------------------
+ALLOW_GLOBS=()
+ALLOW_REGEXES=()
+
+load_allowlist() {
+    local file="$1"
+    ALLOW_GLOBS=()
+    ALLOW_REGEXES=()
+    if [ ! -f "$file" ]; then
+        # No allowlist file at all: zero exemptions, fail-closed. Not an error — every found
+        # CJK line simply becomes a violation.
+        return 0
+    fi
+    local line trimmed glob regex
+    while IFS= read -r line || [ -n "$line" ]; do
+        trimmed="${line#"${line%%[![:space:]]*}"}"
+        [ -z "$trimmed" ] && continue
+        case "$trimmed" in
+            '#'*) continue ;;
+        esac
+        glob="${trimmed%%:*}"
+        regex="${trimmed#*:}"
+        ALLOW_GLOBS+=("$glob")
+        ALLOW_REGEXES+=("$regex")
+    done < "$file"
+    return 0
+}
+
+# is_allowlisted PATH TEXT — true (0) when TEXT at PATH matches an allowlist entry.
+is_allowlisted() {
+    local path="$1" text="$2" i status
+    for i in "${!ALLOW_GLOBS[@]}"; do
+        case "$path" in
+            ${ALLOW_GLOBS[$i]})
+                status=0
+                grep -Eq -- "${ALLOW_REGEXES[$i]}" <<< "$text" || status=$?
+                if [ "$status" -ge 2 ]; then
+                    echo "ERROR: cannot match allowlist pattern '${ALLOW_REGEXES[$i]}' for '$path'; the gate fails closed." >&2
+                    exit 2
+                fi
+                if [ "$status" -eq 0 ]; then
+                    return 0
+                fi
+                ;;
+        esac
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Scanning
+# ---------------------------------------------------------------------------
+
+# java_comment_text PATH — mask non-comment bytes, preserving physical line positions.
+# Read the entire file before matching: an ASCII opener can govern later CJK lines.
+# Perl operates on bytes; only ASCII delimiters are interpreted, not Unicode policy.
+java_comment_text() {
+    perl - "$1" <<'PERL'
+use strict;
+use warnings;
+my $path = shift @ARGV;
+open my $fh, '<:raw', $path or die "Cannot open Java source $path: $!\n";
+my $source = '';
+while (1) {
+    my $size = read($fh, my $chunk, 65536);
+    defined $size or die "Cannot read Java source $path: $!\n";
+    last unless $size;
+    $source .= $chunk;
+}
+close $fh or die "Cannot close Java source $path: $!\n";
+my $state = 'code';
+my $escaped = 0;
+my $out = '';
+for (my $i = 0; $i < length($source); $i++) {
+    my $ch = substr($source, $i, 1);
+    my $pair = substr($source, $i, 2);
+    if ($ch eq "\n" || $ch eq "\r") {
+        $out .= $ch;
+        $state = 'code' if $state eq 'line';
+        next;
+    }
+    if ($state eq 'line') {
+        $out .= $ch;
+    } elsif ($state eq 'block') {
+        if ($pair eq '*/') {
+            $out .= '*/';
+            $i++;
+            $state = 'code';
+        } else {
+            $out .= $ch;
+        }
+    } elsif ($state eq 'string' || $state eq 'char') {
+        $out .= ' ';
+        if ($escaped) {
+            $escaped = 0;
+        } elsif ($ch eq "\\") {
+            $escaped = 1;
+        } elsif (($state eq 'string' && $ch eq '"') ||
+                 ($state eq 'char' && $ch eq "'")) {
+            $state = 'code';
+        }
+    } elsif ($pair eq '//' || $pair eq '/*') {
+        $out .= $pair;
+        $i++;
+        $state = $pair eq '//' ? 'line' : 'block';
+    } else {
+        $out .= ' ';
+        $state = 'string' if $ch eq '"';
+        $state = 'char' if $ch eq "'";
+    }
+}
+print $out or die "Cannot emit Java comments for $path: $!\n";
+PERL
+}
+
+# scan_file PATH — print original PATH:LINENO:TEXT, matching only Java comment spans.
+scan_file() {
+    local path="$1" matches status=0 lineno text comments
+    local source_lines=()
+    case "$path" in
+        *.java)
+            comments="$(java_comment_text "$path")" || {
+                echo "ERROR: Java comment helper failed for '$path'; the gate fails closed." >&2
+                exit 2
+            }
+            if ! mapfile -t source_lines < "$path"; then
+                echo "ERROR: cannot read original Java source '$path'; the gate fails closed." >&2
+                exit 2
+            fi
+            matches="$(cjk_grep -n <<< "$comments")" || status=$?
+            ;;
+        *) matches="$(cjk_grep -n "$path")" || status=$? ;;
+    esac
+    if [ "$status" -ge 2 ]; then
+        exit 2
+    fi
+    if [ "$status" -eq 1 ]; then
+        return 0
+    fi
+    while IFS=: read -r lineno text; do
+        case "$path" in
+            *.java) text="${source_lines[$((lineno - 1))]}" ;;
+        esac
+        is_allowlisted "$path" "$text" && continue
+        printf '%s:%s:%s\n' "$path" "$lineno" "$text"
+    done <<< "$matches"
+    return 0
+}
+
+# run_scan — enumerates the current SCOPES via `git ls-files` and prints violations for every
+# candidate file, applying the two structural exclusions (lang/*.json catalogues, this script's
+# own testdata fixtures). Prints an explicit note to stderr for any scope matching zero tracked
+# files — an empty scope is never a silent pass. A failed enumeration is not an empty scope:
+# when `git ls-files` exits non-zero, the scan prints an ERROR naming the scope and exits 2,
+# like matcher, helper and read failures, before any count or SUMMARY.
+run_scan() {
+    local scope f files listing status
+    for scope in "${SCOPES[@]}"; do
+        files=()
+        listing=""
+        status=0
+        listing="$(git ls-files -- "$scope")" || status=$?
+        if [ "$status" -ne 0 ]; then
+            echo "ERROR: git ls-files failed for scope '${scope}' (exit ${status}); the gate fails closed." >&2
+            exit 2
+        fi
+        # A here-string of an empty string yields one empty element, so fill only from real output.
+        if [ -n "$listing" ]; then
+            mapfile -t files <<< "$listing"
+        fi
+        if [ ${#files[@]} -eq 0 ]; then
+            echo "NOTE: scope '${scope}' matched zero tracked files." >&2
+            continue
+        fi
+        for f in "${files[@]}"; do
+            case "$f" in
+                */lang/en.json | */lang/zh.json) continue ;;
+                .github/scripts/testdata/*) continue ;;
+            esac
+            scan_file "$f"
+        done
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
+run_self_test() {
+    local failures=0
+    local violating_fixture=".github/scripts/testdata/cjk-fixture-violating.txt"
+    local allowlisted_fixture=".github/scripts/testdata/cjk-fixture-allowlisted.txt"
+
+    # Assertion 1: the violating fixture yields exactly one violation, with no allowlist active.
+    ALLOW_GLOBS=()
+    ALLOW_REGEXES=()
+    local n1
+    n1=$(scan_file "$violating_fixture" | grep -c . || true)
+    if [ "$n1" -eq 1 ]; then
+        echo "PASS: assertion 1 — violating fixture yields exactly 1 violation."
+    else
+        echo "FAIL: assertion 1 — violating fixture yields exactly 1 violation (got ${n1})."
+        failures=1
+    fi
+
+    # Assertion 2: a temporary in-memory allowlist exempting only the allowlisted fixture's first
+    # CJK line leaves exactly one violation (the unmatched line, not the exempted one).
+    ALLOW_GLOBS=("$allowlisted_fixture")
+    ALLOW_REGEXES=('会被本次自测的临时白名单豁免')
+    local n2
+    n2=$(scan_file "$allowlisted_fixture" | grep -c . || true)
+    ALLOW_GLOBS=()
+    ALLOW_REGEXES=()
+    if [ "$n2" -eq 1 ]; then
+        echo "PASS: assertion 2 — allowlist exempts the matched line, leaves the other as a violation."
+    else
+        echo "FAIL: assertion 2 — allowlist exempts the matched line, leaves the other as a violation (got ${n2})."
+        failures=1
+    fi
+
+    # Assertion 3: a scope matching zero tracked files yields zero violations, with the explicit
+    # empty-scope message printed — never a silent pass.
+    local saved_scopes=("${SCOPES[@]}")
+    SCOPES=("no/such/scope/at/all/for/self/test")
+    local stderr_capture
+    stderr_capture="$(mktemp)"
+    # run_scan's exit status is captured on its own, never through a pipeline: a failed
+    # enumeration also yields zero output lines, so the count alone cannot tell it from success.
+    local n3=0 status3=0 out3 line3
+    out3="$(run_scan 2>"$stderr_capture")" || status3=$?
+    while IFS= read -r line3; do
+        if [ -n "$line3" ]; then
+            n3=$((n3 + 1))
+        fi
+    done <<< "$out3"
+    local msg3
+    msg3="$(cat "$stderr_capture")"
+    rm -f "$stderr_capture"
+    SCOPES=("${saved_scopes[@]}")
+    if [ "$status3" -eq 0 ] && [ "$n3" -eq 0 ] && printf '%s' "$msg3" | grep -q "matched zero tracked files"; then
+        echo "PASS: assertion 3 — empty scope yields zero violations with an explicit message."
+    elif [ "$status3" -ne 0 ]; then
+        echo "FAIL: assertion 3 — empty scope yields zero violations with an explicit message. (run_scan exit ${status3})"
+        failures=1
+    else
+        echo "FAIL: assertion 3 — empty scope yields zero violations with an explicit message."
+        failures=1
+    fi
+
+    # Assertion 4: the encoding boundary itself — kana is OUTSIDE the contract and must not match,
+    # while CJK and full-width punctuation are INSIDE it and must (6.3.0 widening, UltiRemoteBag#44:
+    # the same contract as the module language guards' I18nSourceScanner#containsCjk). Pins the
+    # range in both directions against silent drift.
+    local kana='ひらがなカタカナ'
+    local fullwidth='。、！？（）'
+    if cjk_grep -q <<< "$(printf '%s' "$kana")"; then
+        echo "FAIL: assertion 4a — kana must not match the contract."
+        failures=1
+    else
+        echo "PASS: assertion 4a — kana must not match the contract."
+    fi
+    if cjk_grep -q <<< "$(printf '%s' "$fullwidth")"; then
+        echo "PASS: assertion 4b — CJK and full-width punctuation match the contract."
+    else
+        echo "FAIL: assertion 4b — CJK and full-width punctuation match the contract."
+        failures=1
+    fi
+
+    # Assertion 8: one planted character per range the 6.3.0 widening added, each alone on its
+    # line, must match: Extension A (U+3400), a supplementary-plane ideograph (U+20000), a
+    # compatibility ideograph (U+F900), CJK punctuation (U+3001) and a full-width form (U+FF1A).
+    local planted
+    for planted in $'\u3400' $'\U00020000' $'\uf900' $'\u3001' $'\uff1a'; do
+        if cjk_grep -q <<< "$(printf 'x %s x' "$planted")"; then
+            echo "PASS: assertion 8 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches."
+        else
+            echo "FAIL: assertion 8 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches."
+            failures=1
+        fi
+    done
+
+    # Assertion 9 (#588): the contract reads the Script property, as Character.UnicodeScript.HAN
+    # does in the module guards, not Script_Extensions. Two Script=Common characters with Han in
+    # their script extensions (U+30FB, inside the kana block; U+3231) must not match; two Han
+    # ideographs (U+4E00, U+20000) must. The fixture carries U+30FB and U+3231 beside a Han
+    # control line, so scanning it must yield exactly that one line.
+    for planted in $'\u30fb' $'\u3231'; do
+        if cjk_grep -q <<< "$(printf 'x %s x' "$planted")"; then
+            echo "FAIL: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') must not match (Script=Common)."
+            failures=1
+        else
+            echo "PASS: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') does not match (Script=Common)."
+        fi
+    done
+    for planted in $'\u4e00' $'\U00020000'; do
+        if cjk_grep -q <<< "$(printf 'x %s x' "$planted")"; then
+            echo "PASS: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches (Script=Han)."
+        else
+            echo "FAIL: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches (Script=Han)."
+            failures=1
+        fi
+    done
+    local script_common_fixture=".github/scripts/testdata/cjk-fixture-script-common.txt"
+    local n9
+    n9=$(scan_file "$script_common_fixture" | grep -c . || true)
+    if [ "$n9" -eq 1 ]; then
+        echo "PASS: assertion 9 — the Script=Common fixture yields only its Han control line."
+    else
+        echo "FAIL: assertion 9 — the Script=Common fixture yields only its Han control line (got ${n9})."
+        failures=1
+    fi
+
+    # Assertion 10 (#588): a pattern the local grep rejects (grep exit status 2) fails the gate
+    # instead of passing it. Simulated by overriding CJK_RANGE in a subshell with a property no
+    # PCRE2 knows; the scan must exit non-zero and the error must name the pattern.
+    local bad_pattern='[\p{NoSuchScriptForSelfTest}]'
+    local err10 status10
+    err10="$(mktemp)"
+    set +e
+    ( CJK_RANGE="$bad_pattern"; scan_file "$violating_fixture" > /dev/null ) 2> "$err10"
+    status10=$?
+    set -e
+    if [ "$status10" -ne 0 ] && grep -qF "$bad_pattern" "$err10"; then
+        echo "PASS: assertion 10 — a pattern grep rejects fails the gate and names the pattern (exit ${status10})."
+    else
+        echo "FAIL: assertion 10 — a pattern grep rejects fails the gate and names the pattern (exit ${status10})."
+        failures=1
+    fi
+    rm -f "$err10"
+
+    # Assertions 5-7: every fixture line has an explicit verdict through the shared scanner.
+    local java_fixture java_matches java_expected="" java_lineno java_line
+    local java_lines=()
+    java_fixture="$(mktemp --suffix=.java)"
+    cp .github/scripts/testdata/cjk-java-comments.java.txt "$java_fixture"
+    mapfile -t java_lines < "$java_fixture"
+    java_matches="$(scan_file "$java_fixture")" || { rm -f "$java_fixture"; return 2; }
+    for java_lineno in "${!java_lines[@]}"; do
+        java_line="${java_lines[$java_lineno]}"
+        case "$((java_lineno + 1))" in
+            3|6|9|12|14|15|24|26)
+                java_expected+="${java_fixture}:$((java_lineno + 1)):${java_line}"$'\n'
+                if [[ "$java_matches" == *"${java_fixture}:$((java_lineno + 1)):${java_line}"* ]]; then
+                    echo "PASS: Java fixture line $((java_lineno + 1)) — comment violation."
+                else
+                    echo "FAIL: Java fixture line $((java_lineno + 1)) — missing comment violation."
+                    failures=1
+                fi
+                ;;
+            *)
+                if [[ "$java_matches" == *"${java_fixture}:$((java_lineno + 1)):"* ]]; then
+                    echo "FAIL: Java fixture line $((java_lineno + 1)) — nonviolating control rejected."
+                    failures=1
+                else
+                    echo "PASS: Java fixture line $((java_lineno + 1)) — nonviolating control."
+                fi
+                ;;
+        esac
+    done
+    if [ "$java_matches" != "${java_expected%$'\n'}" ]; then
+        echo "FAIL: full-file Java fixture diagnostics differ from the exact expected lines."
+        failures=1
+    fi
+    rm -f "$java_fixture"
+
+    return "$failures"
+}
+
+# Compile the contract pattern once before any scan or self-test: a grep that rejects it exits the
+# script with status 2 here, before a single file is read (#588).
+cjk_grep -q <<< 'x' || true
+
+if [ "$SELF_TEST" -eq 1 ]; then
+    run_self_test
+    exit $?
+fi
+
+# ---------------------------------------------------------------------------
+# Main scan
+# ---------------------------------------------------------------------------
+load_allowlist "$ALLOWLIST"
+
+VIOLATIONS_RAW="$(mktemp)"
+# Initialised before the trap is registered, so the trap never expands an unset variable under
+# set -u; one EXIT trap removes both temporary files on every exit, including the exit-2 paths.
+VIOLATIONS_SORTED=""
+trap 'rm -f "$VIOLATIONS_RAW" "$VIOLATIONS_SORTED"' EXIT
+
+run_scan > "$VIOLATIONS_RAW"
+
+VIOLATIONS_SORTED="$(mktemp)"
+# The sorted file is consumed only after sort exited 0: a failed sort leaves it truncated, which
+# would otherwise read as zero violations.
+SORT_STATUS=0
+sort -t: -k1,1 -k2,2n "$VIOLATIONS_RAW" > "$VIOLATIONS_SORTED" || SORT_STATUS=$?
+if [ "$SORT_STATUS" -ne 0 ]; then
+    echo "ERROR: sorting the violation list failed (exit ${SORT_STATUS}); the gate fails closed." >&2
+    exit 2
+fi
+
+TOTAL=$(wc -l < "$VIOLATIONS_SORTED" | tr -d ' ')
+FILES=$(cut -d: -f1 "$VIOLATIONS_SORTED" | sort -u | wc -l | tr -d ' ')
+
+if [ "$TOTAL" -gt 0 ]; then
+    # One GitHub Actions error annotation per violating FILE (not per line) so a large batch stays
+    # readable, then the full sorted list to stdout for anyone reading the raw log.
+    cut -d: -f1 "$VIOLATIONS_SORTED" | sort -u | while IFS= read -r vf; do
+        echo "::error file=${vf}::CJK character(s) found outside the allowed scope (see .github/cjk-allowlist.txt)"
+    done
+    cat "$VIOLATIONS_SORTED"
+fi
+
+echo "SUMMARY: ${TOTAL} CJK violation(s) across ${FILES} file(s)."
+
+rm -f "$VIOLATIONS_RAW" "$VIOLATIONS_SORTED"
+trap - EXIT
+
+if [ "$REPORT_ONLY" -eq 1 ]; then
+    exit 0
+fi
+
+if [ "$TOTAL" -gt "$MAX_VIOLATIONS" ]; then
+    exit 1
+fi
+
+exit 0

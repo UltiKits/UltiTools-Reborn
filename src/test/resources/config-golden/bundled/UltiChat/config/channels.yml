@@ -1,0 +1,23 @@
+# UltiChat - Channel Configuration
+# A channel may add `format:` to replace its chat line (used only while chat.format-enabled in chat.yml
+# is true, the default); `{display}` is the channel display name.
+
+channels:
+  enabled: true
+  default-channel: global
+  channels:
+    global:
+      display-name: "&f[Global]"
+      permission: ""
+      range: -1
+      cross-world: true
+    local:
+      display-name: "&a[Local]"
+      permission: ""
+      range: 100
+      cross-world: false
+    staff:
+      display-name: "&c[Staff]"
+      permission: "ultichat.channel.staff"
+      range: -1
+      cross-world: true

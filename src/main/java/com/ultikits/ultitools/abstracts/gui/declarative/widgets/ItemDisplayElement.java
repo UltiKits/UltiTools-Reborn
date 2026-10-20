@@ -6,7 +6,7 @@ import mc.obliviate.inventory.Icon;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * ItemDisplay 对应的 RenderObjectElement。
+ * The RenderObjectElement counterpart of ItemDisplay.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -22,8 +22,8 @@ public class ItemDisplayElement extends RenderObjectElement {
     @NotNull
     protected RenderNode createRenderNode() {
         ItemDisplay widget = (ItemDisplay) getWidget();
-        
-        // 创建 Icon
+
+        // Create the Icon
         Icon icon = new Icon(widget.getItemStack());
         if (widget.getDisplayName() != null) {
             icon.setName(widget.getDisplayName());
@@ -32,7 +32,7 @@ public class ItemDisplayElement extends RenderObjectElement {
             icon.setLore(widget.getLore());
         }
 
-        // 创建 RenderNode
+        // Create the RenderNode
         RenderNode node = new RenderNode(widget.getKey(), widget.getSlot(), icon);
         if (widget.getClickHandler() != null) {
             node.setClickHandler(widget.getClickHandler());
@@ -45,10 +45,10 @@ public class ItemDisplayElement extends RenderObjectElement {
     protected void updateRenderNode(@NotNull RenderNode renderNode) {
         ItemDisplay widget = (ItemDisplay) getWidget();
 
-        // 更新位置
+        // Update the position
         renderNode.setSlotIndex(widget.getSlot());
 
-        // 更新 Icon
+        // Update the Icon
         Icon icon = new Icon(widget.getItemStack());
         if (widget.getDisplayName() != null) {
             icon.setName(widget.getDisplayName());
@@ -58,7 +58,7 @@ public class ItemDisplayElement extends RenderObjectElement {
         }
         renderNode.setIcon(icon);
 
-        // 更新点击处理器
+        // Update the click handler
         if (widget.getClickHandler() != null) {
             renderNode.setClickHandler(widget.getClickHandler());
         }

@@ -1,545 +1,271 @@
 package com.ultikits.ultitools.utils;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.Reader;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.Date;
 import java.util.function.Consumer;
-import java.util.logging.Level;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import com.ultikits.ultitools.UltiTools;
+import org.jetbrains.annotations.ApiStatus;
+
 import com.ultikits.ultitools.entities.TokenEntity;
 
 /**
- * Manages UltiCloud authentication tokens.
- * Supports magic-link login (no password needed) and token persistence.
- * <br>
- * 管理UltiCloud身份验证令牌。
- * 支持魔法链接登录（无需密码）和令牌持久化。
+ * The three command-facing entry points behind {@code /ulticloud login|logout|status}.
+ * <p>
+ * As of plan 16-09 (D-17) this class owns no state of its own and exposes no generation-shaped or
+ * {@link TokenEntity}-shaped public surface -- everything that used to be a fine-grained public
+ * static (the generation triple, {@code saveToken}/{@code clearToken}/{@code refreshToken}/
+ * {@code loadSavedToken}, the start/stop pairs for polling and refresh) is gone outright, not
+ * deprecated: {@link CloudSession} instance methods now carry that behaviour, reached only through
+ * {@link #login(Runnable, Consumer, Runnable, Consumer, Consumer)}, {@link #logout()} and
+ * {@link #status()} below. Keeping a delegating shim for any of them would leave the generation
+ * convention callable, which is exactly what issue #298's second acceptance criterion requires to
+ * stop being true (see plan 16-08's {@link CloudSession} javadoc for the mechanism this replaced).
+ * <p>
+ * {@code CredentialStaticSurfaceInvariantTest} enforces this structurally: no public static method
+ * anywhere in this package may accept or return a {@link TokenEntity} or a generation (D-18), so a
+ * static bypass of {@link CloudSession#commit(TokenEntity)} cannot be reintroduced unnoticed.
+ * <p>
+ * Marked {@link ApiStatus.Internal} -- this class exists to serve {@code CloudLoginCommand}'s three
+ * {@code @CmdMapping} methods and is not part of the framework's public API surface for module
+ * authors.
  */
+@ApiStatus.Internal
 public class CloudAuthManager {
 
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final long POLL_INTERVAL_MS = 3000;
-    private static final int MAX_POLL_ATTEMPTS = 100; // 5 minutes at 3s intervals
-    /** How often to check if the access token needs refreshing (1 hour) */
-    private static final long TOKEN_REFRESH_CHECK_INTERVAL_MS = 60 * 60 * 1000L;
-    /** Refresh the token when it has less than this many seconds remaining (2 hours) */
-    private static final long TOKEN_REFRESH_THRESHOLD_SECONDS = 2 * 60 * 60L;
-    /** Basic auth header for OAuth2 client credentials (client:112233) */
-    private static final String OAUTH2_BASIC_AUTH = "Basic Y2xpZW50OjExMjIzMw==";
-
-    private static TokenEntity currentToken;
-    private static ScheduledExecutorService pollExecutor;
-    private static ScheduledFuture<?> pollTask;
-    private static ScheduledExecutorService refreshExecutor;
-    private static ScheduledFuture<?> refreshTask;
+    private CloudAuthManager() {
+    }
 
     /**
-     * 凭证的生命周期代际。
-     * <p>
-     * 存在的理由只有一句：<b>取消不等于失效。</b>{@link #stopTokenRefreshScheduler()} 与
-     * {@link #stopPolling()} 用的是 {@code cancel(false)} 加 {@code shutdown()}，两者都只
-     * 承诺不再调度新的执行，对一个已经进入 HTTP 请求的任务毫无约束——而
-     * {@link #refreshToken(String)} 在返回<b>之前</b>就 {@link #saveToken(TokenEntity)} 写盘。
-     * 于是这样的时序完全成立：
-     * <pre>
-     *   1. 刷新任务发出 HTTP 请求（网络往返，秒级）
-     *   2. 管理员 /ulticloud logout → 停调度器 → clearToken() 清掉 data.json
-     *   3. HTTP 返回 → saveToken() 把新凭证写回 data.json
-     *   4. 重启服务器 → 读到有效凭证 → 自动登录
-     * </pre>
-     * logout 于是成了一条没有效果的命令，而它恰恰是安全语义的。
-     * <p>
-     * 规则：一切在途的异步凭证操作出发时记下当时的代际，提交结果之前用
-     * {@link #commitTokenIfCurrent(TokenEntity, long)} 比对；拆线路径调
-     * {@link #invalidateCredentialOperations()} 推进代际，迟到的结果一律作废。
+     * Attempts a magic-link login on a fresh session, covering the already-logged-in check, the
+     * rate-limit check, the magic-link request and starting the poll -- exactly the sequence
+     * {@code /ulticloud login} performed before this plan, just no longer expressed through
+     * separate public statics on this class. Every branch is reported back through the callback
+     * that names it, so {@code CloudLoginCommand.login(CommandSender)} prints the exact same
+     * messages it always has; only where the decision is made moved.
+     *
+     * @param onAlreadyLoggedIn invoked, with nothing else attempted, if a valid token already exists
+     * @param onRateLimited     invoked with the remaining cooldown in seconds if the login attempt
+     *                          is currently rate-limited
+     * @param onRequesting      invoked right before the magic-link HTTP request is made
+     * @param onSuccess         invoked with the magic-link URL once the request succeeds
+     * @param onError           invoked with an error message if the magic-link request fails
      */
-    private static final java.util.concurrent.atomic.AtomicLong credentialGeneration =
-            new java.util.concurrent.atomic.AtomicLong();
+    public static void login(Runnable onAlreadyLoggedIn, Consumer<Long> onRateLimited,
+            Runnable onRequesting, Consumer<String> onSuccess, Consumer<String> onError) {
+        // Captured once, at the very top, and used consistently below -- see the round-1 review's
+        // third finding on this method for why a second, independent read of CloudSession.current()
+        // further down is unsafe here.
+        CloudSession sessionAtCheck = CloudSession.current();
+        if (sessionAtCheck.hasValidToken()) {
+            onAlreadyLoggedIn.run();
+            return;
+        }
+        if (!ApiRateLimiter.isLoginAllowed()) {
+            onRateLimited.accept(ApiRateLimiter.getRemainingCooldown("login", 60_000));
+            return;
+        }
 
-    /**
-     * Try to load a saved token from data.json on startup.
-     * If the access token is expired but a refresh token exists, attempts automatic refresh.
-     * Returns the token if valid, null otherwise.
-     */
-    public static TokenEntity loadSavedToken() {
-        try {
-            Map<String, Object> data = readDataFile();
-            Object savedToken = data.get("cloud_token");
-            if (savedToken == null) {
-                return null;
-            }
-
-            // Gson deserializes nested maps as LinkedTreeMap, so re-serialize and parse
-            String tokenJson = GSON.toJson(savedToken);
-            TokenEntity token = GSON.fromJson(tokenJson, TokenEntity.class);
-
-            if (token == null || token.getAccess_token() == null || token.getAccess_token().isEmpty()) {
-                return null;
-            }
-
-            token.decodeJwtPayload();
-
-            if (token.isExpired()) {
-                // Access token expired — try refreshing with the refresh token
-                if (token.getRefresh_token() != null && !token.getRefresh_token().isEmpty()) {
-                    UltiTools.getInstance().getLogger().log(Level.INFO,
-                        "Saved cloud token has expired, attempting automatic refresh...");
-                    TokenEntity refreshed = refreshToken(token.getRefresh_token());
-                    if (refreshed != null) {
-                        UltiTools.getInstance().getLogger().log(Level.INFO,
-                            "Cloud token refreshed successfully!");
-                        return refreshed;
-                    }
-                    UltiTools.getInstance().getLogger().log(Level.WARNING,
-                        "Token refresh failed. Use /ulticloud login to re-authenticate.");
-                } else {
-                    UltiTools.getInstance().getLogger().log(Level.INFO,
-                        "Saved cloud token has expired and no refresh token available. Use /ulticloud login.");
+        // 16-10 gap-closure addendum, issue #466: everything from the final re-check through
+        // replacing the session is one atomic region against CloudSession#commit(TokenEntity),
+        // acquiring CloudSession.class BEFORE sessionAtCheck's own monitor -- the SAME order
+        // CloudSession#startNew() itself already uses (see CloudSession's own class javadoc for the
+        // full documented lock order). The naive fix here -- synchronizing on sessionAtCheck alone,
+        // then letting disableCloud()'s own synchronized(CloudSession.class) block execute while
+        // still holding it -- inverts that order (session monitor outer, class lock inner) and is a
+        // genuine AB-BA deadlock against a concurrent startNew() (class lock outer, session monitor
+        // inner): reachable in production via a racing /ulticloud login or /ulticloud logout.
+        // Acquiring CloudSession.class first here closes the window WITHOUT that risk: a magic-link
+        // poll from an EARLIER login attempt (see the round-1 review's third finding, which the
+        // re-check below still exists to catch) either completes its own commit() BEFORE this region
+        // starts -- in which case the re-check below sees it and reports "already logged in" -- or it
+        // cannot even enter commit()'s own synchronized(this) until this ENTIRE region has finished
+        // and released sessionAtCheck's monitor, by which point disableCloud() has already set
+        // invalidated, so commit() correctly rejects it instead of silently writing a credential that
+        // then gets orphaned by the replacement already in progress.
+        CloudSession newSession;
+        synchronized (CloudSession.class) {
+            synchronized (sessionAtCheck) {
+                // Round-1 external review finding, third pass (PR #464), re-verified atomic by this
+                // addendum: a magic-link poll from an EARLIER login attempt can still be in flight
+                // here -- polling lasts up to 5 minutes, well past the 1-minute login cooldown
+                // ApiRateLimiter.isLoginAllowed() just cleared above -- and could commit a valid
+                // token onto sessionAtCheck in the gap between the hasValidToken() check above and
+                // this line. Re-checking sessionAtCheck itself (never a fresh CloudSession.current()
+                // read, which could by now point somewhere else entirely) catches that: a session
+                // that became validly authenticated while this method was mid-flight is reported as
+                // "already logged in," not torn down and replaced by a redundant second login.
+                if (sessionAtCheck.hasValidToken()) {
+                    onAlreadyLoggedIn.run();
+                    return;
                 }
-                return null;
-            }
-
-            currentToken = token;
-            return token;
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "Failed to load saved cloud token: " + e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * Refresh the access token using the refresh token.
-     * Calls POST /oauth/token with grant_type=refresh_token.
-     *
-     * @param refreshTokenValue the refresh token string
-     * @return a new TokenEntity with fresh access and refresh tokens, or null on failure
-     */
-    public static TokenEntity refreshToken(String refreshTokenValue) {
-        // 出发时记下代际。整个 HTTP 往返期间 logout 都可能发生，而下面的提交必须能看见。
-        final long generation = credentialGeneration.get();
-        String apiUrl = HttpRequestUtils.getBaseUrl();
-        if (apiUrl == null || apiUrl.trim().isEmpty()) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "Cannot refresh token: API URL not configured");
-            return null;
-        }
-        apiUrl = apiUrl.trim();
-
-        try {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Authorization", OAUTH2_BASIC_AUTH);
-
-            Map<String, Object> formData = new HashMap<>();
-            formData.put("grant_type", "refresh_token");
-            formData.put("refresh_token", refreshTokenValue);
-
-            SimpleHttpClient.Response response = SimpleHttpClient.post(
-                apiUrl + "/oauth/token",
-                headers,
-                formData
-            );
-
-            if (response.isOk()) {
-                TokenEntity newToken = GSON.fromJson(response.body(), TokenEntity.class);
-                if (newToken != null && newToken.getAccess_token() != null) {
-                    newToken.decodeJwtPayload();
-                    // 不能直接 saveToken：这次请求可能是在 logout 之前发出、logout 之后才回来的。
-                    // 直接写盘会把刚被 clearToken() 清掉的凭证原样填回 data.json，重启后自动重连。
-                    if (!commitTokenIfCurrent(newToken, generation)) {
-                        return null;
-                    }
-                    return newToken;
+                // 16-10 gap-closure addendum (round-14 review, PR #464), P2: make the replacement
+                // conditional on sessionAtCheck still being CloudSession.current() -- reachable
+                // because ApiRateLimiter#isAllowed's own check-then-set is a separate
+                // ConcurrentHashMap get() and put(), not atomic, so two overlapping @RunAsync
+                // login() invocations can both pass the rate-limit check against the SAME captured
+                // sessionAtCheck before either reaches this lock. Without this check, the SECOND
+                // thread to acquire the lock would still act on ITS OWN (now stale) sessionAtCheck
+                // reference and call CloudSession#startNew() unconditionally -- which reads
+                // CloudSession.current() fresh, finds the FIRST thread's brand-new (already
+                // requesting/about-to-poll) session installed there, and invalidates THAT instead of
+                // the intended target. The first thread's magic-link URL would then be printed to
+                // the operator, but startPolling() silently refuses to poll an invalidated session,
+                // producing a link that can never complete. This read is stable for the rest of this
+                // block: only startNew() can change current(), and it is also synchronized on
+                // CloudSession.class, which this thread already holds.
+                if (sessionAtCheck != CloudSession.current()) {
+                    onError.accept("Another login attempt is already in progress; please try again");
+                    return;
                 }
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Token refresh returned invalid token data");
-            } else {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    "Token refresh failed: HTTP " + response.getStatus() + " - " + response.body());
+                onRequesting.run();
+                // Round-1 external review finding, first pass (PR #464): CloudSession#startNew()
+                // alone only tears down the session's OWN resources (schedulers, WebSocket client)
+                // -- it does not stop the global server monitor or player-event manager, which live
+                // outside any session and are only ever stopped by
+                // PluginInitiationUtils#disableCloud(CloudSession)'s own two session-independent
+                // teardown steps. Reaching this line means sessionAtCheck's token is missing or
+                // expired (both checks above already failed), so its cloud lifecycle -- if one is
+                // still running -- is stale by definition. Tearing it down completely before
+                // replacing it means a magic-link request that then fails, or never resolves, never
+                // leaves those global managers wired to a socket that already closed with no
+                // successor connection to ever rewire them. Acts on sessionAtCheck specifically, not
+                // a fresh current() read, for the same reason the re-check above does.
+                PluginInitiationUtils.disableCloud(sessionAtCheck);
+                newSession = CloudSession.startNew();
             }
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "Token refresh error: " + e.getMessage());
         }
-        return null;
+        // The multi-second magic-link HTTP POST deliberately stays OUTSIDE both locks -- holding
+        // either for the duration of a network call would let one login attempt stall every other
+        // session-lifecycle operation on the whole plugin.
+        String url = newSession.requestMagicLink(onError);
+        if (url != null) {
+            onSuccess.accept(url);
+        }
     }
 
     /**
-     * Save the current token to data.json for persistence across restarts.
-     */
-    public static void saveToken(TokenEntity token) throws IOException {
-        currentToken = token;
-        Map<String, Object> data = readDataFile();
-
-        // Store token fields as a map (Gson will serialize properly)
-        Map<String, Object> tokenMap = new LinkedHashMap<>();
-        tokenMap.put("access_token", token.getAccess_token());
-        tokenMap.put("refresh_token", token.getRefresh_token());
-        tokenMap.put("token_type", token.getToken_type());
-        tokenMap.put("expires_in", token.getExpires_in());
-        tokenMap.put("scope", token.getScope());
-        tokenMap.put("jti", token.getJti());
-
-        data.put("cloud_token", tokenMap);
-        writeDataFile(data);
-    }
-
-    /**
-     * Clear the saved token (logout).
-     */
-    public static synchronized void clearToken() throws IOException {
-        // 清凭证本身就意味着「此前的一切凭证操作作废」。再推一次代际是第二道关门：
-        // 拆线时推的那一次，与拆线中途才启动的生产者之间仍可能有缝，而这一次发生在
-        // 生产者全部停掉之后，任何仍在途的结果到这里都已过期。
-        credentialGeneration.incrementAndGet();
-        currentToken = null;
-        Map<String, Object> data = readDataFile();
-        data.remove("cloud_token");
-        writeDataFile(data);
-    }
-
-    /**
-     * 取当前的凭证代际。异步凭证操作在<b>出发时</b>调它记下自己那一代。
-     *
-     * @return 当前代际
-     */
-    public static long currentCredentialGeneration() {
-        return credentialGeneration.get();
-    }
-
-    /**
-     * 让一切在途的凭证操作作废。
+     * Tears down cloud features unconditionally, then clears the persisted credential if one
+     * existed. Mirrors {@code /ulticloud logout}'s pre-16-09 sequence exactly: teardown must run
+     * even when there is nothing to clear (an expired-but-still-connected session is the case that
+     * most needs logout to take effect), and the credential is read only <b>after</b> teardown so an
+     * in-flight login that commits mid-teardown is still caught and cleared -- see
+     * {@code CloudLoginCommand.logout(CommandSender)}'s own comments for why that order matters.
      * <p>
-     * 拆线路径（{@code disableCloud()} / {@code /ulticloud logout}）必须调它。只停调度器
-     * 是不够的——见 {@link #credentialGeneration} 上的说明。
-     */
-    public static synchronized void invalidateCredentialOperations() {
-        credentialGeneration.incrementAndGet();
-    }
-
-    /**
-     * 仅当代际未变时才提交凭证。
+     * <b>CR-01 (16-REVIEW-cloud.md):</b> this method captures {@link CloudSession#current()} exactly
+     * once -- in the statement below, immediately before teardown begins -- and passes that captured
+     * reference to {@link PluginInitiationUtils#disableCloud(CloudSession)}, which acts on and
+     * returns that exact instance. The disk-clear decision then acts on the returned reference,
+     * never on a second, independent call to {@link CloudSession#current()} taken after teardown
+     * returns. Reading {@code current()} a second time, afterward, used to be exactly the bug: a
+     * concurrent {@code login()} (unsynchronized, and reachable from a different thread via
+     * {@code @RunAsync}) can install a brand-new session with {@link CloudSession#startNew()}
+     * in the gap while teardown is running, and that second read would then see the NEW session's
+     * (always {@code null}) token instead of the one actually being logged out of -- concluding
+     * "nothing to clear" and leaving the real credential on disk. Acting on the one reference this
+     * method already holds makes that race structurally impossible: there is no second read left to
+     * disagree with the first. This method deliberately does <b>not</b> call
+     * {@link CloudSession#startNew()} itself any more either; clearing the torn-down session in
+     * place is sufficient, and the next real login installs a fresh session via its own
+     * {@code CloudSession.startNew()} call, exactly as it always has.
      * <p>
-     * 与 {@link #invalidateCredentialOperations()} 和 {@link #clearToken()} 同步在类锁上，
-     * 因此「比对代际」与「写入」之间不存在窗口：拆线要么整个发生在提交之前（这次提交被
-     * 拒），要么整个发生在提交之后（拆线把刚写的清掉）。两种都是干净的。
+     * <b>Round-1 external review finding, corrected in the same plan:</b> the paragraph above
+     * establishes WHICH session's disk-clear decision this method acts on, but not what that
+     * clear is safe to remove. {@link CloudSession#clearPersisted()} does NOT wipe disk
+     * unconditionally -- it delegates to {@link TokenStore#clearIfMatches(TokenEntity)}, a
+     * compare-and-delete keyed on the torn-down session's own last-known token. This matters
+     * because a concurrent {@code login()} can still WRITE a fresh credential to the same shared
+     * document while this session's teardown is in flight, even though its own session-invalidation
+     * race is already closed by the paragraph above -- see {@link CloudSession#clearPersisted()}'s
+     * own javadoc for the full account of why an unconditional clear would remove that fresh write.
+     * <p>
+     * <b>Documented semantics for logout racing a concurrent login (CR-01's second half):</b> this
+     * method's teardown always acts on whichever session was current at the single instant this
+     * method's own {@link CloudSession#current()} call below reads it -- a single, fixed point in
+     * time this method controls directly, rather than one buried inside a callee. A {@code login()}
+     * that installs its new session <b>before</b> that read wins outright: this {@code logout()}
+     * call never sees or touches it. A {@code login()} that installs its new session <b>after</b>
+     * that read has already lost the SESSION-invalidation race regardless of what this method does
+     * -- {@link CloudSession#startNew()} itself unconditionally invalidates whatever session it
+     * replaces, so the fresh login's session object is torn down by that call alone, independent of
+     * this command. What {@link CloudSession#clearPersisted()}'s compare-and-delete adds on top is
+     * the disk-level half of that same guarantee: even if the fresh login's own commit reaches the
+     * shared document before this method's clear does, the clear cannot remove a value the
+     * torn-down session never itself wrote.
      *
-     * @param token 待提交的凭证
-     * @param generation 调用方出发时记下的代际
-     * @return 已提交返回 true；代际已变、结果被丢弃则返回 false
-     * @throws IOException 写入失败
+     * @return {@code true} if a credential existed and was cleared, or a pending authentication
+     *         attempt was cancelled (real-machine UAT fix, plan 16-08 -- see
+     *         {@link CloudSession#hasAnythingToClear()}); {@code false} if there was nothing to
+     *         clear and nothing pending (teardown still ran regardless)
+     * @throws IOException if clearing the persisted credential fails
      */
-    public static synchronized boolean commitTokenIfCurrent(TokenEntity token, long generation)
-            throws IOException {
-        if (generation != credentialGeneration.get()) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Discarding a credential result that arrived after logout (generation changed)");
+    public static synchronized boolean logout() throws IOException {
+        CloudSession tornDown = PluginInitiationUtils.disableCloud(CloudSession.current());
+
+        // 16-10 gap-closure addendum (round-13 review, PR #464), P1: gate on
+        // hasAnythingToClear(), not getToken() == null alone -- see CloudSession#predecessorToken's
+        // own javadoc. A session that never itself held a token but replaced one that did
+        // (reconnect exhaustion followed by /ulticloud login, before any logout ran) must still
+        // reach clearPersisted() below, or the predecessor's still-valid, still-persisted
+        // credential survives on disk despite this explicit logout, and a later restart reloads
+        // and reconnects with it.
+        //
+        // Real-machine UAT fix, plan 16-08 (ultitools.ulticloud.logout.neg-mid-poll): the same
+        // hasAnythingToClear() gate ALSO now covers a magic-link poll that was still in flight when
+        // disableCloud() above cancelled it (CloudSession#pendingAuthenticationCancelled) -- so
+        // cancelling a real, in-progress authentication attempt reports a genuine logout even though
+        // it never reached commit() and therefore never set token or predecessorToken.
+        if (!tornDown.hasAnythingToClear()) {
             return false;
         }
-        saveToken(token);
+
+        tornDown.clearPersisted();
         return true;
     }
 
     /**
-     * Get the current token (in-memory).
+     * @return an immutable snapshot of the current session's connection state, for
+     *         {@code /ulticloud status} to render -- never the token itself (D-18)
      */
-    public static TokenEntity getCurrentToken() {
-        return currentToken;
+    public static CloudStatus status() {
+        CloudSession session = CloudSession.current();
+        if (!session.hasValidToken()) {
+            return new CloudStatus(false, null, null);
+        }
+        TokenEntity token = session.getToken();
+        String userName = token.getUser_name() != null ? token.getUser_name() : "Unknown";
+        return new CloudStatus(true, userName, token.getExpirationDate());
     }
 
     /**
-     * Check if we have a valid (non-expired) token.
+     * An immutable view of {@link #status()}'s result. Deliberately carries only the fields
+     * {@code /ulticloud status} actually prints -- never a {@link TokenEntity} reference -- so this
+     * type cannot become a second way to leak the token past the D-18 guard.
      */
-    public static boolean hasValidToken() {
-        return currentToken != null
-            && currentToken.getAccess_token() != null
-            && !currentToken.isExpired();
-    }
+    public static final class CloudStatus {
 
-    /**
-     * Request a magic link for server authentication.
-     * Returns the URL the admin should open in their browser, or null on failure.
-     *
-     * @param errorCallback called with error message if the request fails
-     * @return the magic link URL, or null on failure
-     */
-    public static String requestMagicLink(Consumer<String> errorCallback) {
-        // 代际必须在**这里**捕获，而不是等到 startPolling()。下面那次 POST 是阻塞的，
-        // logout 完全可以整个发生在它的往返期间；等 POST 回来才读代际的话，读到的是
-        // 已经递增过的那一代，这次登录于是"看起来是新的"，它后来拿到的 token 会被接受、
-        // activateCloudIfCurrent() 会把服务器重新连上——而这次 logout 从头到尾都没看见它。
-        final long generation = credentialGeneration.get();
-        String apiUrl = HttpRequestUtils.getBaseUrl();
-        if (apiUrl == null || apiUrl.trim().isEmpty()) {
-            errorCallback.accept("API URL not configured");
-            return null;
-        }
-        apiUrl = apiUrl.trim();
+        private final boolean connected;
+        private final String userName;
+        private final Date expirationDate;
 
-        String serverUuid;
-        try {
-            serverUuid = CommonUtils.getUltiToolsUUID();
-        } catch (IOException e) {
-            errorCallback.accept("Failed to get server UUID: " + e.getMessage());
-            return null;
+        private CloudStatus(boolean connected, String userName, Date expirationDate) {
+            this.connected = connected;
+            this.userName = userName;
+            this.expirationDate = expirationDate;
         }
 
-        String requestId = UUID.randomUUID().toString();
-
-        JsonObject body = new JsonObject();
-        body.addProperty("requestId", requestId);
-        body.addProperty("serverUuid", serverUuid);
-        body.addProperty("serverName", org.bukkit.Bukkit.getServer().getName());
-
-        try {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Content-Type", "application/json");
-
-            SimpleHttpClient.Response response = SimpleHttpClient.post(
-                apiUrl + "/auth/server-login",
-                headers,
-                GSON.toJson(body)
-            );
-
-            if (response.isOk()) {
-                JsonObject responseBody = JsonParser.parseString(response.body()).getAsJsonObject();
-                String url = responseBody.has("url") ? responseBody.get("url").getAsString() : null;
-                if (url != null) {
-                    // Store requestId for polling
-                    startPolling(requestId, null, generation);
-                    return url;
-                }
-                errorCallback.accept("Invalid response from API (missing url)");
-                return null;
-            } else {
-                errorCallback.accept("API returned HTTP " + response.getStatus() + ": " + response.body());
-                return null;
-            }
-        } catch (Exception e) {
-            errorCallback.accept("Request failed: " + e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * Start polling for magic-link auth completion.
-     *
-     * @param requestId the magic link request ID
-     * @param onComplete called when auth succeeds (with the token), or null if no callback needed
-     */
-    public static void startPolling(String requestId, Consumer<TokenEntity> onComplete) {
-        startPolling(requestId, onComplete, credentialGeneration.get());
-    }
-
-    /**
-     * 带显式代际的轮询入口。
-     * <p>
-     * 代际由<b>发起整次登录的那一刻</b>决定，不能在这里就地读：调用方在到达这里之前
-     * 通常已经做过一次阻塞的 HTTP 请求，那段时间里发生的 logout 必须对这次登录可见。
-     *
-     * @param requestId magic-link 请求 ID
-     * @param onComplete 登录完成回调，可为 null
-     * @param generation 发起这次登录时的凭证代际
-     */
-    public static void startPolling(String requestId, Consumer<TokenEntity> onComplete,
-                                    final long generation) {
-        stopPolling();
-
-        pollExecutor = Executors.newSingleThreadScheduledExecutor();
-        final int[] attempts = {0};
-
-        pollTask = pollExecutor.scheduleWithFixedDelay(() -> {
-            attempts[0]++;
-            if (attempts[0] > MAX_POLL_ATTEMPTS) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Magic link login timed out (5 minutes)");
-                stopPolling();
-                return;
-            }
-            pollLoginStatusOnce(requestId, onComplete, generation);
-        }, POLL_INTERVAL_MS, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
-    }
-
-    /** 查一次登录状态。任何异常都只记 FINE——轮询要继续，直到超时或拿到终态。 */
-    private static void pollLoginStatusOnce(String requestId, Consumer<TokenEntity> onComplete,
-                                            long generation) {
-        try {
-            String apiUrl = HttpRequestUtils.getBaseUrl().trim();
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Content-Type", "application/json");
-
-            SimpleHttpClient.Response response = SimpleHttpClient.get(
-                apiUrl + "/auth/server-login/status?requestId=" + requestId,
-                headers
-            );
-            if (!response.isOk()) {
-                return;
-            }
-
-            JsonObject responseBody = JsonParser.parseString(response.body()).getAsJsonObject();
-            String status = responseBody.has("status") ? responseBody.get("status").getAsString() : "pending";
-
-            if ("completed".equals(status)) {
-                completeMagicLinkLogin(responseBody, onComplete, generation);
-                stopPolling();
-            } else if ("expired".equals(status) || "error".equals(status)) {
-                String error = responseBody.has("message") ? responseBody.get("message").getAsString() : "Unknown error";
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Magic link login failed: " + error);
-                stopPolling();
-            }
-            // "pending" — keep polling
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE, "Magic link poll failed: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 处理一次拿到 {@code completed} 的登录：落凭证、再激活云功能。
-     * <p>
-     * 两步都要对 logout 设防，而且是两道不同的闸：
-     * {@link #commitTokenIfCurrent(TokenEntity, long)} 保证凭证不会在 logout 之后被写回；
-     * {@code activateCloudIfCurrent} 保证连接不会在 logout 之后被重新建起来。只有前者是
-     * 不够的——真正把服务器连回去的是后面那一串。
-     *
-     * @throws IOException 凭证落盘失败
-     */
-    private static void completeMagicLinkLogin(JsonObject responseBody,
-                                               Consumer<TokenEntity> onComplete,
-                                               long generation) throws IOException {
-        String tokenJson = responseBody.has("token") ? GSON.toJson(responseBody.getAsJsonObject("token")) : null;
-        if (tokenJson == null) {
-            return;
-        }
-        TokenEntity token = GSON.fromJson(tokenJson, TokenEntity.class);
-        if (token == null || token.getAccess_token() == null) {
-            return;
-        }
-        token.decodeJwtPayload();
-
-        // logout 可能发生在「本次登录发起」与「本次轮询拿到 completed」之间。
-        if (!commitTokenIfCurrent(token, generation)) {
-            return;
+        /** @return {@code true} if the current session holds a valid (non-expired) token */
+        public boolean isConnected() {
+            return connected;
         }
 
-        UltiTools.getInstance().getLogger().log(Level.INFO,
-            "UltiCloud login successful! Welcome, "
-                + (token.getUser_name() != null ? token.getUser_name() : "user") + "!");
-
-        // Reset rate limiter on successful login
-        ApiRateLimiter.reset("login");
-
-        if (onComplete != null) {
-            onComplete.accept(token);
+        /** @return the connected user's display name, or {@code null} if not connected */
+        public String getUserName() {
+            return userName;
         }
 
-        try {
-            // 锁外：一次 HTTP 往返，只向面板注册服务器，不改本地状态。
-            PluginInitiationUtils.loginWithToken(token);
-            // 锁内：复查代际之后再开状态机、建连、起刷新调度。
-            PluginInitiationUtils.activateCloudIfCurrent(generation);
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "Cloud features initialization failed: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Start a background scheduler that proactively refreshes the access token
-     * before it expires (checks every hour, refreshes when &lt;2 hours remaining).
-     */
-    public static void startTokenRefreshScheduler() {
-        stopTokenRefreshScheduler();
-        refreshExecutor = Executors.newSingleThreadScheduledExecutor();
-        refreshTask = refreshExecutor.scheduleWithFixedDelay(() -> {
-            try {
-                if (currentToken == null || currentToken.getAccess_token() == null) {
-                    return;
-                }
-                Long exp = currentToken.getExp();
-                if (exp == null) {
-                    return;
-                }
-                long remainingSeconds = exp - (System.currentTimeMillis() / 1000);
-                if (remainingSeconds < TOKEN_REFRESH_THRESHOLD_SECONDS) {
-                    String refreshTokenValue = currentToken.getRefresh_token();
-                    if (refreshTokenValue != null && !refreshTokenValue.isEmpty()) {
-                        UltiTools.getInstance().getLogger().log(Level.INFO,
-                            "Access token expires in " + remainingSeconds + "s, refreshing proactively...");
-                        TokenEntity refreshed = refreshToken(refreshTokenValue);
-                        if (refreshed != null) {
-                            UltiTools.getInstance().getLogger().log(Level.INFO,
-                                "Proactive token refresh successful");
-                        } else {
-                            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                                "Proactive token refresh failed — WebSocket may disconnect on next reconnect");
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    "Token refresh scheduler error: " + e.getMessage());
-            }
-        }, TOKEN_REFRESH_CHECK_INTERVAL_MS, TOKEN_REFRESH_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
-    }
-
-    /**
-     * Stop the background token refresh scheduler.
-     */
-    public static void stopTokenRefreshScheduler() {
-        if (refreshTask != null) {
-            refreshTask.cancel(false);
-            refreshTask = null;
-        }
-        if (refreshExecutor != null) {
-            refreshExecutor.shutdown();
-            refreshExecutor = null;
-        }
-    }
-
-    /**
-     * Stop polling for magic-link completion.
-     */
-    public static void stopPolling() {
-        if (pollTask != null) {
-            pollTask.cancel(false);
-            pollTask = null;
-        }
-        if (pollExecutor != null) {
-            pollExecutor.shutdown();
-            pollExecutor = null;
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> readDataFile() throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        if (dataFile.exists()) {
-            try (Reader reader = Files.newBufferedReader(dataFile.toPath(), StandardCharsets.UTF_8)) {
-                Map<String, Object> json = GSON.fromJson(reader, Map.class);
-                return json != null ? json : new LinkedHashMap<>();
-            }
-        }
-        return new LinkedHashMap<>();
-    }
-
-    private static void writeDataFile(Map<String, Object> data) throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        if (!dataFile.getParentFile().exists()) {
-            dataFile.getParentFile().mkdirs();
-        }
-        try (Writer writer = Files.newBufferedWriter(dataFile.toPath(), StandardCharsets.UTF_8)) {
-            GSON.toJson(data, writer);
+        /** @return the current token's expiration date, or {@code null} if not connected or unset */
+        public Date getExpirationDate() {
+            return expirationDate;
         }
     }
 }

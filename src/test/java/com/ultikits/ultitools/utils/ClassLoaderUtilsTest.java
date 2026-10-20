@@ -2,6 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -78,48 +79,64 @@ class ClassLoaderUtilsTest {
         }
 
         @Test
-        @DisplayName("危险类应该抛出SecurityException")
-        void dangerousClassShouldThrowSecurityException() {
-            String[] dangerousClasses = {
+        @DisplayName("GEN-07: 原危险类不再抛出SecurityException -- 该层已被移除")
+        void dangerousClassShouldNoLongerThrowSecurityException() {
+            String[] formerlyDangerousClasses = {
                 "java.lang.ProcessBuilder",
                 "java.lang.Runtime",
                 "java.lang.System",
                 "javax.script.ScriptEngine",
                 "sun.misc.Unsafe"
             };
-            
-            for (String className : dangerousClasses) {
-                assertThatThrownBy(() -> ClassLoaderUtils.loadClass(className))
-                    .isInstanceOf(SecurityException.class)
-                    .hasMessageContaining("security");
+
+            for (String className : formerlyDangerousClasses) {
+                try {
+                    ClassLoaderUtils.loadClass(className);
+                } catch (ClassNotFoundException e) {
+                    // Acceptable -- e.g. javax.script.ScriptEngine no longer ships on the JDK 21
+                    // toolchain this repository builds against. The point is that SecurityException
+                    // (the removed exact-name blacklist layer) is never thrown.
+                } catch (SecurityException e) {
+                    fail(
+                        "GEN-07: exact-name blacklist layer removed, should not block: " + className);
+                }
             }
         }
 
         @Test
-        @DisplayName("不信任包的类应该抛出SecurityException")
-        void untrustedPackageClassShouldThrowSecurityException() {
-            String[] untrustedClasses = {
+        @DisplayName("GEN-07: 原不信任包的类不再抛出SecurityException -- 该层已被移除")
+        void untrustedPackageClassShouldNoLongerThrowSecurityException() {
+            String[] formerlyUntrustedClasses = {
                 "com.evil.malware.Payload",
                 "hacker.tools.Exploit"
             };
-            
-            for (String className : untrustedClasses) {
-                assertThatThrownBy(() -> ClassLoaderUtils.loadClass(className))
-                    .isInstanceOf(SecurityException.class);
+
+            for (String className : formerlyUntrustedClasses) {
+                try {
+                    ClassLoaderUtils.loadClass(className);
+                } catch (ClassNotFoundException e) {
+                    // Expected -- these packages do not exist.
+                } catch (SecurityException e) {
+                    fail(
+                        "GEN-07: trusted-package whitelist layer removed, should not block: " + className);
+                }
             }
         }
 
         @Test
         @DisplayName("无效类名格式应该抛出SecurityException")
         void invalidClassNameFormatShouldThrowSecurityException() {
+            // Deliberately excludes "com.invalid$special$.Class" -- '$' is a legal identifier
+            // character in VALID_CLASS_NAME_PATTERN (it supports inner-class binary names), so
+            // that name always matched the format regex. Before GEN-07 it was rejected by the
+            // now-removed trusted-package whitelist layer, not by the format check.
             String[] invalidNames = {
                 "123InvalidStart",
                 "com..double.dot",
                 "com.invalid-dash.Class",
-                "com.invalid space.Class",
-                "com.invalid$special$.Class"
+                "com.invalid space.Class"
             };
-            
+
             for (String className : invalidNames) {
                 assertThatThrownBy(() -> ClassLoaderUtils.loadClass(className))
                     .isInstanceOf(SecurityException.class);
@@ -178,19 +195,21 @@ class ClassLoaderUtilsTest {
         }
 
         @Test
-        @DisplayName("危险类应该抛出SecurityException")
-        void dangerousClassShouldThrowSecurityException() {
-            assertThatThrownBy(() -> 
-                ClassLoaderUtils.loadClass("java.lang.Runtime", false))
-                .isInstanceOf(SecurityException.class);
+        @DisplayName("GEN-07: 原危险类不再抛出SecurityException -- 该层已被移除")
+        void dangerousClassShouldNoLongerThrowSecurityException() throws Exception {
+            Class<?> clazz = ClassLoaderUtils.loadClass("java.lang.Runtime", false);
+            assertThat(clazz).isNotNull();
+            assertThat(clazz.getName()).isEqualTo("java.lang.Runtime");
         }
 
         @Test
-        @DisplayName("不信任包的类应该抛出SecurityException")
-        void untrustedClassShouldThrowSecurityException() {
-            assertThatThrownBy(() -> 
+        @DisplayName("GEN-07: 原不信任包的类不再抛出SecurityException -- 该层已被移除")
+        void untrustedClassShouldNoLongerThrowSecurityException() {
+            // com.untrusted.BadClass does not exist -- the point is that this is now
+            // ClassNotFoundException, not SecurityException (the removed whitelist layer).
+            assertThatThrownBy(() ->
                 ClassLoaderUtils.loadClass("com.untrusted.BadClass", true))
-                .isInstanceOf(SecurityException.class);
+                .isInstanceOf(ClassNotFoundException.class);
         }
     }
 
@@ -364,31 +383,34 @@ class ClassLoaderUtilsTest {
     }
 
     @Nested
-    @DisplayName("安全边界测试")
+    @DisplayName("安全边界测试 -- GEN-07: 危险包前缀层已被移除，这些类现在可以成功加载")
     class SecurityBoundaryTests {
 
         @Test
-        @DisplayName("反射相关类应该被阻止")
-        void reflectionClassesShouldBeBlocked() {
-            assertThatThrownBy(() -> 
-                ClassLoaderUtils.loadClass("java.lang.reflect.Method"))
-                .isInstanceOf(SecurityException.class);
+        @DisplayName("GEN-07: 反射相关类不再被阻止，能够成功加载")
+        void reflectionClassesShouldNoLongerBeBlocked() throws Exception {
+            Class<?> clazz = ClassLoaderUtils.loadClass("java.lang.reflect.Method");
+            assertThat(clazz).isNotNull();
+            assertThat(clazz.getName()).isEqualTo("java.lang.reflect.Method");
         }
 
         @Test
-        @DisplayName("脚本引擎类应该被阻止")
-        void scriptEngineClassesShouldBeBlocked() {
-            assertThatThrownBy(() -> 
-                ClassLoaderUtils.loadClass("javax.script.ScriptEngineManager"))
-                .isInstanceOf(SecurityException.class);
+        @DisplayName("GEN-07: 脚本引擎类不再被阻止，能够成功加载")
+        void scriptEngineClassesShouldNoLongerBeBlocked() throws Exception {
+            // javax.script.ScriptEngineManager is present on this repository's JDK 21 toolchain
+            // (measured empirically -- it loads without exception), so it now loads successfully.
+            // The point GEN-07 makes is that it must not be a SecurityException any more.
+            Class<?> clazz = ClassLoaderUtils.loadClass("javax.script.ScriptEngineManager");
+            assertThat(clazz).isNotNull();
+            assertThat(clazz.getName()).isEqualTo("javax.script.ScriptEngineManager");
         }
 
         @Test
-        @DisplayName("内部JDK类应该被阻止")
-        void internalJdkClassesShouldBeBlocked() {
-            assertThatThrownBy(() -> 
-                ClassLoaderUtils.loadClass("jdk.internal.misc.Unsafe"))
-                .isInstanceOf(SecurityException.class);
+        @DisplayName("GEN-07: 内部JDK类不再被阻止，能够成功加载")
+        void internalJdkClassesShouldNoLongerBeBlocked() throws Exception {
+            Class<?> clazz = ClassLoaderUtils.loadClass("jdk.internal.misc.Unsafe");
+            assertThat(clazz).isNotNull();
+            assertThat(clazz.getName()).isEqualTo("jdk.internal.misc.Unsafe");
         }
     }
 
@@ -420,19 +442,21 @@ class ClassLoaderUtilsTest {
         }
 
         @Test
-        @DisplayName("以下划线开头的类名应该通过格式验证")
+        @DisplayName("GEN-07: 以下划线开头的类名通过格式验证后不再被安全策略阻止")
         void classNameStartingWithUnderscoreShouldPassFormatValidation() {
-            // 格式有效，但安全策略可能阻止
+            // 格式有效，且GEN-07移除了曾经会阻止它的白名单层 -- 现在应为 ClassNotFoundException
+            // （类不存在），而不是 SecurityException。
             assertThatThrownBy(() -> ClassLoaderUtils.loadClass("_com.test.Class"))
-                .isInstanceOf(SecurityException.class);
+                .isInstanceOf(ClassNotFoundException.class);
         }
 
         @Test
-        @DisplayName("以 $ 开头的类名应该通过格式验证")
+        @DisplayName("GEN-07: 以 $ 开头的类名通过格式验证后不再被安全策略阻止")
         void classNameStartingWithDollarShouldPassFormatValidation() {
-            // 格式有效，但安全策略可能阻止
+            // 格式有效，且GEN-07移除了曾经会阻止它的白名单层 -- 现在应为 ClassNotFoundException
+            // （类不存在），而不是 SecurityException。
             assertThatThrownBy(() -> ClassLoaderUtils.loadClass("$com.test.Class"))
-                .isInstanceOf(SecurityException.class);
+                .isInstanceOf(ClassNotFoundException.class);
         }
 
         @ParameterizedTest

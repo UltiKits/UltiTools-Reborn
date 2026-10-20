@@ -16,21 +16,26 @@
  *   <li>{@link com.ultikits.ultitools.abstracts.command.validation.ValidatorChain} - Validation pipeline</li>
  * </ul>
  * 
- * <h2>Migration from AbstractCommandExecutor:</h2>
+ * <h2>Migration from the removed AbstractCommandExecutor:</h2>
+ * <p>
+ * {@code AbstractCommandExecutor} (and its misspelled shim, {@code AbstractCommendExecutor}) was
+ * removed in 6.3.0 after its 6.2.1 deprecation window closed. A module still compiled against it
+ * needs the same one-line base-class swap shown below; see {@code COMPATIBILITY.md}'s "Migrating
+ * off AbstractCommandExecutor" section for the full guide.
  * <pre>{@code
- * // Old way (deprecated)
+ * // Old way (removed in 6.3.0)
  * public class MyCommand extends AbstractCommandExecutor {
  *     @Override
  *     protected void handleHelp(CommandSender sender) { }
  * }
- * 
+ *
  * // New way
  * public class MyCommand extends BaseCommandExecutor {
  *     @Override
  *     protected void handleHelp(CommandSender sender) { }
  * }
  * }</pre>
- * 
+ *
  * <h2>Benefits of new architecture:</h2>
  * <ul>
  *   <li>Better separation of concerns</li>
@@ -41,6 +46,5 @@
  * </ul>
  *
  * @since 6.2.0
- * @see com.ultikits.ultitools.abstracts.AbstractCommandExecutor
  */
 package com.ultikits.ultitools.abstracts.command;

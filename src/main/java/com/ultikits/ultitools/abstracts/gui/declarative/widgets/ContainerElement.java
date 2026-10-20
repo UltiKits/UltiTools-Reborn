@@ -10,7 +10,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Container 对应的 Element。
+ * The Element counterpart of Container.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -33,13 +33,14 @@ public class ContainerElement extends Element {
     @Override
     public void update(@NotNull Widget newWidget) {
         super.update(newWidget);
-        updateChildren();
+        Container container = (Container) getWidget();
+        updateChildren(childElements, container.getChildren());
     }
 
     @Override
     public void performRebuild() {
-        // Container 只是布局容器，不直接构建 RenderNode
-        // 子元素的 RenderNode 会在收集阶段被处理
+        // Container is only a layout container and does not build a RenderNode directly —
+        // its children's RenderNodes are handled during the collection phase
         for (Element child : childElements) {
             if (child.isDirty()) {
                 child.performRebuild();
@@ -64,47 +65,10 @@ public class ContainerElement extends Element {
     }
 
     private void mountChildren() {
+        // First mount shares reconciliation's creation path (starting from the still-empty
+        // list): a child whose mount throws is cleaned up immediately, and every child mounted
+        // before it stays owned, so the parent's own cleanup can release it.
         Container container = (Container) getWidget();
-        for (Widget childWidget : container.getChildren()) {
-            Element childElement = childWidget.createElement();
-            childElement.mount(this);
-            childElements.add(childElement);
-        }
-    }
-
-    private void updateChildren() {
-        Container container = (Container) getWidget();
-        List<Widget> newChildren = container.getChildren();
-
-        // 协调子元素
-        int commonLength = Math.min(childElements.size(), newChildren.size());
-
-        // 更新现有的
-        for (int i = 0; i < commonLength; i++) {
-            Element oldChild = childElements.get(i);
-            Widget newWidget = newChildren.get(i);
-
-            if (oldChild.canUpdate(newWidget)) {
-                oldChild.update(newWidget);
-            } else {
-                oldChild.unmount();
-                Element newChild = newWidget.createElement();
-                newChild.mount(this);
-                childElements.set(i, newChild);
-            }
-        }
-
-        // 添加新增的
-        for (int i = commonLength; i < newChildren.size(); i++) {
-            Element newChild = newChildren.get(i).createElement();
-            newChild.mount(this);
-            childElements.add(newChild);
-        }
-
-        // 移除多余的
-        while (childElements.size() > newChildren.size()) {
-            Element removed = childElements.remove(childElements.size() - 1);
-            removed.unmount();
-        }
+        updateChildren(childElements, container.getChildren());
     }
 }

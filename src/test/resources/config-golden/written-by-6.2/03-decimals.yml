@@ -1,0 +1,8 @@
+economy:
+  # Tax rate
+  rate: 0.03
+  multiplier: 1.5
+  whole: 100.0
+  negative: -2.25
+  tiny: 1.0E-7
+  huge: 1.0E20

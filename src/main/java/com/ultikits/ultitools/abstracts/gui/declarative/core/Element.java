@@ -6,24 +6,25 @@ import org.jetbrains.annotations.Nullable;
 import java.util.*;
 
 /**
- * Element 是 Widget 的实例化表示，负责管理 Widget 的生命周期和更新。
+ * Element is the instantiated representation of a Widget, responsible for managing the Widget's
+ * lifecycle and updates.
  * <p>
- * Element 是持久化的对象，当 Widget 重建时，Element 会被复用（如果类型匹配）。
- * 这种复用机制是框架高效更新的关键。
+ * An Element is a persistent object: when a Widget rebuilds, its Element is reused if the type
+ * still matches. That reuse is the key to the framework's efficient updates.
  * <p>
- * <b>Element 的职责：</b>
+ * <b>Element's responsibilities:</b>
  * <ul>
- * <li>持有 Widget 引用（会随重建更新）</li>
- * <li>管理子 Element 树</li>
- * <li>协调 Widget 的创建、更新和销毁</li>
- * <li>为 RenderObjectElement 提供 RenderNode</li>
+ * <li>Holds a reference to the Widget (updated across rebuilds)</li>
+ * <li>Manages the child Element tree</li>
+ * <li>Coordinates Widget creation, update, and disposal</li>
+ * <li>Supplies a RenderNode for RenderObjectElement</li>
  * </ul>
  *
- * <p><strong>Element 类型：</strong></p>
+ * <p><strong>Element types:</strong></p>
  * <ul>
- * <li>{@link ComponentElement} - 组合型，管理子
- * Widget（StatelessWidget/StatefulWidget）</li>
- * <li>{@link RenderObjectElement} - 渲染型，对应实际的 RenderNode</li>
+ * <li>{@link ComponentElement} - composite, manages a child
+ * Widget (StatelessWidget/StatefulWidget)</li>
+ * <li>{@link RenderObjectElement} - render, corresponds to an actual RenderNode</li>
  * </ul>
  *
  * @author UltiTools Team
@@ -43,30 +44,50 @@ public abstract class Element {
     private boolean _mounted = false;
     @Nullable
     private BuildContext _context;
+    @Nullable
+    private Runnable _rootBuildScheduler;
 
     protected Element(@NotNull Widget widget) {
         this._widget = widget;
     }
 
     /**
-     * 为此 Element 分配 Context（仅用于根 Element 或测试）。
+     * Assigns a Context to this Element (only used for the root Element or in tests).
      *
-     * @param context BuildContext
+     * @param context the BuildContext
      */
     public void assignContext(@NotNull BuildContext context) {
         this._context = context;
     }
 
     /**
-     * 将此 Element 挂载到树中。
+     * Mounts this Element into the tree.
      * <p>
-     * 这个方法在 Element 首次插入树中时调用。
-     * 子类应该在此处执行初始化工作，并挂载子 Element。
+     * Called the first time the Element is inserted into the tree. Subclasses should perform
+     * initialization work here and mount their child Elements.
+     * <p>
+     * <b>CR-01 (T-05-62 / #371):</b> every {@code mount(Element)} override in this codebase
+     * calls {@code super.mount(parent)} before doing its own work (mounting children, running
+     * the first {@code performRebuild()}, etc.) -- this base method is therefore the single
+     * choke point through which the ENTIRE mounting recursion passes, one call per Element,
+     * regardless of subtype: {@code ContainerElement}/{@code GridViewElement.mountChildren()}
+     * mounting each child through {@code updateChildren()} and {@code updateChild()}, and the
+     * {@code mount()->performRebuild()->updateChild()->mount()} cascade
+     * {@code StatelessElement}/{@code StatefulElement} drive when composing a child Widget for
+     * the first time. Checking the depth HERE, rather than separately in every subclass's own
+     * mounting method, guards the mount recursion exactly once per node without needing to
+     * duplicate the check at each override. {@code update()}/{@code unmount()}'s own recursions
+     * need no separate guard: they only ever walk a subtree whose depth was already validated
+     * here when it was first mounted, so they can never exceed {@link RenderDepthGuard#MAX_DEPTH}
+     * without first passing through an unguarded {@code mount()} call -- which this check
+     * closes.
      *
-     * @param parent 父 Element，如果为 null 表示这是根 Element
+     * @param parent the parent Element, or null if this is the root Element
      */
     public void mount(@Nullable Element parent) {
         _parent = parent;
+        RenderDepthGuard.check("Element.mount", RenderDepthGuard.depthOf(this));
+
         _mounted = true;
         _dirty = false;
 
@@ -78,12 +99,12 @@ public abstract class Element {
     }
 
     /**
-     * 使用新的 Widget 更新此 Element。
+     * Updates this Element with a new Widget.
      * <p>
-     * 这个方法在 Widget 重建时被调用。
-     * 子类应该更新对 Widget 的引用，并执行必要的更新。
+     * Called when the Widget rebuilds. Subclasses should update their reference to the Widget
+     * and perform any necessary updates.
      *
-     * @param newWidget 新的 Widget 实例
+     * @param newWidget the new Widget instance
      */
     public void update(@NotNull Widget newWidget) {
         if (!canUpdate(newWidget)) {
@@ -91,23 +112,28 @@ public abstract class Element {
                     "Cannot update " + this + " with " + newWidget);
         }
         _widget = newWidget;
+        // D-09 item 2: mark dirty here, in the BASE class, so StatefulElement and
+        // StatelessElement (which both call super.update() before their own logic)
+        // pick this up "for free" and move in step. Before this, only markNeedsBuild()
+        // ever set _dirty, so a Widget swap via update() never scheduled a rebuild.
+        _dirty = true;
     }
 
     /**
-     * 检查此 Element 是否可以更新为给定的 Widget。
+     * Checks whether this Element can update to the given Widget.
      *
-     * @param newWidget 新的 Widget
-     * @return 如果可以更新则返回 true
+     * @param newWidget the new Widget
+     * @return true if it can be updated
      */
     public boolean canUpdate(@NotNull Widget newWidget) {
         return _widget != null && newWidget.canUpdate(this);
     }
 
     /**
-     * 从树中移除此 Element。
+     * Removes this Element from the tree.
      * <p>
-     * 这个方法在 Element 不再需要时被调用。
-     * 子类应该在此处执行清理工作，并卸载子 Element。
+     * Called when the Element is no longer needed. Subclasses should perform cleanup work here
+     * and unmount their child Elements.
      */
     public void unmount() {
         _mounted = false;
@@ -123,9 +149,9 @@ public abstract class Element {
     }
 
     /**
-     * 标记此 Element 需要重建。
+     * Marks this Element as needing a rebuild.
      * <p>
-     * 这会安排框架在下一个帧中重建此 Element。
+     * This schedules the framework to rebuild this Element on the next frame.
      */
     public void markNeedsBuild() {
         if (!_mounted) {
@@ -136,36 +162,66 @@ public abstract class Element {
         }
         _dirty = true;
 
-        // 通知父 Element 或渲染器
+        // Notify the parent Element or the renderer.
+        //
+        // This is the sole exit point of the State.setState() -> Element.markNeedsBuild() chain:
+        // if this Element is the mounted root (_parent == null), bubbling stops right here --
+        // before GuiRenderer registers _rootBuildScheduler, setState() would mutate the State's
+        // fields and mark this Element dirty, but no frame was ever scheduled to actually run
+        // performBuild(), so the Inventory would never reflect the new state.
         if (_parent != null) {
             _parent.markChildNeedsBuild(this);
+        } else if (_rootBuildScheduler != null) {
+            _rootBuildScheduler.run();
         }
     }
 
     /**
-     * 标记子 Element 需要重建。
+     * Marks a child Element as needing a rebuild.
      *
-     * @param child 子 Element
+     * @param child the child Element
      */
     public void markChildNeedsBuild(@NotNull Element child) {
-        // 默认实现：传递给父 Element
+        // Default implementation: forward to the parent Element; once bubbling reaches the
+        // mounted root (_parent == null), hand off to the scheduling callback GuiRenderer
+        // registered -- see the note on markNeedsBuild() above; the same "bubbling stops at the
+        // root" gap applies here.
         if (_parent != null) {
             _parent.markChildNeedsBuild(child);
+        } else if (_rootBuildScheduler != null) {
+            _rootBuildScheduler.run();
         }
     }
 
     /**
-     * 执行重建。
+     * Registers, on the mounted root Element, the callback that a "needs rebuild" bubble hands
+     * off to on {@link com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer}.
      * <p>
-     * 子类应该实现此方法来构建或重建 Widget 树。
+     * Framework-internal method -- only GuiRenderer calls this, when it mounts or remounts the
+     * root Element; module authors do not need to (and should not) call it themselves. On a
+     * non-root Element this field is always null, because bubbling forwards to the first
+     * ancestor with {@code _parent != null} and never reaches this branch.
+     *
+     * @param scheduler the callback invoked when the root needs a rebuild, typically
+     *                  {@code GuiRenderer::scheduleBuild}; pass {@code null} to unregister (when
+     *                  the renderer is destroyed)
+     */
+    public void setRootBuildScheduler(@Nullable Runnable scheduler) {
+        this._rootBuildScheduler = scheduler;
+    }
+
+    /**
+     * Performs a rebuild.
+     * <p>
+     * Subclasses should implement this method to build or rebuild the Widget tree.
      */
     public abstract void performRebuild();
 
     /**
-     * 获取与此 Element 关联的 Widget。
+     * Gets the Widget associated with this Element.
      *
-     * @return Widget 实例
-     * @throws IllegalStateException 如果 Widget 为 null
+     * @return the Widget instance
+     * @throws IllegalStateException if the Widget is null
      */
     @NotNull
     public Widget getWidget() {
@@ -176,9 +232,9 @@ public abstract class Element {
     }
 
     /**
-     * 获取父 Element。
+     * Gets the parent Element.
      *
-     * @return 父 Element，如果是根则返回 null
+     * @return the parent Element, or null at the root
      */
     @Nullable
     public Element getParent() {
@@ -186,9 +242,9 @@ public abstract class Element {
     }
 
     /**
-     * 获取子 Element 列表。
+     * Gets the list of child Elements.
      *
-     * @return 子 Element 列表，如果没有则返回空列表
+     * @return the child Element list, or an empty list if there are none
      */
     @NotNull
     public List<Element> getChildren() {
@@ -196,9 +252,9 @@ public abstract class Element {
     }
 
     /**
-     * 获取构建上下文。
+     * Gets the build context.
      *
-     * @return BuildContext
+     * @return the BuildContext
      */
     @NotNull
     public BuildContext getContext() {
@@ -209,34 +265,34 @@ public abstract class Element {
     }
 
     /**
-     * 检查是否已挂载。
+     * Checks whether this Element is mounted.
      *
-     * @return 如果已挂载则返回 true
+     * @return true if mounted
      */
     public boolean isMounted() {
         return _mounted;
     }
 
     /**
-     * 检查是否需要重建。
+     * Checks whether this Element needs a rebuild.
      *
-     * @return 如果需要重建则返回 true
+     * @return true if it needs a rebuild
      */
     public boolean isDirty() {
         return _dirty;
     }
 
     /**
-     * 清除 dirty 标记。
+     * Clears the dirty flag.
      */
     public void clearDirty() {
         _dirty = false;
     }
 
     /**
-     * 添加子 Element。
+     * Adds a child Element.
      *
-     * @param child 子 Element
+     * @param child the child Element
      */
     protected void addChild(@NotNull Element child) {
         if (_children == null) {
@@ -246,18 +302,18 @@ public abstract class Element {
     }
 
     /**
-     * 更新单个子 Element。
+     * Updates a single child Element.
      * <p>
-     * 这是协调（reconciliation）的核心方法。
-     * 它决定是复用现有 Element 还是创建新的。
+     * This is the core method of reconciliation. It decides whether to reuse the existing
+     * Element or create a new one.
      *
-     * @param newWidget 新的 Widget
-     * @param oldChild  旧的子 Element，可能为 null
-     * @return 更新后的 Element
+     * @param newWidget the new Widget
+     * @param oldChild  the previous child Element, may be null
+     * @return the updated Element
      */
     @Nullable
     protected Element updateChild(@Nullable Widget newWidget, @Nullable Element oldChild) {
-        // 如果新 Widget 为 null，移除旧 Element
+        // If the new Widget is null, remove the old Element.
         if (newWidget == null) {
             if (oldChild != null) {
                 oldChild.unmount();
@@ -265,24 +321,170 @@ public abstract class Element {
             return null;
         }
 
-        // 如果没有旧 Element，创建新的
+        // If there is no old Element, create a new one.
         if (oldChild == null) {
-            Element newChild = newWidget.createElement();
-            newChild.mount(this);
-            return newChild;
+            return createAndMountChild(newWidget);
         }
 
-        // 如果 Widget 类型相同，复用 Element
+        // If the Widget type matches, reuse the Element.
         if (oldChild.canUpdate(newWidget)) {
             oldChild.update(newWidget);
             return oldChild;
         }
 
-        // 类型不同，需要替换
+        // Type differs, so it must be replaced. The old child is unmounted before the new one is
+        // created, so its dispose always runs before the replacement's initState.
         oldChild.unmount();
+        return createAndMountChild(newWidget);
+    }
+
+    /**
+     * Creates the Element for {@code newWidget} and mounts it under this Element -- the single
+     * creation path for every child, whether it is new, a replacement, or part of a layout
+     * element's first mount.
+     * <p>
+     * A child becomes owned by its parent only when this method returns normally. If
+     * {@code mount} throws (for example a {@code State.initState} that subscribed to something
+     * and then failed, or a failing descendant of a newly created layout element), the new
+     * Element is unmounted here immediately, so whatever it or its descendants acquired is
+     * released and nothing is left mounted without an owner. The original exception then
+     * propagates unchanged; if the cleanup itself throws, that failure is attached to it with
+     * {@link Throwable#addSuppressed(Throwable)} rather than replacing it.
+     *
+     * @param newWidget the Widget to create and mount a child for
+     * @return the mounted child Element
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate cleanup barrier -- rethrows the primary unchanged
+    @NotNull
+    private Element createAndMountChild(@NotNull Widget newWidget) {
         Element newChild = newWidget.createElement();
-        newChild.mount(this);
+        try {
+            newChild.mount(this);
+        } catch (RuntimeException | Error primary) {
+            try {
+                newChild.unmount();
+            } catch (RuntimeException | Error cleanupFailure) {
+                primary.addSuppressed(cleanupFailure);
+            }
+            throw primary;
+        }
         return newChild;
+    }
+
+    /**
+     * Reconciles the caller's owned child Elements against a list of new Widgets, pairing by
+     * {@link SlotKey} where a Widget declares one and falling back to positional (index)
+     * pairing where it does not -- so a caller that never supplies a key sees exactly the
+     * same index-based behaviour this method replaces.
+     * <p>
+     * This is the shared implementation D-09 item 5 asks for:
+     * {@link com.ultikits.ultitools.abstracts.gui.declarative.widgets.ContainerElement} and
+     * {@link com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridViewElement} were
+     * literal twins, each hand-rolling the same
+     * {@code Math.min(size)} index pairing and never reading {@link Widget#getKey()}. Both
+     * now call this method instead of maintaining their own copy, so the two classes cannot
+     * drift apart the way they did before this plan.
+     * <p>
+     * <b>Algorithm:</b> the old child Elements are first split into a keyed group and an
+     * unkeyed group. Iterating the new Widget list, a keyed Widget looks up its match in the
+     * keyed group, and an unkeyed Widget takes the next available Element from the unkeyed
+     * group, in order. A match is reused via {@link #updateChild(Widget, Element)} (or replaced
+     * there if its type no longer matches); no match means a new Element is created. After the
+     * pass, whatever remains in either group -- unclaimed by any new Widget -- is unmounted.
+     * <p>
+     * <b>Ownership protocol.</b> {@code ownedChildren} must be the caller's own live, mutable
+     * child list; this method snapshots it first and rewrites its contents on every exit, so the
+     * caller never has to copy a result back:
+     * <ul>
+     * <li>On normal completion the list becomes exactly the reconciled children, in
+     * {@code newWidgets}' order.</li>
+     * <li>When a child's update, replacement or creation throws, the list becomes every child
+     * already produced for {@code newWidgets} (in that order), followed by every old child this
+     * reconciliation had not released that is still mounted, in its previous relative order:
+     * the old child paired with the Widget being processed when the exception occurred, and
+     * every old child no Widget had claimed yet. A replaced or unmounted old child is never
+     * kept. The exception then propagates unchanged. Because every element the parent still
+     * lists is mounted and every mounted child is still listed, closing the GUI later disposes
+     * each owned State exactly once.</li>
+     * </ul>
+     * In the common failure shape (a child was replaced, then a later sibling's update threw)
+     * the kept list lines up position for position with {@code newWidgets}, so the next frame
+     * reuses every kept child and its State. <b>Limit:</b> when the failing pairing is itself a
+     * replacement whose new child could not be mounted, that position has no element any more
+     * (the old child was already disposed and the failed new child was cleaned up), so on the
+     * next frame later <em>unkeyed</em> siblings pair by position exactly as after removing a
+     * child from the middle of an unkeyed list, and may be rebuilt with a new State. Give
+     * siblings a {@link SlotKey} when their State must survive structural changes; keyed
+     * siblings keep their identity.
+     *
+     * @param ownedChildren the caller's live, mutable list of currently owned child Elements,
+     *                      in their current order; rewritten in place on every exit
+     * @param newWidgets    the new child Widgets, in their desired order
+     */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // The very in-flight old child, not an equal one.
+    protected void updateChildren(@NotNull List<Element> ownedChildren, @NotNull List<Widget> newWidgets) {
+        List<Element> previous = new ArrayList<>(ownedChildren);
+        List<Element> produced = new ArrayList<>(newWidgets.size());
+
+        Map<SlotKey, Element> keyedOld = new HashMap<>();
+        Deque<Element> unkeyedOld = new ArrayDeque<>();
+        for (Element old : previous) {
+            SlotKey key = old.getWidget().getKey();
+            if (key != null) {
+                keyedOld.put(key, old);
+            } else {
+                unkeyedOld.addLast(old);
+            }
+        }
+
+        Element inFlight = null;
+        boolean completed = false;
+        try {
+            for (Widget newWidget : newWidgets) {
+                SlotKey key = newWidget.getKey();
+                Element oldChild = key != null ? keyedOld.remove(key)
+                        : (unkeyedOld.isEmpty() ? null : unkeyedOld.pollFirst());
+                // Not reset after a successful pairing: by then this old child is either reused
+                // (and in produced) or replaced (and unmounted), so the finally block below
+                // drops it either way.
+                inFlight = oldChild;
+                Element updated = updateChild(newWidget, oldChild);
+                if (updated != null) {
+                    produced.add(updated);
+                }
+            }
+
+            // Anything left in either group was not claimed by any new Widget -- unmount it.
+            for (Element leftover : keyedOld.values()) {
+                leftover.unmount();
+            }
+            for (Element leftover : unkeyedOld) {
+                leftover.unmount();
+            }
+            completed = true;
+        } finally {
+            ownedChildren.clear();
+            ownedChildren.addAll(produced);
+            if (!completed) {
+                for (Element old : previous) {
+                    boolean unreleased = old == inFlight
+                            || keyedOld.containsValue(old) || unkeyedOld.contains(old);
+                    if (unreleased && old.isMounted() && !containsIdentity(produced, old)) {
+                        ownedChildren.add(old);
+                    }
+                }
+            }
+        }
+    }
+
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Ownership is by identity: the very element, not an equal one.
+    private static boolean containsIdentity(@NotNull List<Element> elements, @NotNull Element target) {
+        for (Element element : elements) {
+            if (element == target) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override

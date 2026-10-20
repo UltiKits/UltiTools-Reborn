@@ -1,0 +1,58 @@
+# UltiWorlds configuration
+# This file documents the runtime defaults bound by WorldConfig.java (@ConfigEntry).
+# The framework materializes this file automatically on first boot even if this shipped copy
+# is absent -- it exists here purely as a readable reference for server administrators, not
+# because the framework's @ConfigEntity binding requires a packaged default.
+
+# Default world name
+default_world: world
+
+# Worlds that cannot be auto-unloaded or deleted
+protected_worlds:
+  - world
+  - world_nether
+  - world_the_end
+
+# Worlds to load automatically on server start
+load_worlds_on_start: []
+
+auto_unload:
+  # Enable auto-unloading of empty worlds
+  enabled: false
+  # Check interval in seconds
+  check_interval: 60
+  # Unload world after being empty for this many seconds
+  unload_after: 300
+
+tp_to_world:
+  # Allow players to teleport between worlds
+  enabled: true
+  # Require permission for each world
+  permission_per_world: false
+  # World teleport cooldown in seconds
+  cooldown: 10
+  # Show world description to player on teleport
+  show_description: true
+
+world_spawn:
+  # Teleport to world spawn instead of last location
+  use_spawn_location: true
+
+world_isolation:
+  # Enable per-world inventory isolation
+  enabled: false
+  # Separate inventory per world
+  separate_inventory: true
+  # Separate ender chest per world
+  separate_ender_chest: true
+  # Separate XP levels per world
+  separate_experience: false
+  # Separate health per world
+  separate_health: false
+  # Separate hunger per world
+  separate_hunger: false
+  # Separate potion effects per world
+  separate_effects: false
+  # Worlds that share inventory (comma separated groups)
+  shared_worlds:
+    - "world,world_nether,world_the_end"

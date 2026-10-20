@@ -1,17 +1,10 @@
 package com.ultikits.ultitools.context;
 
 import com.ultikits.ultitools.annotations.Autowired;
-import org.junit.jupiter.api.AfterEach;
+import com.ultikits.ultitools.exceptions.ContainerException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,61 +19,10 @@ class AutowireFactoryTest {
     private SimpleContainer container;
     private AutowireFactory autowireFactory;
 
-    private final List<LogRecord> captured = new ArrayList<>();
-    private Logger factoryLogger;
-    private Handler captureHandler;
-    private Level previousLevel;
-    private boolean previousUseParentHandlers;
-
     @BeforeEach
     void setUp() {
         container = new SimpleContainer();
         autowireFactory = new AutowireFactory(container);
-
-        captured.clear();
-        factoryLogger = Logger.getLogger(AutowireFactory.class.getName());
-        previousLevel = factoryLogger.getLevel();
-        previousUseParentHandlers = factoryLogger.getUseParentHandlers();
-        // 关掉向上冒泡，否则这些用例每跑一条就往测试输出里打一段堆栈
-        factoryLogger.setUseParentHandlers(false);
-        factoryLogger.setLevel(Level.ALL);
-        captureHandler = new Handler() {
-            @Override
-            public void publish(LogRecord record) {
-                captured.add(record);
-            }
-
-            @Override
-            public void flush() {
-                // nothing buffered
-            }
-
-            @Override
-            public void close() {
-                // nothing to release
-            }
-        };
-        factoryLogger.addHandler(captureHandler);
-    }
-
-    @AfterEach
-    void tearDown() {
-        factoryLogger.removeHandler(captureHandler);
-        factoryLogger.setLevel(previousLevel);
-        factoryLogger.setUseParentHandlers(previousUseParentHandlers);
-    }
-
-    /**
-     * WARNING 级别的记录。别的级别（比如 SimpleContainer 的 fine）不算。
-     */
-    private List<LogRecord> warnings() {
-        List<LogRecord> result = new ArrayList<>();
-        for (LogRecord record : captured) {
-            if (Level.WARNING.equals(record.getLevel())) {
-                result.add(record);
-            }
-        }
-        return result;
     }
 
     @Test
@@ -88,9 +30,9 @@ class AutowireFactoryTest {
     void testAutowireDependencies() {
         // Given
         TestRepository testRepository = new TestRepository();
-        
+
         container.registerType(TestRepository.class, testRepository);
-        
+
         TestController controller = new TestController();
 
         // When
@@ -102,11 +44,11 @@ class AutowireFactoryTest {
     }
 
     @Test
-    @DisplayName("Should handle null dependencies gracefully")
+    @DisplayName("Should handle null dependencies gracefully when optional")
     void testNullDependencies() {
         // Given
-        TestController controller = new TestController();
-        // No repository registered
+        TestOptionalController controller = new TestOptionalController();
+        // No repository registered, but the field is @Autowired(required = false)
 
         // When - should not throw exception
         assertDoesNotThrow(() -> autowireFactory.autowireBean(controller));
@@ -121,10 +63,10 @@ class AutowireFactoryTest {
         // Given
         TestRepository repository = new TestRepository();
         TestService service = new TestService();
-        
+
         container.registerType(TestRepository.class, repository);
         container.registerType(TestService.class, service);
-        
+
         TestComplexController controller = new TestComplexController();
 
         // When
@@ -143,7 +85,7 @@ class AutowireFactoryTest {
         // Given
         TestRepository repository = new TestRepository();
         container.registerType(TestRepository.class, repository);
-        
+
         TestNoAutowireController controller = new TestNoAutowireController();
 
         // When
@@ -159,7 +101,7 @@ class AutowireFactoryTest {
         // Given
         TestService service = new TestService();
         container.registerType(TestService.class, service);
-        
+
         TestExtendedController controller = new TestExtendedController();
 
         // When
@@ -171,29 +113,25 @@ class AutowireFactoryTest {
     }
 
     @Test
-    @DisplayName("Should warn when a required dependency cannot be resolved")
-    void testWarnOnMissingRequiredDependency() {
+    @DisplayName("Should throw when a required dependency cannot be resolved")
+    void testThrowsOnMissingRequiredDependency() {
         // Given - nothing registered, so TestRepository cannot be resolved
         TestController controller = new TestController();
 
         // When
-        autowireFactory.autowireBean(controller);
+        ContainerException exception = assertThrows(ContainerException.class,
+                () -> autowireFactory.autowireBean(controller));
 
         // Then
-        List<LogRecord> warnings = warnings();
-        assertEquals(1, warnings.size());
-        LogRecord record = warnings.get(0);
-        assertTrue(record.getMessage().contains(TestRepository.class.getName()),
-                "the warning must name the bean type that could not be resolved");
-        assertTrue(record.getMessage().contains(TestController.class.getName() + ".repository"),
-                "the warning must name the host field");
-        assertNotNull(record.getThrown(),
-                "the stack is the point: it tells the module author which code path triggered the injection");
+        assertTrue(exception.getMessage().contains(TestRepository.class.getName()),
+                "the exception must name the bean type that could not be resolved");
+        assertTrue(exception.getMessage().contains(TestController.class.getName() + ".repository"),
+                "the exception must name the host field");
     }
 
     @Test
     @DisplayName("Should stay silent when required = false")
-    void testNoWarnWhenDependencyIsOptional() {
+    void testNoThrowWhenDependencyIsOptional() {
         // Given
         TestOptionalController controller = new TestOptionalController();
 
@@ -202,51 +140,41 @@ class AutowireFactoryTest {
 
         // Then - opting out is exactly what required = false means
         assertNull(controller.getRepository());
-        assertTrue(warnings().isEmpty());
     }
 
     @Test
     @DisplayName("Should stay silent when the dependency resolves")
-    void testNoWarnWhenDependencyResolves() {
+    void testNoThrowWhenDependencyResolves() {
         // Given
         container.registerType(TestRepository.class, new TestRepository());
 
-        // When
-        autowireFactory.autowireBean(new TestController());
-
-        // Then
-        assertTrue(warnings().isEmpty());
+        // When / Then
+        assertDoesNotThrow(() -> autowireFactory.autowireBean(new TestController()));
     }
 
     @Test
     @DisplayName("Should name the declaring class for inherited fields")
-    void testWarnNamesDeclaringClassForInheritedField() {
+    void testThrowNamesDeclaringClassForInheritedField() {
         // Given - the annotated field lives on the base class, not the one being autowired
         TestExtendedController controller = new TestExtendedController();
 
         // When
-        autowireFactory.autowireBean(controller);
+        ContainerException exception = assertThrows(ContainerException.class,
+                () -> autowireFactory.autowireBean(controller));
 
         // Then
-        assertEquals(1, warnings().size());
-        assertTrue(warnings().get(0).getMessage().contains(TestBaseController.class.getName() + ".service"),
+        assertTrue(exception.getMessage().contains(TestBaseController.class.getName() + ".service"),
                 "pointing at the subclass would send the author to a file that has no such field");
     }
 
     @Test
-    @DisplayName("Should not interrupt container refresh when a required dependency is missing")
-    void testRefreshIsNotInterrupted() {
+    @DisplayName("Container refresh aborts when a required dependency is missing")
+    void testRefreshAbortsOnMissingRequiredDependency() {
         // Given - a bean whose required dependency is not registered
         container.registerBean(TestController.class);
 
-        // When - 本版只警告不抛，可能有下游模块正带着 null 字段跑在生产上
-        assertDoesNotThrow(() -> container.refresh());
-
-        // Then
-        TestController bean = container.getBean(TestController.class);
-        assertNotNull(bean);
-        assertNull(bean.getRepository());
-        assertFalse(warnings().isEmpty());
+        // When / Then - required = true now aborts the container instead of leaving a null field
+        assertThrows(RuntimeException.class, () -> container.refresh());
     }
 
     // Test helper classes

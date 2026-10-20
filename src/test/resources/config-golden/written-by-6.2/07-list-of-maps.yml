@@ -1,0 +1,7 @@
+# Reward table
+rewards:
+- item: DIAMOND
+  amount: 5
+  chance: 0.25
+- item: minecraft.stick
+  amount: 1

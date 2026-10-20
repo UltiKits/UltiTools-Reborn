@@ -19,13 +19,8 @@ import net.kyori.adventure.text.format.TextDecoration;
  * This widget displays a confirmation prompt in the player's chat with clickable
  * confirm and cancel buttons. Uses Adventure API for rich text formatting.
  * </p>
- * <p>
- * 基于聊天的确认对话框实现。
- * 该组件在玩家聊天中显示带有可点击确认和取消按钮的确认提示。
- * 使用 Adventure API 进行富文本格式化。
- * </p>
  *
- * <p><strong>Example Usage / 使用示例:</strong></p>
+ * <p><strong>Example Usage:</strong></p>
  * <pre>{@code
  * Confirm.chat(player, "Delete Item", "Are you sure?",
  *     () -> deleteItem(),
@@ -40,32 +35,30 @@ import net.kyori.adventure.text.format.TextDecoration;
  * @since 6.0.0
  */
 public class ChatConfirm implements Confirm {
-    /** Custom confirm button text, null uses default i18n "OK" / 自定义确认按钮文本，null 使用默认 i18n "OK" */
+    /** Custom confirm button text, null uses default i18n "OK" */
     private String confirmText;
-    /** Custom cancel button text, null uses default i18n "取消" / 自定义取消按钮文本，null 使用默认 i18n "取消" */
+    /** Custom cancel button text, null uses the default cancel-button i18n key (see {@link #getCancelText()}) */
     private String cancelText;
 
-    /** The target player to show the dialog / 显示对话框的目标玩家 */
+    /** The target player to show the dialog */
     private final Player player;
-    /** The title text displayed in bold gold / 以粗体金色显示的标题文本 */
+    /** The title text displayed in bold gold */
     private final String title;
-    /** The description text displayed below title / 显示在标题下方的描述文本 */
+    /** The description text displayed below title */
     private final String description;
-    /** Callback executed when player clicks confirm / 玩家点击确认时执行的回调 */
+    /** Callback executed when player clicks confirm */
     private final Runnable onConfirm;
-    /** Callback executed when player clicks cancel / 玩家点击取消时执行的回调 */
+    /** Callback executed when player clicks cancel */
     private final Runnable onCancel;
 
     /**
      * Creates a chat confirmation dialog with default button text.
-     * <br>
-     * 使用默认按钮文本创建聊天确认对话框。
      *
-     * @param player      the target player / 目标玩家
-     * @param title       the dialog title / 对话框标题
-     * @param description the dialog description / 对话框描述
-     * @param onConfirm   callback for confirm action / 确认操作的回调
-     * @param onCancel    callback for cancel action / 取消操作的回调
+     * @param player      the target player
+     * @param title       the dialog title
+     * @param description the dialog description
+     * @param onConfirm   callback for confirm action
+     * @param onCancel    callback for cancel action
      */
     public ChatConfirm(Player player, String title, String description, Runnable onConfirm, Runnable onCancel) {
         this.player = player;
@@ -77,16 +70,14 @@ public class ChatConfirm implements Confirm {
 
     /**
      * Creates a chat confirmation dialog with custom button text.
-     * <br>
-     * 使用自定义按钮文本创建聊天确认对话框。
      *
-     * @param player      the target player / 目标玩家
-     * @param title       the dialog title / 对话框标题
-     * @param description the dialog description / 对话框描述
-     * @param confirmText custom confirm button text / 自定义确认按钮文本
-     * @param cancelText  custom cancel button text / 自定义取消按钮文本
-     * @param onConfirm   callback for confirm action / 确认操作的回调
-     * @param onCancel    callback for cancel action / 取消操作的回调
+     * @param player      the target player
+     * @param title       the dialog title
+     * @param description the dialog description
+     * @param confirmText custom confirm button text
+     * @param cancelText  custom cancel button text
+     * @param onConfirm   callback for confirm action
+     * @param onCancel    callback for cancel action
      */
     public ChatConfirm(Player player, String title, String description, String confirmText, String cancelText, Runnable onConfirm, Runnable onCancel) {
         this(player, title, description, onConfirm, onCancel);
@@ -102,15 +93,6 @@ public class ChatConfirm implements Confirm {
      *   <li>Description text</li>
      *   <li>Clickable green confirm button</li>
      *   <li>Clickable red cancel button</li>
-     * </ul>
-     * <p>
-     * 在玩家聊天中显示确认对话框，包含：
-     * </p>
-     * <ul>
-     *   <li>粗体金色标题文本</li>
-     *   <li>描述文本</li>
-     *   <li>可点击的绿色确认按钮</li>
-     *   <li>可点击的红色取消按钮</li>
      * </ul>
      */
     @Override

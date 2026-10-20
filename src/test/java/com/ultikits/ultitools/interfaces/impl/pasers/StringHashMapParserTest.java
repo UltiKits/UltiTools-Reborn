@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test;
 class StringHashMapParserTest {
 
     @Test
+    // Exercises the frozen legacy compatibility contract until removal.
+    @SuppressWarnings("removal")
     void testParse() {
         StringHashMapParser parser = new StringHashMapParser();
         ConfigurationSection section = mock(ConfigurationSection.class);
@@ -36,12 +38,16 @@ class StringHashMapParserTest {
     }
 
     @Test
+    // Exercises the frozen legacy compatibility contract until removal.
+    @SuppressWarnings("removal")
     void testParseInvalidInput() {
         StringHashMapParser parser = new StringHashMapParser();
         assertNull(parser.parse("not a section"));
     }
 
     @Test
+    // Exercises the frozen legacy compatibility contract until removal.
+    @SuppressWarnings("removal")
     void testSerializeToMemorySection() {
         StringHashMapParser parser = new StringHashMapParser();
         HashMap<String, String> map = new HashMap<>();

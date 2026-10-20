@@ -3,9 +3,6 @@ package com.ultikits.ultitools.websocket;
 /**
  * Exponential backoff reconnection strategy.
  * Delays increase exponentially: 5s, 10s, 20s, 40s... up to max 5 minutes.
- * <p>
- * 指数退避重连策略。
- * 延迟指数增长：5秒、10秒、20秒、40秒...最大5分钟。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -42,7 +39,6 @@ public class ExponentialBackoffStrategy implements ReconnectStrategy {
     
     /**
      * Creates a strategy with default settings.
-     * 使用默认设置创建策略。
      */
     public ExponentialBackoffStrategy() {
         this(DEFAULT_INITIAL_DELAY, DEFAULT_MAX_DELAY, DEFAULT_MULTIPLIER, DEFAULT_MAX_ATTEMPTS);
@@ -50,7 +46,6 @@ public class ExponentialBackoffStrategy implements ReconnectStrategy {
     
     /**
      * Creates a strategy with custom settings.
-     * 使用自定义设置创建策略。
      *
      * @param initialDelay initial delay in milliseconds
      * @param maxDelay     maximum delay in milliseconds
@@ -98,7 +93,6 @@ public class ExponentialBackoffStrategy implements ReconnectStrategy {
     
     /**
      * Creates a strategy that tries forever with default backoff.
-     * 创建使用默认退避的无限重试策略。
      *
      * @return an unlimited retry strategy
      */
@@ -108,7 +102,6 @@ public class ExponentialBackoffStrategy implements ReconnectStrategy {
     
     /**
      * Creates a strategy with limited attempts.
-     * 创建有限尝试次数的策略。
      *
      * @param maxAttempts the maximum number of attempts
      * @return a limited retry strategy
@@ -120,7 +113,6 @@ public class ExponentialBackoffStrategy implements ReconnectStrategy {
     
     /**
      * Creates a builder for custom configuration.
-     * 创建自定义配置的构建器。
      *
      * @return a new builder
      */

@@ -2,14 +2,8 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -24,7 +18,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
@@ -66,9 +59,8 @@ class PluginInitiationUtilsInboundMessageTest {
 
     /** 取出所有以指定级别记录的日志正文。 */
     private List<String> loggedAt(Level level) {
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        verify(mockLogger, atLeastOnce()).log(eq(level), captor.capture());
-        return captor.getAllValues();
+        // Both forms: inbound-message lines are panel-connection lines, logged as marked records.
+        return com.ultikits.ultitools.testutil.LoggedLines.at(mockLogger, level);
     }
 
     @Nested
@@ -143,7 +135,7 @@ class PluginInitiationUtilsInboundMessageTest {
 
             assertThat(loggedAt(Level.WARNING))
                     .anySatisfy(line -> assertThat(line).contains("缺少有效的 type 字段"));
-            verify(mockLogger, never()).log(eq(Level.SEVERE), anyString(), any(Throwable.class));
+            assertThat(loggedAt(Level.SEVERE)).isEmpty();
         }
     }
 
@@ -195,8 +187,7 @@ class PluginInitiationUtilsInboundMessageTest {
                     .doesNotThrowAnyException();
 
             // 不能被守卫误伤：这些是合法 type，不该走「缺少有效的 type 字段」那条分支
-            verify(mockLogger, never()).log(eq(Level.WARNING),
-                    org.mockito.ArgumentMatchers.contains("缺少有效的 type 字段"));
+            assertThat(loggedAt(Level.WARNING)).noneSatisfy(line -> assertThat(line).contains("缺少有效的 type 字段"));
         }
 
         @Test

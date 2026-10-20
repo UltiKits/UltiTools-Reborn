@@ -3,6 +3,9 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +16,7 @@ import org.junit.jupiter.api.Timeout;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
 
 /**
  * DependencyUtils 测试类
@@ -108,15 +112,16 @@ class DependencyUtilsTest {
         }
 
         @Test
-        @DisplayName("ComponentScan 应该优先于 EnableAutoRegister")
-        void componentScanShouldTakePrecedenceOverEnableAutoRegister() {
+        @DisplayName("ComponentScan 与 EnableAutoRegister 同时声明时应该按声明顺序累加，而不是互相排斥")
+        void componentScanAndEnableAutoRegisterContributeAdditively() {
             UltiToolsPlugin mockPlugin = mock(MockPluginWithBothAnnotations.class);
 
             String[] packages = DependencyUtils.getPluginPackages(mockPlugin);
 
-            // ComponentScan 优先，应该返回 ComponentScan 的 value
-            assertThat(packages).hasSize(1);
-            assertThat(packages[0]).isEqualTo("com.componentscan.priority");
+            // 累加式：ComponentScan 的 value 先贡献，EnableAutoRegister 的 scanPackage 后贡献，
+            // 二者都保留而不是互相排斥（SILENT-22 / 04-08 Task 2）。
+            assertThat(packages).hasSize(2);
+            assertThat(packages).containsExactly("com.componentscan.priority", "com.enableautoregister.additional");
         }
 
         @Test
@@ -139,6 +144,58 @@ class DependencyUtilsTest {
 
             assertThat(packages).hasSize(1);
             assertThat(packages[0]).isEqualTo("com.very.deeply.nested.package.structure");
+        }
+    }
+
+    @Nested
+    @DisplayName("元注解解析测试 (SILENT-22 / 04-08 Task 2)")
+    class MetaAnnotationResolutionTests {
+
+        @Test
+        @DisplayName("只标注 @UltiToolsModule(scanBasePackages = {...}) 时应该返回声明的包，而不是类自身的包")
+        void shouldReturnDeclaredPackageForUltiToolsModuleOnly() {
+            // 这是这个方法在修复前的确切缺陷：isAnnotationPresent(ComponentScan.class) 只看
+            // 直接注解，@UltiToolsModule 是元注解，所以修复前这里会静默落回类自身的包名，
+            // 丢弃 scanBasePackages 声明的值。
+            UltiToolsPlugin mockPlugin = mock(MockPluginWithUltiToolsModuleScanBasePackages.class);
+
+            String[] packages = DependencyUtils.getPluginPackages(mockPlugin);
+
+            assertThat(packages).hasSize(1);
+            assertThat(packages[0]).isEqualTo("com.example.moduleonly");
+        }
+
+        @Test
+        @DisplayName("只标注 @UltiToolsModule 且声明两个 scanBasePackages 时应该按声明顺序返回两个")
+        void shouldReturnBothPackagesForUltiToolsModuleWithTwoScanBasePackages() {
+            UltiToolsPlugin mockPlugin = mock(MockPluginWithUltiToolsModuleTwoScanBasePackages.class);
+
+            String[] packages = DependencyUtils.getPluginPackages(mockPlugin);
+
+            assertThat(packages).hasSize(2);
+            assertThat(packages).containsExactly("com.example.moduleone", "com.example.moduletwo");
+        }
+
+        @Test
+        @DisplayName("当 @UltiToolsModule 的 scanBasePackages 与类自身包名一致时（12 个自研模块的真实形状），结果不变")
+        void shouldMatchTodaysResultForInHouseModuleShape() {
+            UltiToolsPlugin mockPlugin = mock(MockPluginMatchingInHouseModuleShape.class);
+
+            String[] packages = DependencyUtils.getPluginPackages(mockPlugin);
+
+            assertThat(packages).hasSize(1);
+            assertThat(packages[0]).isEqualTo("com.ultikits.ultitools.utils");
+        }
+
+        @Test
+        @DisplayName("ComponentScan 声明 basePackageClasses() 时应该返回这些类所在的包")
+        void shouldReturnPackagesOfBasePackageClasses() {
+            UltiToolsPlugin mockPlugin = mock(MockPluginWithComponentScanBasePackageClasses.class);
+
+            String[] packages = DependencyUtils.getPluginPackages(mockPlugin);
+
+            assertThat(packages).hasSize(1);
+            assertThat(packages[0]).isEqualTo("com.ultikits.ultitools.annotations");
         }
     }
 
@@ -260,15 +317,16 @@ class DependencyUtilsTest {
     class ComplexScenarioTests {
 
         @Test
-        @DisplayName("当 ComponentScan 的 value 和 basePackages 都有值时，value 优先")
-        void valueShouldTakePrecedenceOverBasePackages() {
+        @DisplayName("当 ComponentScan 的 value 和 basePackages 都有值时，二者应该按声明顺序累加")
+        void valueAndBasePackagesContributeAdditively() {
             UltiToolsPlugin mockPlugin = mock(MockPluginWithBothValueAndBasePackages.class);
 
             String[] packages = DependencyUtils.getPluginPackages(mockPlugin);
 
-            // value 优先于 basePackages
-            assertThat(packages).hasSize(1);
-            assertThat(packages[0]).isEqualTo("com.value.priority");
+            // 累加式而非首个匹配优先：value 先贡献，basePackages 后贡献，重复项才会被折叠
+            // （SILENT-22 / 04-08 Task 2，与 PluginManager.getPluginScanPackages 的形状一致）。
+            assertThat(packages).hasSize(2);
+            assertThat(packages).containsExactly("com.value.priority", "com.base.additional");
         }
 
         @Test
@@ -288,6 +346,93 @@ class DependencyUtilsTest {
             UltiToolsPlugin plugin3 = mock(MockPluginWithComponentScanBasePackages.class);
             assertThat(DependencyUtils.getPluginPackages(plugin3))
                 .containsExactly("com.base.one", "com.base.two");
+        }
+    }
+
+    /**
+     * {@code DependencyUtils.dedupeNestedPackages(Set)} 直接单测 (#362) —— 六个行为里
+     * 除最后一个「一次初始化」之外的五个，都是这个去重函数自身的输入输出契约。
+     */
+    @Nested
+    @DisplayName("dedupeNestedPackages 去重测试 (#362)")
+    class DedupeNestedPackagesTests {
+
+        @Test
+        @DisplayName("给定一个包和它的严格子包，只有父包幸存")
+        void strictSubpackageIsDropped() {
+            Set<String> input = new LinkedHashSet<>();
+            input.add("com.example.mod");
+            input.add("com.example.mod.config");
+
+            Set<String> result = DependencyUtils.dedupeNestedPackages(input);
+
+            assertThat(result).containsExactly("com.example.mod");
+        }
+
+        @Test
+        @DisplayName("给定两个互为字符串前缀但不是分段祖先关系的包，两者都幸存")
+        void prefixButNotSegmentwiseAncestorSurvivesBoth() {
+            // com.example.modular 以 "com.example.mod" 开头，但按分段判断不是它的子包 ——
+            // 这正是朴素字符串前缀实现会误删的用例，必须在红灯阶段就出现。
+            Set<String> input = new LinkedHashSet<>();
+            input.add("com.example.mod");
+            input.add("com.example.modular");
+
+            Set<String> result = DependencyUtils.dedupeNestedPackages(input);
+
+            assertThat(result).containsExactlyInAnyOrder("com.example.mod", "com.example.modular");
+        }
+
+        @Test
+        @DisplayName("给定单个包，原样幸存")
+        void singlePackageSurvivesUnchanged() {
+            Set<String> input = Collections.singleton("com.example.solo");
+
+            Set<String> result = DependencyUtils.dedupeNestedPackages(input);
+
+            assertThat(result).containsExactly("com.example.solo");
+        }
+
+        @Test
+        @DisplayName("给定空集合，结果为空且不抛异常")
+        void emptySetYieldsEmptyResult() {
+            Set<String> result = DependencyUtils.dedupeNestedPackages(Collections.emptySet());
+
+            assertThat(result).isEmpty();
+        }
+
+        @Test
+        @DisplayName("给定三层嵌套，只有最外层幸存")
+        void threeLevelNestKeepsOnlyOutermost() {
+            Set<String> input = new LinkedHashSet<>();
+            input.add("com.example");
+            input.add("com.example.mod");
+            input.add("com.example.mod.sub");
+
+            Set<String> result = DependencyUtils.dedupeNestedPackages(input);
+
+            assertThat(result).containsExactly("com.example");
+        }
+    }
+
+    /**
+     * 「一个模块的扫描包发生嵌套时，只初始化一次配置类」这条消费侧行为 (#362 第六条) ——
+     * 通过 {@code getPluginPackages()} 的公开契约验证：嵌套声明被去重之后，{@code
+     * UltiToolsPlugin.initConfig()} 对 {@code registerAll} 的循环次数天然降到一次，
+     * 该配置类的构造与校验也就只跑一次，而不是每个命中的扫描包各跑一次。
+     */
+    @Nested
+    @DisplayName("getPluginPackages 嵌套扫描包去重的消费侧后果 (#362)")
+    class NestedScanPackageConsumerConsequenceTests {
+
+        @Test
+        @DisplayName("ComponentScan 声明了嵌套的两个包时，getPluginPackages 只返回外层")
+        void componentScanWithNestedPackagesReturnsOnlyOuter() {
+            UltiToolsPlugin mockPlugin = mock(MockPluginWithNestedComponentScanPackages.class);
+
+            String[] packages = DependencyUtils.getPluginPackages(mockPlugin);
+
+            assertThat(packages).containsExactly("com.nested.parent");
         }
     }
 
@@ -338,10 +483,10 @@ class DependencyUtilsTest {
 
     /**
      * 同时有 ComponentScan 和 EnableAutoRegister 的 Mock 插件
-     * ComponentScan 应该优先
+     * 二者应该按声明顺序累加，而不是互相排斥（SILENT-22 / 04-08 Task 2）
      */
     @ComponentScan(value = {"com.componentscan.priority"})
-    @EnableAutoRegister(scanPackage = "com.enableautoregister.ignored")
+    @EnableAutoRegister(scanPackage = "com.enableautoregister.additional")
     static abstract class MockPluginWithBothAnnotations extends UltiToolsPlugin {
     }
 
@@ -368,8 +513,48 @@ class DependencyUtilsTest {
 
     /**
      * 同时有 value 和 basePackages 的 ComponentScan Mock 插件
+     * 二者应该按声明顺序累加（SILENT-22 / 04-08 Task 2）
      */
-    @ComponentScan(value = {"com.value.priority"}, basePackages = {"com.base.ignored"})
+    @ComponentScan(value = {"com.value.priority"}, basePackages = {"com.base.additional"})
     static abstract class MockPluginWithBothValueAndBasePackages extends UltiToolsPlugin {
+    }
+
+    /**
+     * 只标注了 {@code @UltiToolsModule} 的 Mock 插件，声明单个 scanBasePackages ——
+     * 覆盖当前 12 个自研模块共有的实际形状：declaration 中的包名与类自身的包名不同
+     * （SILENT-22）。
+     */
+    @UltiToolsModule(scanBasePackages = {"com.example.moduleonly"})
+    static abstract class MockPluginWithUltiToolsModuleScanBasePackages extends UltiToolsPlugin {
+    }
+
+    /**
+     * 只标注了 {@code @UltiToolsModule} 的 Mock 插件，声明两个 scanBasePackages。
+     */
+    @UltiToolsModule(scanBasePackages = {"com.example.moduleone", "com.example.moduletwo"})
+    static abstract class MockPluginWithUltiToolsModuleTwoScanBasePackages extends UltiToolsPlugin {
+    }
+
+    /**
+     * 只标注了 {@code @UltiToolsModule} 的 Mock 插件，其单个 scanBasePackages 声明与类自身的包名
+     * 完全一致——这正是当前 12 个自研模块的真实形状：修复前后必须产出同一个单元素结果。
+     */
+    @UltiToolsModule(scanBasePackages = {"com.ultikits.ultitools.utils"})
+    static abstract class MockPluginMatchingInHouseModuleShape extends UltiToolsPlugin {
+    }
+
+    /**
+     * 声明 {@code basePackageClasses()} 的 ComponentScan Mock 插件。
+     */
+    @ComponentScan(basePackageClasses = {UltiToolsModule.class})
+    static abstract class MockPluginWithComponentScanBasePackageClasses extends UltiToolsPlugin {
+    }
+
+    /**
+     * {@code ComponentScan} 声明两个包，其中一个是另一个的严格子包 (#362) —— 去重之后
+     * {@code getPluginPackages} 只应该返回外层 {@code com.nested.parent}。
+     */
+    @ComponentScan(value = {"com.nested.parent", "com.nested.parent.config"})
+    static abstract class MockPluginWithNestedComponentScanPackages extends UltiToolsPlugin {
     }
 }

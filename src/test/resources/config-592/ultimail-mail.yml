@@ -1,0 +1,53 @@
+# Maximum number of items attached to one mail
+max-items: 27
+# Notify players of unread mail when they log in
+notify-on-join: true
+# Delay before the login notification (seconds)
+notify-delay: 3
+# Maximum length of a mail subject
+max-subject-length: 50
+# Maximum length of a mail's content
+max-content-length: 500
+# Cooldown between sending mails (seconds)
+send-cooldown: 10
+messages:
+  # Notice shown when a new mail is received
+  mail-received: '&e[Mail] &fYou received a new mail from &a{SENDER}&f!'
+recall:
+  # Server name shown in recall mails
+  server-name: Minecraft Server
+  # Subject of the in-game recall mail
+  subject: '[{SERVER}] Come back to us'
+  # Content of the in-game recall mail
+  content: |-
+    Dear player, {SERVER} misses you!
+
+    Come back and take a look, we look forward to seeing you again!
+
+    Sender: {SENDER}
+email:
+  # Whether real email sending is enabled
+  enabled: false
+  # SMTP server address
+  smtp-host: smtp.example.com
+  # SMTP port
+  smtp-port: 587
+  # SMTP username
+  smtp-username: ''
+  # SMTP password
+  smtp-password: ''
+  # Sender email address
+  smtp-from-email: noreply@example.com
+  # Whether to use SSL encryption
+  smtp-ssl: false
+  # Whether to use STARTTLS encryption
+  smtp-starttls: true
+  # Subject of the recall email
+  recall-subject: '[{SERVER}] We miss you!'
+  # Content of the recall email
+  recall-content: |-
+    Dear {PLAYER},
+
+    The {SERVER} server misses you! Come back and take a look, we look forward to seeing you again!
+
+    Sender: {SENDER}

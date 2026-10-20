@@ -3,6 +3,8 @@ package com.ultikits.ultitools.entities;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 
+import org.bukkit.configuration.file.YamlConfiguration;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.Reader;
@@ -10,12 +12,13 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 语言实体类
+ * Language entity class.
  *
  * @author wisdomme
  * @version 1.0.0
@@ -24,13 +27,14 @@ public class Language {
     private static final Logger LOGGER = Logger.getLogger(Language.class.getName());
     private static final Gson GSON = new Gson();
     private static final Type MAP_TYPE = new TypeToken<Map<String, String>>() {}.getType();
-    
+
     private final Map<String, String> dictionary;
+    private final Language fallback;
 
     /**
-     * 使用json文件读取创建语言字典
+     * Creates a language dictionary by reading a JSON file.
      *
-     * @param file 语言json文件
+     * @param file the language JSON file
      */
     public Language(File file) {
         Map<String, String> tempDict = Collections.emptyMap();
@@ -40,34 +44,117 @@ public class Language {
             LOGGER.log(Level.WARNING, "Failed to load language file: " + file.getPath(), e);
         }
         this.dictionary = tempDict != null ? tempDict : Collections.emptyMap();
+        this.fallback = null;
     }
 
     /**
-     * 使用字典直接创建
+     * Creates directly from a dictionary.
      *
-     * @param dictionary 语言字典
+     * @param dictionary the language dictionary
      */
     public Language(Map<String, String> dictionary) {
         this.dictionary = dictionary != null ? dictionary : Collections.emptyMap();
+        this.fallback = null;
     }
 
     /**
-     * 使用json创建语言字典
+     * Creates a language dictionary from JSON.
      *
-     * @param json json字符串
+     * @param json the JSON string
      */
     public Language(String json) {
         Map<String, String> tempDict = GSON.fromJson(json, MAP_TYPE);
         this.dictionary = tempDict != null ? tempDict : Collections.emptyMap();
+        this.fallback = null;
     }
 
     /**
-     * 获取对应的语言翻译
+     * Creates a language whose dictionary is consulted first, falling back to {@code fallback}
+     * for any key this dictionary does not contain.
      *
-     * @param str 需要翻译的字符串
-     * @return 翻译后的字符串，若字典中没有则返回原文
+     * @param dictionary this language's own dictionary, authoritative for every key it contains
+     * @param fallback   consulted only for a key absent from {@code dictionary}; may be {@code null}
      */
+    private Language(Map<String, String> dictionary, Language fallback) {
+        this.dictionary = dictionary != null ? dictionary : Collections.emptyMap();
+        this.fallback = fallback;
+    }
+
+    /**
+     * Returns a {@code Language} that answers from this dictionary first and, for any key this
+     * dictionary lacks, from {@code fallback} instead of immediately returning the raw key.
+     * <p>
+     * Real-machine finding (phase 13, PR #418): on an upgraded server a module jar adds a
+     * language key, but the copy of that language file already sitting in the module's data
+     * folder -- extracted by an older jar -- does not have it. Before this method existed,
+     * whichever {@code Language} the loader picked (disk, if present at all) was used
+     * exclusively, so a key the disk file lacked rendered as its own raw key even though the
+     * new jar shipped a translation for it. The disk file stays authoritative for every key it
+     * does contain, since server owners customise it.
+     *
+     * @param fallback the language to consult for a key this dictionary does not contain; may be
+     *                 {@code null}, in which case this language is returned unchanged
+     * @return a language falling back to {@code fallback} for missing keys
+     * @throws IllegalArgumentException if {@code fallback} is this language, or if {@code
+     *                                   fallback}'s own fallback chain already contains this
+     *                                   language -- either would make {@link #getLocalizedText}
+     *                                   recurse forever for a key present in neither
+     * @since 6.3.0
+     */
+    public Language withFallback(Language fallback) {
+        if (fallback == null) {
+            return this;
+        }
+        for (Language link = fallback; link != null; link = link.fallback) {
+            if (link == this) {
+                throw new IllegalArgumentException(
+                        "Cannot use a fallback that is, or already falls back to, this language -- "
+                                + "that would create a fallback cycle.");
+            }
+        }
+        return new Language(this.dictionary, fallback);
+    }
+
+    /**
+     * Gets the corresponding language translation.
+     *
+     * @param str the string to translate
+     * @return the translated string, or the original text if not found in the dictionary
+     */
+    /**
+     * Builds a {@code Language} from a YAML language file.
+     * <p>
+     * Eight of this ecosystem's sixteen modules ship {@code lang/*.yml} rather than
+     * {@code lang/*.json}, and until 6.3.0 the loader looked only for {@code .json} and returned an
+     * empty dictionary when it found nothing -- silently, so every message in those modules
+     * rendered as its own raw key (#389).
+     * <p>
+     * The YAML is nested and the modules address it with dotted keys
+     * ({@code i18n("world.delete.deleting")}), which is exactly the form
+     * {@link org.bukkit.configuration.ConfigurationSection#getKeys(boolean) getKeys(true)}
+     * produces, so the flattening is the library's own and not a convention invented here.
+     * Section nodes are skipped: only leaves that are actually strings become entries.
+     *
+     * @param reader the YAML source; the caller owns closing it
+     * @return a language whose dictionary is the flattened YAML
+     * @since 6.3.0
+     */
+    public static Language fromYaml(Reader reader) {
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(reader);
+        Map<String, String> flattened = new LinkedHashMap<>();
+        for (String key : yaml.getKeys(true)) {
+            if (yaml.isString(key)) {
+                flattened.put(key, yaml.getString(key));
+            }
+        }
+        return new Language(flattened);
+    }
+
     public String getLocalizedText(String str) {
-        return dictionary.getOrDefault(str, str);
+        String value = dictionary.get(str);
+        if (value != null) {
+            return value;
+        }
+        return fallback != null ? fallback.getLocalizedText(str) : str;
     }
 }

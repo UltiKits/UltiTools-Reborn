@@ -8,23 +8,31 @@ import java.lang.annotation.Target;
 /**
  * Conditionally registers a component based on a YAML config value.
  * <p>
- * When placed on a {@code @Service}, {@code @CmdExecutor}, {@code @EventListener},
- * or any component class, the framework checks the specified config file and key
- * during component scanning. If the config value is {@code false} (or missing),
- * the component is skipped entirely.
- * <p>
- * 根据 YAML 配置值条件性地注册组件。放在 {@code @Service}、{@code @CmdExecutor}、
- * {@code @EventListener} 或任何组件类上时，框架在组件扫描期间检查指定的配置文件和键。
- * 如果配置值为 {@code false}（或缺失），则完全跳过该组件。
+ * When placed on a {@code @Service}, {@code @CmdExecutor}, {@code @EventListener}, or any
+ * component class, the framework checks the specified config file and key <b>once</b>, during
+ * component scanning at plugin startup. If the config value is {@code false} (or missing), the
+ * component is skipped entirely for the lifetime of that startup.
  *
  * <p>Usage example:
  * <pre>{@code
  * @CmdExecutor(alias = {"warp"}, permission = "ultikits.tools.command.warp")
  * @ConditionalOnConfig(value = "config/config.yml", path = "enableWarp")
- * public class WarpCommands extends AbstractCommandExecutor {
+ * public class WarpCommands extends BaseCommandExecutor {
  *     // Only registered if enableWarp: true in config.yml
  * }
  * }</pre>
+ *
+ * <p><b>A restart is required for a change to the named key to take effect, in both
+ * directions.</b> {@code ul reload} re-reads the config file, but only <i>reports</i> the drift
+ * as a {@code Level.WARNING} naming the class, the file, the key, and the new direction -- it
+ * does not register or unregister anything (issue #392, D-01). See {@code
+ * com.ultikits.ultitools.context.ConditionalRegistrationEvaluator} for the reporting mechanism
+ * and why re-registering on reload was rejected.
+ *
+ * <p><b>This is not equivalent to an in-code {@code if (config.isEnabled())} block</b>, which
+ * re-reads the config value on every call and therefore does follow a reload. A module author
+ * migrating off a hand-written {@code if} block onto this annotation is trading that per-call
+ * freshness for load-time simplicity -- know that before switching.
  *
  * @since 6.2.0
  */
@@ -33,8 +41,6 @@ import java.lang.annotation.Target;
 public @interface ConditionalOnConfig {
     /**
      * Config file path relative to the plugin data folder.
-     * <p>
-     * 相对于插件数据目录的配置文件路径。
      *
      * @return the config file path
      */
@@ -42,8 +48,6 @@ public @interface ConditionalOnConfig {
 
     /**
      * Dot-separated or slash-separated YAML key path.
-     * <p>
-     * 点分隔或斜杠分隔的 YAML 键路径。
      *
      * @return the config key path
      */
@@ -51,8 +55,6 @@ public @interface ConditionalOnConfig {
 
     /**
      * If true, register when the config value is false (inverted logic).
-     * <p>
-     * 如果为 true，则在配置值为 false 时注册（反转逻辑）。
      *
      * @return true to negate the condition
      */

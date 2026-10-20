@@ -159,6 +159,7 @@ class BasicTypeUtilTest {
 
         @Test
         @DisplayName("私有构造函数应该抛出 UnsupportedOperationException")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void privateConstructorShouldThrowException() throws Exception {
             Constructor<BasicTypeUtil> constructor = BasicTypeUtil.class.getDeclaredConstructor();
             constructor.setAccessible(true);

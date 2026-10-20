@@ -3,14 +3,21 @@ package com.ultikits.ultitools.interfaces.impl.data;
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -18,16 +25,26 @@ import javax.sql.DataSource;
 import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.dbutils.ResultSetHandler;
 import org.apache.commons.dbutils.handlers.ScalarHandler;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonDeserializer;
+import com.google.gson.JsonNull;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSerializer;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.ultikits.ultitools.manager.DataSourceTransactionManager;
 import com.ultikits.ultitools.utils.BasicTypeUtil;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -42,16 +59,55 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @author wisdomme
  * @since 6.2.0
  */
-public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T> {
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // ORM maps private @Column fields to SQL -- see 08-GATE05-TRIAGE.md
+public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>>
+        implements DataOperator<T>, RowCountingDelete {
 
     private static final Logger LOGGER = Logger.getLogger(AbstractRelationalDataOperator.class.getName());
-    private static final Gson GSON = new Gson();
+    /** The primary-key column every generated table declares; its value is always {@code getId()}. */
+    private static final String ID_COLUMN = "id";
+    /** Alias of the row-identifier column {@link #backfillNullIds} selects next to the entity's own. */
+    private static final String BACKFILL_ROWID = "ultitools_backfill_rowid";
+    /**
+     * The escape character of the {@code LIKE} that INCLUDE, STARTSWITH and ENDSWITH render; see
+     * {@link #sqlOperatorFor} for why it is not a backslash.
+     */
+    private static final char LIKE_ESCAPE = '!';
+    /**
+     * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
+     * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
+     * system refuses without {@code --add-opens java.base/java.time}, throwing
+     * {@code JsonIOException} at the first non-null {@code @Column}-mapped {@code LocalDateTime}
+     * value (02-08 -- {@code AuditableDataEntity#createdAt}/{@code updatedAt} were always
+     * {@code null} before this plan, so the per-field {@link #insert} / {@link #update} JSON
+     * fallback below never reached this type until the lifecycle hooks started populating it).
+     * Serializes to/from {@link LocalDateTime#toString()}'s ISO-8601 form, which
+     * {@link LocalDateTime#parse(CharSequence)} reads back exactly.
+     */
+    private static final Gson GSON = new GsonBuilder()
+            .registerTypeAdapter(LocalDateTime.class, (JsonSerializer<LocalDateTime>) (src, type, context) ->
+                    src == null ? JsonNull.INSTANCE : new JsonPrimitive(src.toString()))
+            .registerTypeAdapter(LocalDateTime.class, (JsonDeserializer<LocalDateTime>) (json, type, context) ->
+                    json.isJsonNull() ? null : LocalDateTime.parse(json.getAsString()))
+            .create();
 
     protected final Class<T> type;
     protected final DataSource dataSource;
     protected final String tableName;
     protected final QueryRunner queryRunner;
     protected TransactionManager transactionManager;
+    /**
+     * The entity's own {@code @Column} names, reflected once at construction. The allow-list
+     * {@link #validateColumn(String)} checks every WHERE-clause column identifier against
+     * before it is concatenated into SQL text (T-02-SQLI-1).
+     */
+    private final Set<String> knownColumns;
+    /**
+     * The Java type of the field behind each {@code @Column} name, reflected once at construction in
+     * the same pass as {@link #knownColumns} (which is its key set). {@link #appendConditions} passes
+     * it to {@link #orderedComparisonOperand(String, Class)} for {@code GREATER} and {@code LESS}.
+     */
+    private final Map<String, Class<?>> columnTypes;
 
     /**
      * Creates a new data operator.
@@ -65,14 +121,58 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         // transaction, getConnection() returns the transaction's connection instead
         // of a fresh auto-commit one.
         this.dataSource = new TransactionAwareDataSource(dataSource, () -> this.transactionManager);
-        this.queryRunner = new QueryRunner(this.dataSource);
+        // D-10: TimeoutAwareQueryRunner reads the active transaction's remaining-time budget
+        // fresh on every statement via currentTimeoutDeadlineNanos() -- this operator outlives
+        // any single transaction, and transactionManager itself can be swapped out.
+        this.queryRunner = new TimeoutAwareQueryRunner(this.dataSource, this::currentTimeoutDeadlineNanos);
         Table tableAnnotation = ReflectionUtil.getAnnotation(type, Table.class);
         if (tableAnnotation == null) {
             throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                     "Entity class " + type.getName() + " must have @Table annotation");
         }
         this.tableName = tableAnnotation.value();
+        this.columnTypes = buildColumnTypes(type);
+        this.knownColumns = columnTypes.keySet();
         initializeTable();
+    }
+
+    /**
+     * Reflects the entity's {@code @Column} mappings once: their names are
+     * {@link #validateColumn(String)}'s allow-list, and the field type behind each name is what
+     * {@link #orderedComparisonOperand(String, Class)} receives. This mirrors the same reflected
+     * metadata {@link #buildColumnDefinitions(Class)} and {@link #getColumnMappings()} already read
+     * from the entity class — a dedicated pass over it, not a second scan of anything already
+     * cached. When two fields declare the same name, the first one reflected keeps the mapping.
+     *
+     * @param entityType the entity class
+     * @return an unmodifiable map from every {@code @Column} SQL name declared on
+     *         {@code entityType} (including inherited fields, e.g. {@code BaseDataEntity}'s
+     *         {@code id}) to the Java type of its field
+     */
+    private static Map<String, Class<?>> buildColumnTypes(Class<?> entityType) {
+        Map<String, Class<?>> columns = new LinkedHashMap<>();
+        for (Field field : ReflectionUtil.getFields(entityType)) {
+            if (field.isAnnotationPresent(Column.class)) {
+                columns.putIfAbsent(field.getAnnotation(Column.class).value(), field.getType());
+            }
+        }
+        return Collections.unmodifiableMap(columns);
+    }
+
+    /**
+     * Refuses a column identifier that is not among the entity's own reflected {@code @Column}
+     * mappings, before it can be concatenated into SQL text (T-02-SQLI-1). Called from
+     * {@link #appendConditions} on behalf of all four relational WHERE builders.
+     *
+     * @param column the column name from a caller-supplied {@link WhereCondition}
+     * @throws DataAccessException if {@code column} is not a known column of {@link #type}
+     */
+    private void validateColumn(String column) {
+        if (!knownColumns.contains(column)) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Unknown column '" + column + "' for entity " + type.getName()
+                            + " -- it is not among the entity's @Column mappings.");
+        }
     }
 
     /**
@@ -82,6 +182,39 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      */
     public void setTransactionManager(TransactionManager transactionManager) {
         this.transactionManager = transactionManager;
+    }
+
+    /**
+     * Supplies {@link #queryRunner}'s per-statement query timeout deadline (D-10): the active
+     * transaction's remaining-time budget, or {@code null} when none is configured (no active
+     * transaction, or {@code @Transactional(timeout=0)}, the default). Also used directly by
+     * {@link #applyStatementTimeout} for the two {@code PreparedStatement} call sites that
+     * bypass {@link #queryRunner} entirely. A method reference rather than a field capture, so
+     * every call reads {@link #transactionManager}'s *current* value -- this operator outlives
+     * any single transaction, and {@link #setTransactionManager} can swap the manager out.
+     *
+     * @return the active transaction's timeout deadline, or {@code null} if none is configured
+     */
+    private Long currentTimeoutDeadlineNanos() {
+        return transactionManager != null ? transactionManager.getTimeoutDeadlineNanos() : null;
+    }
+
+    /**
+     * Applies the same per-statement query timeout {@link #queryRunner} (a {@link
+     * TimeoutAwareQueryRunner}) would, to a {@link PreparedStatement} built directly against
+     * {@link #dataSource} -- the two call sites in {@link #insertAll} and {@link #updateAll}
+     * that bypass {@code QueryRunner} entirely. A timeout wired only into {@link #queryRunner}'s
+     * path would leave these two batch operations silently ignoring
+     * {@code @Transactional(timeout=)}, exactly the gap 02-RESEARCH.md warns about.
+     *
+     * @param statement the statement to apply the timeout to, already prepared
+     * @throws SQLException if the driver rejects the timeout value
+     */
+    private void applyStatementTimeout(PreparedStatement statement) throws SQLException {
+        Long deadlineNanos = currentTimeoutDeadlineNanos();
+        if (deadlineNanos != null) {
+            statement.setQueryTimeout(TimeoutAwareQueryRunner.remainingSecondsFloored(deadlineNanos));
+        }
     }
 
     /**
@@ -97,7 +230,287 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
     }
 
+    /**
+     * Gives every row of this operator's table whose {@code id} is {@code NULL} an id that makes it
+     * addressable, and logs one line naming the table and the count when there were any (#546,
+     * maintainer decision of 2026-09-27).
+     * <p>
+     * UltiTools-API 6.2.0 did not assign an id in {@link #insert}, and SQLite's generated DDL
+     * ({@code PRIMARY KEY (`id`)} with no {@code NOT NULL}) accepted the {@code NULL}, so every row
+     * a module inserted without an id on that release was stored with none. Such a row can be read
+     * by any other column, but {@code WHERE id = ?} bound to {@code null} matches nothing, so every
+     * update or delete of it silently did nothing.
+     * <p>
+     * Each row gets the id its entity reports through {@code getId()} (an entity may derive it from
+     * another column), or a new UUID when it reports none -- but only if an entity read back with
+     * that id in the {@code id} column reports it, since every lookup binds {@code getId()}. A row
+     * no written id would make addressable is left as it is, and one WARNING per table counts them
+     * by reason: a derived id that more than one row without an id reports (none of them is
+     * written, maintainer decision of 2026-09-29, the rule UltiEssentials' own repair applies), a
+     * derived id another row already holds, and a derived id that is {@code null} or a row that
+     * cannot be read as the entity. Only the {@code id} column is written, guarded by {@code id IS NULL} and
+     * keyed by the engine's row identifier, all rows in one transaction. A second start writes
+     * nothing and logs no INFO line; rows that were left are counted again. A failure rolls the
+     * whole repair back and is logged at {@code SEVERE}; the table is still usable, and an update
+     * or delete through a row without an id is refused rather than silently matching nothing.
+     * <p>
+     * Called by the subclass whose engine can hold a {@code NULL} id ({@code SQLiteDataOperator});
+     * MySQL rejects a {@code NULL} primary key, so its operator never calls it.
+     *
+     * @param rowIdColumn the engine's row-identifier pseudo-column (SQLite's {@code _rowid_}); a
+     *                    constant supplied by the subclass, never caller input
+     * @return the number of rows given an id
+     * @since 6.3.0
+     */
+    // PMD.AvoidCatchingThrowable: any failure, an Error included, must roll the assignment back
+    // before the connection is released (#634); it is rethrown unchanged.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CloseResource"})
+    protected final int backfillNullIds(String rowIdColumn) {
+        String select = "SELECT " + rowIdColumn + " AS " + BACKFILL_ROWID + ", `" + tableName + "`.* FROM `"
+                + tableName + "` WHERE `id` IS NULL";
+        String update = "UPDATE `" + tableName + "` SET `id` = ? WHERE " + rowIdColumn + " = ? AND `id` IS NULL";
+        String held = "SELECT COUNT(*) FROM `" + tableName + "` WHERE `id` = ?";
+        int reported = 0;
+        int generated = 0;
+        int shared = 0;
+        int alreadyHeld = 0;
+        int unusable = 0;
+        Connection conn = null;
+        boolean discarded = false;
+        try {
+            conn = dataSource.getConnection();
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            // #634: auto-commit is restored only after a commit or a rollback that succeeded --
+            // switching it on over an open transaction commits it -- otherwise the connection is
+            // discarded, so a partial assignment is never stored.
+            boolean ended = false;
+            try {
+                List<Object> rowIds = new ArrayList<>();
+                List<String> candidates = new ArrayList<>();
+                List<Boolean> fromEntity = new ArrayList<>();
+                readRowsWithoutId(conn, select, rowIds, candidates, fromEntity);
+                Map<String, Integer> occurrences = new HashMap<>();
+                for (String id : candidates) {
+                    if (id != null) {
+                        occurrences.merge(id, 1, Integer::sum);
+                    }
+                }
+                for (int i = 0; i < rowIds.size(); i++) {
+                    String id = candidates.get(i);
+                    if (id == null) {
+                        unusable++;
+                    } else if (occurrences.get(id) > 1) {
+                        // Maintainer decision 2026-09-29 ("touch none of those rows, only warn"): a reported id more
+                        // than one row shares is written to none of them, or a write made through
+                        // one row would reach the other -- UltiEssentials' own repair does the same.
+                        shared++;
+                    } else if (isHeld(conn, held, id) || !assignId(conn, update, id, rowIds.get(i))) {
+                        alreadyHeld++;
+                    } else if (fromEntity.get(i)) {
+                        reported++;
+                    } else {
+                        generated++;
+                    }
+                }
+                conn.commit();
+                ended = true;
+            } catch (Throwable failure) {
+                try {
+                    conn.rollback();
+                    ended = true;
+                } catch (Throwable rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
+                }
+                throw failure;
+            } finally {
+                if (ended) {
+                    conn.setAutoCommit(autoCommit);
+                } else {
+                    discarded = true;
+                    DataSourceTransactionManager.discardConnection(dataSource, conn);
+                }
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "Could not assign ids to the rows of table '" + tableName
+                    + "' that have none; nothing was changed. Rows without an id cannot be updated or deleted "
+                    + "until this succeeds on a later start.", e);
+            return 0;
+        } finally {
+            // A discarded connection is not touched again: a pool that evicted it would fail on close.
+            if (conn != null && !discarded) {
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                    LOGGER.log(Level.WARNING, "Failed to close the id backfill connection of table '"
+                            + tableName + "'", e);
+                }
+            }
+        }
+        int repaired = reported + generated;
+        if (repaired > 0) {
+            LOGGER.info("Assigned an id to " + repaired + " row(s) of table '" + tableName
+                    + "' that had none (rows written without an id by UltiTools-API 6.2.0): " + reported
+                    + " took the id the entity itself reports, " + generated + " were given a new UUID; "
+                    + "only the id column was written.");
+        }
+        int left = shared + alreadyHeld + unusable;
+        if (left > 0) {
+            LOGGER.warning(left + " row(s) of table '" + tableName + "' still have no id and were left as "
+                    + "they are: " + shared + " share a reported id with another row without an id, "
+                    + alreadyHeld + " report an id another row already holds, " + unusable
+                    + " report no id or could not be read as " + type.getName() + ". No value written to "
+                    + "the id column would make them addressable by getId() alone, so they cannot be "
+                    + "updated or deleted by id.");
+        }
+        return repaired;
+    }
+
+    /**
+     * Reads every row of {@code select} (row identifier first, then the table's columns) and
+     * decides which id, if any, would make it addressable.
+     * <p>
+     * Every {@code WHERE id = ?} binds {@code getId()}, and an entity may derive {@code getId()}
+     * from another column -- UltiEssentials' and UltiKits' do -- so an id is useful only if an
+     * entity read back with it in the {@code id} column reports it. The id the entity already
+     * reports is tried first; otherwise a new UUID. A candidate that would not be reported back
+     * (the entity derives a {@code null} id), and a row that cannot be read as the entity at all,
+     * get {@code null}: writing anything to such a row would change nothing any lookup uses.
+     */
+    private void readRowsWithoutId(Connection conn, String select, List<Object> rowIds, List<String> candidates,
+                                   List<Boolean> fromEntity) throws SQLException {
+        RowMapper<T> mapper = getRowMapper();
+        queryRunner.query(conn, select, rs -> {
+            while (rs.next()) {
+                rowIds.add(rs.getObject(1));
+                T entity = readEntity(mapper, rs);
+                Object reported = entity == null ? null : entity.getId();
+                boolean hasReported = reported != null && !reported.toString().isEmpty();
+                String candidate = hasReported ? reported.toString() : UUID.randomUUID().toString();
+                candidates.add(entity != null && reportsAs(entity, candidate) ? candidate : null);
+                fromEntity.add(hasReported);
+            }
+            return null;
+        });
+    }
+
+    private T readEntity(RowMapper<T> mapper, ResultSet rs) throws SQLException {
+        try {
+            return mapper.map(rs);
+        } catch (JsonParseException e) {
+            LOGGER.warning("A row of table '" + tableName + "' without an id could not be read as "
+                    + type.getName() + " (" + e.getMessage() + "); it is left without an id.");
+            return null;
+        }
+    }
+
+    /**
+     * Whether {@code entity}, read back with {@code candidate} in its {@code id} column, reports
+     * {@code candidate} from {@code getId()} -- that is, whether writing it makes the row
+     * addressable.
+     */
+    private boolean reportsAs(T entity, String candidate) {
+        JsonObject tree = GSON.toJsonTree(entity).getAsJsonObject();
+        // BaseDataEntity's id field is named like its column.
+        tree.addProperty(ID_COLUMN, candidate);
+        Object reported = GSON.fromJson(tree, type).getId();
+        return reported != null && candidate.equals(reported.toString());
+    }
+
+    /** Whether a row of this table already holds {@code id} in its id column. */
+    private boolean isHeld(Connection conn, String held, String id) throws SQLException {
+        Number count = queryRunner.query(conn, held, new ScalarHandler<Number>(), id);
+        return count != null && count.longValue() > 0;
+    }
+
+    /**
+     * Writes {@code id} into the row with this row identifier, on the backfill's own connection
+     * (so inside its transaction), if the row still has none. A value another row already holds
+     * violates the primary key; that is reported as {@code false} and the row is left without an
+     * id, since any other value would not be what its entity reports. The statement fails alone:
+     * SQLite rolls back only the failing statement, and the transaction continues.
+     */
+    private boolean assignId(Connection conn, String update, String id, Object rowId) throws SQLException {
+        try {
+            return queryRunner.update(conn, update, id, rowId) > 0;
+        } catch (SQLException e) {
+            if (isConstraintViolation(e)) {
+                return false;
+            }
+            throw e;
+        }
+    }
+
+    private static boolean isConstraintViolation(SQLException e) {
+        String state = e.getSQLState();
+        // SQLState class 23 is "integrity constraint violation"; the SQLite driver reports a
+        // PRIMARY KEY/UNIQUE failure with no SQLState, but always names the constraint.
+        return (state != null && state.startsWith("23"))
+                || (e.getMessage() != null && e.getMessage().contains("constraint"));
+    }
+
+    /**
+     * Refuses an update or delete addressed by a {@code null} id (#546): {@code WHERE id = ?} bound
+     * to {@code null} matches no row, so the call used to return normally having changed nothing.
+     *
+     * @param id        the id the caller addressed the row by
+     * @param operation what was attempted, for the message
+     * @throws DataAccessException if {@code id} is {@code null}
+     */
+    private void requireId(Object id, String operation) {
+        if (id == null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to " + operation + " a row of table '" + tableName + "' (" + type.getName()
+                            + ") by a null id: no row can be addressed by it.");
+        }
+    }
+
+    /**
+     * The read handler used by {@link #getAll(WhereCondition...)}, {@link #getLike}, and
+     * {@link #page}: fires {@code onLoad()} once per row it materializes. {@link #getById} and
+     * {@link #delById} deliberately do *not* go through this handler -- see
+     * {@link #getRawListHandler()}.
+     */
     protected ResultSetHandler<List<T>> getListHandler() {
+        ResultSetHandler<List<T>> raw = getRawListHandler();
+        return rs -> {
+            List<T> list = raw.handle(rs);
+            for (T entity : list) {
+                entity.onLoad();
+            }
+            return list;
+        };
+    }
+
+    /**
+     * The same row-materialization logic as {@link #getListHandler()}, without firing
+     * {@code onLoad()}. Used internally by {@link #getById} (which fires {@code onLoad()} itself,
+     * exactly once, on the single entity it returns) and {@link #delById} (which needs the
+     * entity to fire {@code onDelete()} on, but deleting is not loading -- see 02-08-PLAN.md's
+     * delete-hook-path split).
+     */
+    private ResultSetHandler<List<T>> getRawListHandler() {
+        RowMapper<T> mapper = getRowMapper();
+        return rs -> {
+            List<T> list = new ArrayList<>();
+            while (rs.next()) {
+                list.add(mapper.map(rs));
+            }
+            return list;
+        };
+    }
+
+    /** Materialises the current row of a result set as an entity; see {@link #getRowMapper()}. */
+    private interface RowMapper<E> {
+        E map(ResultSet rs) throws SQLException;
+    }
+
+    /**
+     * Materialises one row as an entity without firing {@code onLoad()}: shared by
+     * {@link #getRawListHandler()} and {@link #backfillNullIds}, so a row is read the same way
+     * whichever needs it. A column labelled {@link #BACKFILL_ROWID} is skipped.
+     */
+    private RowMapper<T> getRowMapper() {
         // Build mappings from SQL column names to Java field names and boolean detection.
         // Gson matches JSON keys to Java field names, so we must use field names (camelCase)
         // as map keys, not SQL column names (snake_case).
@@ -106,8 +519,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         for (Field f : ReflectionUtil.getFields(type)) {
             if (f.isAnnotationPresent(Column.class)) {
                 Column col = f.getAnnotation(Column.class);
-                // Locale.ROOT：土耳其语/阿塞拜疆语 locale 下 'I' 会折成无点的 'ı'，
-                // 建映射与查映射只要有一边跟着系统 locale 走，列名就对不上。
+                // Locale.ROOT: under a Turkish/Azerbaijani locale, 'I' folds to dotless 'ı' --
+                // if either the build-side or query-side mapping instead follows the system
+                // locale, column names stop matching.
                 String sqlName = col.value().toLowerCase(Locale.ROOT);
                 columnToFieldName.put(sqlName, f.getName());
                 if (f.getType() == boolean.class || f.getType() == Boolean.class) {
@@ -117,27 +531,247 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
 
         return rs -> {
-            List<T> list = new ArrayList<>();
             ResultSetMetaData meta = rs.getMetaData();
             int cols = meta.getColumnCount();
-            while (rs.next()) {
-                Map<String, Object> map = new LinkedHashMap<>();
-                for (int i = 1; i <= cols; i++) {
-                    String colName = meta.getColumnLabel(i).toLowerCase(Locale.ROOT);
-                    Object value = rs.getObject(i);
-                    // SQLite stores BOOLEAN as INTEGER (0/1); convert for Gson compatibility
-                    if (value instanceof Number && booleanColumns.containsKey(colName)) {
-                        value = ((Number) value).intValue() != 0;
-                    }
-                    // Use Java field name as key so Gson can match it during deserialization
-                    String fieldName = columnToFieldName.getOrDefault(colName, colName);
-                    map.put(fieldName, value);
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (int i = 1; i <= cols; i++) {
+                String colName = meta.getColumnLabel(i).toLowerCase(Locale.ROOT);
+                if (BACKFILL_ROWID.equals(colName)) {
+                    continue;
                 }
-                String json = GSON.toJson(map);
-                list.add(GSON.fromJson(json, type));
+                Object value = rs.getObject(i);
+                if (booleanColumns.containsKey(colName)) {
+                    value = normaliseBoolean(value, colName);
+                }
+                // Use Java field name as key so Gson can match it during deserialization
+                String fieldName = columnToFieldName.getOrDefault(colName, colName);
+                map.put(fieldName, value);
             }
-            return list;
+            return GSON.fromJson(GSON.toJson(map), type);
         };
+    }
+
+    /**
+     * Fetches a single row by id without firing {@code onLoad()}. Shared by {@link #getById}
+     * (which fires {@code onLoad()} on the result) and {@link #delById} (which fires
+     * {@code onDelete()} instead -- deleting is not loading).
+     */
+    private T fetchRawById(Object id) {
+        String sql = "SELECT * FROM " + tableName + " WHERE id = ?";
+        try {
+            List<T> list = queryRunner.query(sql, getRawListHandler(), id);
+            return list.isEmpty() ? null : list.get(0);
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to get entity by id: " + id, e);
+        }
+    }
+
+    /**
+     * Maps a {@link Comparison} to its SQL operator fragment (including the placeholder).
+     * <p>
+     * Shared by all five relational WHERE builders ({@link #exist(WhereCondition...)},
+     * {@link #getAll(WhereCondition...)}, {@link #page(int, int, WhereCondition...)},
+     * {@link #del(WhereCondition...)}, {@link #updateIf}) so a given {@code Comparison} means the
+     * same thing on every one of them, and on {@code SimpleJsonDataOperator}'s JSON backend. There
+     * is no silent fallback to equality: an unhandled constant throws rather than being misread as
+     * {@code EQUAL}, since a silent default is exactly how this defect stayed invisible before.
+     * <p>
+     * {@code INCLUDE}, {@code STARTSWITH} and {@code ENDSWITH} render {@code LIKE ? ESCAPE '!'}:
+     * the value is matched literally as text (see {@link #likeWrappedValue}), the way
+     * {@code SimpleJsonDataOperator} uses {@code contains}, {@code startsWith} and {@code endsWith}.
+     * The escape character is the exclamation mark ({@code LIKE_ESCAPE}), not a backslash: MySQL's
+     * default {@code sql_mode} needs a doubled backslash inside the {@code ESCAPE} literal, and with
+     * {@code NO_BACKSLASH_ESCAPES} that doubled form is two characters and is rejected, while the
+     * exclamation mark means the same thing on SQLite, MySQL in either mode, and H2. No caller text
+     * enters the SQL. {@link #getLike} and {@code Query#like} are separate pattern operators and are
+     * not affected; {@code EQUAL}, {@code GREATER} and {@code LESS} are unchanged here (the column
+     * side of {@code GREATER} and {@code LESS} goes through {@link #orderedComparisonOperand}, and
+     * their parameter side is {@code orderedPlaceholder}, which {@link #appendConditions} takes from
+     * {@link #orderedComparisonPlaceholder}).
+     *
+     * @param comparison         the comparison operator
+     * @param orderedPlaceholder the parameter operand of {@code GREATER} and {@code LESS}; the other
+     *                           comparisons always use a plain {@code ?}
+     * @return the SQL fragment, e.g. {@code " > ?"}
+     */
+    private String sqlOperatorFor(Comparison comparison, String orderedPlaceholder) {
+        switch (comparison) {
+            case EQUAL:
+                return " = ?";
+            case GREATER:
+                return " > " + orderedPlaceholder;
+            case LESS:
+                return " < " + orderedPlaceholder;
+            case INCLUDE:
+            case STARTSWITH:
+            case ENDSWITH:
+                return " LIKE ? ESCAPE '" + LIKE_ESCAPE + "'";
+            default:
+                throw new IllegalArgumentException("Unhandled comparison: " + comparison);
+        }
+    }
+
+    /**
+     * Builds the parameter to bind for a condition's value. For {@code INCLUDE},
+     * {@code STARTSWITH} and {@code ENDSWITH} the value is matched literally as text: it is
+     * rendered with {@link String#valueOf(Object)} (so a {@code null} value and non-String values
+     * render exactly as before), then every escape character {@code '!'}, {@code %} and {@code _}
+     * in it is prefixed with {@code '!'} -- the escape character first, so the prefixes added for
+     * the other two are not escaped again -- and only then are the wildcards added that the
+     * comparison implies, in the same places {@code SimpleJsonDataOperator} matches:
+     * {@code INCLUDE} on both sides, {@code STARTSWITH} after the value, {@code ENDSWITH} before
+     * it. A backslash needs no escaping because {@link #sqlOperatorFor} names {@code '!'} as the
+     * only escape character. {@code EQUAL}, {@code GREATER} and {@code LESS} pass the value through
+     * unchanged.
+     *
+     * @param condition the condition supplying the comparison and the raw value
+     * @return the value to bind as the SQL parameter
+     */
+    private Object likeWrappedValue(WhereCondition condition) {
+        Object value = condition.getValue();
+        Comparison comparison = condition.getComparison();
+        if (comparison != Comparison.INCLUDE && comparison != Comparison.STARTSWITH
+                && comparison != Comparison.ENDSWITH) {
+            return value;
+        }
+        String text = String.valueOf(value);
+        StringBuilder literal = new StringBuilder(text.length() + 8);
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == LIKE_ESCAPE || c == '%' || c == '_') {
+                literal.append(LIKE_ESCAPE);
+            }
+            literal.append(c);
+        }
+        switch (comparison) {
+            case INCLUDE:
+                return "%" + literal + "%";
+            case STARTSWITH:
+                return literal + "%";
+            default:
+                return "%" + literal;
+        }
+    }
+
+    /**
+     * Returns the SQL operand that a {@code GREATER} or {@code LESS} condition compares on the
+     * column side. The default returns {@code column} unchanged, so the database compares the
+     * stored value as it is declared. A dialect overrides it to compare the stored value as a number
+     * of the field's Java type when the declared column type would not, for example a numeric field
+     * left on the default {@code VARCHAR(255)} column.
+     * <p>
+     * {@link #appendConditions} calls it only for {@code GREATER} and {@code LESS}, and only after
+     * {@link #validateColumn(String)} has accepted {@code column}; {@code EQUAL} and the three
+     * {@code LIKE} comparisons never reach it. Its result is concatenated into the SQL text, so an
+     * override must build it only from {@code column} and constants, never from a condition's
+     * value or any other caller text.
+     *
+     * @param column    an allow-listed {@code @Column} name of the entity
+     * @param fieldType the Java type of the field mapped to {@code column}
+     * @return the SQL operand to compare, e.g. {@code column} or a cast of it
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    protected String orderedComparisonOperand(String column, Class<?> fieldType) {
+        return column;
+    }
+
+    /**
+     * Returns the SQL operand that a {@code GREATER} or {@code LESS} condition compares on the
+     * parameter side: the placeholder {@code ?} the condition's value is bound to, or an expression
+     * around it. The default returns {@code ?}, so the database compares the value as bound. A dialect
+     * overrides it, together with {@link #orderedComparisonOperand(String, Class)}, when both sides
+     * must pass through the same conversion to compare the way the stored value reads back, for
+     * example a {@code float} field whose stored text keeps fewer digits than the bound value. The
+     * value is passed so an override can apply that conversion only to values it keeps the order of,
+     * for example a number whose {@code double} value is finite.
+     * <p>
+     * {@link #appendConditions} calls it only for {@code GREATER} and {@code LESS}, after
+     * {@link #validateColumn(String)} has accepted the column, and binds the condition's value to
+     * the result's one placeholder. Its result is concatenated into the SQL text, so an override must
+     * return exactly one {@code ?} and build the rest only from constants, never from a condition's
+     * value or any other caller text; it may only use the value to choose between such constant
+     * operands.
+     *
+     * @param fieldType the Java type of the field the condition compares
+     * @param value     the condition's value, which is bound to the placeholder; may be {@code null}
+     * @return the SQL operand holding exactly one {@code ?}, e.g. {@code ?} or a cast of it
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    protected String orderedComparisonPlaceholder(Class<?> fieldType, Object value) {
+        return "?";
+    }
+
+    /**
+     * Appends a {@code WHERE} clause built from {@code conditions} to {@code sql} and their
+     * bound values to {@code params}, routing every column through {@link #sqlOperatorFor} so
+     * the four relational builders cannot diverge in how they honor a {@link Comparison} again.
+     * <p>
+     * When {@code skipEmpty} is {@code true}, conditions whose {@code WhereCondition#isEmpty()}
+     * is {@code true} are skipped — {@link #getAll(WhereCondition...)}'s pre-existing behavior,
+     * preserved here rather than changed. {@link #exist(WhereCondition...)},
+     * {@link #page(int, int, WhereCondition...)}, and {@link #del(WhereCondition...)} do not
+     * skip empty conditions; that asymmetry already existed before this method and is not
+     * resolved by this change (see 02-03-SUMMARY.md).
+     *
+     * @param sql        the SQL being built; must already hold the statement up to (not
+     *                   including) the WHERE clause
+     * @param params     the parameter list to append bound values to, in SQL order
+     * @param conditions the conditions to render; must be non-null and non-empty
+     * @param skipEmpty  whether to skip conditions whose {@code isEmpty()} is true
+     */
+    private void appendConditions(StringBuilder sql, List<Object> params, WhereCondition[] conditions,
+                                   boolean skipEmpty) {
+        appendConditions(sql, params, conditions, skipEmpty, false);
+    }
+
+    /**
+     * {@link #appendConditions(StringBuilder, List, WhereCondition[], boolean)}, with the switch only
+     * {@link #updateIf} turns on (#640): with {@code nullMeansIsNull} a condition with the default
+     * {@link Comparison#EQUAL} and a {@code null} value renders {@code <column> IS NULL} and binds
+     * nothing for it. Off -- the four read and delete builders -- rendering and binding are exactly
+     * as before ({@code <column> = ?} bound to {@code null}, which matches no row). The caller has
+     * already refused a {@code null} value under any other comparison.
+     *
+     * @param sql             the SQL being built
+     * @param params          the parameter list to append bound values to, in SQL order
+     * @param conditions      the conditions to render; must be non-null and non-empty
+     * @param skipEmpty       whether to skip conditions whose {@code isEmpty()} is true
+     * @param nullMeansIsNull whether an EQUAL condition with a {@code null} value means {@code IS NULL}
+     */
+    private void appendConditions(StringBuilder sql, List<Object> params, WhereCondition[] conditions,
+                                   boolean skipEmpty, boolean nullMeansIsNull) {
+        boolean first = true;
+        for (WhereCondition condition : conditions) {
+            if (skipEmpty && condition.isEmpty()) {
+                continue;
+            }
+            validateColumn(condition.getColumn());
+            if (first) {
+                sql.append(" WHERE ");
+                first = false;
+            } else {
+                sql.append(" AND ");
+            }
+            if (nullMeansIsNull && condition.getValue() == null
+                    && condition.getComparison() == Comparison.EQUAL) {
+                sql.append(condition.getColumn()).append(" IS NULL");
+                continue;
+            }
+            Comparison comparison = condition.getComparison();
+            if (comparison == Comparison.GREATER || comparison == Comparison.LESS) {
+                Class<?> fieldType = columnTypes.get(condition.getColumn());
+                sql.append(orderedComparisonOperand(condition.getColumn(), fieldType));
+                sql.append(sqlOperatorFor(comparison,
+                        orderedComparisonPlaceholder(fieldType, condition.getValue())));
+            } else {
+                sql.append(condition.getColumn());
+                sql.append(sqlOperatorFor(comparison, "?"));
+            }
+            params.add(likeWrappedValue(condition));
+        }
     }
 
     @Override
@@ -145,24 +779,22 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         return exist(WhereCondition.builder().column("id").value(object.getId()).build());
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * JDBC drivers report {@code COUNT(*)} as an {@code Integer} or a {@code Long} (sqlite-jdbc
+     * returns an {@code Integer}), so the count is read as a Number.
+     */
     @Override
     public boolean exist(WhereCondition... whereConditions) {
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
+            appendConditions(sql, params, whereConditions, false);
         }
         try {
-            Long count = queryRunner.query(sql.toString(), new ScalarHandler<>(), params.toArray());
-            return count != null && count > 0;
+            Number count = queryRunner.query(sql.toString(), new ScalarHandler<Number>(), params.toArray());
+            return count != null && count.longValue() > 0;
         } catch (SQLException e) {
             LOGGER.warning("Failed to check existence: " + e.getMessage());
             return false;
@@ -171,14 +803,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public T getById(Object id) {
-        String sql = "SELECT * FROM " + tableName + " WHERE id = ?";
-        try {
-            List<T> list = queryRunner.query(sql, getListHandler(), id);
-            return list.isEmpty() ? null : list.get(0);
-        } catch (SQLException e) {
-            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
-                    "Failed to get entity by id: " + id, e);
+        T entity = fetchRawById(id);
+        if (entity != null) {
+            entity.onLoad();
         }
+        return entity;
     }
 
     @Override
@@ -191,21 +820,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            // Filter out empty conditions
-            boolean first = true;
-            for (WhereCondition condition : whereConditions) {
-                if (condition.isEmpty()) {
-                    continue;
-                }
-                if (first) {
-                    sql.append(" WHERE ");
-                    first = false;
-                } else {
-                    sql.append(" AND ");
-                }
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-            }
+            appendConditions(sql, params, whereConditions, true);
         }
         try {
             return queryRunner.query(sql.toString(), getListHandler(), params.toArray());
@@ -243,15 +858,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
+            appendConditions(sql, params, whereConditions, false);
         }
         sql.append(" LIMIT ? OFFSET ?");
         params.add(size);
@@ -268,8 +875,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     public void insert(T obj) {
         // Auto-generate UUID for id if not set
         if (obj.getId() == null) {
-            obj.setId(java.util.UUID.randomUUID().toString());
+            obj.setId(UUID.randomUUID().toString());
         }
+        // Fires before the fields below are read for the SQL parameters, so whatever onCreate()
+        // writes (e.g. AuditableDataEntity's createdAt/createdBy) is what actually gets persisted.
+        obj.onCreate();
         StringBuilder sql = new StringBuilder("INSERT INTO ").append(tableName).append(" (");
         StringBuilder values = new StringBuilder(") VALUES (");
         List<Object> params = new ArrayList<>();
@@ -286,15 +896,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 sql.append("`").append(column.value()).append("`");
                 values.append("?");
                 try {
-                    Object value = field.get(obj);
-                    if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
-                        String jsonString = GSON.toJson(value);
-                        if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
-                            jsonString = jsonString.substring(1, jsonString.length() - 1);
-                        }
-                        value = jsonString;
-                    }
-                    params.add(value);
+                    params.add(persistedValue(field, column.value(), obj));
                 } catch (IllegalAccessException e) {
                     throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                             "Failed to access entity fields", e);
@@ -311,21 +913,28 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
     }
 
+    /**
+     * Deletes by predicate, without loading matched rows into entities first. Consequently this
+     * overload does <strong>not</strong> fire {@code onDelete()} -- there is no entity to fire it
+     * on without fabricating one, and this class does not fabricate entities to satisfy a hook.
+     * {@link #delById(Object)} fetches the entity first and does fire {@code onDelete()} on it
+     * (02-08-PLAN.md's delete-hook-path split).
+     */
     @Override
     public void del(WhereCondition... whereConditions) {
+        // T-02-TAM-1 / SILENT-01 / D-12: refuse before any SQL text is built and before any
+        // QueryRunner interaction. The varargs no-arg call produces a zero-length array, not
+        // null -- both shapes are refused here. Stateless: every call re-checks, so this is
+        // not a one-shot latch and cannot partially execute on a retry.
+        if (whereConditions == null || whereConditions.length == 0) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to delete every row of table '" + tableName + "' with no WhereCondition. "
+                            + "Pass an explicit condition, or use a dedicated full-table operation "
+                            + "if one genuinely exists.");
+        }
         StringBuilder sql = new StringBuilder("DELETE FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
-        if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
-        }
+        appendConditions(sql, params, whereConditions, false);
         try {
             queryRunner.update(sql.toString(), params.toArray());
         } catch (SQLException e) {
@@ -334,11 +943,35 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
     }
 
+    /**
+     * Deletes by id, fetching the entity first so {@code onDelete()} can fire on it -- unlike
+     * {@link #del(WhereCondition...)}, which deletes by predicate without materializing rows and
+     * therefore does not fire the hook. If no row matches {@code id}, nothing is fetched and
+     * {@code onDelete()} does not fire.
+     */
     @Override
     public void delById(Object id) {
+        deleteByIdCounted(id);
+    }
+
+    /**
+     * {@link #delById(Object)}, returning the affected-row count the database reported for the
+     * {@code DELETE} (#521), so {@code Query#delete()} can return rows removed instead of rows
+     * matched.
+     *
+     * @param id the row id
+     * @return the number of rows the {@code DELETE} removed
+     */
+    @Override
+    public int deleteByIdCounted(Object id) {
+        requireId(id, "delete");
+        T entity = fetchRawById(id);
+        if (entity != null) {
+            entity.onDelete();
+        }
         String sql = "DELETE FROM " + tableName + " WHERE id = ?";
         try {
-            queryRunner.update(sql, id);
+            return queryRunner.update(sql, id);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to delete entity by id: " + id, e);
@@ -347,12 +980,13 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void update(String column, Object value, Object id) {
+        requireId(id, "update");
         if (value != null && !BasicTypeUtil.isBasicType(value.getClass())) {
             value = GSON.toJson(value);
         }
         String sql = "UPDATE " + tableName + " SET " + column + " = ? WHERE id = ?";
         try {
-            queryRunner.update(sql, value, id);
+            warnIfNoRow(queryRunner.update(sql, value, id), id);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to update column: " + column, e);
@@ -361,8 +995,120 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void update(T obj) throws IllegalAccessException {
-        StringBuilder sql = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
+        updateRow(obj);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Returns the database's affected-row count for the {@code UPDATE}.
+     */
+    @Override
+    public int updateCounted(T entity) {
+        try {
+            return updateRow(entity);
+        } catch (IllegalAccessException e) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "Failed to access entity fields", e);
+        }
+    }
+
+    /**
+     * {@link #update(BaseDataEntity)}, returning the number of rows the {@code UPDATE} changed.
+     * A non-null id that matches no row writes nothing and logs one WARNING (#558).
+     */
+    private int updateRow(T obj) throws IllegalAccessException {
+        requireId(obj.getId(), "update");
+        // Fires before the fields below are read for the SQL parameters, so whatever onUpdate()
+        // writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is what actually gets
+        // persisted. onUpdate() does not touch createdAt/createdBy, so an entity carrying its
+        // original creation values in memory persists them unchanged here.
+        obj.onUpdate();
+        StringBuilder sql = new StringBuilder();
         List<Object> params = new ArrayList<>();
+        appendUpdateSet(sql, params, obj);
+        sql.append(" WHERE id = ?");
+        params.add(obj.getId());
+        try {
+            return warnIfNoRow(queryRunner.update(sql.toString(), params.toArray()), obj.getId());
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to update entity", e);
+        }
+    }
+
+    /**
+     * Logs one WARNING when an update by a non-null id changed no row, and returns the count
+     * unchanged (#558, maintainer decision 2026-09-29). The call still returns normally: a row
+     * another writer deleted is not a storage failure, and module code catches exceptions from
+     * {@code update} as storage failures.
+     */
+    private int warnIfNoRow(int changed, Object id) {
+        if (changed == 0) {
+            LOGGER.warning("Update of table '" + tableName + "' matched no row with id '" + id
+                    + "'; nothing was written.");
+        }
+        return changed;
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * One {@code UPDATE ... SET <every mapped column> WHERE id = ? AND <expected>} statement; the
+     * database's affected-row count decides the result, so the check and the write cannot be
+     * separated by another writer, on the same server or another one sharing the database.
+     * Condition columns pass the same allow-list as every other WHERE clause here, and values are
+     * bound as parameters. A {@code null} expected value under the default {@link Comparison#EQUAL}
+     * renders {@code <column> IS NULL} and binds nothing (#640); this meaning belongs to this method
+     * alone -- {@link #getAll(WhereCondition...)}, {@link #exist(WhereCondition...)},
+     * {@link #del(WhereCondition...)} and {@link #page(int, int, WhereCondition...)} are unchanged.
+     */
+    @Override
+    public boolean updateIf(T entity, WhereCondition... expected) {
+        requireId(entity.getId(), "update");
+        entity.onUpdate();
+        StringBuilder sql = new StringBuilder();
+        List<Object> params = new ArrayList<>();
+        try {
+            appendUpdateSet(sql, params, entity);
+        } catch (IllegalAccessException e) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "Failed to access entity fields", e);
+        }
+        List<WhereCondition> conditions = new ArrayList<>();
+        conditions.add(WhereCondition.builder().column("id").value(entity.getId()).build());
+        if (expected != null) {
+            for (WhereCondition condition : expected) {
+                if (condition == null) {
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "updateIf was given a null condition for table '" + tableName + "'.");
+                }
+                if (!condition.isEmpty() && condition.getValue() == null
+                        && condition.getComparison() != Comparison.EQUAL) {
+                    // A null value has a meaning only under EQUAL (IS NULL, #640); `column > NULL`
+                    // or `column LIKE NULL` is never true, so the write could never apply and a
+                    // caller's re-read-and-retry loop would spin forever.
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "updateIf can compare column '" + condition.getColumn() + "' with a null value only under "
+                                    + "EQUAL (IS NULL); " + condition.getComparison() + " has no null meaning.");
+                }
+                conditions.add(condition);
+            }
+        }
+        appendConditions(sql, params, conditions.toArray(new WhereCondition[0]), true, true);
+        try {
+            return queryRunner.update(sql.toString(), params.toArray()) > 0;
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to conditionally update entity", e);
+        }
+    }
+
+    /**
+     * Appends {@code UPDATE <table> SET `col` = ?, ...} for every {@code @Column} field of
+     * {@code obj}, and the values in the same order, serialised exactly as {@link #insert} does.
+     * Shared by {@link #update(BaseDataEntity)} and {@link #updateIf}.
+     */
+    private void appendUpdateSet(StringBuilder sql, List<Object> params, T obj) throws IllegalAccessException {
+        sql.append("UPDATE ").append(tableName).append(" SET ");
         Field[] fields = ReflectionUtil.getFields(obj.getClass());
         boolean first = true;
         for (Field field : fields) {
@@ -373,44 +1119,52 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     sql.append(", ");
                 }
                 sql.append("`").append(column.value()).append("` = ?");
-                Object value = field.get(obj);
-                if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
-                    String jsonString = GSON.toJson(value);
-                    if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
-                        jsonString = jsonString.substring(1, jsonString.length() - 1);
-                    }
-                    value = jsonString;
-                }
-                params.add(value);
+                params.add(persistedValue(field, column.value(), obj));
                 first = false;
             }
-        }
-        sql.append(" WHERE id = ?");
-        params.add(obj.getId());
-        try {
-            queryRunner.update(sql.toString(), params.toArray());
-        } catch (SQLException e) {
-            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
-                    "Failed to update entity", e);
         }
     }
 
     // ===== Transaction support =====
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Any {@link Throwable} the action throws -- an {@link Error} included (#634) -- rolls the
+     * transaction back and is rethrown as the same instance, so the thread's transaction context is
+     * gone afterwards and the next {@code transaction(...)} on that thread starts its own. When the
+     * rollback itself throws, the action's throwable still reaches the caller and the rollback
+     * failure is attached to it as suppressed. A commit that throws (a failed commit, or
+     * {@code UnexpectedRollbackException} for a transaction marked rollback-only) has already ended
+     * the transaction and is not followed by a rollback. A commit or rollback that fails never ends
+     * in an implicit commit: see {@code DataSourceTransactionManager}.
+     */
+    // PMD.AvoidCatchingThrowable: an Error must roll the transaction back too (#634); it is
+    // rethrown unchanged, never swallowed.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.AvoidCatchingGenericException"})
     @Override
     public <R> R transaction(Callable<R> action) throws Exception {
         if (transactionManager == null) {
             return action.call();
         }
         transactionManager.begin();
+        R result;
         try {
-            R result = action.call();
-            transactionManager.commit();
-            return result;
-        } catch (Exception e) {
-            transactionManager.rollback();
-            throw e;
+            result = action.call();
+        } catch (Throwable failure) {
+            try {
+                transactionManager.rollback();
+            } catch (Throwable rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+            throw failure;
         }
+        // Outside the catch, as in TransactionInterceptor: a commit that throws has already ended
+        // the transaction (the manager discards it whether or not the commit succeeds), so there
+        // is nothing left to roll back, and a second rollback() would only log that no
+        // transaction is active.
+        transactionManager.commit();
+        return result;
     }
 
     @Override
@@ -436,11 +1190,16 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             return;
         }
         transaction(() -> {
-            // Auto-generate UUID for entities without id
+            // Auto-generate UUID for entities without id, then fire onCreate() once per entity
+            // in list order -- before the second loop below reads fields for the batch
+            // PreparedStatement, exactly mirroring insert()'s single-entity ordering. This loop
+            // builds its own statement rather than delegating to insert(), so a hook wired only
+            // into insert() would silently skip this path.
             for (T entity : entities) {
                 if (entity.getId() == null) {
-                    entity.setId(java.util.UUID.randomUUID().toString());
+                    entity.setId(UUID.randomUUID().toString());
                 }
+                entity.onCreate();
             }
             List<ColumnMapping> columns = getColumnMappings();
             StringBuilder sql = new StringBuilder("INSERT INTO ").append(tableName).append(" (");
@@ -459,18 +1218,13 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+                // D-10: this statement bypasses queryRunner entirely, so it needs the same
+                // per-statement timeout applied explicitly -- see applyStatementTimeout's javadoc.
+                applyStatementTimeout(pstmt);
                 for (T entity : entities) {
                     int idx = 1;
                     for (ColumnMapping col : columns) {
-                        Object value = col.field.get(entity);
-                        if (value != null && !BasicTypeUtil.isBasicType(col.field.getType())) {
-                            String json = GSON.toJson(value);
-                            if (json.startsWith("\"") && json.endsWith("\"")) {
-                                json = json.substring(1, json.length() - 1);
-                            }
-                            value = json;
-                        }
-                        pstmt.setObject(idx++, value);
+                        pstmt.setObject(idx++, persistedValue(col.field, col.columnName, entity));
                     }
                     pstmt.addBatch();
                 }
@@ -486,6 +1240,10 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     public void updateAll(List<T> entities) throws IllegalAccessException {
         if (entities == null || entities.isEmpty()) {
             return;
+        }
+        // Checked before the batch starts, so a refused batch writes nothing.
+        for (T entity : entities) {
+            requireId(entity.getId(), "update");
         }
         try {
             transaction((Callable<Void>) () -> {
@@ -503,23 +1261,27 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
                 try (Connection conn = dataSource.getConnection();
                      PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+                    // D-10: this statement bypasses queryRunner entirely -- same reasoning as
+                    // insertAll's identical call above.
+                    applyStatementTimeout(pstmt);
                     for (T entity : entities) {
+                        // Fires once per entity, in list order, before this entity's fields are
+                        // read below -- this loop builds its own statement rather than
+                        // delegating to update(T), so a hook wired only into update(T) would
+                        // silently skip this path.
+                        entity.onUpdate();
                         int idx = 1;
                         for (ColumnMapping col : columns) {
-                            Object value = col.field.get(entity);
-                            if (value != null && !BasicTypeUtil.isBasicType(col.field.getType())) {
-                                String json = GSON.toJson(value);
-                                if (json.startsWith("\"") && json.endsWith("\"")) {
-                                    json = json.substring(1, json.length() - 1);
-                                }
-                                value = json;
-                            }
-                            pstmt.setObject(idx++, value);
+                            pstmt.setObject(idx++, persistedValue(col.field, col.columnName, entity));
                         }
                         pstmt.setObject(idx, entity.getId());
                         pstmt.addBatch();
                     }
-                    pstmt.executeBatch();
+                    int[] changed = pstmt.executeBatch();
+                    for (int row = 0; row < changed.length; row++) {
+                        // Statement.SUCCESS_NO_INFO (-2) says nothing about the row; only 0 means no match.
+                        warnIfNoRow(changed[row], entities.get(row).getId());
+                    }
                 } catch (SQLException | IllegalAccessException e) {
                     throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                             "Batch update failed", e);
@@ -534,6 +1296,29 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
                     "Batch update transaction failed", e);
         }
+    }
+
+    /**
+     * The value written for one {@code @Column} field of {@code obj}, serialised as every write
+     * path here always has: a non-basic value goes out as JSON, with a bare string's quotes
+     * removed.
+     * <p>
+     * The {@code id} column is written from {@code getId()}, not from the inherited field, because
+     * {@code getId()} is what every {@code WHERE id = ?} binds (#546). An entity that overrides
+     * {@code getId()} onto another column -- UltiEssentials' and UltiKits' do -- never sets the
+     * inherited field, so writing the field stored a {@code NULL} id that no update or delete could
+     * reach (and that MySQL refused outright).
+     */
+    private Object persistedValue(Field field, String columnName, T obj) throws IllegalAccessException {
+        Object value = ID_COLUMN.equals(columnName) ? obj.getId() : field.get(obj);
+        if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
+            String json = GSON.toJson(value);
+            if (json.startsWith("\"") && json.endsWith("\"")) {
+                json = json.substring(1, json.length() - 1);
+            }
+            value = json;
+        }
+        return value;
     }
 
     // ===== Column mapping helper =====
@@ -571,6 +1356,59 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * @return the CREATE TABLE SQL statement
      */
     protected abstract String createTableSqlFromClazz(Class<T> type);
+
+    /**
+     * Normalises whatever the driver returned for a {@code boolean} column into a real
+     * {@link Boolean}, so Gson deserialises it correctly.
+     * <p>
+     * The previous version converted only {@code Number}, on the stated assumption that "SQLite
+     * stores BOOLEAN as INTEGER (0/1)". That assumption does not hold here, because of what this
+     * class writes: {@code @Column}'s default type is {@code VARCHAR(255)} and
+     * {@link #buildColumnDefinitions} emits it verbatim, so a {@code boolean} field with no
+     * explicit {@code type} gets a text column. {@code rs.getObject} then returns a
+     * {@code String}, the {@code Number} branch was skipped, and Gson coerced the JSON string
+     * {@code "1"} to {@code false} -- every defaulted boolean column read back false regardless of
+     * what was stored (#388). It was one root cause behind a banned player still being able to
+     * join, {@code /unban} reporting "not banned" for a player it had just banned, and a world's
+     * weather flag having no effect.
+     * <p>
+     * Both representations are handled rather than one, because both exist in the field: tables
+     * created before this fix have text columns holding {@code "1"}/{@code "0"}, and a column
+     * declared with an explicit numeric or boolean {@code type} returns a {@code Number} or
+     * {@code Boolean}. The column type is deliberately left as it is -- correcting it would change
+     * the schema for new installs only, would not help the tables that already exist, and reading
+     * both forms is required either way.
+     * <p>
+     * An unrecognised value is logged rather than quietly becoming {@code false}. Quietly becoming
+     * {@code false} is precisely the behaviour this method exists to remove.
+     *
+     * @param value   whatever {@code ResultSet.getObject} returned
+     * @param colName the column name, for the diagnostic
+     * @return {@code null}, or a {@link Boolean}
+     * @since 6.3.0
+     */
+    private static Object normaliseBoolean(Object value, String colName) {
+        if (value == null || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue() != 0;
+        }
+        if (value instanceof String) {
+            String text = ((String) value).trim();
+            if ("1".equals(text) || "true".equalsIgnoreCase(text)) {
+                return Boolean.TRUE;
+            }
+            if ("0".equals(text) || "false".equalsIgnoreCase(text)) {
+                return Boolean.FALSE;
+            }
+        }
+        LOGGER.warning("Boolean column '" + colName + "' holds a value this reader does not "
+                + "recognise: " + value.getClass().getSimpleName() + " " + value
+                + ". Reading it as false. Recognised forms are boolean, any number (0 is false), "
+                + "and the strings \"1\"/\"0\"/\"true\"/\"false\".");
+        return Boolean.FALSE;
+    }
 
     /**
      * Builds the column definitions portion of CREATE TABLE.

@@ -1,14 +1,45 @@
 package com.ultikits.ultitools.interfaces;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
-import java.util.List;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.lang.reflect.Method;
+import java.lang.reflect.Type;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 
+import org.bukkit.command.Command;
+import org.bukkit.entity.Player;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.I18n;
+import com.ultikits.ultitools.annotations.command.CmdCD;
 
 /**
  * Localized 接口测试
@@ -32,11 +63,13 @@ class LocalizedTest {
     }
 
     /**
-     * 只支持一种语言的 Localized 实现
+     * 类型上标注了额外语言声明，但实际只打包了 en.json -- 派生结果必须以实际资源为准，而不是这个声明。
+     * <p>
+     * static 嵌套类不能声明在非 static 的 {@code @Nested} 内部类里面（Java 8 语言规则），
+     * 所以这些端到端测试用的实现类必须放在顶层。
      */
-    @I18n({"en_US"})
-    static class SingleLanguageLocalized implements Localized {
-        // 使用默认实现
+    @I18n({"fr"})
+    static class AnnotatedButOnlyShipsEnglish implements Localized {
     }
 
     /**
@@ -61,48 +94,321 @@ class LocalizedTest {
     }
 
     @Nested
-    @DisplayName("supported 测试")
+    @DisplayName("supported 测试 -- 派生自 lang/*.json 资源 (D-20)")
     class SupportedTests {
 
-        @Test
-        @DisplayName("没有 @I18n 注解应该返回空列表")
-        void shouldReturnEmptyListWithoutAnnotation() {
-            // Arrange
-            Localized localized = new NoAnnotationLocalized();
+        // Rewritten for D-20 (04-04 Task 3): supported() is derived from the lang/*.json
+        // resources an implementor's own code source actually ships, not from any type-level
+        // annotation. These tests exercise the real default method end-to-end against a real
+        // directory code source (target/test-classes, the shape Surefire runs test classes
+        // from) rather than the old contract where an annotation alone drove the result.
 
-            // Act
-            List<String> supported = localized.supported();
+        private File langDir;
 
-            // Assert
-            assertThat(supported).isEmpty();
+        @BeforeEach
+        void setUp() throws URISyntaxException {
+            URL codeSourceUrl = NoAnnotationLocalized.class.getProtectionDomain().getCodeSource().getLocation();
+            File testClassesRoot = new File(codeSourceUrl.toURI());
+            langDir = new File(testClassesRoot, "lang");
+            // Defensive: a previous run's cleanup failing should be loud, not silently overwritten.
+            assertThat(langDir).doesNotExist();
+        }
+
+        @AfterEach
+        void tearDown() throws IOException {
+            if (langDir.exists()) {
+                deleteRecursively(langDir);
+            }
         }
 
         @Test
-        @DisplayName("有 @I18n 注解应该返回支持的语言列表")
-        void shouldReturnSupportedLanguages() {
-            // Arrange
-            Localized localized = new AnnotatedLocalized();
-
-            // Act
-            List<String> supported = localized.supported();
-
-            // Assert
-            assertThat(supported).hasSize(3);
-            assertThat(supported).containsExactly("en_US", "zh_CN", "ja_JP");
+        @DisplayName("没有 lang/ 目录时返回空列表，不抛出异常")
+        void noLangDirectoryReturnsEmptyList() {
+            assertThat(new NoAnnotationLocalized().supported()).isEmpty();
         }
 
         @Test
-        @DisplayName("单语言支持")
-        void shouldReturnSingleLanguage() {
-            // Arrange
-            Localized localized = new SingleLanguageLocalized();
+        @DisplayName("目录代码源下 lang/en.json 与 lang/zh.json 被正确枚举")
+        void directoryCodeSourceEnumeratesShippedLanguages() throws IOException {
+            langDir.mkdirs();
+            Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "zh.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
 
-            // Act
-            List<String> supported = localized.supported();
+            assertThat(new NoAnnotationLocalized().supported()).containsExactlyInAnyOrder("en", "zh");
+        }
 
-            // Assert
-            assertThat(supported).hasSize(1);
-            assertThat(supported).containsExactly("en_US");
+        @Test
+        @DisplayName("类型上标注了额外语言声明，但实际只打包了 en.json -- 派生结果以实际资源为准")
+        void typeLevelDeclarationDoesNotOverrideActualResources() throws IOException {
+            langDir.mkdirs();
+            Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(new AnnotatedButOnlyShipsEnglish().supported()).containsExactly("en");
+        }
+
+        private void deleteRecursively(File file) throws IOException {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+            Files.delete(file.toPath());
+        }
+    }
+
+    @Nested
+    @DisplayName("scanLangJar / scanLangDirectory 派生辅助方法测试 (04-04 Task 1, D-20)")
+    class LangResourceDerivationHelperTests {
+
+        @TempDir
+        File tempDir;
+
+        @Test
+        @DisplayName("JAR 中 lang/ 直接子级的 .json 条目被枚举，非 .json 条目被忽略")
+        void jarEntriesAreFilteredToJsonUnderLang() throws IOException {
+            File jar = new File(tempDir, "module.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/en.json", "{}");
+                writeEntry(out, "lang/zh.json", "{}");
+                writeEntry(out, "lang/README.txt", "notes");
+            }
+
+            assertThat(Localized.scanLangJar(jar)).containsExactlyInAnyOrder("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#389: JAR 中的 .yml / .yaml 与 .json 同等计入")
+        void jarEntriesIncludeYamlExtensions() throws IOException {
+            // 八个模块只发 lang/*.yml。在 6.3.0 之前它们在这里一个语言都报不出来，
+            // resolveLanguageCode 因此无从判断，createLanguageFromPath 也只找 .json，
+            // 最终静默拿到空字典、玩家看到 raw key（#389）。
+            File jar = new File(tempDir, "yamlmodule.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/en.yml", "a: b");
+                writeEntry(out, "lang/zh.yaml", "a: b");
+                writeEntry(out, "lang/fr.json", "{}");
+                writeEntry(out, "lang/README.txt", "notes");
+            }
+
+            assertThat(Localized.scanLangJar(jar)).containsExactlyInAnyOrder("en", "zh", "fr");
+        }
+
+        @Test
+        @DisplayName("#389: 目录中的 .yml / .yaml 与 .json 同等计入")
+        void directoryEntriesIncludeYamlExtensions() throws IOException {
+            File langDir = new File(tempDir, "lang");
+            assertThat(langDir.mkdirs()).isTrue();
+            Files.write(new File(langDir, "en.yml").toPath(), "a: b".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "zh.yaml").toPath(), "a: b".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "fr.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "README.txt").toPath(), "x".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(Localized.scanLangDirectory(langDir))
+                    .containsExactlyInAnyOrder("en", "zh", "fr");
+        }
+
+        @Test
+        @DisplayName("#389: languageCodeOf 只认语言扩展名，且不把纯扩展名当成代码")
+        void languageCodeOfRecognisesOnlyLanguageExtensions() {
+            assertThat(Localized.languageCodeOf("en.json")).isEqualTo("en");
+            assertThat(Localized.languageCodeOf("en.yml")).isEqualTo("en");
+            assertThat(Localized.languageCodeOf("en.yaml")).isEqualTo("en");
+            assertThat(Localized.languageCodeOf("README.txt")).isNull();
+            // 名字就是扩展名本身时不能得出空代码
+            assertThat(Localized.languageCodeOf(".json")).isNull();
+        }
+
+        @Test
+        @DisplayName("JAR 中嵌套的 lang/extra/en.json 被忽略，只统计 lang/ 直接子级")
+        void nestedJarEntriesAreIgnored() throws IOException {
+            File jar = new File(tempDir, "nested.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/extra/en.json", "{}");
+            }
+
+            assertThat(Localized.scanLangJar(jar)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("无法作为 JAR 打开的文件（随机字节）返回空列表，不抛出异常")
+        void unreadableJarReturnsEmptyList() throws IOException {
+            File garbage = new File(tempDir, "garbage.jar");
+            Files.write(garbage.toPath(), new byte[]{1, 2, 3, 4});
+
+            assertThat(Localized.scanLangJar(garbage)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("目录中没有 .json 文件时返回空列表")
+        void directoryWithNoJsonFilesReturnsEmptyList() throws IOException {
+            File langDir = new File(tempDir, "lang");
+            langDir.mkdirs();
+            Files.write(new File(langDir, "README.txt").toPath(), "notes".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(Localized.scanLangDirectory(langDir)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("目录中嵌套的 lang/extra/en.json 被忽略")
+        void nestedDirectoryEntriesAreIgnored() throws IOException {
+            File langDir = new File(tempDir, "lang");
+            File extra = new File(langDir, "extra");
+            extra.mkdirs();
+            Files.write(new File(extra, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(Localized.scanLangDirectory(langDir)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("不存在的 lang 目录返回空列表")
+        void missingLangDirectoryReturnsEmptyList() {
+            File missing = new File(tempDir, "does-not-exist");
+            assertThat(Localized.scanLangDirectory(missing)).isEmpty();
+        }
+
+        /*
+         * #676 case 26: a code source under a folder whose name needs percent escapes. The space alone
+         * makes File.toURI().toURL() escape the path; the non-ASCII variants run only where file names
+         * are UTF-8, so another host skips them instead of failing.
+         */
+
+        private File shippingJarUnder(String folderName) throws IOException {
+            File folder = new File(tempDir, folderName);
+            Files.createDirectories(folder.toPath());
+            File jar = new File(folder, "module.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/en.json", "{}");
+                writeEntry(out, "lang/zh.json", "{}");
+            }
+            return jar;
+        }
+
+        private File shippingDirectoryUnder(String folderName) throws IOException {
+            File classes = new File(tempDir, folderName);
+            File langDir = new File(classes, "lang");
+            Files.createDirectories(langDir.toPath());
+            Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "zh.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            return classes;
+        }
+
+        private void assumeUtf8FileNames() {
+            Assumptions.assumeTrue("UTF-8".equalsIgnoreCase(System.getProperty("sun.jnu.encoding")),
+                    "the host's file-name encoding is not UTF-8, so a non-ASCII folder name is not portable here");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: a JAR code source under a path with a space reports the languages it ships")
+        void escapedJarCodeSourceEnumeratesShippedLanguages() throws IOException {
+            File jar = shippingJarUnder("server install");
+
+            assertThat(Localized.scanLangResources(jar.toURI().toURL())).containsExactly("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: an exploded-directory code source under a path with a space reports its languages")
+        void escapedDirectoryCodeSourceEnumeratesShippedLanguages() throws IOException {
+            File classes = shippingDirectoryUnder("exploded classes");
+
+            assertThat(Localized.scanLangResources(classes.toURI().toURL())).containsExactly("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: the JAR case under a path with a space and a non-ASCII character (UTF-8 file names only)")
+        void nonAsciiJarCodeSourceEnumeratesShippedLanguages() throws IOException {
+            assumeUtf8FileNames();
+            File jar = shippingJarUnder("server install 服务器");
+
+            assertThat(Localized.scanLangResources(jar.toURI().toURL())).containsExactly("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: the directory case under a path with a space and a non-ASCII character (UTF-8 file names only)")
+        void nonAsciiDirectoryCodeSourceEnumeratesShippedLanguages() throws IOException {
+            assumeUtf8FileNames();
+            File classes = shippingDirectoryUnder("exploded classes 服务器");
+
+            assertThat(Localized.scanLangResources(classes.toURI().toURL())).containsExactly("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: a code source that is not a usable file URI yields an empty list instead of throwing")
+        void codeSourceThatIsNotAUriReturnsWithoutThrowing() throws IOException {
+            URL authorityBearing = new URL("file://fileserver/share/module.jar");
+
+            assertThat(Localized.scanLangResources(authorityBearing)).isEmpty();
+        }
+
+        private void writeEntry(JarOutputStream out, String name, String content) throws IOException {
+            out.putNextEntry(new JarEntry(name));
+            out.write(content.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+    }
+
+    /**
+     * 16-05 (CodeQL {@code java/zipslip} alert #11): {@code languageCodeOf} must reject any
+     * stripped code that is not itself a plain language-code token, since it is downstream
+     * combined with a directory to build a {@link File} in {@code UltiToolsPlugin} without any
+     * other sanitisation. A jar entry such as {@code lang/..\..\evil.json} previously produced
+     * the code {@code ..\..\evil} unchanged; this must now be rejected (return {@code null})
+     * before it ever reaches {@code scanLangJar}/{@code scanLangDirectory}'s result set.
+     * <p>
+     * This environment is Linux, where a backslash is a legal, non-separator filename character
+     * (only {@code '/'} and the NUL byte are forbidden) -- so the directory-scan sibling test
+     * below can create a real on-disk file literally named {@code ..\..\evil.json} without it
+     * being interpreted as a path (nothing is skipped here).
+     */
+    @Nested
+    @DisplayName("16-05: languageCodeOf 拒绝越权字符 (CodeQL java/zipslip #11)")
+    class ZipSlipLanguageCodeAllowlistTests {
+
+        @TempDir
+        File tempDir;
+
+        @Test
+        @DisplayName("JAR 条目名包含反斜杠遍历序列时被拒绝，只保留合法的 en")
+        void scanLangJarRejectsBackslashTraversalEntry() throws IOException {
+            File jar = new File(tempDir, "malicious.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/en.json", "{}");
+                writeEntry(out, "lang/..\\..\\evil.json", "{}");
+                writeEntry(out, "lang/a.b.json", "{}");
+            }
+
+            assertThat(Localized.scanLangJar(jar)).containsExactly("en");
+        }
+
+        @Test
+        @DisplayName("目录扫描下同名的反斜杠遍历文件同样被拒绝，只保留合法的 en")
+        void scanLangDirectoryRejectsBackslashTraversalEntry() throws IOException {
+            File langDir = new File(tempDir, "lang");
+            assertThat(langDir.mkdirs()).isTrue();
+            Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "..\\..\\evil.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "a.b.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(Localized.scanLangDirectory(langDir)).containsExactly("en");
+        }
+
+        @Test
+        @DisplayName("languageCodeOf 直接拒绝含点号/斜杠/反斜杠的候选代码")
+        void languageCodeOfRejectsCodesOutsideTheCharacterAllowlist() {
+            assertThat(Localized.languageCodeOf("..\\..\\evil.json")).isNull();
+            assertThat(Localized.languageCodeOf("a.b.json")).isNull();
+            assertThat(Localized.languageCodeOf("../evil.json")).isNull();
+            // Still accepts every real-world shape this ecosystem's modules actually ship.
+            assertThat(Localized.languageCodeOf("en.json")).isEqualTo("en");
+            assertThat(Localized.languageCodeOf("zh.yml")).isEqualTo("zh");
+            assertThat(Localized.languageCodeOf("en_US.yaml")).isEqualTo("en_US");
+            assertThat(Localized.languageCodeOf("zh-CN.json")).isEqualTo("zh-CN");
+        }
+
+        private void writeEntry(JarOutputStream out, String name, String content) throws IOException {
+            out.putNextEntry(new JarEntry(name));
+            out.write(content.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
         }
     }
 
@@ -225,6 +531,179 @@ class LocalizedTest {
 
             // Assert
             assertThat(result).isEqualTo("Test");
+        }
+    }
+
+    /**
+     * SILENT-15: {@code CooldownValidator} formats a parameterized source literal (see its
+     * {@code validate()}), but neither {@code lang/en.json} nor {@code lang/zh.json} carried an
+     * entry for it -- an English-locale player saw raw Chinese, and Chinese only looked correct
+     * by {@link com.ultikits.ultitools.entities.Language#getLocalizedText}'s identity fallback (source text returned unchanged
+     * when no dictionary entry exists), not because the key existed.
+     * <p>
+     * The expected key is DERIVED from {@link CooldownValidator}'s own message-building call to
+     * {@code UltiTools.getInstance().i18n(...)} at test time -- captured via a mocked {@code
+     * i18n(String)} -- rather than retyped here, so a future edit to the source literal breaks
+     * this test instead of silently reintroducing the identity-fallback gap the fallback masks.
+     * <br>
+     * SILENT-15：{@code CooldownValidator} 格式化的是一个带参数的源字面量（见其 {@code validate()}），
+     * 但 {@code lang/en.json} 与 {@code lang/zh.json} 都没有对应条目——英文玩家看到的是原始中文，
+     * 中文玩家只是因为 {@link com.ultikits.ultitools.entities.Language#getLocalizedText} 的恒等回退（找不到词典条目时原样返回源文本）
+     * 而“看起来正确”，并非因为该 key 真的存在。
+     */
+    @Nested
+    @DisplayName("cooldown 消息 i18n key 完整性测试 (SILENT-15)")
+    class CooldownMessageKeyCompletenessTests {
+
+        private static final String LEGACY_COOLDOWN_KEY = "操作频繁，请稍后再试";
+
+        private final Type langMapType = new TypeToken<Map<String, String>>() {
+        }.getType();
+
+        private Player mockPlayer;
+        private Command mockCommand;
+        private UltiTools mockUltiTools;
+        private MockedStatic<UltiTools> mockedUltiTools;
+        private String expectedKey;
+
+        /** Fixture method carrying {@code @CmdCD} so {@code CooldownValidator} treats it as
+         * cooldown-gated -- never invoked directly, only read reflectively for its annotation
+         * (see the {@code getDeclaredMethod("methodWithCooldown")} lookup below), which is why
+         * PMD cannot see the call site. */
+        @CmdCD(5)
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
+        private void methodWithCooldown() { /* fixture stub, only its @CmdCD annotation is read */ }
+
+        @BeforeEach
+        void setUp() throws Exception {
+            mockPlayer = mock(Player.class);
+            mockCommand = mock(Command.class);
+            mockUltiTools = mock(UltiTools.class);
+            mockedUltiTools = mockStatic(UltiTools.class);
+            mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+
+            AtomicReference<String> captured = new AtomicReference<>();
+            when(mockUltiTools.i18n(anyString())).thenAnswer(invocation -> {
+                captured.set(invocation.getArgument(0));
+                return invocation.getArgument(0);
+            });
+            when(mockPlayer.getUniqueId()).thenReturn(UUID.randomUUID());
+            when(mockCommand.getName()).thenReturn("test");
+
+            CooldownValidator validator = new CooldownValidator();
+            Method method = getClass().getDeclaredMethod("methodWithCooldown");
+            CommandContext context = CommandContext.builder()
+                    .sender(mockPlayer)
+                    .command(mockCommand)
+                    .alias("test")
+                    .rawArgs(new String[]{})
+                    .matchedMethod(method)
+                    .build();
+
+            // Put the player on cooldown, then trigger the rejection path -- this is what
+            // reaches CooldownValidator's i18n(...) call and captures its exact argument.
+            validator.applyCooldown(context);
+            validator.validate(context);
+
+            expectedKey = captured.get();
+            assertThat(expectedKey)
+                    .as("CooldownValidator.validate() must call i18n(...) while the player is on "
+                            + "cooldown -- if this is null, the derivation itself is broken, not "
+                            + "the language files")
+                    .isNotNull();
+        }
+
+        @AfterEach
+        void tearDown() {
+            if (mockedUltiTools != null) {
+                mockedUltiTools.close();
+            }
+        }
+
+        private Map<String, String> loadLangResource(String resourcePath) throws IOException {
+            try (Reader reader = new InputStreamReader(
+                    getClass().getClassLoader().getResourceAsStream(resourcePath), StandardCharsets.UTF_8)) {
+                return new Gson().fromJson(reader, langMapType);
+            }
+        }
+
+        @Test
+        @DisplayName("Test 1: lang/en.json contains the parameterized cooldown key (presence, "
+                + "not message production)")
+        void enJsonContainsParameterizedCooldownKey() throws IOException {
+            Map<String, String> en = loadLangResource("lang/en.json");
+
+            assertThat(en)
+                    .as("en.json must carry the exact key CooldownValidator formats -- absence "
+                            + "is invisible at runtime because i18n falls back to the source text")
+                    .containsKey(expectedKey);
+        }
+
+        @Test
+        @DisplayName("Test 2: lang/zh.json contains the same parameterized cooldown key")
+        void zhJsonContainsParameterizedCooldownKey() throws IOException {
+            Map<String, String> zh = loadLangResource("lang/zh.json");
+
+            assertThat(zh)
+                    .as("zh.json is missing this key too -- Chinese players only saw a correct "
+                            + "message by identity-fallback coincidence, not because the key existed")
+                    .containsKey(expectedKey);
+        }
+
+        @Test
+        @DisplayName("Test 3: the English value carries a %d placeholder and formats a "
+                + "well-formed English sentence")
+        void enValueHasPlaceholderAndFormatsToEnglish() throws IOException {
+            Map<String, String> en = loadLangResource("lang/en.json");
+            String value = en.get(expectedKey);
+
+            assertThat(value).as("en.json entry for the cooldown key").isNotNull();
+            assertThat(value).as("the English translation must carry the %%d placeholder")
+                    .contains("%d");
+
+            String formatted = String.format(value, 5L);
+            assertThat(formatted)
+                    .as("formatting the remaining-seconds argument must fully substitute the "
+                            + "placeholder and read as English, not leak raw Chinese source text")
+                    .doesNotContain("%d")
+                    .doesNotMatch(".*[一-鿿].*");
+        }
+
+        @Test
+        @DisplayName("Test 4: the Chinese value follows the file's identity-mapping convention")
+        void zhValueIsIdentityMapped() throws IOException {
+            Map<String, String> zh = loadLangResource("lang/zh.json");
+
+            assertThat(zh.get(expectedKey))
+                    .as("zh.json maps every Chinese-source key to itself, matching every other "
+                            + "Chinese-source entry in the file")
+                    .isEqualTo(expectedKey);
+        }
+
+        @Test
+        @DisplayName("Test 5: both files carry the same production-derived key, byte-identical "
+                + "to the source literal (never retyped)")
+        void bothLanguageFilesUseTheSameProductionDerivedKey() throws IOException {
+            Map<String, String> en = loadLangResource("lang/en.json");
+            Map<String, String> zh = loadLangResource("lang/zh.json");
+
+            assertThat(en).containsKey(expectedKey);
+            assertThat(zh).containsKey(expectedKey);
+            assertThat(expectedKey)
+                    .as("the derived key must carry the %%d placeholder CooldownValidator "
+                            + "actually formats -- confirms the derivation reached the real call")
+                    .contains("%d");
+        }
+
+        @Test
+        @DisplayName("Test 6: the older, non-parameterized cooldown key is still present in both "
+                + "files -- nothing in this plan requires its removal")
+        void olderNonParameterizedKeyStillPresentInBothFiles() throws IOException {
+            Map<String, String> en = loadLangResource("lang/en.json");
+            Map<String, String> zh = loadLangResource("lang/zh.json");
+
+            assertThat(en).containsKey(LEGACY_COOLDOWN_KEY);
+            assertThat(zh).containsKey(LEGACY_COOLDOWN_KEY);
         }
     }
 }

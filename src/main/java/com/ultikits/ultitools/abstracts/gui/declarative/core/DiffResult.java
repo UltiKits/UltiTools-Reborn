@@ -7,14 +7,14 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * DiffResult 表示两次渲染之间的差异。
+ * DiffResult represents the difference between two renders.
  * <p>
- * 它包含需要应用到 Inventory 的所有变更：
+ * It holds every change that must be applied to the Inventory:
  * <ul>
- *   <li>added - 新增的 RenderNode</li>
- *   <li>removed - 删除的 RenderNode</li>
- *   <li>updated - 内容变化的 RenderNode（相同位置）</li>
- *   <li>moved - 位置变化的 RenderNode</li>
+ *   <li>added - newly added RenderNodes</li>
+ *   <li>removed - deleted RenderNodes</li>
+ *   <li>updated - RenderNodes whose content changed (same position)</li>
+ *   <li>moved - RenderNodes whose position changed</li>
  * </ul>
  *
  * @author UltiTools Team
@@ -40,9 +40,9 @@ public class DiffResult {
     }
 
     /**
-     * 创建一个空的 DiffResult。
+     * Creates an empty DiffResult.
      *
-     * @return 空的 DiffResult
+     * @return an empty DiffResult
      */
     @NotNull
     public static DiffResult empty() {
@@ -50,9 +50,9 @@ public class DiffResult {
     }
 
     /**
-     * 创建一个新的 Builder。
+     * Creates a new Builder.
      *
-     * @return Builder
+     * @return the Builder
      */
     @NotNull
     public static Builder builder() {
@@ -82,18 +82,18 @@ public class DiffResult {
     }
 
     /**
-     * 检查是否有任何变更。
+     * Checks whether there are any changes.
      *
-     * @return 如果没有变更则返回 true
+     * @return true if there are no changes
      */
     public boolean isEmpty() {
         return added.isEmpty() && removed.isEmpty() && updated.isEmpty() && moved.isEmpty();
     }
 
     /**
-     * 获取变更总数。
+     * Gets the total number of changes.
      *
-     * @return 变更总数
+     * @return the total change count
      */
     public int getChangeCount() {
         return added.size() + removed.size() + updated.size() + moved.size();
@@ -108,7 +108,7 @@ public class DiffResult {
     }
 
     /**
-     * 表示一个节点更新。
+     * Represents a single node update.
      */
     public static class RenderNodeUpdate {
         @NotNull
@@ -132,9 +132,9 @@ public class DiffResult {
         }
 
         /**
-         * 获取变更的槽位索引。
+         * Gets the slot index of the change.
          *
-         * @return 槽位索引
+         * @return the slot index
          */
         public int getSlotIndex() {
             return oldNode.getSlotIndex();
@@ -142,7 +142,7 @@ public class DiffResult {
     }
 
     /**
-     * 表示一个节点移动。
+     * Represents a single node move.
      */
     public static class RenderNodeMove {
         @NotNull
@@ -171,7 +171,7 @@ public class DiffResult {
     }
 
     /**
-     * DiffResult 的构建器。
+     * Builder for DiffResult.
      */
     public static class Builder {
         private final List<RenderNode> added = new ArrayList<>();

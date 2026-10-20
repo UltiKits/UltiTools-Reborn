@@ -462,6 +462,9 @@ class QueryImplTest {
         @DisplayName("delete() should delete matching entities and return count")
         void deleteTest() {
             when(operator.getAll()).thenReturn(sampleData());
+            // This mock does not report affected rows, so delete() checks each row before and
+            // after its delById: present, then gone, for both matched rows (#521).
+            when(operator.exist(any(WhereCondition[].class))).thenReturn(true, false, true, false);
 
             int deleted = query.where("score").lt(150).delete();
 

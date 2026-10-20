@@ -9,11 +9,11 @@ import org.jetbrains.annotations.Nullable;
 import java.util.function.Consumer;
 
 /**
- * TextButton 是一个显示文本的按钮 Widget。
+ * TextButton is a button Widget that displays text.
  * <p>
- * 它使用彩色玻璃板作为按钮背景，上面显示文本。
+ * It uses a colored glass pane as the button background, with the text overlaid.
  *
- * <p><strong>使用示例：</strong></p>
+ * <p><strong>Usage example:</strong></p>
  * <pre>{@code
  * TextButton.builder()
  *     .text("Confirm")
@@ -52,9 +52,9 @@ public class TextButton extends RenderObjectWidget {
     }
 
     /**
-     * 创建 Builder。
+     * Creates a Builder.
      *
-     * @return Builder
+     * @return the Builder
      */
     @NotNull
     public static Builder builder() {

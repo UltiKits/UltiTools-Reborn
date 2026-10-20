@@ -1,0 +1,886 @@
+package com.ultikits.ultitools.manager;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
+import org.mockbukkit.mockbukkit.MockBukkit;
+
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.abstracts.ConfigFileStubs;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.annotations.ConfigEntry;
+
+/**
+ * Shutdown persistence contract for {@link ConfigManager#saveAll()} (#510).
+ * <p>
+ * {@code UltiTools#onDisable()} calls {@code saveAll()}. Before #510 it rewrote every registered
+ * configuration file from memory, silently discarding any edit an operator made to a file while
+ * the server was running. Since #510 each entity keeps a serialized snapshot of the state it last
+ * loaded or saved, and shutdown writes only the entities whose current state differs from it.
+ * <p>
+ * Every test that asserts "the file was written" also proves, in the same run, that
+ * {@code saveAll()} is selective (an untouched sibling keeps its operator edit, or the written
+ * value differs from what an unconditional write would produce); otherwise "it was saved" would
+ * pass vacuously against the pre-#510 unconditional implementation.
+ */
+@DisplayName("ConfigManager at server stop writes nothing and names never-saved module changes (#510; 17-65)")
+@Timeout(value = 30, unit = TimeUnit.SECONDS)
+class ConfigManagerShutdownSaveTest {
+
+    @TempDir
+    File tempDir;
+
+    private ConfigManager configManager;
+    private UltiToolsPlugin plugin;
+    private Logger frameworkLogger;
+
+    @BeforeEach
+    void setUp() {
+        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        MockBukkit.mock();
+
+        frameworkLogger = mock(Logger.class);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                ultiTools -> when(ultiTools.getLogger()).thenReturn(frameworkLogger));
+
+        plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn("ShutdownSaveTestModule");
+        when(plugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
+        when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        ConfigFileStubs.stubConfigFolder(plugin, tempDir);
+
+        configManager = new ConfigManager();
+    }
+
+    @AfterEach
+    void tearDown() {
+        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+    }
+
+    // ==================== Fixtures ====================
+
+    /** A plain scalar configuration, like UltiCleaner's {@code item.interval}. */
+    @ConfigEntity("config/scalar.yml")
+    public static class ScalarConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "value", comment = "A scalar value")
+        private String value = "default";
+
+        public ScalarConfig(String configFilePath) {
+            super(configFilePath);
+        }
+
+        String getValue() {
+            return value;
+        }
+
+        void setValue(String value) {
+            this.value = value;
+        }
+    }
+
+    /** A second scalar configuration, used as the untouched control sibling. */
+    @ConfigEntity("config/control.yml")
+    public static class ControlConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "value", comment = "A control value")
+        private String value = "control-default";
+
+        public ControlConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** A map-typed configuration mutated in place, like UltiChat's auto-reply {@code rules}. */
+    @ConfigEntity("config/rules.yml")
+    public static class RulesConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "rules", comment = "Keyword rules")
+        private Map<String, String> rules = new LinkedHashMap<>();
+
+        public RulesConfig(String configFilePath) {
+            super(configFilePath);
+        }
+
+        Map<String, String> getRules() {
+            return rules;
+        }
+    }
+
+    /** Two independent keys, so a partial write or a partial file can leave one of them out. */
+    @ConfigEntity("config/two.yml")
+    public static class TwoKeyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "a", comment = "First")
+        private String a = "a-default";
+
+        @ConfigEntry(path = "b", comment = "Second")
+        private String b = "b-default";
+
+        public TwoKeyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+
+        void setA(String a) {
+            this.a = a;
+        }
+    }
+
+    /**
+     * A configuration with no {@code @ConfigEntry} field at all, and no constructor the framework
+     * can resolve. Registering it is legal - {@code validateFields()} returns before the
+     * constructability check for an entryless class - so nothing on the shutdown path may require
+     * constructing it either.
+     */
+    @ConfigEntity("config/entryless.yml")
+    public static class EntrylessConfig extends AbstractConfigEntity {
+        private final String unused;
+
+        public EntrylessConfig(String configFilePath, String unused) {
+            super(configFilePath);
+            this.unused = unused;
+        }
+
+        String getUnused() {
+            return unused;
+        }
+    }
+
+    /** A list-typed configuration whose on-disk integers come back from the parser as strings. */
+    @ConfigEntity("config/list.yml")
+    public static class ListConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "ids", comment = "Some ids")
+        private List<Integer> ids = new ArrayList<>(Arrays.asList(60, 70));
+
+        public ListConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    // ==================== Helpers ====================
+
+    private File file(String relativePath) {
+        return new File(tempDir, relativePath);
+    }
+
+    private static void write(File target, String content) throws IOException {
+        Files.createDirectories(target.getParentFile().toPath());
+        Files.write(target.toPath(), content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String read(File target) throws IOException {
+        return new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8);
+    }
+
+    private List<String> loggedMessages(Level level) {
+        ArgumentCaptor<Level> levels = ArgumentCaptor.forClass(Level.class);
+        ArgumentCaptor<String> messages = ArgumentCaptor.forClass(String.class);
+        // atLeast(0) never fails; it only collects every log(Level, String) call made so far.
+        Mockito.verify(frameworkLogger, atLeast(0)).log(levels.capture(), messages.capture());
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < levels.getAllValues().size(); i++) {
+            if (levels.getAllValues().get(i) == level) {
+                result.add(messages.getAllValues().get(i));
+            }
+        }
+        return result;
+    }
+
+    private List<String> unparseableWarnings() {
+        List<String> result = new ArrayList<>();
+        for (String message : loggedMessages(Level.WARNING)) {
+            if (message.contains("could not be parsed")) {
+                result.add(message);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Warnings that a module change was not written because the file no longer held what it was made from (the save
+     * rule of plan 17-65; maintainer decision 2026-10-04, superseding #527's "overwritten" warning).
+     */
+    private List<String> overwriteWarnings() {
+        List<String> result = new ArrayList<>();
+        for (String message : loggedMessages(Level.WARNING)) {
+            if (message.contains("overwritten") || message.contains("were not written")) {
+                result.add(message);
+            }
+        }
+        return result;
+    }
+
+    // ==================== 1. operator edit survives ====================
+
+    @Test
+    @DisplayName("1. A file edited on disk while its entity is untouched keeps the operator's edit")
+    void saveAll_keepsOperatorEditOfUntouchedConfig() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "# A scalar value\nvalue: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        String operatorEdit = "# operator comment\nvalue: operator-edit\n";
+        write(scalarFile, operatorEdit);
+        // Guard: memory still holds a different value, so any write would change the bytes.
+        assertThat(config.getValue()).isEqualTo("original");
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(operatorEdit);
+    }
+
+    // ==================== 2. in-place collection mutation ====================
+
+    @Test
+    @DisplayName("2. An in-place map mutation is detected as a change and named at stop, never written")
+    void saveAll_reportsInPlaceMapMutation() throws IOException {
+        File rulesFile = file("config/rules.yml");
+        write(rulesFile, "rules:\n  hello: world\n");
+        File controlFile = file("config/control.yml");
+        write(controlFile, "value: control-original\n");
+        RulesConfig rules = new RulesConfig("config/rules.yml");
+        ControlConfig control = new ControlConfig("config/control.yml");
+        configManager.register(plugin, rules);
+        configManager.register(plugin, control);
+
+        rules.getRules().put("added", "by-command");
+        String controlEdit = "value: control-operator-edit\n";
+        write(controlFile, controlEdit);
+
+        configManager.saveAll();
+
+        // 17-65 (maintainer decision 2026-10-04): no shutdown save; the change is named, not written.
+        assertThat(read(rulesFile)).isEqualTo("rules:\n  hello: world\n");
+        assertThat(unsavedReports()).hasSize(1).allSatisfy(report -> assertThat(report).contains("rules.yml", "'rules'"));
+        // Selectivity guard: the untouched sibling was neither rewritten nor named.
+        assertThat(read(controlFile)).isEqualTo(controlEdit);
+    }
+
+    // ==================== 3. snapshot refreshed after explicit save ====================
+
+    @Test
+    @DisplayName("3. After an explicit save() shutdown does not write again, and a later operator edit survives")
+    void saveAll_afterExplicitSaveKeepsLaterOperatorEdit() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        config.setValue("set-by-code");
+        config.save();
+        assertThat(read(scalarFile)).contains("value: set-by-code");
+
+        String operatorEdit = "value: operator-after-save\n";
+        write(scalarFile, operatorEdit);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(operatorEdit);
+        assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("3b. After a panel write (updateProperties) shutdown does not write again")
+    void saveAll_afterPanelWriteKeepsLaterOperatorEdit() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        configManager.loadFromJson("config/scalar.yml", "{\"value\":\"set-by-panel\"}");
+        assertThat(read(scalarFile)).contains("value: set-by-panel");
+
+        String operatorEdit = "value: operator-after-panel\n";
+        write(scalarFile, operatorEdit);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(operatorEdit);
+    }
+
+    // ==================== 4. snapshot refreshed after reload ====================
+
+    @Test
+    @DisplayName("4. After reload() shutdown does not write back the reloaded state")
+    void saveAll_afterReloadKeepsLaterOperatorEdit() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: reloaded\n");
+        config.reload();
+        assertThat(config.getValue()).isEqualTo("reloaded");
+
+        String operatorEdit = "value: operator-after-reload\n";
+        write(scalarFile, operatorEdit);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(operatorEdit);
+    }
+
+    @Test
+    @DisplayName("4b. After ConfigManager.reloadConfigs() shutdown does not write back the reloaded state")
+    void saveAll_afterReloadConfigsKeepsLaterOperatorEdit() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: reloaded\n");
+        configManager.reloadConfigs(plugin);
+        assertThat(config.getValue()).isEqualTo("reloaded");
+
+        String operatorEdit = "value: operator-after-reload\n";
+        write(scalarFile, operatorEdit);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(operatorEdit);
+    }
+
+    // ==================== 5. failed save stays dirty ====================
+
+    @Test
+    @DisplayName("5. A failed save leaves the entity dirty; stop names it and writes nothing")
+    void saveAll_namesChangeWhoseExplicitSaveFailed() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        File controlFile = file("config/control.yml");
+        write(controlFile, "value: control-original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        ControlConfig control = new ControlConfig("config/control.yml");
+        configManager.register(plugin, config);
+        configManager.register(plugin, control);
+
+        config.setValue("set-by-code");
+        // Read-only target mode is not a failure for atomic replacement in a writable parent.
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
+                    Mockito.eq(scalarFile.toPath()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
+            assertThatThrownBy(config::save).isInstanceOf(IOException.class);
+        }
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+        String controlEdit = "value: control-operator-edit\n";
+        write(controlFile, controlEdit);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+        assertThat(unsavedReports()).hasSize(1).allSatisfy(report -> assertThat(report).contains("scalar.yml", "'value'"));
+        // Selectivity guard: the untouched sibling was not rewritten.
+        assertThat(read(controlFile)).isEqualTo(controlEdit);
+        assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    // ==================== 6. dirty entity + externally changed file ====================
+
+    @Test
+    @DisplayName("6. A dirty entity whose file was also edited on disk keeps the operator's edit and a WARNING names the file")
+    void saveAll_keepsOperatorEditAndNamesTheUnwrittenChange() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        config.setValue("set-by-code");
+        write(scalarFile, "value: operator-edit\n");
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value: operator-edit\n");
+        List<String> warnings = unsavedReports();
+        assertThat(warnings).hasSize(1);
+        assertThat(warnings.get(0)).contains(scalarFile.getAbsolutePath(), "'value'").doesNotContain("set-by-code");
+        assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("6b. A dirty entity whose file was not edited on disk is named at stop, not written")
+    void saveAll_namesChangeWhenFileUnchanged() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        config.setValue("set-by-code");
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+        assertThat(unsavedReports()).hasSize(1);
+        assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    // ==================== 7. first boot ====================
+
+    @Test
+    @DisplayName("7. First boot writes defaults at init() and shutdown does not rewrite the file")
+    void saveAll_afterFirstBootDefaultsKeepsOperatorEdit() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        assertThat(scalarFile).doesNotExist();
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+        assertThat(read(scalarFile)).contains("value: default");
+
+        String operatorEdit = "value: operator-after-first-boot\n";
+        write(scalarFile, operatorEdit);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(operatorEdit);
+    }
+
+    @Test
+    @DisplayName("7b. A first-boot defaults write is part of the snapshot; a later unsaved code change is named at stop, not written")
+    void saveAll_afterFirstBootDefaultsNamesCodeChange() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+        String firstBoot = read(scalarFile);
+
+        config.setValue("set-by-code");
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(firstBoot).contains("value: default");
+        assertThat(unsavedReports()).hasSize(1);
+        assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    // ==================== 8. parsed-type quirks do not look like changes ====================
+
+    @Test
+    @DisplayName("8. Integers in a list, which the parser reads back as strings, do not make an untouched entity dirty")
+    void saveAll_doesNotRewriteUntouchedIntegerList() throws IOException {
+        File listFile = file("config/list.yml");
+        String onDisk = "ids:\n- 60\n- 70\n";
+        write(listFile, onDisk);
+        ListConfig config = new ListConfig("config/list.yml");
+        configManager.register(plugin, config);
+
+        configManager.saveAll();
+
+        assertThat(read(listFile)).isEqualTo(onDisk);
+    }
+
+    @Test
+    @DisplayName("8b. A 6.2-written integer list stored as quoted text is not rewritten by load, reload or shutdown")
+    void saveAll_doesNotRewriteQuotedIntegerListWrittenBy62() throws IOException {
+        // 6.2's DefaultConfigParser stored every list element as text, so a 6.2-saved List<Integer>
+        // reads "- '60'". The entity binds 60 (an approved coercion); the bytes must stay as they are
+        // until module code or a panel edit actually saves the file (wfufw-s2 compat-62 row, cleaner.yml).
+        File listFile = file("config/list.yml");
+        String onDisk = "ids:\n- '60'\n- '70'\n";
+        write(listFile, onDisk);
+        ListConfig config = new ListConfig("config/list.yml");
+        configManager.register(plugin, config);
+        assertThat(config.ids).containsExactly(60, 70);
+
+        configManager.saveAll();
+        assertThat(read(listFile)).isEqualTo(onDisk);
+
+        configManager.reloadConfigs(plugin);
+        configManager.saveAll();
+        assertThat(read(listFile)).isEqualTo(onDisk);
+    }
+
+    // ==================== 9. explicit save() stays unconditional ====================
+
+    @Test
+    @DisplayName("9. An explicit save() of an untouched entity writes nothing over the operator's edit")
+    void save_explicitCallOfUntouchedEntityWritesNothing() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: operator-edit\n");
+        config.save();
+
+        assertThat(read(scalarFile)).isEqualTo("value: operator-edit\n");
+        assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    // ==================== 10. partial writes never absorb an unsaved change (gate-1 BL-01) ====================
+
+    @Test
+    @DisplayName("10. A panel write of one key does not mark another key's unsaved code change as saved")
+    void saveAll_keepsCodeChangeAcrossPartialPanelWrite() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+
+        config.setA("a-by-code");
+        configManager.loadFromJson("config/two.yml", "{\"b\":\"b-by-panel\"}");
+        // Guard: the panel write did not itself write the code change.
+        assertThat(read(twoFile)).contains("a: a1").contains("b: b-by-panel");
+
+        configManager.saveAll();
+
+        // The panel write did not acknowledge 'a': it is still named at stop, and nothing is written.
+        assertThat(read(twoFile)).contains("a: a1").contains("b: b-by-panel");
+        assertThat(unsavedReports()).hasSize(1).allSatisfy(report -> assertThat(report).contains("'a'").doesNotContain("'b'"));
+    }
+
+    @Test
+    @DisplayName("10b. A reload of a file missing a key keeps that key's unsaved code change in memory; no save re-adds the key")
+    void saveAll_keepsCodeChangeWhenReloadFindsKeyMissing() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+
+        config.setA("a-by-code");
+        write(twoFile, "b: b1\n");
+        config.reload();
+        // Guard: reload() kept the in-memory value for the absent key and wrote nothing.
+        assertThat(read(twoFile)).isEqualTo("b: b1\n");
+        assertThat(config.a).isEqualTo("a-by-code");
+
+        configManager.saveAll();
+
+        // The operator deleted the key: nothing re-adds it, and nothing is written at stop (maintainer decision 2026-10-04).
+        assertThat(read(twoFile)).isEqualTo("b: b1\n");
+        assertThat(config.isModifiedSinceSnapshot()).isTrue();
+        assertThat(unsavedReports()).hasSize(1).allSatisfy(report -> assertThat(report).contains("'a'"));
+    }
+
+    @Test
+    void managerReloadRetainsMissingLiveValueAgainstDeclaredDefaultWithoutWriting() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+        config.setA("a-by-code");
+        int[] notifications = {0};
+        config.addChangeListener(changed -> notifications[0]++);
+        write(twoFile, "# operator\nb: b2\n");
+        java.nio.file.attribute.FileTime time = Files.getLastModifiedTime(twoFile.toPath());
+        configManager.reloadConfigs(plugin);
+        assertThat(config.a).isEqualTo("a-by-code");
+        assertThat(config.b).isEqualTo("b2");
+        assertThat(read(twoFile)).isEqualTo("# operator\nb: b2\n");
+        assertThat(Files.getLastModifiedTime(twoFile.toPath())).isEqualTo(time);
+        assertThat(notifications[0]).isEqualTo(1);
+        assertThat(config.isPresentInFile("a")).isFalse();
+        assertThat(config.isModifiedSinceSnapshot()).isTrue();
+        config.setA("a-default");
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+        config.setA("a-by-code");
+        configManager.saveAll();
+        // The key stays deleted: a save never inserts a key the file lacks (maintainer decision 2026-10-04).
+        assertThat(read(twoFile)).isEqualTo("# operator\nb: b2\n");
+    }
+
+    // ==================== 11. the comparison never touches the live configuration ====================
+
+    @Test
+    @DisplayName("11. Checking for changes and the shutdown save leave the panel-visible configuration unchanged")
+    void saveAll_leavesPanelVisibleConfigurationUnchanged() throws IOException {
+        File listFile = file("config/list.yml");
+        write(listFile, "ids:\n- 60\n- 70\n");
+        ListConfig config = new ListConfig("config/list.yml");
+        configManager.register(plugin, config);
+        String before = config.toJsonObject().toString();
+        // Guard: the panel sees numbers, which a parser-serialized render would turn into strings.
+        assertThat(before).contains("[60,70]");
+
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+        configManager.saveAll();
+
+        assertThat(config.toJsonObject().toString()).isEqualTo(before);
+    }
+
+    // ==================== 12. a failed shutdown save claims no overwrite ====================
+
+    @Test
+    @DisplayName("12. Stop never reaches the writer: a broken writer logs no failure, and the change is named")
+    void saveAll_neverReachesTheWriter() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        config.setValue("set-by-code");
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
+                    Mockito.eq(scalarFile.toPath()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
+            configManager.saveAll();
+            writer.verify(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
+                    Mockito.any(java.nio.file.Path.class), Mockito.anyString()), Mockito.never());
+        }
+
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+        assertThat(overwriteWarnings()).isEmpty();
+        assertThat(loggedMessages(Level.WARNING)).noneMatch(message -> message.contains("save failed"));
+        assertThat(unsavedReports()).hasSize(1);
+    }
+
+    // ==================== 13. a change made by a reload listener ====================
+
+    @Test
+    @DisplayName("13. A change a config listener makes in memory while the entity loads is named at stop, not written")
+    void saveAll_namesChangeMadeByChangeListener() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        config.addChangeListener(changed -> ((ScalarConfig) changed).setValue("set-by-listener"));
+        configManager.register(plugin, config);
+        // Guard: the listener ran and changed memory only.
+        assertThat(config.getValue()).isEqualTo("set-by-listener");
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+        assertThat(unsavedReports()).hasSize(1).allSatisfy(report -> assertThat(report).doesNotContain("set-by-listener"));
+    }
+
+    // ==================== 14. a file the parser rejects is never overwritten (round-2 WR2-01) ====================
+
+    @Test
+    @DisplayName("14. After a reload of an unparseable file, shutdown leaves the file alone and says so")
+    void saveAll_leavesUnparseableFileAloneAfterReload() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: on-disk\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+        // Guard: the in-memory value differs from the declared default, so an unguarded shutdown
+        // save would rewrite the file.
+        assertThat(config.getValue()).isEqualTo("on-disk").isNotEqualTo("default");
+
+        String broken = "value: [unclosed\n  bad: : :\n";
+        write(scalarFile, broken);
+        // #589: the reload throws; the entity keeps its values and the file stays protected.
+        assertThatThrownBy(config::reload).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(broken);
+        assertThat(unparseableWarnings()).hasSize(1);
+        assertThat(unparseableWarnings().get(0)).contains(scalarFile.getAbsolutePath());
+        assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("14b. After reloadConfigs() over an unparseable file, shutdown writes nothing further")
+    void saveAll_writesNothingFurtherAfterReloadConfigsOverUnparseableFile() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: on-disk\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: [unclosed\n  bad: : :\n");
+        // #589: reloadConfigs lets the failure through instead of logging and returning.
+        assertThatThrownBy(() -> configManager.reloadConfigs(plugin)).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class);
+        // init() rewrites the file with defaults for every key it could not read - the pre-existing
+        // defect tracked as #511, unchanged here. What must not happen is a second, later write.
+        String afterReload = read(scalarFile);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(afterReload);
+        assertThat(unparseableWarnings()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("14c. A successful load clears the unparseable state; a later code change is named at stop, not written")
+    void saveAll_namesCodeChangeAfterTheFileIsFixed() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: on-disk\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: [unclosed\n  bad: : :\n");
+        assertThatThrownBy(config::reload).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class); // #589
+        write(scalarFile, "value: repaired\n");
+        config.reload();
+        assertThat(config.getValue()).isEqualTo("repaired");
+        config.setValue("set-by-code");
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value: repaired\n");
+        assertThat(unparseableWarnings()).isEmpty();
+        assertThat(unsavedReports()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("14d. An explicit save protects an unparseable file until a successful load")
+    void save_explicitCallProtectsUnparseableFileUntilSuccessfulLoad() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: on-disk\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: [unclosed\n  bad: : :\n");
+        assertThatThrownBy(config::reload).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class); // #589
+        config.setValue("set-by-code");
+        String broken = read(scalarFile);
+        config.save();
+
+        // Plan 17-58/#511 part 2: no explicit write may clear the protection latch.
+        assertThat(read(scalarFile)).isEqualTo(broken);
+        assertThat(config.isLastLoadUnparseable()).isTrue();
+        write(scalarFile, "value: repaired\n");
+        config.save();
+        assertThat(read(scalarFile)).isEqualTo("value: repaired\n");
+        assertThat(config.isLastLoadUnparseable()).isTrue();
+        config.reload();
+        assertThat(config.isLastLoadUnparseable()).isFalse();
+        config.setValue("set-by-code");
+        config.save();
+        assertThat(read(scalarFile)).contains("value: set-by-code");
+        configManager.saveAll();
+        assertThat(unparseableWarnings()).isEmpty();
+    }
+
+    // ==================== 15. canonicalization needs both passes (round-2 IN2-01) ====================
+
+    @Test
+    @DisplayName("15. A list-of-integers key removed from the file does not make an untouched entity look changed")
+    void saveAll_doesNotRewriteWhenIntegerListKeyIsAbsentFromFile() throws IOException {
+        File listFile = file("config/list.yml");
+        write(listFile, "ids:\n- 60\n- 70\n");
+        ListConfig config = new ListConfig("config/list.yml");
+        configManager.register(plugin, config);
+
+        String withoutKey = "other: kept\n";
+        write(listFile, withoutKey);
+        config.reload();
+        // Guard: the entity holds the class default for ids, which renders as integers before the
+        // parser has seen them - the asymmetry a single canonicalization pass would leave behind.
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+
+        configManager.saveAll();
+
+        assertThat(read(listFile)).isEqualTo(withoutKey);
+    }
+
+    // ==================== 16. a panel write refreshes the fingerprint too (round-2 IN2-02) ====================
+
+    @Test
+    @DisplayName("16. A later code change after a panel write does not claim the file was changed on disk")
+    void saveAll_afterPanelWriteDoesNotClaimAnOverwrite() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+
+        configManager.loadFromJson("config/two.yml", "{\"b\":\"b-by-panel\"}");
+        config.setA("a-by-code");
+
+        configManager.saveAll();
+
+        assertThat(read(twoFile)).contains("a: a1").contains("b: b-by-panel");
+        assertThat(overwriteWarnings()).isEmpty();
+        assertThat(unsavedReports()).hasSize(1).allSatisfy(report -> assertThat(report).contains("'a'").doesNotContain("'b'"));
+    }
+
+    // ==================== 17. an entryless configuration is not rewritten (Codex P2) ====================
+
+    @Test
+    @DisplayName("17. A configuration with no @ConfigEntry field keeps the operator's edit, even with no resolvable constructor")
+    void saveAll_keepsOperatorEditOfEntrylessConfig() throws IOException {
+        File entrylessFile = file("config/entryless.yml");
+        write(entrylessFile, "operator: value\n");
+        EntrylessConfig config = new EntrylessConfig("config/entryless.yml", "not-a-config-entry");
+        configManager.register(plugin, config);
+        assertThat(config.getUnused()).isEqualTo("not-a-config-entry");
+
+        String operatorEdit = "operator: edited\n# a comment\n";
+        write(entrylessFile, operatorEdit);
+
+        configManager.saveAll();
+
+        assertThat(read(entrylessFile)).isEqualTo(operatorEdit);
+    }
+
+    // ==================== 17-65: nothing is written at server stop (#599) ====================
+
+    /** Reports of module changes that were never saved and are not written at stop (maintainer decision 2026-10-04). */
+    private List<String> unsavedReports() {
+        List<String> result = new ArrayList<>();
+        for (String message : loggedMessages(Level.WARNING)) {
+            if (message.contains("never saved")) {
+                result.add(message);
+            }
+        }
+        return result;
+    }
+
+    @Test
+    @DisplayName("17-65: at stop an unsaved module change writes nothing; one line names the file and the key, never the value")
+    void stop_unsavedModuleChangeWritesNothingAndIsNamedOnce() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+        config.setValue("set-by-code");
+        java.nio.file.attribute.FileTime old = java.nio.file.attribute.FileTime.fromMillis(1_577_836_800_000L);
+        Files.setLastModifiedTime(scalarFile.toPath(), old);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+        assertThat(Files.getLastModifiedTime(scalarFile.toPath())).isEqualTo(old);
+        assertThat(unsavedReports()).hasSize(1);
+        assertThat(unsavedReports().get(0)).contains(scalarFile.getAbsolutePath(), "'value'").doesNotContain("set-by-code");
+        assertThat(config.getValue()).isEqualTo("set-by-code");
+    }
+
+    @Test
+    @DisplayName("17-65: at stop an operator edit with no module change writes nothing and reports nothing")
+    void stop_operatorEditWithoutModuleChangeWritesAndReportsNothing() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+        write(scalarFile, "value:   operator-edit\n");
+        java.nio.file.attribute.FileTime old = java.nio.file.attribute.FileTime.fromMillis(1_577_836_800_000L);
+        Files.setLastModifiedTime(scalarFile.toPath(), old);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value:   operator-edit\n");
+        assertThat(Files.getLastModifiedTime(scalarFile.toPath())).isEqualTo(old);
+        assertThat(loggedMessages(Level.WARNING)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("17-65: ConfigManager#saveAll() is deprecated since 6.3.0 (it writes nothing)")
+    void saveAll_isDeprecatedSince630() throws Exception {
+        Deprecated deprecated = ConfigManager.class.getMethod("saveAll").getAnnotation(Deprecated.class);
+        assertThat(deprecated).isNotNull();
+        assertThat(deprecated.since()).isEqualTo("6.3.0");
+    }
+}

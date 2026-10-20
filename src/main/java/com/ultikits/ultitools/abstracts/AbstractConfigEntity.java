@@ -3,193 +3,2827 @@ package com.ultikits.ultitools.abstracts;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Type;
+import java.lang.reflect.ParameterizedType;
+import java.util.LinkedHashMap;
+import java.util.Iterator;
+import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import org.bukkit.configuration.file.YamlConfiguration;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonPrimitive;
+import com.google.common.reflect.TypeToken;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.config.ConfigEntryPresenceException;
+import com.ultikits.ultitools.config.ConfigWriteRefusedException;
+import com.ultikits.ultitools.config.EntryPresence;
+import com.ultikits.ultitools.config.document.ConfigDocument;
+import com.ultikits.ultitools.config.document.ConfigLoadResult;
+import com.ultikits.ultitools.config.document.AtomicConfigWriter;
+import com.ultikits.ultitools.config.document.OperatorFileWriter;
+import com.ultikits.ultitools.config.document.OwnedPaths;
+import com.ultikits.ultitools.config.document.PlainData;
+import com.ultikits.ultitools.config.convert.ConverterRegistry;
+import com.ultikits.ultitools.config.convert.ConversionResult;
+import com.ultikits.ultitools.config.convert.ConversionFailure;
+import com.ultikits.ultitools.config.convert.ConversionException;
+import com.ultikits.ultitools.config.convert.builtin.ConversionTypes;
+import com.ultikits.ultitools.config.convert.builtin.GenericConverters;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.annotations.config.Size;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
+import lombok.AccessLevel;
 import lombok.Getter;
 
 /**
- * Abstract class representing a configuration entity.
- * <p>
- * 配置实体的抽象类。
+ * A module configuration bound through the converter registry and a comment-preserving document.
+ * All framework operations run under the entity monitor; module field setters remain unsynchronized.
+ * Constructors must be cheap and side-effect-free: validation constructs one throwaway instance to
+ * prove the existing String/no-arg construction contract. Snapshot checks never construct entities.
+ * The persisted raw document and the ordered effective field baseline are separate: partial panel
+ * writes must not acknowledge unrelated unsaved code edits. Missing reload keys retain live fields,
+ * but their baseline remains the initial declared default.
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
 public abstract class AbstractConfigEntity {
+    private static final Object ABSENT_RELOAD_VALUE = new Object();
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
-    
+    /** Representative classes of each kind a constraint checks, for "can a value of the declared type be one of them". */
+    private static final List<Class<?>> NUMBER_KINDS = Arrays.asList(Integer.class, Long.class, Double.class, Float.class,
+            Short.class, Byte.class, java.math.BigInteger.class, java.math.BigDecimal.class);
+    private static final List<Class<?>> TEXT_KINDS = Arrays.asList(String.class, Character.class);
+    private static final List<Class<?>> CONTAINER_KINDS = Arrays.asList(ArrayList.class, java.util.LinkedHashSet.class,
+            LinkedHashMap.class, Object[].class);
+
     private final String configFilePath;
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
     private UltiToolsPlugin ultiToolsPlugin;
-    private YamlConfiguration config;
+    @Getter(AccessLevel.NONE)
+    private ConfigDocument document;
+    @Getter(AccessLevel.NONE)
+    private Map<String, Object> lastLoadedPresence;
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, RawEntry> acknowledgedRaw = new LinkedHashMap<>();
+
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, Object> declaredDefaults = new LinkedHashMap<>();
+    /**
+     * The declared default's own size per field, measured on the Java value when the defaults are captured (0 for an
+     * empty or null container, -1 for a value {@code @Size} does not count): a converter or a legacy parser may give the
+     * default another plain shape, such as a set written as one {@code joined:} entry (PR #632 local Codex run 1).
+     */
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, Integer> declaredDefaultLengths = new LinkedHashMap<>();
+    @Getter(AccessLevel.NONE)
+    private Map<Field, Object> savedSnapshot;
+    @Getter(AccessLevel.NONE)
+    private String savedFileFingerprint;
+    @Getter(AccessLevel.NONE)
+    private boolean lastLoadUnparseable;
+    @Getter(AccessLevel.NONE)
+    private volatile boolean lastInitIncomplete;
+    @Getter(AccessLevel.NONE)
+    private boolean defaultsCaptured;
+    /** Set only while a reload validates the values it read, for the refusal's wording (#595). */
+    @Getter(AccessLevel.NONE)
+    private boolean validatingReload;
+    @Getter(AccessLevel.NONE)
+    private boolean deferInitialization;
+    @Getter(AccessLevel.NONE)
+    private PendingInitialization pendingInitialization;
+    /** Whether the last load's comment-only write was refused or failed (it has logged its one warning). */
+    @Getter(AccessLevel.NONE)
+    private boolean commentWriteNotAppliedAtLoad;
+    /**
+     * Whether a write to this file failed part-way and the file could not be put back from its framework backup (#622):
+     * it may hold part of that write, so the entity treats it as changed since it was read and writes nothing to it until
+     * a load reads it again. Deliberately not part of {@link PanelCheckpoint}: rolling an entity's state back never
+     * forgets that its file is in an unknown state.
+     */
+    @Getter(AccessLevel.NONE)
+    private boolean fileNotRestored;
+
+    @Getter(AccessLevel.NONE)
+    private final Set<String> warnedCommentKeys = ConcurrentHashMap.newKeySet();
+
+    /**
+     * The composite values a panel edit is about to rewrite whole, as last read, per setting and unit; set by
+     * {@code applyAndValidate} and consumed by {@code panelChanges} under the entity monitor (route change, R3-01).
+     */
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, Map<List<String>, RawEntry>> compositeReads = new LinkedHashMap<>();
+
+    /**
+     * The whole composite values a panel edit writes, per setting and unit: the value as last read with only the edited
+     * fields changed, so every untouched field keeps the bytes the operator wrote (#609, 17-65 round 4 R4-I2); set by
+     * {@code applyAndValidate} and consumed by {@code panelChanges} under the entity monitor, like {@link #compositeReads}.
+     */
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, Map<List<String>, Object>> compositeWrites = new LinkedHashMap<>();
+
+    /**
+     * The value ranges a config binding (#531) imposes on this entity's keys, by {@code @ConfigEntry}
+     * path, then by rule text. A panel write ({@link #updateProperties}, {@link
+     * #validateProposedProperties}) is refused when it sets a bound key outside its range, the same
+     * way as a {@code @Range} violation. {@link #init} and {@link #reload()} do not consult this:
+     * the binding step handles an invalid value there (it refuses the module at load and keeps the
+     * running value on reload).
+     */
+    @Getter(AccessLevel.NONE)
+    private final Map<String, Map<String, Predicate<Long>>> bindingRanges = new ConcurrentHashMap<>();
+
+    /** A detached raw entry acknowledgment; absent and explicit null are different states. */
+    private static final class RawEntry {
+        private final boolean present;
+        private final Object value;
+
+        private RawEntry(ConfigDocument source, List<String> path) {
+            this(source.contains(path), source.get(path));
+        }
+
+        private RawEntry(boolean present, Object value) {
+            this.present = present; this.value = PlainData.copy(value);
+        }
+    }
+
+    /** A batch initialization write: what to insert, and the bytes it was read from (#602). */
+    private static final class PendingInitialization {
+        private final ConfigDocument read;
+        private final Map<Field, Object> baseline;
+        private final Map<Field, Object> inserted;
+        private final String expected;
+        private PendingInitialization(ConfigDocument read, Map<Field, Object> baseline, Map<Field, Object> inserted,
+                String expected) {
+            this.read = read; this.baseline = baseline; this.inserted = inserted; this.expected = expected;
+        }
+    }
 
     /**
      * Constructor for AbstractConfigEntity.
-     * <p>
-     * AbstractConfigEntity的构造函数。
      *
-     * @param configFilePath the path to the configuration file, for example: config/config.yml <br> 配置文件在resource文件夹的路径，例如：config/config.yml
+     * @param configFilePath the path to the configuration file, for example: config/config.yml
      */
     public AbstractConfigEntity(String configFilePath) {
         this.configFilePath = configFilePath;
     }
 
     /**
-     * Saves the configuration to the file.
+     * Writes the settings this module changed in memory since the last load or save - and nothing else - through the
+     * config write gate.
      * <p>
-     * 将配置保存到文件。
+     * A setting is written only when all three hold: the module changed it since the last load or save; the file
+     * still holds at that path exactly the value the framework last read or wrote there; and that value is the one
+     * the module started from (it converts to the setting's value as last loaded or saved). A setting declared as a
+     * {@link Map} is compared and written entry by entry, following the declared map types into nested maps: only the
+     * entries the module added, changed or removed are set or removed. Any other value - a list, a
+     * {@code ConfigurationSerializable} such as a Bukkit {@code Location}, the value of a typed map entry that is not
+     * itself a map - is one value, written whole or not at all, so the file never holds a value mixed from the
+     * module's and the operator's. Everything else in the file stays as it is: a save never inserts a key the file lacks, never
+     * rewrites a comment and never removes a map entry the module did not remove. When nothing needs writing, the file
+     * is not touched (bytes and modification time stay).
+     * <p>
+     * <b>Why it cannot overwrite operator content.</b> A value the operator edited on disk since it was read, a key
+     * the operator deleted, a value the framework could not use ({@code interval: 3O0}, a list element {@code abc})
+     * and a map entry left in the 6.2 split form ({@code o: {O: x}}) are never the value the module started from at
+     * that path, so they are never written - whether or not the module changed that setting. The config write gate
+     * ({@link OperatorFileWriter}) then verifies, after rendering, that every line outside the written settings is
+     * byte-identical to the file as it is at write time, or writes nothing. A change that is not written stays in
+     * memory, and one WARNING names the file and those keys, never a value (maintainer decision 2026-10-04, "what
+     * code may write, by file type", which supersedes the earlier "a save warns and overwrites").
+     * <p>
+     * Use it for a change the operator asked for through the module, or for shipped text the module re-renders after
+     * a language switch. A failed write leaves the effective baseline as it was, so the change is still unsaved.
      *
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @throws IOException if publishing the verified file fails; the file then holds the bytes it held before, put back
+     *                     from its framework backup when an in-place write failed part-way, or - when even that fails -
+     *                     one SEVERE names the file and the kept backup and later saves write nothing until a reload
      */
-    @SuppressWarnings("unchecked")
     public void save() throws IOException {
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (!field.isAnnotationPresent(ConfigEntry.class)) {
-                continue;
-            }
-            field.setAccessible(true);
-            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-            String path = annotation.path();
-            if (path.isEmpty()) {
-                path = field.getName();
-            }
-            Object fieldValue = ReflectionUtil.getFieldValue(this, field);
-            if (fieldValue == null) {
-                continue;
-            }
-            Object serialized = ReflectionUtil.newInstance(annotation.parser()).serialize(fieldValue);
-            config.set(path, serialized);
+        synchronized (this) {
+            if (lastLoadUnparseable) { return; }
+            saveModuleChanges();
         }
-        config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
+    }
+
+    /**
+     * One setting, or one entry of a map setting, the module changed since the last load or save: where it is in the
+     * file, what the module holds there now, and what the framework last read or wrote there.
+     */
+    private static final class ModuleChange {
+        private final Field field;
+        private final List<String> leaf;
+        private List<String> path;
+        private boolean present;
+        private Object value;
+        /**
+         * The module's value at {@link #path} as plain data, which becomes the setting's baseline once written. It differs
+         * from {@link #value} only after {@link #writeWhole}: the file then holds the read composite with one field changed
+         * ({@code y: 64} kept as written), while the module holds its own conversion of it ({@code 64.0}); recording the
+         * written text as the baseline would leave the setting "unsaved" and refuse its next module change (PR #611 local
+         * Codex run 1).
+         */
+        private final Object effective;
+        private final boolean readPresent;
+        private final Object readValue;
+        /**
+         * For a panel edit inside a composite value: the whole value the entity last read there, which the file must still
+         * hold at write time (17-65 route change, R3-01); {@code null} when the file's value is not a precondition.
+         */
+        private RawEntry required;
+        /**
+         * For an operator's map-entry write made under a condition: whether the entry must already be in the file, or must
+         * not be, on the read the gate verifies against (#623); {@code null} when presence is not a precondition.
+         */
+        private EntryPresence presence;
+
+        private ModuleChange(Field field, List<String> leaf, List<String> path, Object mine, RawEntry read) {
+            this.field = field; this.leaf = leaf; this.path = path;
+            this.present = leaf.isEmpty() || mapContains(mine, leaf);
+            this.value = leaf.isEmpty() ? PlainData.copy(mine) : PlainData.copy(mapLeaf(mine, leaf));
+            this.effective = PlainData.copy(this.value);
+            this.readPresent = read != null && read.present && (leaf.isEmpty() || mapContains(read.value, leaf));
+            this.readValue = read == null ? null : leaf.isEmpty() ? PlainData.copy(read.value) : PlainData.copy(mapLeaf(read.value, leaf));
+        }
+
+        private boolean holds(boolean isPresent, Object at, boolean wantPresent, Object want) {
+            return isPresent == wantPresent && (!isPresent || PlainData.plainEquals(at, want));
+        }
+
+        /**
+         * Writes {@code unit} - the whole composite value as last read with only the panel's fields changed - instead of
+         * the module's serialization of it, so the untouched fields keep their bytes (#609, R4-I2).
+         */
+        private void writeWhole(Object unit) {
+            this.present = true;
+            this.value = PlainData.copy(unit);
+        }
+
+        /** Addresses the change where the file being written holds the setting ({@code setting}, #612). */
+        private void relocate(List<String> setting) {
+            List<String> located = new ArrayList<>(setting);
+            located.addAll(leaf);
+            this.path = located;
+        }
+    }
+
+    /** Sets the module's value, or removes the map entry the module removed, at each change's path. */
+    private static void apply(ConfigDocument target, List<ModuleChange> changes) {
+        for (ModuleChange change : changes) {
+            if (change.present) { target.set(change.path, change.value); } else { target.remove(change.path); }
+        }
+    }
+
+    /**
+     * What a save owns at the config write gate: each change's whole key, except that a map which is empty in the file
+     * as read ({@code {}}), or which the changes empty, is owned as a whole - its key line must change with its first
+     * or last entry, and an empty map holds nothing of the operator's that could be lost.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Map parents emptied by the changes are owned whole; every other change owns its key.
+    private static OwnedPaths saveOwnership(List<ModuleChange> changes, ConfigDocument read) {
+        Map<List<String>, Map<String, Object>> after = new LinkedHashMap<>();
+        Set<List<String>> emptied = new java.util.LinkedHashSet<>();
+        for (ModuleChange change : changes) {
+            if (change.path.size() < 2) { continue; }
+            List<String> parent = change.path.subList(0, change.path.size() - 1);
+            Object now = read.get(parent);
+            if (!(now instanceof Map)) { continue; }
+            if (((Map<?, ?>) now).isEmpty()) { emptied.add(parent); }
+            Map<String, Object> state = after.get(parent);
+            if (state == null) {
+                state = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : ((Map<?, ?>) now).entrySet()) { state.put(String.valueOf(entry.getKey()), entry.getValue()); }
+                after.put(parent, state);
+            }
+            String last = change.path.get(change.path.size() - 1);
+            if (change.present) { state.put(last, change.value); } else { state.remove(last); }
+        }
+        for (Map.Entry<List<String>, Map<String, Object>> entry : after.entrySet()) {
+            if (entry.getValue().isEmpty()) { emptied.add(entry.getKey()); }
+        }
+        OwnedPaths.Builder owned = OwnedPaths.builder();
+        for (ModuleChange change : changes) {
+            List<String> parent = change.path.size() < 2 ? null : change.path.subList(0, change.path.size() - 1);
+            owned.value(parent != null && emptied.contains(parent) ? parent : change.path);
+        }
+        return owned.build();
+    }
+
+    /**
+     * The save rule of {@link #save()}: collects the module's changes against the effective baseline; keeps those whose
+     * last-read file value is the value the module started from; checks each on one read of the file, which must still
+     * hold there what the framework last read (a file already holding the module's value needs nothing); writes the
+     * rest through the config write gate against exactly that read; advances the baseline and the last-read entry only
+     * for what the file now holds; and names every change that was not written in one warning.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // The save rule classifies every change (on disk, writable, not written) on one read.
+    private void saveModuleChanges() throws IOException {
+        java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
+        ConfigLoadResult loaded = ConfigDocument.load(target);
+        if (protectFailedLoad(loaded)) {
+            throw new IOException("Cannot save " + configFilePath + ": current file is " + loaded.state());
+        }
+        ConfigDocument read = loaded.state() == ConfigLoadResult.State.LOADED ? loaded.document() : ConfigDocument.empty();
+        List<Field> fields = configEntryFields();
+        Map<Field, Object> current = currentPlain(fields, true);
+        if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
+        List<ModuleChange> writable = new ArrayList<>();
+        List<String> unwritten = new ArrayList<>();
+        for (Field field : fields) {
+            Object base = savedSnapshot.get(field);
+            Object mine = current.get(field);
+            List<List<String>> leaves = new ArrayList<>();
+            changedLeaves(base, mine, declaredType(field), new ArrayList<>(), leaves);
+            if (leaves.isEmpty()) {
+                // Equal content (at most a different map order): nothing a file write could carry.
+                savedSnapshot.put(field, mine);
+                continue;
+            }
+            // A typed map key the file now holds in several spellings cannot be mapped to one entry: no change of the
+            // setting is written, whatever the module's value holds (#673, case 52).
+            if (reportedSeveralSpellings(read, field, leaves)) { continue; }
+            // The setting is written where the file holds it (a flat dotted key stays flat); one now written twice is not
+            // the value the module started from and is not written (#612).
+            boolean twice = heldTwice(read, field);
+            for (List<String> leaf : leaves) {
+                List<String> path = new ArrayList<>(keysIn(read, field)); path.addAll(leaf);
+                ModuleChange change = new ModuleChange(field, leaf, path, mine, acknowledgedRaw.get(field));
+                if (!twice && startedFromFile(field, leaf, base)) { writable.add(change); }
+                else { unwritten.add(describeKey(field, leaf)); }
+            }
+        }
+        if (fileNotRestored) {
+            // The file may hold part of a failed write (#622): it is not what was read, so nothing is written over it.
+            for (ModuleChange change : writable) { unwritten.add(describeKey(change.field, change.leaf)); }
+            if (!unwritten.isEmpty()) { warnNotWritten(unwritten, NOT_RESTORED); }
+            return;
+        }
+        List<ModuleChange> onDisk = new ArrayList<>();
+        List<ModuleChange> toWrite = new ArrayList<>();
+        for (ModuleChange change : writable) {
+            boolean present = read.contains(change.path);
+            Object now = read.get(change.path);
+            boolean parentIsMapping = change.path.size() == 1
+                    || read.get(change.path.subList(0, change.path.size() - 1)) instanceof Map;
+            if (change.holds(present, now, change.present, change.value)) { onDisk.add(change); }
+            else if (parentIsMapping && change.holds(present, now, change.readPresent, change.readValue)) { toWrite.add(change); }
+            else { unwritten.add(describeKey(change.field, change.leaf)); }
+        }
+        if (!toWrite.isEmpty()) {
+            // Against exactly the bytes checked above: a file that changed since is abandoned by the gate, named once.
+            OperatorFileWriter.Result result;
+            try {
+                result = OperatorFileWriter.write(target, saveOwnership(toWrite, read), expectedBase(loaded),
+                        candidate -> apply(candidate, toWrite));
+            } catch (IOException failure) {
+                noteFailedWrite(failure);
+                throw failure;
+            }
+            if (result.applied()) {
+                onDisk.addAll(toWrite);
+                acknowledgeWritten(result.readFingerprint(), result.fingerprint(), result.document(), onDisk);
+            }
+        } else if (!onDisk.isEmpty()) {
+            acknowledgeWritten(loaded.fingerprint(), loaded.fingerprint(), read, onDisk);
+        }
+        if (!unwritten.isEmpty()) { warnNotWritten(unwritten, null); }
+    }
+
+    /**
+     * Advances the effective baseline and the last-read entry of exactly the changes the file now holds. The entity
+     * records the bytes the gate wrote as last read only when the gate's read held exactly the bytes this entity last
+     * bound; otherwise the operator's newer edit stays a change on disk (never a fresh read: 17-63 review WR-01).
+     *
+     * @param readFingerprint the bytes the write was checked against (storage-layer SHA-256 hex)
+     * @param fingerprint     the bytes the file holds now (the gate's written bytes, or the bytes read when nothing was written)
+     * @param onDisk          the document the file holds now
+     * @param applied         the changes the file now holds
+     */
+    private void acknowledgeWritten(String readFingerprint, String fingerprint, ConfigDocument onDisk, List<ModuleChange> applied) {
+        boolean bound = savedFileFingerprint != null && readFingerprint != null
+                && entityFingerprint(readFingerprint).equals(savedFileFingerprint);
+        for (ModuleChange change : applied) {
+            Field field = change.field;
+            RawEntry read = acknowledgedRaw.get(field);
+            // The baseline takes the module's value; the last-read entry and the document take the bytes now on disk.
+            if (change.leaf.isEmpty()) {
+                savedSnapshot.put(field, PlainData.copy(change.effective));
+                acknowledgedRaw.put(field, new RawEntry(true, change.value));
+            } else {
+                Object base = savedSnapshot.get(field);
+                savedSnapshot.put(field, change.present ? patchedMap(base, change.leaf, change.effective) : withoutLeaf(base, change.leaf));
+                Object raw = read == null ? null : read.value;
+                acknowledgedRaw.put(field, new RawEntry(true, change.present ? patchedMap(raw, change.leaf, change.value)
+                        : withoutLeaf(raw, change.leaf)));
+            }
+            if (!bound && document != null) {
+                // The entity's own document is addressed where it holds the setting: the file's form may have changed
+                // since it was read, and the written path follows the file (#612, PR #613 local Codex run 1).
+                List<String> mine = new ArrayList<>(keysIn(document, field)); mine.addAll(change.leaf);
+                if (change.present) { document.set(mine, change.value); } else { document.remove(mine); }
+            }
+        }
+        if (bound) {
+            document = onDisk;
+            savedFileFingerprint = entityFingerprint(fingerprint);
+        }
+    }
+
+    /**
+     * Whether the value the framework last read for {@code field} at {@code leaf} is the value the module started from
+     * there: it is present, and the setting's last loaded or saved value with that entry taken from the file converts,
+     * without a conversion failure, back to exactly that value. An unconvertible value or element, a key the operator
+     * deleted and a 6.2 split map entry are therefore never "started from".
+     */
+    private boolean startedFromFile(Field field, List<String> leaf, Object base) {
+        RawEntry read = acknowledgedRaw.get(field);
+        if (read == null || !read.present) { return false; }
+        Object probe;
+        if (leaf.isEmpty()) {
+            probe = read.value;
+        } else {
+            if (!(read.value instanceof Map) || !(base instanceof Map)) { return false; }
+            probe = mapContains(read.value, leaf) ? patchedMap(base, leaf, mapLeaf(read.value, leaf)) : withoutLeaf(base, leaf);
+        }
+        ConfigEntry entry = field.getAnnotation(ConfigEntry.class);
+        try {
+            ConversionResult<Object> converted = registry().fromPlainResult(PlainData.copy(probe), declaredType(field),
+                    configFilePath, keys(field), entry);
+            if (!converted.failures().isEmpty()) { return false; }
+            Object plain = registry().toPlainResult(converted.value(), declaredType(field), configFilePath, keys(field), entry,
+                    probe).value();
+            return PlainData.plainEquals(PlainData.copy(plain), base);
+        } catch (ConversionException | RuntimeException unusable) {
+            return false;
+        }
+    }
+
+    /**
+     * Collects the paths, relative to a setting, at which {@code current} differs from {@code base}. Only a value
+     * declared as a {@link Map} is compared key by key (an added or removed key is one path), following the declared
+     * value type into nested maps; anything else - a list, a {@code ConfigurationSerializable} such as a Bukkit
+     * {@code Location} or {@code Vector}, a typed map's value of a non-map type - is one value, written whole or not at
+     * all, so a save never leaves on disk a value mixed from the module's and the operator's (save rule revision 1,
+     * 17-65 review round 1 R65-01).
+     */
+    private static void changedLeaves(Object base, Object current, Type declared, List<String> prefix, List<List<String>> out) {
+        if (splitsByEntry(declared, base, current)) {
+            Map<?, ?> before = (Map<?, ?>) base;
+            Map<?, ?> after = (Map<?, ?>) current;
+            Type valueType = mapValueType(declared);
+            Set<Object> names = new java.util.LinkedHashSet<>(after.keySet()); names.addAll(before.keySet());
+            for (Object name : names) {
+                List<String> path = new ArrayList<>(prefix); path.add(String.valueOf(name));
+                if (!before.containsKey(name) || !after.containsKey(name)) { out.add(path); }
+                else { changedLeaves(before.get(name), after.get(name), valueType, path, out); }
+            }
+            return;
+        }
+        if (!PlainData.plainEquals(base, current)) { out.add(prefix); }
+    }
+
+    /** The declared value type of a map type ({@code Object} when it is raw). */
+    private static Type mapValueType(Type declared) {
+        return TypeToken.of(declared).resolveType(Map.class.getTypeParameters()[1]).getType();
+    }
+
+    /**
+     * How many of {@code keys}, from the start, address entries of declared maps: the keys after them would reach inside a
+     * value that is one value (17-65 review round 2 R2-01).
+     */
+    private static int splitDepth(Type declared, List<String> keys) {
+        Type type = declared;
+        int depth = 0;
+        for (int i = 0; i < keys.size() && Map.class.isAssignableFrom(TypeToken.of(type).getRawType()); i++) {
+            depth++;
+            type = mapValueType(type);
+        }
+        return depth;
+    }
+
+    /**
+     * Whether a value is compared entry by entry: it is declared as a {@link Map} and both plain forms are maps that are
+     * not a serialized object (Bukkit's {@code ==} type key).
+     */
+    private static boolean splitsByEntry(Type declared, Object base, Object current) {
+        return base instanceof Map && current instanceof Map
+                && Map.class.isAssignableFrom(TypeToken.of(declared).getRawType())
+                && !((Map<?, ?>) base).containsKey("==") && !((Map<?, ?>) current).containsKey("==");
+    }
+
+    /** The key a warning names for a change: the setting's path, then the map keys, any key below a secret-shaped one redacted. */
+    private String describeKey(Field field, List<String> leaf) {
+        StringBuilder text = new StringBuilder(fieldPath(field));
+        for (String key : displayKeys(secretSetting(field), leaf)) { text.append('.').append(key); }
+        return "'" + text + "'";
+    }
+
+    /**
+     * The one display rule for map keys in every configuration diagnostic bound for the server log or the panel (#673,
+     * case 54): once the setting or a key above is secret-shaped, every deeper key shows as {@code <redacted>}; the
+     * secret-shaped key itself is shown, so the operator still sees which setting to fix. Only the displayed text is
+     * redacted - whether a value is secret is decided from the real keys ({@link #secretPath}), never from this text.
+     *
+     * @param secretAbove whether a key above {@code keys} - the field name or a declared path segment - is secret-shaped
+     * @param keys        the real keys, outermost first
+     * @return the keys to display, in the same order
+     */
+    private List<String> displayKeys(boolean secretAbove, List<String> keys) {
+        List<String> shown = new ArrayList<>(keys.size());
+        boolean secret = secretAbove;
+        for (String key : keys) {
+            shown.add(secret ? "<redacted>" : key);
+            secret |= isSecretShapedFieldName(key);
+        }
+        return shown;
+    }
+
+    /** Whether a setting is secret-shaped: its field name or a segment of its declared path. */
+    private boolean secretSetting(Field field) {
+        boolean secret = isSecretShapedFieldName(field.getName());
+        for (String key : keys(field)) { secret |= isSecretShapedFieldName(key); }
+        return secret;
+    }
+
+    /** Whether a value of {@code field} at {@code leaf} is secret: the setting or a real key down to it is secret-shaped. */
+    private boolean secretPath(Field field, List<String> leaf) {
+        boolean secret = secretSetting(field);
+        for (String key : leaf) { secret |= isSecretShapedFieldName(key); }
+        return secret;
+    }
+
+    /**
+     * Writes exactly the named settings, as the module holds them now, because the operator explicitly asked for that
+     * change - a command such as {@code /setspawn}, which names the six {@code spawn.location.*} entries.
+     * <p>
+     * The operator's request is their consent to replace what the file holds at those settings: the module's value is
+     * written there even when the operator also edited that key by hand since it was read (the command wins at the key
+     * it names), and a named setting the file lacks is inserted with its comment. Nothing else is written - not another
+     * setting, not even one the module changed and did not name - and no other key, value, comment or byte of the file
+     * moves (maintainer decision of 2026-10-04, "what code may write, by file type": write exactly the item the
+     * operator explicitly asked to change).
+     * <p>
+     * Naming a setting declared as a {@link Map} writes the whole map as the module holds it: every entry the operator
+     * added or edited by hand in that map since it was read is replaced or dropped. For a command that changes one
+     * entry - one rule, one warp - use {@link #saveOperatorMapEntry(String, String...)}, which writes only that entry.
+     * <p>
+     * <b>Why it cannot overwrite other operator content.</b> The write goes through the framework's configuration write
+     * gate owning only the named settings' keys: after rendering, every line outside them must be byte-identical to the
+     * file as it is at write time, or nothing is written. When the gate refuses - the file cannot be read or parsed,
+     * uses anchors, aliases or merge keys, has a layout the write could not keep byte for byte outside the named keys,
+     * or changed while the write was being prepared - this throws {@link ConfigWriteRefusedException} naming the reason;
+     * the file keeps its bytes and the in-memory values stay as the module set them, still unsaved.
+     *
+     * @param entryPaths the {@link ConfigEntry#path()} of each setting to write (the field name for an entry declared
+     *                   without a path), at least one
+     * @throws IllegalArgumentException     if no path is given, or a path is not a declared entry of this configuration;
+     *                                      nothing is written
+     * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
+     * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
+     * @throws IOException                  if publishing the verified file fails; the file then holds the bytes it held
+     *                                      before, put back from its framework backup when an in-place write failed
+     *                                      part-way, or - when even that fails - one SEVERE names the file and the
+     *                                      kept backup, and this configuration treats the file as changed since it
+     *                                      was read: every later write is refused until a reload reads it again
+     * @since 6.3.0
+     */
+    public final void saveOperatorChange(String... entryPaths) throws IOException {
+        requireOperatorWriteThread("saveOperatorChange");
+        synchronized (this) {
+            if (entryPaths == null || entryPaths.length == 0) {
+                throw new IllegalArgumentException("Name at least one configuration entry of " + configFilePath + " to write");
+            }
+            List<Field> named = new ArrayList<>();
+            for (String entryPath : entryPaths) {
+                Field field = declaredEntry(entryPath);
+                if (!named.contains(field)) { named.add(field); }
+            }
+            List<ModuleChange> changes = new ArrayList<>();
+            for (Field field : named) {
+                changes.add(new ModuleChange(field, Collections.<String>emptyList(), keys(field), plainValue(field, true),
+                        acknowledgedRaw.get(field)));
+            }
+            writeOperatorChanges(changes);
+        }
+    }
+
+    /**
+     * Writes exactly one entry of a map setting, as the module holds it now, because the operator explicitly asked for
+     * that change - a command such as {@code /autoreply add}, which names one rule of {@code autoreply.rules}.
+     * <p>
+     * The entry is set to the module's value, inserted when the file lacks it; when the module's map no longer holds the
+     * entry, the entry is removed from the file. The operator's request is their consent to replace what the file holds
+     * at that entry. Every other entry - one the operator added or edited by hand since the file was read, a 6.2 split
+     * entry - and every other key, value, comment and byte of the file stay (maintainer decision of 2026-10-04: write
+     * exactly the item the operator explicitly asked to change). Each map key is one whole key: a rule named
+     * {@code play.example} is the single key {@code play.example}.
+     * <p>
+     * <b>Why it cannot overwrite other operator content.</b> As {@link #saveOperatorChange(String...)}: the write owns
+     * only that entry's key at the configuration write gate, which refuses any change to another byte of the file and
+     * then throws {@link ConfigWriteRefusedException} naming the reason, leaving the file and the in-memory value as
+     * they are. A map that is empty in the file ({@code {}}), or that the change empties, is owned as a whole, since its
+     * key line changes with its first or last entry.
+     *
+     * @param entryPath the {@link ConfigEntry#path()} of a setting declared as a {@link Map}
+     * @param mapKeys   the keys from that map down to the entry, one whole key each; usually just the entry's key
+     * @throws IllegalArgumentException     if {@code entryPath} is not a declared entry of this configuration, the
+     *                                      setting is not declared as a map, no key is given, or the keys reach inside
+     *                                      an entry that is not itself a declared map (a serializable such as a
+     *                                      {@code Location}, or a list, is one value: name the entry itself); nothing
+     *                                      is written
+     * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
+     * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
+     * @throws IOException                  if publishing the verified file fails; the file then holds the bytes it held
+     *                                      before, put back from its framework backup when an in-place write failed
+     *                                      part-way, or - when even that fails - one SEVERE names the file and the
+     *                                      kept backup, and this configuration treats the file as changed since it
+     *                                      was read: every later write is refused until a reload reads it again
+     * @since 6.3.0
+     */
+    public final void saveOperatorMapEntry(String entryPath, String... mapKeys) throws IOException {
+        writeOperatorMapEntry(null, entryPath, mapKeys);
+    }
+
+    /**
+     * Writes exactly one entry of a map setting, as {@link #saveOperatorMapEntry(String, String...)} does, but only when
+     * the entry's presence in the file is what the operator's command assumes: {@link EntryPresence#MUST_BE_ABSENT} for a
+     * command that creates the entry ({@code /autoreply add <name>}), {@link EntryPresence#MUST_BE_PRESENT} for one that
+     * changes an existing entry ({@code /autoreply setkeyword <name>}). When the condition does not hold, nothing is
+     * written and {@link ConfigEntryPresenceException} tells the caller which condition failed. A module then needs no
+     * second read of the file to decide whether the command may write.
+     * <p>
+     * <b>What "present" means.</b> The entry is present when its whole key path exists in the file. The path is where the
+     * framework reads the setting (its nested keys, or the flat dotted key the operator wrote), followed by
+     * {@code mapKeys}, each one whole key. An entry holding {@code null} is present. An entry is absent when its key, or a
+     * key above it, is missing, {@code null}, an empty map or not a map. A file that is missing, empty or holds only
+     * comments holds no entry (see {@link EntryPresence}).
+     * <p>
+     * <b>Why it cannot overwrite other operator content.</b> As {@link #saveOperatorMapEntry(String, String...)}: the write
+     * owns only that entry's key at the configuration write gate, which refuses any change to another byte of the file.
+     * The condition adds no second read. It is decided on the same read of the file that the gate verifies the edit
+     * against and that the gate checks again immediately before it replaces the file. An entry the operator added or
+     * deleted by hand before that read is seen. An edit saved after it makes the gate refuse the write, because the file
+     * changed. So {@code add} never replaces an entry the operator wrote, and {@code setkeyword} never writes back an
+     * entry the operator deleted.
+     * <p>
+     * A failed condition logs at FINE only, because the caller reports it to the operator. Every other refusal is as for
+     * the two-argument overload: one WARNING names the file and the keys, never a value.
+     *
+     * @param required  whether the entry must already be in the file, or must not be
+     * @param entryPath the {@link ConfigEntry#path()} of a setting declared as a {@link Map}
+     * @param mapKeys   the keys from that map down to the entry, one whole key each; usually just the entry's key
+     * @throws IllegalArgumentException     if {@code required} is {@code null}, or for any reason the two-argument
+     *                                      overload names; nothing is written
+     * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
+     * @throws ConfigEntryPresenceException if the entry's presence in the file is not {@code required}; nothing is written
+     * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
+     * @throws IOException                  if publishing the verified file fails; the file then holds the bytes it held
+     *                                      before, put back from its framework backup when an in-place write failed
+     *                                      part-way, or - when even that fails - one SEVERE names the file and the
+     *                                      kept backup, and this configuration treats the file as changed since it
+     *                                      was read: every later write is refused until a reload reads it again
+     * @since 6.3.0
+     */
+    public final void saveOperatorMapEntry(EntryPresence required, String entryPath, String... mapKeys) throws IOException {
+        if (required == null) {
+            throw new IllegalArgumentException("Name the presence the map entry of '" + entryPath + "' in " + configFilePath
+                    + " must have (EntryPresence.MUST_BE_PRESENT or MUST_BE_ABSENT)");
+        }
+        writeOperatorMapEntry(required, entryPath, mapKeys);
+    }
+
+    /** Both {@code saveOperatorMapEntry} overloads: {@code required} is {@code null} for the unconditional one. */
+    private void writeOperatorMapEntry(EntryPresence required, String entryPath, String... mapKeys) throws IOException {
+        requireOperatorWriteThread("saveOperatorMapEntry");
+        synchronized (this) {
+            Field field = declaredEntry(entryPath);
+            if (!Map.class.isAssignableFrom(TypeToken.of(declaredType(field)).getRawType())) {
+                throw new IllegalArgumentException("Configuration entry '" + entryPath + "' of " + configFilePath
+                        + " is not a map setting");
+            }
+            if (mapKeys == null || mapKeys.length == 0) {
+                throw new IllegalArgumentException("Name the map entry of '" + entryPath + "' in " + configFilePath + " to write");
+            }
+            List<String> leaf = new ArrayList<>();
+            for (String key : mapKeys) {
+                if (key == null) { throw new IllegalArgumentException("A map key of '" + entryPath + "' cannot be null"); }
+                leaf.add(key);
+            }
+            if (splitDepth(declaredType(field), leaf) < leaf.size()) {
+                // The entry is one value - a serializable or a list - and is written whole (17-65 review round 2 R2-01).
+                throw new IllegalArgumentException("The map keys " + leaf + " of '" + entryPath + "' in " + configFilePath
+                        + " reach inside an entry that is not a map; name the entry itself");
+            }
+            Object mine = plainValue(field, true);
+            leaf = spelledLeaf(field, leaf, mine);
+            List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
+            ModuleChange change = new ModuleChange(field, leaf, path, mine, acknowledgedRaw.get(field));
+            change.presence = required;
+            writeOperatorChanges(Collections.singletonList(change));
+        }
+    }
+
+    /**
+     * The keys of an operator's map-entry write, spelled as the module's map and the file spell them (#673, case 52). At
+     * a map level declared with a non-text key type ({@code Integer}, {@code Long}, {@code Boolean}, ...), a key the
+     * module's plain map there does not hold as given is read through that key type and replaced by the one key of the
+     * module's map that reads back to the same key, else by the one such key of the value last read from the file, so
+     * {@code "1"} reaches the entry the file spells {@code '01'}. Text that does not convert, or that no key reads back
+     * to, is kept as given; levels keyed by {@code String} or {@code Object} are not changed. A setting with its own legacy
+     * {@link ConfigEntry#parser()} owns its keys: they are kept as given (PR #687 local Codex run 2).
+     *
+     * @throws ConfigWriteRefusedException if several keys at one level read back to the same key; nothing is written
+     */
+    private List<String> spelledLeaf(Field field, List<String> leaf, Object mine) throws ConfigWriteRefusedException {
+        if (!registryConverts(field)) { return leaf; }
+        RawEntry read = acknowledgedRaw.get(field);
+        Object moduleLevel = mine;
+        Object fileLevel = read == null || !read.present ? null : read.value;
+        Type type = declaredType(field);
+        List<String> spelled = new ArrayList<>(leaf.size());
+        for (String key : leaf) {
+            String text = key;
+            Type keyType = ConversionTypes.argument(type, Map.class, 0);
+            boolean held = moduleLevel instanceof Map && ((Map<?, ?>) moduleLevel).containsKey(key);
+            if (!held && GenericConverters.bindsKeyText(keyType)) {
+                text = spelledKey(field, spelled, key, keyType, moduleLevel, fileLevel);
+            }
+            spelled.add(text);
+            moduleLevel = moduleLevel instanceof Map ? ((Map<?, ?>) moduleLevel).get(text) : null;
+            fileLevel = fileLevel instanceof Map ? ((Map<?, ?>) fileLevel).get(text) : null;
+            type = mapValueType(type);
+        }
+        return spelled;
+    }
+
+    /** One key of {@link #spelledLeaf}: {@code above} holds the keys already resolved, outermost first. */
+    private String spelledKey(Field field, List<String> above, String key, Type keyType, Object moduleLevel, Object fileLevel)
+            throws ConfigWriteRefusedException {
+        List<String> location = new ArrayList<>(keys(field)); location.addAll(above); location.add(key);
+        Object typed = readKey(key, keyType, location);
+        if (typed == null) { return key; }
+        List<String> matches = keysReadingBack(moduleLevel, typed, keyType, location);
+        if (matches.isEmpty()) { matches = keysReadingBack(fileLevel, typed, keyType, location); }
+        if (several(matches)) {
+            List<String> leaf = new ArrayList<>(above); leaf.add(matches.get(0));
+            throw refused(severalSpellingsReason(field, Collections.singletonList(leaf)));
+        }
+        return matches.isEmpty() ? key : matches.get(0);
+    }
+
+    /** The keys of {@code level}, when it is a map, that read back through {@code keyType} to {@code typed}, in map order. */
+    private List<String> keysReadingBack(Object level, Object typed, Type keyType, List<String> location) {
+        List<String> found = new ArrayList<>();
+        if (!(level instanceof Map)) { return found; }
+        for (Object candidate : ((Map<?, ?>) level).keySet()) {
+            String text = String.valueOf(candidate);
+            if (typed.equals(readKey(text, keyType, location))) { found.add(text); }
+        }
+        return found;
+    }
+
+    /**
+     * {@code text} read as a map key of {@code keyType} on the loader's read path, or {@code null} when it does not
+     * convert. A probe: nothing is logged or recorded.
+     */
+    private Object readKey(String text, Type keyType, List<String> location) {
+        try {
+            ConversionResult<Object> key = registry().fromPlainResult(text, keyType, configFilePath, location);
+            return key.failures().isEmpty() ? key.value() : null;
+        } catch (ConversionException | RuntimeException unusable) {
+            return null;
+        }
+    }
+
+    private static boolean several(List<?> values) { return values.size() > 1; }
+
+    /**
+     * The refusal text for typed map keys the file writes in several spellings, such as {@code 1:} and {@code '01':}
+     * (#673, case 52): the setting and each key (its first spelling) through {@link #describeKey}, never a value or the
+     * other spellings.
+     */
+    private String severalSpellingsReason(Field field, List<List<String>> leaves) {
+        List<String> named = new ArrayList<>(leaves.size());
+        for (List<String> leaf : leaves) { named.add(describeKey(field, leaf)); }
+        return "setting " + describeKey(field, Collections.<String>emptyList()) + " holds the map key "
+                + String.join(", ", named) + " in several spellings; delete all but one of them, then reload";
+    }
+
+    /**
+     * Every typed map key that {@code read} holds for {@code field} in several spellings, relative to the setting and
+     * ending in its first spelling in file order (#673, case 52). Decided from the file's keys alone through the
+     * converter's file-key ambiguity scan - the same key index the writer binds keys with - so a key the module removed
+     * or never held still counts. A setting with its own legacy {@link ConfigEntry#parser()} has none: its parser, not
+     * the default key converter, decides which file keys are one key (PR #687 local Codex run 2).
+     */
+    private List<List<String>> severalSpellings(ConfigDocument read, Field field) {
+        if (!registryConverts(field)) { return Collections.emptyList(); }
+        List<String> location = keysIn(read, field);
+        if (!read.contains(location)) { return Collections.emptyList(); }
+        List<List<String>> leaves = new ArrayList<>();
+        int setting = keys(field).size();
+        for (List<String> path : registry().ambiguousFileKeys(declaredType(field), read.get(location), configFilePath, keys(field))) {
+            leaves.add(new ArrayList<>(path.subList(setting, path.size())));
+        }
+        return leaves;
+    }
+
+    /**
+     * Whether the converter registry converts {@code field}, as {@code toPlainResult} decides: an explicit non-default
+     * legacy {@link ConfigEntry#parser()} keeps conversion ownership, so no default typed-key spelling rule applies to it.
+     */
+    // Explicit legacy parsers remain supported; the comparison names the deprecated default parser class.
+    @SuppressWarnings("removal")
+    private static boolean registryConverts(Field field) {
+        ConfigEntry entry = field.getAnnotation(ConfigEntry.class);
+        return entry == null || entry.parser() == com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser.class;
+    }
+
+    /** An operator write of a setting whose typed map keys {@code read} holds in several spellings is refused. */
+    private void refuseSeveralSpellings(ConfigDocument read, Field field) throws ConfigWriteRefusedException {
+        List<List<String>> ambiguous = severalSpellings(read, field);
+        if (!ambiguous.isEmpty()) { throw refused(severalSpellingsReason(field, ambiguous)); }
+    }
+
+    /**
+     * The save rule for a setting whose typed map keys {@code read} holds in several spellings: none of its changed
+     * {@code leaves} is written, and one warning names them with the reason, never a value.
+     *
+     * @return whether the setting was reported and must not be written
+     */
+    private boolean reportedSeveralSpellings(ConfigDocument read, Field field, List<List<String>> leaves) {
+        List<List<String>> ambiguous = severalSpellings(read, field);
+        if (ambiguous.isEmpty()) { return false; }
+        List<String> named = new ArrayList<>(leaves.size());
+        for (List<String> leaf : leaves) { named.add(describeKey(field, leaf)); }
+        warnNotWritten(named, severalSpellingsReason(field, ambiguous));
+        return true;
+    }
+
+    private void requireOperatorWriteThread(String operation) {
+        if (ultiToolsPlugin == null) { throw new IllegalStateException("Config not initialized. Call init() first."); }
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, operation + " " + configFilePath)) {
+            throw new IllegalStateException("Configuration " + operation + " of " + configFilePath + " requires the server thread");
+        }
+    }
+
+    /** The field declared at {@code entryPath} ({@link ConfigEntry#path()}, or the field name for an empty path). */
+    private Field declaredEntry(String entryPath) {
+        for (Field field : configEntryFields()) {
+            if (fieldPath(field).equals(entryPath)) { return field; }
+        }
+        throw new IllegalArgumentException("'" + entryPath + "' is not a declared configuration entry of " + configFilePath);
+    }
+
+    /**
+     * Writes an operator's explicit changes through the configuration write gate - the module's value at each change's
+     * path, whatever the file holds there now (the operator's consent), each owned as a whole key - against one read
+     * of the file, and advances the baseline and the last-read entry of exactly those paths. A refusal throws
+     * {@link ConfigWriteRefusedException}; nothing is acknowledged then.
+     */
+    private void writeOperatorChanges(List<ModuleChange> changes) throws IOException {
+        if (changes.isEmpty()) { return; }
+        OperatorFileWriter.Staged staged = stageOperatorChanges(changes);
+        OperatorFileWriter.Result result;
+        try { result = staged.commit(); }
+        catch (IOException failure) { noteFailedWrite(failure); throw failure; }
+        if (!result.applied()) { throw refused(result.reason()); }
+        acknowledgeWritten(result.readFingerprint(), result.fingerprint(), result.document(), changes);
+    }
+
+    /**
+     * Prepares an operator's explicit changes for the configuration write gate and stages the verified file (see
+     * {@link #writeOperatorChanges}); a write the gate settles as refused, or a file that cannot be read or parsed,
+     * throws {@link ConfigWriteRefusedException} here, before anything is staged.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Each precondition refuses with its own reason before anything is staged.
+    private OperatorFileWriter.Staged stageOperatorChanges(List<ModuleChange> changes) throws IOException {
+        java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
+        if (lastLoadUnparseable) {
+            throw refused("the file could not be read or parsed when it was last loaded; reload a valid file first");
+        }
+        if (fileNotRestored) { throw refused(NOT_RESTORED); }
+        ConfigLoadResult loaded = ConfigDocument.load(target);
+        if (protectFailedLoad(loaded)) { throw refused("the file cannot be read or parsed"); }
+        ConfigDocument read = loaded.state() == ConfigLoadResult.State.LOADED ? loaded.document() : ConfigDocument.empty();
+        for (ModuleChange change : changes) {
+            // Written on the line the file holds the setting on - a flat dotted key stays flat - and refused when the file
+            // now holds it twice, since writing one form would leave the other (#612).
+            if (heldTwice(read, change.field)) { throw refused(heldTwiceReason(change.field) + "; delete one of them, then reload"); }
+            refuseSeveralSpellings(read, change.field);
+            if (change.present && read.readings(fieldPath(change.field)).isEmpty() && insertKeysIn(read, change.field) == null) {
+                // Inserted below the section the file holds, never into a second form of it (#614). Only a change that
+                // writes a value inserts; removing from a setting the file no longer holds writes nothing (Codex run 1).
+                throw refused("setting '" + fieldPath(change.field) + "' cannot be inserted: " + unplacedReason(read, change.field)
+                        + "; delete one of the forms, then reload");
+            }
+            change.relocate(keysIn(read, change.field));
+        }
+        for (ModuleChange change : changes) {
+            // A field edited inside a composite value is written as the whole value built from what was last read: only
+            // while the file still holds exactly that value - observed on the read the gate verifies against - never
+            // rebuilt over an edit made since (17-65 route change after review round 3, R3-01).
+            if (change.required != null && !change.holds(read.contains(change.path), read.get(change.path),
+                    change.required.present, change.required.value)) {
+                throw refused(describeKey(change.field, change.leaf) + ": the file changed since it was read; reload first");
+            }
+        }
+        for (ModuleChange change : changes) {
+            // An operator's map-entry write under a presence condition (#623), decided on this read: the gate below
+            // verifies the edit against exactly these bytes, and checks them again immediately before it replaces the file.
+            if (change.presence != null
+                    && read.contains(change.path) != (change.presence == EntryPresence.MUST_BE_PRESENT)) {
+                throw presenceRefused(change);
+            }
+        }
+        List<Field> inserted = new ArrayList<>();
+        for (ModuleChange change : changes) {
+            if (change.leaf.isEmpty() && !read.contains(change.path)) { inserted.add(change.field); }
+        }
+        OperatorFileWriter.Staged staged = OperatorFileWriter.stage(target, saveOwnership(changes, read), expectedBase(loaded),
+                candidate -> {
+                    apply(candidate, changes);
+                    for (Field field : inserted) { addEntryComment(candidate, field); }
+                });
+        if (!staged.isPending() && !staged.settledResult().applied()) { throw refused(staged.settledResult().reason()); }
+        return staged;
+    }
+
+    private ConfigWriteRefusedException refused(String reason) {
+        return new ConfigWriteRefusedException(ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath(), reason);
+    }
+
+    /** The refusal of a map-entry write whose presence condition did not hold: logged at FINE only, the caller reports it (#623). */
+    private ConfigEntryPresenceException presenceRefused(ModuleChange change) {
+        String reason = describeKey(change.field, change.leaf) + (change.presence == EntryPresence.MUST_BE_ABSENT
+                ? " is already in the file, so it was not created" : " is not in the file, so it was not written");
+        String file = ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath();
+        LOGGER.fine("Configuration file " + file + " was not written: " + reason);
+        return new ConfigEntryPresenceException(file, reason, change.presence);
+    }
+
+    /**
+     * A panel edit's changes: each touched setting as a whole, or - for a map setting edited leaf by leaf - each touched
+     * leaf, at the value the edit applied. The operator named exactly these in the panel (maintainer decision of
+     * 2026-10-04: write exactly the item the operator explicitly asked to change).
+     */
+    private List<ModuleChange> panelChanges(List<Field> touched, Map<Field, List<List<String>>> leaves) {
+        List<ModuleChange> changes = new ArrayList<>();
+        for (Field field : touched) {
+            Object mine = plainValue(field, true);
+            RawEntry read = acknowledgedRaw.get(field);
+            Map<List<String>, RawEntry> required = compositeReads.get(field);
+            Map<List<String>, Object> wholes = compositeWrites.get(field);
+            List<List<String>> fieldLeaves = leaves.get(field);
+            if (fieldLeaves == null) {
+                ModuleChange change = new ModuleChange(field, Collections.<String>emptyList(), keys(field), mine, read);
+                change.required = required == null ? null : required.get(Collections.<String>emptyList());
+                if (change.required != null && wholes != null && wholes.containsKey(Collections.<String>emptyList())) {
+                    change.writeWhole(wholes.get(Collections.<String>emptyList()));
+                }
+                changes.add(change);
+                continue;
+            }
+            for (List<String> leaf : fieldLeaves) {
+                List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
+                ModuleChange change = new ModuleChange(field, leaf, path, mine, read);
+                change.required = required == null ? null : required.get(leaf);
+                if (change.required != null && wholes != null && wholes.containsKey(leaf)) {
+                    change.writeWhole(wholes.get(leaf));
+                }
+                changes.add(change);
+            }
+        }
+        compositeReads.clear();
+        compositeWrites.clear();
+        return changes;
+    }
+
+    /** @param reason why nothing was written, or {@code null} for the save rule's "not the value made from" */
+    private void warnNotWritten(List<String> keys, String reason) {
+        // Values are deliberately omitted: any key may hold a credential.
+        Logger logger = UltiTools.getInstance() == null ? LOGGER : UltiTools.getInstance().getLogger();
+        logger.log(Level.WARNING, "Configuration file " + ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath()
+                + ": the module's changes to " + String.join(", ", keys) + " were not written, because "
+                + (reason == null ? "the file does not hold the value they were made from there (edited, deleted or"
+                        + " unusable since it was read)" : reason)
+                + ". The file keeps its text; the module's values stay in memory.");
+    }
+
+    /** The refusal reason while {@link #fileNotRestored} holds (#622): a phrase without any value. */
+    private static final String NOT_RESTORED = "the file changed since it was read: a write to it failed part-way and"
+            + " could not be undone, so it may hold part of that write; compare it with the backup the server log names,"
+            + " then reload";
+
+    /**
+     * Records that a write to this file could not be put back after it failed part-way (#622), so the file is treated as
+     * changed since it was read until a load reads it again; any other failure left the file holding its previous bytes.
+     */
+    private void noteFailedWrite(IOException failure) {
+        if (failure instanceof AtomicConfigWriter.RestoreFailedException) { fileNotRestored = true; }
+    }
+
+    private ConverterRegistry registry() { return ConverterRegistry.forModule(ultiToolsPlugin); }
+
+    private String fieldPath(Field field) {
+        String path = field.getAnnotation(ConfigEntry.class).path();
+        return path.isEmpty() ? field.getName() : path;
+    }
+
+    private List<String> keys(Field field) { return Arrays.asList(fieldPath(field).split("\\.", -1)); }
+
+    /**
+     * Where {@code doc} holds {@code field}'s setting: its one reading ({@link ConfigDocument#readings(String)}) - the
+     * nested keys, a flat dotted key such as {@code features.chat}, or a mix such as {@code a.b: {c: 1}} - or, when it
+     * holds none, where an insert puts it ({@link #insertKeysIn}; the nested keys when that cannot be decided, for a
+     * caller that only asks whether the setting is held). One key semantics for every reader and writer of a declared
+     * setting (#612): a setting the operator wrote in flat form is read, saved and edited on that line, and never gets a
+     * nested copy. A setting held in several forms is refused first ({@link #heldTwice}).
+     */
+    private List<String> keysIn(ConfigDocument doc, Field field) {
+        List<List<String>> readings = doc.readings(fieldPath(field));
+        if (readings.size() == 1) { return readings.get(0); }
+        List<String> insert = readings.isEmpty() ? insertKeysIn(doc, field) : null;
+        return insert != null ? insert : keys(field);
+    }
+
+    /**
+     * Where an insert puts {@code field}'s setting, which {@code doc} does not hold (#614, maintainer decision
+     * 2026-10-06): below the longest prefix of its path the file holds as a section ({@link ConfigDocument#heldSections}),
+     * the rest of the path as nested keys - so a section the operator wrote in flat dotted form ({@code a.b:}) gets the
+     * setting in place, never a second, nested copy of the section. When the file holds that section in several forms, the
+     * insert goes below the one form that holds another declared setting of the section (insert-location rule, revision
+     * 0, plan 17-75); when none or more than one does, the framework cannot tell, and this returns {@code null}: the
+     * insert is refused, naming the file and the setting ({@link #unplacedReason}). The nested keys of the whole path when
+     * the file holds no prefix as a section.
+     * <p>
+     * <b>A sibling written as one dotted key below the section</b> (insert-location rule revision 1, gate-1 F4 of plan
+     * 17-75, maintainer decision 2026-10-06). When a declared setting of the same section is held with the rest of its path
+     * as one dotted key ({@code a:} / {@code b.c: 3}), it shares a longer prefix with the missing setting ({@code a.b.d})
+     * than any section the file holds; the missing setting is then written in that sibling's form, beside it
+     * ({@code b.d: 2}), never as a nested {@code b:} / {@code d:} - a second form of {@code a.b}, which Bukkit reads as
+     * shadowing the first. When siblings sharing that prefix are written in different splits, it cannot be decided.
+     *
+     * @return the key path to insert at, or {@code null} when it cannot be decided
+     */
+    private List<String> insertKeysIn(ConfigDocument doc, Field field) {
+        return placement(doc, field).path;
+    }
+
+    /** Where {@link #insertKeysIn} puts a setting, and the dotted section it belongs to (named in a refusal). */
+    private static final class Placement {
+        private final List<String> path;
+        private final String section;
+
+        private Placement(List<String> path, String section) {
+            this.path = path;
+            this.section = section;
+        }
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // The mirrored form is decided first; the held section's rule follows unchanged.
+    private Placement placement(ConfigDocument doc, Field field) {
+        List<String> parts = keys(field);
+        List<List<String>> sections = doc.heldSections(fieldPath(field));
+        int held = sections.isEmpty() ? 0 : String.join(".", sections.get(0)).split("\\.", -1).length;
+        // A sibling written as one dotted key below the held section shares a longer prefix than that section (F4).
+        int longest = held;
+        List<List<String>> mirrored = new ArrayList<>();
+        for (Field other : configEntryFields()) {
+            List<List<String>> readings = other.equals(field) ? Collections.<List<String>>emptyList()
+                    : doc.readings(fieldPath(other));
+            if (readings.size() != 1) { continue; }
+            List<String> otherParts = keys(other);
+            int common = 0;
+            while (common < parts.size() - 1 && common < otherParts.size() && parts.get(common).equals(otherParts.get(common))) {
+                common++;
+            }
+            List<String> location = common > longest || common == longest && common > held
+                    ? mirroredPath(readings.get(0), common, parts) : null;
+            if (location == null) { continue; }
+            if (common > longest) { longest = common; mirrored.clear(); }
+            if (!mirrored.contains(location)) { mirrored.add(location); }
+        }
+        if (longest > held) {
+            return new Placement(mirrored.size() == 1 ? mirrored.get(0) : null, String.join(".", parts.subList(0, longest)));
+        }
+        if (sections.isEmpty()) { return new Placement(keys(field), String.join(".", parts)); }
+        List<String> section = sections.size() == 1 ? sections.get(0) : sectionHoldingASibling(doc, field, sections);
+        String name = String.join(".", sections.get(0));
+        if (section == null) { return new Placement(null, name); }
+        List<String> path = new ArrayList<>(section);
+        path.addAll(parts.subList(held, parts.size()));
+        return new Placement(path, name);
+    }
+
+    /**
+     * The missing setting's path in a sibling's form: the sibling's reading cut at the {@code common} dotted segments both
+     * paths share, when that cut falls inside one of its keys ({@code [a, b.c]} cut after {@code a.b} gives
+     * {@code [a, b.d]} for {@code a.b.d}); {@code null} when the cut falls between keys (that prefix is a held section).
+     */
+    private static List<String> mirroredPath(List<String> reading, int common, List<String> parts) {
+        int before = 0;
+        for (int i = 0; i < reading.size(); i++) {
+            String[] segments = reading.get(i).split("\\.", -1);
+            if (common == before + segments.length) { return null; }
+            if (common < before + segments.length) {
+                List<String> path = new ArrayList<>(reading.subList(0, i));
+                path.add(String.join(".", Arrays.asList(segments).subList(0, common - before)) + "."
+                        + String.join(".", parts.subList(common, parts.size())));
+                return path;
+            }
+            before += segments.length;
+        }
+        return null;
+    }
+
+    /** Of several forms of one section, the one form holding another declared setting of it; {@code null} for none or several. */
+    private List<String> sectionHoldingASibling(ConfigDocument doc, Field field, List<List<String>> sections) {
+        String prefix = String.join(".", sections.get(0)) + ".";
+        List<String> found = null;
+        for (List<String> section : sections) {
+            boolean holds = false;
+            for (Field other : configEntryFields()) {
+                if (other.equals(field) || !fieldPath(other).startsWith(prefix)) { continue; }
+                for (List<String> reading : doc.readings(fieldPath(other))) {
+                    holds |= reading.size() > section.size() && reading.subList(0, section.size()).equals(section);
+                }
+            }
+            if (holds && found != null) { return null; }
+            if (holds) { found = section; }
+        }
+        return found;
+    }
+
+    /** Why {@code field}'s setting cannot be inserted ({@link #insertKeysIn} returned {@code null}): names, never values. */
+    private String unplacedReason(ConfigDocument doc, Field field) {
+        return "the section '" + placement(doc, field).section + "' is written in several"
+                + " forms (as a flat dotted key and as nested keys, or in several splits of its dots), and not exactly one"
+                + " of them holds another setting of the section, so the framework cannot tell where to add it";
+    }
+
+    /** Whether {@code doc} holds {@code field}'s setting in more than one form (#612). */
+    private boolean heldTwice(ConfigDocument doc, Field field) {
+        return doc.readings(fieldPath(field)).size() > 1;
+    }
+
+    /** The refusal text for a setting held in more than one form: the setting path, never a value (#612). */
+    private String heldTwiceReason(Field field) {
+        return "setting '" + fieldPath(field) + "' is written in two forms (as a flat dotted key and as nested keys,"
+                + " or in two splits of its dots)";
+    }
+
+    private Type declaredType(Field field) {
+        return TypeToken.of(getClass()).resolveType(field.getGenericType()).getType();
+    }
+
+    private Object plainValue(Field field) { return plainValue(field, false); }
+
+    /**
+     * The plain value of {@code field} as the module holds it, spelled like the file this entity last read or wrote: the
+     * raw acknowledgement is passed as the file value, so a typed map key the file spells {@code '01'}, {@code 1.0} or
+     * in upper case keeps that text (#673, case 52). Every save, operator write, panel edit, unsaved-entry check and
+     * reload's in-memory side therefore names the operator's own key, which is the document's key identity.
+     */
+    private Object plainValue(Field field, boolean writing) {
+        RawEntry read = acknowledgedRaw.get(field);
+        return plainValue(field, writing, read == null || !read.present ? null : read.value);
+    }
+
+    /**
+     * @param fileValue the plain value the file holds at the setting, whose typed map keys name the text each key is
+     *                  written under; {@code null} for canonical key text (a setting the file does not hold)
+     */
+    private Object plainValue(Field field, boolean writing, Object fileValue) {
+        field.setAccessible(true);
+        try {
+            ConversionResult<Object> result = registry().toPlainResult(ReflectionUtil.getFieldValue(this, field),
+                    declaredType(field), configFilePath, keys(field), field.getAnnotation(ConfigEntry.class), fileValue);
+            if (writing && !result.failures().isEmpty()) {
+                List<String> locations = new ArrayList<>();
+                for (ConversionFailure failure : result.failures()) {
+                    List<String> path = failure.path();
+                    List<String> relative = path.subList(keys(field).size(), path.size());
+                    boolean secret = isSecretShapedFieldName(field.getName());
+                    for (String key : path) { secret |= isSecretShapedFieldName(key); }
+                    locations.add(secret ? "<redacted>" : relative.toString());
+                }
+                LOGGER.warning("File " + configFilePath + ", key '" + fieldPath(field)
+                        + "': omitted null collection/array elements at " + String.join(", ", locations));
+            }
+            return PlainData.copy(result.value());
+        } catch (ConversionException failure) {
+            throw new ConfigurationException(failure.getMessage(), failure);
+        }
+    }
+
+    private Map<Field, Object> currentPlain(List<Field> fields) { return currentPlain(fields, false); }
+
+    private Map<Field, Object> currentPlain(List<Field> fields, boolean writing) {
+        Map<Field, Object> plain = new LinkedHashMap<>();
+        for (Field field : fields) { plain.put(field, plainValue(field, writing)); }
+        return plain;
+    }
+
+    private void captureDefaults() {
+        if (!defaultsCaptured) {
+            // Canonical key text: the defaults belong to no file.
+            for (Field field : configEntryFields()) { declaredDefaults.put(field, plainValue(field, false, null)); }
+            for (Field field : configEntryFields()) {
+                Object javaDefault = ReflectionUtil.getFieldValue(this, field);
+                declaredDefaultLengths.put(field, isEmptyContainer(javaDefault) ? 0 : getValueLength(javaDefault));
+            }
+            defaultsCaptured = true;
+        }
+    }
+
+    private void acknowledgeRaw(ConfigDocument source, List<Field> fields) {
+        for (Field field : fields) { acknowledgedRaw.put(field, new RawEntry(source, keysIn(source, field))); }
+    }
+
+    private boolean isTokenComment(Field field) {
+        return field.getAnnotation(ConfigEntry.class).comment().trim().matches("\\{[^{}]+\\}");
+    }
+
+    private String resolvedComment(Field field) {
+        String literal = field.getAnnotation(ConfigEntry.class).comment();
+        if (!isTokenComment(field)) { return literal; }
+        String token = literal.trim();
+        String key = token.substring(1, token.length() - 1);
+        String resolved = null;
+        try { resolved = ultiToolsPlugin.i18n(key); }
+        catch (RuntimeException unavailable) {
+            // Catalogue failure must not prevent configuration values from loading.
+        }
+        if (resolved != null && !resolved.equals(key)) { return resolved; }
+        if (warnedCommentKeys.add(fieldPath(field))) {
+            LOGGER.warning("Module " + ultiToolsPlugin.getPluginName() + ", file " + configFilePath
+                    + ", path '" + fieldPath(field) + "': missing comment catalogue key '" + key + "'");
+        }
+        return token;
+    }
+
+    /**
+     * Writes the framework's comment above {@code field}'s key in {@code target}: for a token comment, only the
+     * run of comment lines {@link #frameworkCommentRun} identifies as the framework's is replaced, and a comment
+     * that is the operator's is left as it is; a literal comment is written only for a key just inserted, which
+     * has no comment yet.
+     *
+     * @return whether a comment line changed
+     */
+    private boolean addEntryComment(ConfigDocument target, Field field) {
+        String comment = resolvedComment(field);
+        if (comment.isEmpty()) { return false; }
+        int run = isTokenComment(field) ? frameworkCommentRun(target, field) : 0;
+        // The operator's comment (#604): kept byte for byte, permanently (maintainer decision 2026-10-04).
+        if (run < 0) { return false; }
+        List<String> at = keysIn(target, field);
+        List<String> before = target.blockComment(at);
+        // Merge-inherited entries exist in the plain view but need their own explicit comment owner.
+        target.set(at, target.get(at));
+        target.replaceFrameworkComment(at, run, Collections.singletonList(comment));
+        return !before.equals(target.blockComment(at));
+    }
+
+    /**
+     * How many of the last comment lines above {@code field}'s key in {@code target} the framework wrote (#604,
+     * maintainer decision 2026-10-04: "only the framework's own comments are rewritten"). The key's comment -
+     * in the byte form it is written in ({@link ConfigDocument#blockCommentAsWritten(List)}), without the blank
+     * lines above it - is the framework's when it equals, as a whole or as its trailing run of lines, the exact
+     * form the framework writes (the key's column, {@code "# "} and the text; identification revision 1, 17-64
+     * review round 1 R1-02) of the token's text in a catalogue the module's jar ships, of a text an earlier module
+     * version shipped for the entry ({@link ConfigEntry#previousComments()}), of the text an operator's custom
+     * language file in the module's {@code lang/} folder holds for the token now (#615 item 1), of the text the module
+     * resolves now, or of the bare {@code {key}} token. Equality is the only test: no prefix, similarity, spacing
+     * or language tolerance, so a note the operator wrote above the framework's lines, a framework comment the
+     * operator edited, or the framework's text written at another column or without the space after {@code #}
+     * is never taken in. Of several matching texts the longest run counts, so a whole-comment match comes first.
+     *
+     * @return the run's length; 0 when the key has no comment (the framework's comment may be inserted); -1 when the
+     *         comment is the operator's and must not be touched
+     */
+    private int frameworkCommentRun(ConfigDocument target, Field field) {
+        List<String> comment = new ArrayList<>(target.blockCommentAsWritten(keysIn(target, field)));
+        while (!comment.isEmpty() && comment.get(0) == null) { comment.remove(0); }
+        if (comment.isEmpty()) { return 0; }
+        int run = -1;
+        for (List<String> known : frameworkRenderings(field)) {
+            int size = known.size();
+            if (size > run && size > 0 && size <= comment.size()
+                    && comment.subList(comment.size() - size, comment.size()).equals(known)) {
+                run = size;
+            }
+        }
+        return run;
+    }
+
+    /**
+     * Every rendering of a token comment the framework may have written above {@code field}'s key: the token's text
+     * in each catalogue the module's jar ships (read without any language-file side effect), the texts earlier module
+     * versions shipped for the entry ({@link ConfigEntry#previousComments()}), the token's text in each of the
+     * operator's custom language files in the module's {@code lang/} folder ({@link
+     * UltiToolsPlugin#customCatalogueTexts}, #615 item 1), the text the module resolves now, and the bare token - each
+     * in the byte form {@link ConfigDocument#setFrameworkComment} writes
+     * it, as {@link ConfigDocument#blockCommentAsWritten(List)} reports it. An empty text is not a rendering: the
+     * framework writes no comment for it, so it can never identify an operator's bare {@code #} line.
+     * <p>
+     * <b>Why the custom files' texts cannot take in an operator's own comment.</b> While a custom language is
+     * selected, the framework renders a token comment from that file's text for the same key, so a comment equal to
+     * it, above that key, is a text the framework wrote there; the operator supplied it through their own catalogue,
+     * for this very purpose. Only the text for the comment's own key counts, and only as the whole comment or its
+     * trailing run of lines, with no tolerance. A comment written from an earlier version of that text - edited in the
+     * custom file since - equals no current text and stays the operator's: no record of earlier renderings is kept
+     * (maintainer decision of 2026-10-06, option A). The custom files are only read; nothing records, refreshes or
+     * backs them up.
+     */
+    private List<List<String>> frameworkRenderings(Field field) {
+        String token = field.getAnnotation(ConfigEntry.class).comment().trim();
+        String key = token.substring(1, token.length() - 1);
+        Set<List<String>> known = new java.util.LinkedHashSet<>();
+        List<String> shipped = null;
+        try { shipped = ultiToolsPlugin.shippedCatalogueTexts(key); }
+        catch (RuntimeException unavailable) {
+            // Without the shipped catalogues only the current text and the bare token are recognised.
+        }
+        List<String> custom = null;
+        try { custom = ultiToolsPlugin.customCatalogueTexts(key); }
+        catch (RuntimeException unavailable) {
+            // Without the custom files a comment written from one is kept as the operator's (the pre-#615 outcome).
+        }
+        List<String> texts = new ArrayList<>();
+        if (shipped != null) { texts.addAll(shipped); }
+        // Texts earlier module versions shipped for this entry (maintainer decision 2026-10-04: registered as the framework's).
+        texts.addAll(Arrays.asList(field.getAnnotation(ConfigEntry.class).previousComments()));
+        // The operator's custom language files' current texts (#615 item 1): a comment the framework wrote while one was selected.
+        if (custom != null) { texts.addAll(custom); }
+        texts.add(resolvedComment(field));
+        texts.add(token);
+        for (String text : texts) {
+            // The framework never writes an empty comment (addEntryComment), so an empty text renders nothing of its.
+            if (text != null && !text.isEmpty()) { known.add(renderedComment(text)); }
+        }
+        return new ArrayList<>(known);
+    }
+
+    /** The comment lines {@code text} becomes when the framework writes it, in their written byte form. */
+    private static List<String> renderedComment(String text) {
+        ConfigDocument presentation = ConfigDocument.empty();
+        List<String> key = Collections.singletonList("key");
+        presentation.set(key, null);
+        presentation.setFrameworkComment(key, Collections.singletonList(text));
+        return presentation.blockCommentAsWritten(key);
+    }
+
+    private boolean updateTokenComments(ConfigDocument target) {
+        boolean changed = false;
+        for (Field field : configEntryFields()) {
+            if (isTokenComment(field) && target.contains(keysIn(target, field))) {
+                changed |= addEntryComment(target, field);
+            }
+        }
+        return changed;
+    }
+
+    private String panelComment(Field field) {
+        // Reuse the storage boundary's sole sanitation policy, including every YAML line break.
+        ConfigDocument presentation = ConfigDocument.empty();
+        presentation.set(keys(field), null);
+        presentation.setFrameworkComment(keys(field), Collections.singletonList(resolvedComment(field)));
+        return String.join("\n", presentation.blockComment(keys(field)));
+    }
+
+    private boolean protectFailedLoad(ConfigLoadResult loaded) {
+        String cause = failedLoadCause(loaded);
+        if (cause == null) { return false; }
+        lastLoadUnparseable = true;
+        LOGGER.severe("Cannot load " + configFilePath + ": " + cause + "; file will not be overwritten");
+        return true;
+    }
+
+    /**
+     * The safe cause of a load that could not read or parse the file, or {@code null} when it did.
+     * Names only the exception class or the parser's numeric location, never file content.
+     */
+    private static String failedLoadCause(ConfigLoadResult loaded) {
+        if (loaded.state() == ConfigLoadResult.State.UNREADABLE) { return loaded.cause().getClass().getSimpleName(); }
+        if (loaded.state() == ConfigLoadResult.State.UNPARSEABLE) { return safeParserLocation(loaded.parserMessage()); }
+        return null;
+    }
+
+    /**
+     * #589: a reload that cannot read or parse the file refuses with the file and the safe cause.
+     * The caller reports it (the module's reload logs one SEVERE line and {@code /ul reload <name>}
+     * replies failure), so the entity logs nothing itself.
+     */
+    private ConfigurationException reloadRefusal(ConfigLoadResult loaded, String cause) {
+        boolean unreadable = loaded.state() == ConfigLoadResult.State.UNREADABLE;
+        return new ConfigurationException(unreadable ? ErrorCode.CONFIG_LOAD_FAILED : ErrorCode.CONFIG_PARSE_FAILED,
+                "Cannot reload " + configFilePath + ": " + cause + "; the file and the running values are unchanged",
+                unreadable ? loaded.cause() : null);
+    }
+
+    private static String safeParserLocation(String message) {
+        if (message != null) {
+            // The storage result discards the typed parser cause. Extract numeric metadata only,
+            // never the filename, parser reason, scalar snippet or throwable message.
+            java.util.regex.Matcher location = java.util.regex.Pattern.compile(
+                    "(?m)^ *in [^\\r\\n]*, line ([0-9]+), column ([0-9]+):? *$").matcher(message);
+            if (location.find()) {
+                return "invalid YAML at line " + location.group(1) + ", column " + location.group(2);
+            }
+        }
+        return "invalid YAML or UTF-8";
+    }
+
+    /**
+     * Every {@code @ConfigEntry} field this class declares or inherits, in {@link
+     * ReflectionUtil#getFields(Class)} order.
+     *
+     * @return the annotated fields, possibly empty
+     */
+    private List<Field> configEntryFields() {
+        List<Field> configFields = new ArrayList<>();
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
+            if (field.isAnnotationPresent(ConfigEntry.class)) {
+                configFields.add(field);
+            }
+        }
+        return configFields;
+    }
+
+    /**
+     * Runs {@link #validateFields()} on the values a load just bound. A reload's refusal says that
+     * fixing the file and reloading again is enough (#595); a refusal at load keeps its wording.
+     */
+    private void validateLoaded(boolean initialize) {
+        validatingReload = !initialize;
+        try {
+            validateFields();
+        } finally {
+            validatingReload = false;
+        }
+    }
+
+    /**
+     * Whether serialized fields differ from their last bound/persisted effective values - module changes not yet saved.
+     * Map iteration order is significant here; the storage equality used for no-op saves is not.
+     * Nothing writes them at server stop: they are reported, by key, and dropped (maintainer decision 2026-10-04).
+     * Protected files and uninitialized entities report {@code false}.
+     * @return whether the entity holds module changes that were never saved
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isModifiedSinceSnapshot() {
+        synchronized (this) {
+            if (document == null || ultiToolsPlugin == null || lastLoadUnparseable) { return false; }
+            if (savedSnapshot == null) { return true; }
+            try { return !orderedEquals(savedSnapshot, currentPlain(configEntryFields())); }
+            catch (RuntimeException failure) {
+                LOGGER.warning("Cannot compare the state of " + configFilePath + "; treating it as changed");
+                return true;
+            }
+        }
+    }
+
+    /** Names unsaved declared entries without exposing their values, for superseded-copy reporting.
+     * @return changed entry paths
+     */
+    @ApiStatus.Internal
+    public final List<String> unsavedEntryPaths() {
+        synchronized (this) {
+            List<String> paths = new ArrayList<>();
+            for (Field field : configEntryFields()) {
+                if (savedSnapshot == null || !orderedEquals(savedSnapshot.get(field), plainValue(field))) {
+                    paths.add(fieldPath(field));
+                }
+            }
+            return paths;
+        }
+    }
+
+    private static boolean orderedEquals(Object left, Object right) {
+        if (left instanceof Map && right instanceof Map) {
+            Map<?, ?> a = (Map<?, ?>) left; Map<?, ?> b = (Map<?, ?>) right;
+            if (a.size() != b.size()) { return false; }
+            Iterator<? extends Map.Entry<?, ?>> ai = a.entrySet().iterator();
+            Iterator<? extends Map.Entry<?, ?>> bi = b.entrySet().iterator();
+            while (ai.hasNext()) {
+                Map.Entry<?, ?> x = ai.next(); Map.Entry<?, ?> y = bi.next();
+                if (!x.getKey().equals(y.getKey()) || !orderedEquals(x.getValue(), y.getValue())) { return false; }
+            }
+            return true;
+        }
+        if (left instanceof List && right instanceof List) {
+            List<?> a = (List<?>) left; List<?> b = (List<?>) right;
+            if (a.size() != b.size()) { return false; }
+            for (int i = 0; i < a.size(); i++) {
+                if (!orderedEquals(a.get(i), b.get(i))) { return false; }
+            }
+            return true;
+        }
+        return PlainData.plainEquals(left, right);
+    }
+
+    /**
+     * Reports presence in the last successfully loaded document, including explicit nulls and
+     * undeclared keys. The path is read the way a declared setting path is (#612): split at its dots
+     * as nested keys, or held as a flat dotted key such as {@code features.chat}, or any mix of the
+     * two; the key is present when the file holds it in any of these forms. Failed loads report no
+     * presence.
+     * @param path dotted configuration path
+     * @return whether the last load contained the key
+     * @since 6.3.0
+     */
+    public final boolean isPresentInFile(String path) {
+        synchronized (this) {
+            if (lastLoadedPresence == null || lastLoadUnparseable) { return false; }
+            return !ConfigDocument.readings(lastLoadedPresence, path).isEmpty();
+        }
+    }
+
+    /**
+     * Whether the last attempt to read this configuration's file failed to parse (#510) - in
+     * practice, whether the file on disk holds invalid YAML. Nothing writes configuration at server
+     * stop as of 6.3.0; the stop report names such a configuration once as left alone, instead of
+     * listing unsaved keys, and no write path ever replaces a file the framework could not read.
+     * <p>
+     * Framework-internal: this method is called only by {@code ConfigManager}'s stop and unload report and is
+     * {@code public} solely because {@code ConfigManager} lives in another package. Module code
+     * should not call it.
+     *
+     * @return {@code true} if the last load of this configuration's file failed to parse, and no
+     *         successful load has happened since
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isLastLoadUnparseable() {
+        synchronized (this) {
+            return lastLoadUnparseable;
+        }
+    }
+
+    /**
+     * Whether the last {@link #init} failed before its field validation completed -- for example
+     * because writing back a missing key threw an {@code IOException}, which {@code ConfigManager}
+     * logs and continues past. The fields may then hold values that their validation annotations
+     * never checked. The config-bound {@code @Scheduled}/{@code @CmdCD} step (#531) does not apply
+     * values from such an entity: it refuses the module at load and keeps the running value on
+     * reload.
+     * <p>
+     * Thread contract: the marker is set by {@code init} and read by the binding step on the main
+     * server thread, where the framework and the first-party modules run both. An {@code init} or
+     * {@link #reload()} run off the main thread is not synchronized with the binding step; confining
+     * them to the main thread is tracked in UltiKits/UltiTools-Reborn#538.
+     * <p>
+     * Framework-internal: {@code public} solely because the binding step lives in another package.
+     * Module code should not call it.
+     *
+     * @return {@code true} if the last {@code init} did not complete its validation
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isLastInitIncomplete() {
+        return lastInitIncomplete;
+    }
+
+    /**
+     * Records that {@code key} is bound by a config-bound {@code @Scheduled} or {@code @CmdCD}
+     * (#531), so that a panel write setting it to a value {@code isValid} rejects is refused, naming
+     * the key, the value and {@code rule}. The binding step calls this when it resolves the binding
+     * at load. Recording the same rule twice for a key keeps one.
+     * <p>
+     * Framework-internal: {@code public} solely because the binding step lives in another package.
+     * Module code should not call it.
+     *
+     * @param key     the {@code @ConfigEntry} path, or the field name when the path is empty
+     * @param rule    the range, as a sentence, for the refusal message
+     * @param isValid whether a value, in seconds ({@code null} for a {@code null} boxed field), is
+     *                inside the range
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final void addBindingRange(String key, String rule, Predicate<Long> isValid) {
+        bindingRanges.computeIfAbsent(key, k -> new ConcurrentHashMap<>()).put(rule, isValid);
+    }
+
+    /**
+     * Whether the file on disk differs from the file as it was at the last snapshot point (#510) -
+     * in practice, whether someone edited, replaced or removed it while the server was running. The
+     * snapshot is the bytes this entity last bound or wrote itself, never a fresh read, so an
+     * operator's edit stays visible here until the next load. It is also {@code true} while a write
+     * to the file failed part-way and could not be put back from its framework backup (#622): the
+     * file may then hold part of that write, so it is treated as changed since it was read until a
+     * load reads it again.
+     * <p>
+     * Framework-internal: no production code calls it as of 6.3.0. Its former caller,
+     * {@code ConfigManager#saveAll()}, no longer writes or compares anything (#510, #599); the
+     * method is kept for the framework's own regression tests of the snapshot. It is {@code public}
+     * only because that former caller lives in another package. Module code should not call it.
+     *
+     * @return {@code true} if the file's fingerprint changed since the last snapshot, or a write to
+     *         it could not be put back; {@code false} if neither, or if no snapshot has been taken yet
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isFileModifiedSinceSnapshot() {
+        synchronized (this) {
+            if (fileNotRestored) {
+                return true;
+            }
+            String fingerprint = savedFileFingerprint;
+            if (fingerprint == null || ultiToolsPlugin == null) {
+                return false;
+            }
+            String current;
+            try {
+                current = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+            } catch (RuntimeException e) {
+                current = "unreadable";
+            }
+            return !fingerprint.equals(current);
+        }
+    }
+
+    /**
+     * Fingerprints a configuration file by the SHA-256 digest of its bytes (#510). A content hash
+     * rather than size plus modification time: a typical operator edit changes one value to another
+     * of the same length ({@code 60} to {@code 90}, {@code true} to {@code TRUE}), which size alone
+     * cannot see, and modification time is coarse or preserved on common paths (two-second
+     * resolution on FAT and many network shares, {@code cp -p}, {@code rsync -t}, editors that
+     * restore it). Configuration files are small and this runs only at load, reload and write time.
+     *
+     * @param file the configuration file, possibly {@code null} or missing
+     * @return {@code "absent"} for a missing file, {@code "unreadable"} if it cannot be read, or the
+     *         Base64 SHA-256 digest of its contents
+     */
+    private static String fingerprintOf(File file) {
+        if (file == null || !file.isFile()) {
+            return "absent";
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file.toPath()));
+            return Base64.getEncoder().encodeToString(digest);
+        } catch (IOException e) {
+            return "unreadable";
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required on every Java platform", e);
+        }
     }
 
     /**
      * Initializes the configuration entity.
-     * <p>
-     * 初始化配置实体。
      *
-     * @param ultiToolsPlugin the plugin instance <br> 插件实例
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @param ultiToolsPlugin the plugin instance
+     * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
-        this.ultiToolsPlugin = ultiToolsPlugin;
-        config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
-        boolean upToDate = true;
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                field.setAccessible(true);
-                ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-                String path = annotation.path();
-                if (path.isEmpty()) {
-                    path = field.getName();
+        initialize(ultiToolsPlugin, false);
+    }
+
+    /** Framework manager bridge; binds without flushing initialization writes.
+     * @param plugin owning module
+     * @throws IOException on load failure
+     */
+    @ApiStatus.Internal
+    public final void initForBatch(UltiToolsPlugin plugin) throws IOException {
+        initialize(plugin, true);
+    }
+
+    private void initialize(UltiToolsPlugin ultiToolsPlugin, boolean deferred) throws IOException {
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, "init " + configFilePath)) { return; }
+        synchronized (this) {
+            deferInitialization = deferred;
+            lastInitIncomplete = true;
+            this.ultiToolsPlugin = ultiToolsPlugin;
+            registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);
+            captureDefaults();
+            checkConstraintDeclarations();
+            try { load(true); }
+            finally { deferInitialization = false; }
+            lastInitIncomplete = false;
+        }
+        notifyChangeListeners();
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // Keep protected load, binding, three-way merge and initialization persistence under one monitor.
+    private void load(boolean initialize) throws IOException {
+        warnedCommentKeys.clear();
+        commentWriteNotAppliedAtLoad = false;
+        ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
+        String failedCause = initialize ? null : failedLoadCause(loaded);
+        if (failedCause != null) {
+            // Protected until a later successful load; reload() restores everything else.
+            lastLoadUnparseable = true;
+            throw reloadRefusal(loaded, failedCause);
+        }
+        if (protectFailedLoad(loaded)) {
+            if (document == null) { document = ConfigDocument.empty(); }
+            validateFields();
+            return;
+        }
+        lastLoadUnparseable = false;
+        ConfigDocument next = loaded.state() == ConfigLoadResult.State.LOADED
+                ? loaded.document() : ConfigDocument.empty();
+        // One key semantics (#612): a declared setting held in two forms - a flat dotted key and nested keys, or two
+        // splits of its dots - is refused before any value is bound, naming the file and the setting, never a value.
+        List<String> heldTwice = new ArrayList<>();
+        for (Field field : configEntryFields()) {
+            if (heldTwice(next, field)) { heldTwice.add(heldTwiceReason(field)); }
+        }
+        if (!heldTwice.isEmpty()) {
+            // Not a value violation: the operator chooses which form stays (gate-1 R613-04).
+            throw new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Module '" + ultiToolsPlugin.getPluginName() + "' refused to load: configuration file '" + configFilePath
+                            + "' writes a setting in two forms: " + String.join("; ", heldTwice)
+                            + ". The file was not modified - delete one of the two forms and restart.");
+        }
+        // Presence describes the load input, never defaults/comment writes or a later save read.
+        Map<String, Object> loadedPresence = next.toPlain();
+        Map<Field, Object> baseline = new LinkedHashMap<>(declaredDefaults);
+        Map<Field, Object> mine = initialize ? Collections.emptyMap() : currentPlain(configEntryFields());
+        List<String> conflicts = new ArrayList<>();
+        List<Field> missing = new ArrayList<>();
+        for (Field field : configEntryFields()) {
+            field.setAccessible(true);
+            if (!next.contains(keysIn(next, field))) {
+                missing.add(field);
+                // #596 item 2: a key the operator deleted, for a setting the module did not change, resets to its
+                // declared default; a setting the module changed keeps the module's value (#511 three-way rule).
+                if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)
+                        && orderedEquals(savedSnapshot.get(field), mine.get(field))) {
+                    bindDeclaredDefault(field, !ConfigDocument.readings(lastLoadedPresence, fieldPath(field)).isEmpty());
                 }
-                Object configValue = config.get(path);
-                if (configValue != null) {
-                    Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                    ReflectionUtil.setFieldValue(this, field, parse);
-                } else {
-                    upToDate = false;
-                    config.set(path, ReflectionUtil.getFieldValue(this, field));
+                continue;
+            }
+            Object raw = next.get(keysIn(next, field));
+            try {
+                ConversionResult<Object> converted = registry().fromPlainResult(raw, declaredType(field),
+                        configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+                ReflectionUtil.setFieldValue(this, field, converted.value());
+                for (ConversionFailure failure : converted.failures()) {
+                    warnConversion(field, failure.cause(), failure.raw(), raw);
+                }
+            } catch (ConversionException failure) {
+                warnConversion(field, failure, raw, raw);
+                // Restore the initially declared default, not a live unsaved value or the last load.
+                try {
+                    Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field),
+                            configFilePath, keys(field), field.getAnnotation(ConfigEntry.class)).value();
+                    ReflectionUtil.setFieldValue(this, field, value);
+                } catch (ConversionException invalidDefault) {
+                    throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
                 }
             }
+            useDeclaredDefaultIfEmpty(field, raw);
+            // Spelled like the file just read: the raw acknowledgement is refreshed only at the end of this load.
+            Object theirs = plainValue(field, false, raw);
+            baseline.put(field, theirs);
+            if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)) {
+                Object merged = mergeReload(savedSnapshot.get(field), mine.get(field), theirs, declaredType(field),
+                        field, new ArrayList<>(), conflicts);
+                try {
+                    Object value = registry().fromPlainResult(merged, declaredType(field), configFilePath,
+                            keys(field), field.getAnnotation(ConfigEntry.class)).value();
+                    ReflectionUtil.setFieldValue(this, field, value);
+                } catch (ConversionException failure) { throw new ConfigurationException(failure.getMessage(), failure); }
+            }
         }
-        if (!upToDate) {
-            config.save(ultiToolsPlugin.getConfigFile(configFilePath));
+        validateLoaded(initialize);
+        document = next;
+        // This load read the file as it is now; a write below that cannot be put back sets this again (#622).
+        fileNotRestored = false;
+        Map<Field, Object> inserted = new LinkedHashMap<>();
+        if (initialize) {
+            for (Field field : missing) {
+                // The file does not hold the setting: its keys are inserted in their canonical text.
+                Object value = plainValue(field, true, null);
+                inserted.put(field, value); baseline.put(field, value);
+            }
         }
+        String bound = expectedBase(loaded);
+        if (!inserted.isEmpty() && !deferInitialization) {
+            // On a refusal the declared defaults run in memory and the raw acknowledgement keeps the keys absent.
+            OperatorFileWriter.Result result = null;
+            try { result = writeInitialization(inserted, bound, next); }
+            catch (IOException failure) { noteFailedWrite(failure); throw failure; }
+            catch (RuntimeException failure) { warnGateFailure("insert the missing keys into", failure); }
+            if (result != null && result.applied()) { document = result.document(); bound = result.fingerprint(); }
+        } else if (deferInitialization) {
+            if (!inserted.isEmpty() || tokenCommentsDiffer(next)) {
+                // The flush writes through the gate against the bytes read here, never over a later edit (#602).
+                pendingInitialization = new PendingInitialization(next, baseline, inserted, expectedBase(loaded));
+                lastLoadedPresence = loadedPresence;
+                return;
+            }
+        } else if (tokenCommentsDiffer(next)) {
+            // On a refusal or a failure the file keeps its comments and no save state changes (#603).
+            OperatorFileWriter.Result result = rewriteTokenComments(loaded);
+            if (result != null && result.applied()) { document = result.document(); bound = result.fingerprint(); }
+            else { commentWriteNotAppliedAtLoad = true; }
+        }
+        lastLoadedPresence = loadedPresence;
+        savedSnapshot = baseline;
+        acknowledgeRaw(document, configEntryFields());
+        // The bytes this entity bound or the gate wrote, never a fresh read: a later edit stays a change on disk.
+        savedFileFingerprint = entityFingerprint(bound);
+        for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
+    }
 
-        // Validate fields and reset invalid values to defaults
-        validateFields();
+    /**
+     * Binds {@code field}'s initially declared default because a reload found its key missing from the file and the
+     * module had not changed the setting since the last load or save (#596 item 2): deleting a key resets that setting,
+     * as an unusable value already does (#523). Memory only - the file is not changed, and a later save does not re-add
+     * the key. When the key was in the file at the previous load - the operator deleted it - one warning names the file
+     * and the key, never a value; a key the file already lacked (one a refused insert could not add, already named
+     * when that write was refused) is not named again at every reload.
+     *
+     * @param field   the setting whose key is missing
+     * @param deleted whether the previous load found the key in the file
+     */
+    private void bindDeclaredDefault(Field field, boolean deleted) {
+        try {
+            Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field), configFilePath,
+                    keys(field), field.getAnnotation(ConfigEntry.class)).value();
+            ReflectionUtil.setFieldValue(this, field, value);
+        } catch (ConversionException invalidDefault) {
+            throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
+        }
+        if (deleted) {
+            LOGGER.warning("File " + configFilePath + ", key '" + fieldPath(field) + "': missing from the file; using the"
+                    + " declared default (the file is not changed)");
+        }
+    }
 
-        // Notify listeners after initialization
-        notifyChangeListeners();
+    /**
+     * An unchecked failure inside the configuration write gate during start-up never refuses the module: one warning
+     * names the file and the failure's class (never a message, which may quote file content), the declared defaults run
+     * in memory, and the file is not changed (17-65 review round 2 R2-02).
+     */
+    private void warnGateFailure(String action, RuntimeException failure) {
+        LOGGER.warning("Cannot " + action + " " + configFilePath + ": " + failure.getClass().getSimpleName()
+                + "; the declared defaults are used in memory and the file is unchanged");
+    }
+
+    private static String expectedBase(ConfigLoadResult loaded) {
+        return loaded.state() == ConfigLoadResult.State.LOADED ? loaded.fingerprint() : OperatorFileWriter.ABSENT;
+    }
+
+    /**
+     * Whether a framework token comment in {@code target} differs from what the current language renders,
+     * without changing {@code target}: the framework's own run ({@link #frameworkCommentRun}) compared, in its
+     * written byte form, with the current rendering; a comment that is the operator's never differs.
+     *
+     * @param target the document as read
+     * @return whether a comment-only write would change a comment
+     */
+    private boolean tokenCommentsDiffer(ConfigDocument target) {
+        for (Field field : configEntryFields()) {
+            if (!isTokenComment(field) || !target.contains(keysIn(target, field))) { continue; }
+            int run = frameworkCommentRun(target, field);
+            if (run < 0 || resolvedComment(field).isEmpty()) { continue; }
+            List<String> current = target.blockCommentAsWritten(keysIn(target, field));
+            if (!current.subList(current.size() - run, current.size()).equals(renderedComment(resolvedComment(field)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The token comments of {@code read} the framework may rewrite, each owning only the run of lines
+     * {@link #frameworkCommentRun} identified as the framework's in the file as read (#604): the config write gate
+     * then refuses any write that changes a comment line above that run or of a comment that is the operator's.
+     *
+     * @param owned the ownership being built
+     * @param read  the document as read, holding the bytes the write is checked against
+     */
+    private void ownFrameworkComments(OwnedPaths.Builder owned, ConfigDocument read) {
+        for (Field field : configEntryFields()) {
+            if (!isTokenComment(field) || !read.contains(keysIn(read, field))) { continue; }
+            int run = frameworkCommentRun(read, field);
+            if (run >= 0) { owned.frameworkComment(keysIn(read, field), run); }
+        }
+    }
+
+    /**
+     * Rewrites the framework's token comments in the current language through the config write gate
+     * ({@link OperatorFileWriter}), at start-up and on reload. This cannot overwrite operator content: the write
+     * owns only the comment lines the framework identified as its own above token-commented keys (#604; an
+     * operator's comment, or the lines above the framework's run, are not owned), the gate verifies that every
+     * other byte of the file is unchanged after rendering and writes nothing when the file no longer holds the
+     * bytes {@code loaded} read, and it refuses a file using anchors. A refusal or an I/O failure logs one warning
+     * and changes no save state, so no later save follows from it (#603); nothing is written at stop.
+     *
+     * @param loaded the load being bound (LOADED)
+     * @return the gate's result, or {@code null} after an I/O failure
+     */
+    private OperatorFileWriter.Result rewriteTokenComments(ConfigLoadResult loaded) {
+        OwnedPaths.Builder owned = OwnedPaths.builder();
+        ownFrameworkComments(owned, loaded.document());
+        try {
+            OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
+                    owned.build(), expectedBase(loaded), this::updateTokenComments);
+            return result;
+        } catch (IOException | RuntimeException failure) {
+            if (failure instanceof IOException) { noteFailedWrite((IOException) failure); }
+            LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
+                    + failure.getClass().getSimpleName() + "; the file keeps its comments");
+            return null;
+        }
+    }
+
+    /**
+     * Rewrites this configuration's framework comment lines in the owning module's language as it is now (#594).
+     * <p>
+     * A reload reads the module's configurations before it rebuilds the module's language, so the comment pass of
+     * that read resolved the tokens with the catalogue of the language the module ran with until then.
+     * {@code UltiToolsPlugin}'s reload calls this, through {@code ConfigManager}, right after the rebuild and before
+     * the module's own reload hook, so a {@code language} switch applied by {@code /ul reload} reaches the comments
+     * too (maintainer decision 2026-10-04, "the framework only refreshes comments on reload").
+     * <p>
+     * <b>Why it cannot overwrite operator content.</b> It reads the file afresh and hands the config write gate
+     * ({@link OperatorFileWriter}) a comment-only write that owns just the comment lines the framework identifies
+     * as its own above token-commented keys ({@link #frameworkCommentRun}, #604), checked against the bytes of that
+     * fresh read: no value, no key and no other comment line can change, so an operator's invalid value, a key
+     * deleted to reset it, a hand-written note and an edit saved after the reload read the file all stay as typed,
+     * and a file that changed again before publishing, uses anchors or has a layout the renderer would normalize is
+     * refused with the gate's one warning. Nothing is attempted when the last load refused the file as unreadable
+     * or unparseable (it is never written), while a first-start write is still pending, or when no framework
+     * comment differs from the current language, nor when this reload's own load already attempted a comment write
+     * that was refused or failed: that attempt logged the file's one warning for this reload, and the next reload
+     * tries again (17-64 review round 1 R1-03). A refusal or a failure logs one warning and changes no save
+     * state, so no later save follows from it (#603, #597 review F2); nothing is written at stop. Only when the fresh read
+     * still held exactly the bytes this entity bound does the entity record what the gate wrote as its last read;
+     * otherwise the operator's newer file stays a change on disk.
+     * <p>
+     * Framework-internal: {@code public} solely because {@code ConfigManager} lives in another package. Module
+     * code should not call it.
+     *
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final void refreshFrameworkComments() {
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin,
+                "refresh comments " + configFilePath)) { return; }
+        synchronized (this) {
+            if (document == null || ultiToolsPlugin == null || lastLoadUnparseable || pendingInitialization != null
+                    || commentWriteNotAppliedAtLoad || fileNotRestored) {
+                return;
+            }
+            ConfigLoadResult fresh = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
+            if (fresh.state() != ConfigLoadResult.State.LOADED || !tokenCommentsDiffer(fresh.document())) { return; }
+            OperatorFileWriter.Result result = rewriteTokenComments(fresh);
+            if (result != null && result.applied() && entityFingerprint(fresh.fingerprint()).equals(savedFileFingerprint)) {
+                // The file held exactly the bytes this entity bound; it now holds them with the refreshed comments.
+                document = result.document();
+                savedFileFingerprint = entityFingerprint(result.fingerprint());
+            }
+        }
+    }
+
+    /**
+     * Writes an initialization - the declared keys {@code init} found missing, each with its comment, and the
+     * framework's token comments - through the config write gate ({@link OperatorFileWriter}), at once or from
+     * the batch flush. This cannot overwrite operator content: the write owns only the inserted keys and the
+     * token comment lines the framework identified as its own (#604) (or the whole file when it was absent,
+     * created exclusively so a file that appeared
+     * meanwhile is never replaced) - and, for a key whose section the operator left with no value ({@code messages:}
+     * after deleting every key of the section), that section's one line, which carried no value and keeps its key text
+     * and comment (#620, maintainer decision 2026-10-06: the key is put back so the section is complete) - the gate
+     * verifies that every other byte of the file is unchanged after
+     * rendering (layout included), and it writes nothing when the file no longer holds the bytes read at
+     * {@code expected}. When it does not write, the gate has logged one warning naming the file and the keys,
+     * the fields keep their declared defaults in memory, and the file keeps its bytes.
+     *
+     * @param inserted the missing fields and their declared default values, as plain data
+     * @param expected the fingerprint of the bytes the init read, or {@link OperatorFileWriter#ABSENT}
+     * @param read     the document the init read from those bytes
+     * @return the gate's result; when it applied the edit, its document and fingerprint are what the file holds
+     * @throws IOException if publishing the verified text fails
+     */
+    private OperatorFileWriter.Result writeInitialization(Map<Field, Object> inserted, String expected, ConfigDocument read)
+            throws IOException {
+        boolean absent = OperatorFileWriter.ABSENT.equals(expected);
+        // Each key goes below the section the file already holds it in, never into a second form of it (#614).
+        Map<Field, List<String>> at = new LinkedHashMap<>();
+        Map<String, List<String>> unplaced = new LinkedHashMap<>();
+        for (Field field : inserted.keySet()) {
+            List<String> path = absent ? keys(field) : insertKeysIn(read, field);
+            if (path != null) { at.put(field, path); continue; }
+            String reason = unplacedReason(read, field);
+            if (!unplaced.containsKey(reason)) { unplaced.put(reason, new ArrayList<String>()); }
+            unplaced.get(reason).add("'" + fieldPath(field) + "'");
+        }
+        for (Map.Entry<String, List<String>> entry : unplaced.entrySet()) {
+            // Names and the reason only, never a value; the declared defaults run in memory (#614).
+            LOGGER.warning("Configuration file " + ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath() + ": "
+                    + (entry.getValue().size() == 1 ? "setting " : "settings ") + String.join(", ", entry.getValue())
+                    + (entry.getValue().size() == 1 ? " was" : " were") + " not inserted: " + entry.getKey()
+                    + ". The declared defaults are used in memory; delete one of the forms, or add the settings by hand.");
+        }
+        OwnedPaths owned = OwnedPaths.wholeFile();
+        if (!absent) {
+            OwnedPaths.Builder builder = OwnedPaths.builder();
+            for (List<String> path : at.values()) { builder.value(path); }
+            ownFrameworkComments(builder, read);
+            owned = builder.build();
+        }
+        OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
+                owned, expected, candidate -> {
+                    for (Map.Entry<Field, List<String>> entry : at.entrySet()) {
+                        candidate.set(entry.getValue(), inserted.get(entry.getKey()));
+                        addEntryComment(candidate, entry.getKey());
+                    }
+                    updateTokenComments(candidate);
+                });
+        return result;
+    }
+
+    /**
+     * The fingerprint form {@link #fingerprintOf} uses, for a storage-layer SHA-256 in lower-case hex (or
+     * {@link OperatorFileWriter#ABSENT}): what the entity records as the bytes it last bound or wrote (#602).
+     */
+    private static String entityFingerprint(String sha256Hex) {
+        if (OperatorFileWriter.ABSENT.equals(sha256Hex)) { return "absent"; }
+        byte[] digest = new byte[sha256Hex.length() / 2];
+        for (int i = 0; i < digest.length; i++) {
+            digest[i] = (byte) Integer.parseInt(sha256Hex.substring(2 * i, 2 * i + 2), 16);
+        }
+        return Base64.getEncoder().encodeToString(digest);
+    }
+
+    /**
+     * The #511 three-way reload merge of one setting. Only a value declared as a {@link Map} is merged key by key,
+     * following the declared value types into nested maps; any other value - a list, a {@code ConfigurationSerializable}
+     * such as a Bukkit {@code Location} or {@code Vector}, a typed map's value that is not a map - is one value: the
+     * module's, the file's, or on a conflict the file's whole, never a value mixed from both (17-65 review round 2 R2-01,
+     * the same rule as the save's {@link #changedLeaves}). A conflict over a composite value or a list names the key only.
+     * <p>
+     * The recursion carries the setting and the real keys down to the value. A conflict's key is displayed through
+     * {@link #describeKey}, so a key below a secret-shaped field name, declared path segment or map key is never named,
+     * and whether the discarded value is redacted is decided from the real keys (#673, case 54). The merged map keeps the
+     * real keys.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
+    private Object mergeReload(Object base, Object mine, Object theirs, Type declared, Field field, List<String> leaf,
+            List<String> conflicts) {
+        if (orderedEquals(mine, base)) { return theirs; }
+        if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
+        if (theirs instanceof Map && !((Map<?, ?>) theirs).containsKey("==") && splitsByEntry(declared, base, mine)) {
+            Type valueType = mapValueType(declared);
+            Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
+            Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
+            Map<String, Object> merged = new LinkedHashMap<>();
+            for (Object key : keys) {
+                List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
+                Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
+                        m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
+                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType, field, child, conflicts);
+                if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
+            }
+            return merged;
+        }
+        if (mine instanceof Map || mine instanceof List) {
+            // A composite value or a list is replaced whole; its contents are not listed (they may hold anything;
+            // 17-65 review round 3 R3-I3).
+            conflicts.add("reload conflict at " + describeKey(field, leaf) + ": discarded the in-memory value; file wins");
+            return theirs;
+        }
+        String value = secretPath(field, leaf) || containsSecret(mine) ? "<redacted>"
+                : mine == ABSENT_RELOAD_VALUE ? "<absent>" : String.valueOf(mine);
+        conflicts.add("reload conflict at " + describeKey(field, leaf) + ": discarded in-memory value " + value + "; file wins");
+        return theirs;
+    }
+
+    /** Flushes only a validated manager batch's initialization write, through the config write gate and only
+     * while the file still holds the bytes {@code initForBatch} read (#602); see {@link #writeInitialization}.
+     * @throws IOException when replacement fails; the entity is then protected until reload
+     */
+    @ApiStatus.Internal
+    public final void flushInitializationWrite() throws IOException {
+        synchronized (this) {
+            PendingInitialization pending = pendingInitialization;
+            pendingInitialization = null;
+            if (pending == null || lastLoadUnparseable) { return; }
+            OperatorFileWriter.Result result;
+            try { result = writeInitialization(pending.inserted, pending.expected, pending.read); }
+            catch (IOException failure) { lastLoadUnparseable = true; noteFailedWrite(failure); throw failure; }
+            catch (RuntimeException failure) {
+                warnGateFailure("insert the missing keys into", failure);
+                document = pending.read;
+                savedSnapshot = pending.baseline;
+                acknowledgeRaw(document, configEntryFields());
+                savedFileFingerprint = entityFingerprint(pending.expected);
+                return;
+            }
+            // Not written (file changed since initForBatch, or refused): the defaults run in memory, the file stays,
+            // and the entity records the bytes it bound - never the operator's newer file - as last read (#602).
+            document = result.applied() ? result.document() : pending.read;
+            savedSnapshot = pending.baseline;
+            acknowledgeRaw(document, configEntryFields());
+            savedFileFingerprint = entityFingerprint(result.applied() ? result.fingerprint() : pending.expected);
+        }
+    }
+
+    /** Clears an uncommitted initialization belonging to a refused manager batch. */
+    @ApiStatus.Internal
+    public final void discardInitializationWrite() {
+        synchronized (this) {
+            if (pendingInitialization == null) { return; }
+            pendingInitialization = null;
+            document = null;
+            savedSnapshot = null;
+            acknowledgedRaw.clear();
+            savedFileFingerprint = null;
+            lastLoadedPresence = new LinkedHashMap<>();
+        }
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // Diagnostic traversal distinguishes list positions, whole keys and inherited secret boundaries.
+    private void warnConversion(Field field, ConversionException failure, Object raw, Object fieldRaw) {
+        List<String> path = failure.path();
+        StringBuilder located = new StringBuilder(fieldPath(field));
+        Object cursor = fieldRaw;
+        boolean parentSecret = isSecretShapedFieldName(field.getName());
+        for (String key : keys(field)) { parentSecret |= isSecretShapedFieldName(key); }
+        for (int i = keys(field).size(); i < path.size(); i++) {
+            String part = path.get(i);
+            if (cursor instanceof List) {
+                located.append('[').append(part).append(']');
+                cursor = ((List<?>) cursor).get(Integer.parseInt(part));
+            } else {
+                located.append('.').append(parentSecret ? "<redacted>" : part);
+                cursor = cursor instanceof Map ? ((Map<?, ?>) cursor).get(part) : null;
+            }
+            parentSecret |= isSecretShapedFieldName(part);
+        }
+        String key = located.toString();
+        boolean secret = isSecretShapedFieldName(field.getName());
+        for (String part : path) { secret |= isSecretShapedFieldName(part); }
+        String found = raw instanceof Map ? "a map" : raw instanceof List ? "a list"
+                : raw instanceof String ? "text" : raw == null ? "null" : raw.getClass().getSimpleName();
+        // Container values may hold nested credentials; redact the entire failed specimen.
+        boolean redacted = secret || containsSecret(raw);
+        String value = redacted ? "<redacted>" : String.valueOf(raw);
+        // #590: the converter is the only code that knows what is wrong; its reason may echo the
+        // value, so it is redacted with it, and it is kept on one log line.
+        String reason = conversionReason(failure);
+        String because = reason == null ? "" : " (reason: " + (redacted ? "<redacted>" : reason) + ")";
+        LOGGER.warning("File " + configFilePath + ", key '" + key + "', declared as " + typeName(failure.declaredType())
+                + ": found " + found + " " + value + because + "; skipped or using the declared default");
+    }
+
+    private static String conversionReason(ConversionException failure) {
+        String reason = failure.reason();
+        if ((reason == null || reason.trim().isEmpty()) && failure.getCause() != null) {
+            reason = failure.getCause().getClass().getSimpleName();
+        }
+        if (reason == null || reason.trim().isEmpty()) { return null; }
+        return reason.replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ").trim();
+    }
+
+    private boolean containsSecret(Object value) {
+        if (value instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+                if (isSecretShapedFieldName(String.valueOf(entry.getKey())) || containsSecret(entry.getValue())) { return true; }
+            }
+        } else if (value instanceof List) {
+            for (Object child : (List<?>) value) { if (containsSecret(child)) { return true; } }
+        }
+        return false;
+    }
+
+    private static String typeName(Type type) {
+        if (type instanceof Class) { return ((Class<?>) type).getSimpleName(); }
+        if (type instanceof ParameterizedType) {
+            ParameterizedType parameterized = (ParameterizedType) type;
+            List<String> arguments = new ArrayList<>();
+            for (Type argument : parameterized.getActualTypeArguments()) { arguments.add(typeName(argument)); }
+            return typeName(parameterized.getRawType()) + "<" + String.join(", ", arguments) + ">";
+        }
+        return type.getTypeName();
+    }
+
+    /**
+     * Splits a {@code @ConfigEntry.comment()} value into one {@link List} element per line, in
+     * declaration order, ready for {@link org.bukkit.configuration.ConfigurationSection}'s
+     * comment-writing API. No blank leading element is added (Claude's Discretion, D-07) - it
+     * would produce a diff on every regenerated file for a purely cosmetic gain, contrary to
+     * D-01's touch-as-little-as-possible posture.
+     *
+     * @param comment the raw {@code comment()} attribute value, possibly empty
+     * @return one element per line, or an empty list if {@code comment} is blank
+     */
+    private static List<String> splitComment(String comment) {
+        if (comment == null || comment.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return Arrays.asList(comment.split("\n"));
     }
 
     /**
      * Updates the properties of the configuration entity.
      * <p>
-     * 更新配置实体的属性。
-     *
+     * The field traversal and path-derivation must match {@code init()} / {@code save()} /
+     * {@code reload()} exactly, or a write can silently no-op: all four methods walk
+     * {@code @ConfigEntry} fields, and this method previously diverged from them in two ways --
+     * using {@code getDeclaredFields()} instead of {@link ReflectionUtil#getFields(Class)}
+     * (missing inherited fields), and not normalizing an empty {@code path} to the field name.
+     * The second divergence was the more hidden one: omitting {@code path} on
+     * {@code @ConfigEntry} is a supported style, {@code init}/{@code save} read and write it by
+     * field name, and {@link #toJsonObject()} also sends it to the panel by field name -- but
+     * this method was looking for an empty-string key in the JSON, which never exists, so the
+     * field was silently skipped while persistence still ran and the caller still
+     * received success.
      * <p>
-     * 字段的遍历方式与路径推导必须与 {@code init()} / {@code save()} / {@code reload()} 完全一致，
-     * 否则会出现「写进去了、其实没写」：这四个方法各自遍历 {@code @ConfigEntry} 字段，
-     * 而本方法过去两处都跟它们不一样 ——
-     * 用 {@code getDeclaredFields()} 而非 {@link ReflectionUtil#getFields(Class)}（漏掉父类字段），
-     * 且不把空的 {@code path} 归一到字段名。后者的后果最隐蔽：{@code @ConfigEntry} 不写
-     * {@code path} 是受支持的写法，{@code init}/{@code save} 会按字段名读写它，
-     * {@link #toJsonObject()} 也按字段名把它发给面板，而这里去 JSON 里找空字符串键，
-     * 永远找不到——字段被跳过，随后 {@code config.save} 照常执行，调用方收到成功。
+     * Since 6.3.0 a panel edit writes exactly the settings it touches - or, inside a map setting, exactly the touched
+     * entries - through the framework's configuration write gate: the operator named them, so their values replace
+     * what the file holds there, and every other key, value, comment and byte of the file stays as it is (maintainer
+     * decision of 2026-10-04, "what code may write, by file type"). It cannot overwrite other operator content: the
+     * gate owns only the touched keys and writes nothing unless every other line comes out byte-identical. When the
+     * gate refuses (anchors, a layout it cannot keep, a file that cannot be read or parsed, or one that changed while
+     * the write was prepared), this throws {@link ConfigWriteRefusedException} naming the reason and the entity is left
+     * exactly as before the call.
+     * <p>
+     * Since 6.3.0 (SILENT-14, closing CR-01) this method validates the full post-update field
+     * state - the same {@link #validateFields()} {@link #init(UltiToolsPlugin)}/{@link
+     * #reload()} already use - before either document mutation or file persistence
+     * runs. A violating value refuses with {@link ConfigurationException} instead of being
+     * written: the operator's file is left byte-identical, and every field this call touched is
+     * restored to the value it held before the call, so memory never disagrees with disk (D-01,
+     * D-04). The entity keeps running after a refusal, so its in-memory state must not be left
+     * holding a rejected value; {@link #reload()} follows the same all-or-nothing rule. The same
+     * holds when the file replacement itself fails: every field and every piece of save
+     * tracking is restored to its state before the call, and the {@code IOException} is rethrown.
      *
-     * @param jsonObject the JSON object containing the new properties <br> 包含新属性的JSON对象
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @param jsonObject the JSON object containing the new properties
+     * @throws IOException            if an I/O error occurs, or the write gate refused the write
+     *                                 ({@link ConfigWriteRefusedException}); the entity is then left as it was
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if the post-update field state violates a {@code @Range}/
+     *                                 {@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint
+     *                                 - the file is not written and touched fields are restored
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
-        Gson gson = new Gson();
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                field.setAccessible(true);
-                ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
-                String path = annotation.path();
-                if (path.isEmpty()) {
-                    path = field.getName();
+        synchronized (this) {
+            PanelCheckpoint before = new PanelCheckpoint();
+            boolean saved = false;
+            try {
+                List<Field> touchedFields = new ArrayList<>();
+                Map<Field, List<List<String>>> leaves = applyAndValidate(jsonObject, touchedFields, new ArrayList<>());
+                writeOperatorChanges(panelChanges(touchedFields, leaves));
+                saved = true;
+            } finally {
+                // A refusal or a failed file replacement leaves the entity exactly as before.
+                if (!saved) { before.restore(); }
+            }
+        }
+    }
+
+    /** Prepares one panel entity without acknowledging or replacing its file: the touched settings or leaves are
+     * verified and staged through the configuration write gate (see {@link #updateProperties}); the commit re-checks
+     * the file's bytes immediately before its move.
+     * @param properties proposed panel values
+     * @return manager-owned write
+     * @throws IOException if reading or staging fails, or the gate refused the write ({@link ConfigWriteRefusedException})
+     */
+    @ApiStatus.Internal
+    public final PanelWrite preparePanelWrite(JsonObject properties) throws IOException {
+        synchronized (this) {
+            PanelCheckpoint before = new PanelCheckpoint();
+            try {
+                List<Field> touched = new ArrayList<>();
+                Map<Field, List<List<String>>> leaves = applyAndValidate(properties, touched, new ArrayList<>());
+                List<ModuleChange> changes = panelChanges(touched, leaves);
+                java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
+                OperatorFileWriter.Staged staged = changes.isEmpty() ? null : stageOperatorChanges(changes);
+                Map<Field, Object> bound = new LinkedHashMap<>();
+                for (Field field : touched) { bound.put(field, ReflectionUtil.getFieldValue(this, field)); }
+                before.restore();
+                return new PanelWrite(before, changes, target, staged, bound);
+            } catch (IOException | RuntimeException failure) {
+                before.restore(); throw failure;
+            }
+        }
+    }
+
+    /** Complete entity state before a panel candidate or a reload attempt, including raw and effective acknowledgments. */
+    private final class PanelCheckpoint {
+        private final List<Field> fields = configEntryFields();
+        private final List<Object> values = new ArrayList<>();
+        private final ConfigDocument oldDocument = document;
+        private final Map<Field, Object> baseline = savedSnapshot == null ? null : new LinkedHashMap<>(savedSnapshot);
+        private final Map<String, Object> presence = lastLoadedPresence;
+        private final Map<Field, RawEntry> raw = new LinkedHashMap<>(acknowledgedRaw);
+        private final String fingerprint = savedFileFingerprint;
+        private final boolean protectedFile = lastLoadUnparseable;
+        private final boolean incomplete = lastInitIncomplete;
+        private final boolean deferred = deferInitialization;
+        private final PendingInitialization initialization = pendingInitialization;
+        private final Set<String> warningKeys = new java.util.LinkedHashSet<>(warnedCommentKeys);
+        private PanelCheckpoint() {
+            for (Field field : fields) { values.add(ReflectionUtil.getFieldValue(AbstractConfigEntity.this, field)); }
+        }
+        private void restore() {
+            restoreFields(fields, values);
+            document = oldDocument; savedSnapshot = baseline; lastLoadedPresence = presence;
+            acknowledgedRaw.clear(); acknowledgedRaw.putAll(raw); savedFileFingerprint = fingerprint;
+            lastLoadUnparseable = protectedFile; lastInitIncomplete = incomplete;
+            deferInitialization = deferred; pendingInitialization = initialization;
+            warnedCommentKeys.clear(); warnedCommentKeys.addAll(warningKeys);
+        }
+    }
+
+    /** Narrow manager coordination for one staged entity; not a module transaction API. */
+    @ApiStatus.Internal
+    public final class PanelWrite {
+        private final PanelCheckpoint before;
+        private final List<ModuleChange> changes;
+        private final java.nio.file.Path target;
+        private final OperatorFileWriter.Staged staged;
+        private OperatorFileWriter.Result committed;
+        private final Map<Field, Object> bound;
+        private PanelWrite(PanelCheckpoint before, List<ModuleChange> changes, java.nio.file.Path target,
+                OperatorFileWriter.Staged staged, Map<Field, Object> bound) {
+            this.before = before; this.changes = changes; this.target = target;
+            this.staged = staged; this.bound = bound;
+        }
+        /**
+         * Publishes this file through the configuration write gate only while it still holds exactly the bytes the
+         * write was verified against; a file the operator saved after staging is kept and refused.
+         * @throws IOException if the replacement fails, or {@link ConfigWriteRefusedException} when the file changed
+         *                     since it was staged (nothing was moved)
+         */
+        public void commit() throws IOException {
+            if (staged == null) { return; }
+            OperatorFileWriter.Result result;
+            try { result = staged.commit(); }
+            catch (IOException failure) { noteFailedWrite(failure); throw failure; }
+            if (!result.applied()) { throw refused(result.reason()); }
+            committed = result;
+        }
+        /** Acknowledges only after every manager-owned replacement succeeds. */
+        public void acknowledge() {
+            synchronized (AbstractConfigEntity.this) {
+                for (Map.Entry<Field, Object> entry : bound.entrySet()) {
+                    ReflectionUtil.setFieldValue(AbstractConfigEntity.this, entry.getKey(), entry.getValue());
                 }
-                if (jsonObject.has(path)) {
-                    Object configValue = gson.fromJson(jsonObject.get(path), field.getType());
-                    if (configValue != null) {
-                        ReflectionUtil.setFieldValue(this, field, configValue);
-                        config.set(path, configValue);
-                    }
+                if (committed != null) {
+                    acknowledgeWritten(committed.readFingerprint(), committed.fingerprint(), committed.document(), changes);
                 }
             }
         }
-        config.save(ultiToolsPlugin.getConfigFile(configFilePath));
+        /** Restores a target this write replaced to exactly the bytes it was verified against - through the gate's
+         * last-moment check, so a file the operator saved after this write replaced it is kept and named once
+         * ({@link OperatorFileWriter.Staged#restore()}, 17-65 review round 1 R65-I3) - and all entity state; always
+         * discards its staged file.
+         * @throws IOException if physical recovery fails
+         */
+        public void rollback() throws IOException {
+            synchronized (AbstractConfigEntity.this) {
+                try {
+                    if (staged != null) { staged.restore(); }
+                } catch (IOException failure) {
+                    noteFailedWrite(failure); throw failure;
+                } finally {
+                    before.restore(); discard();
+                }
+            }
+        }
+        /** Releases a staged file that has not been committed. */
+        public void discard() {
+            if (staged != null && !staged.discard()) {
+                LOGGER.warning("Could not remove staged configuration file for " + configFilePath);
+            }
+        }
+    }
+
+    private void restoreFields(List<Field> fields, List<Object> values) {
+        for (int i = 0; i < fields.size(); i++) { ReflectionUtil.setFieldValue(this, fields.get(i), values.get(i)); }
+    }
+
+    /**
+     * Validates that applying {@code jsonObject}'s touched fields would NOT violate any
+     * {@code @Range}/{@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint, without
+     * persisting anything to disk or leaving any field changed (#358 Part 2).
+     * <p>
+     * Used by {@code ConfigManager.loadFromJson(String)} to validate every entity touched by a
+     * multi-file panel-pushed batch BEFORE persisting any of them - a refusal on entity N must
+     * not leave entities 1..N-1 already written to disk. This method always restores every
+     * field it touched, whether validation passes or fails; the caller is expected to call
+     * {@link #updateProperties(JsonObject)} itself afterward (which re-validates - cheap on the
+     * documented idiom - and persists) once every entity in its own batch has passed this check.
+     *
+     * @param jsonObject the JSON object containing the candidate new properties
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if the candidate post-update field state would violate a
+     *                                 validation constraint
+     */
+    public void validateProposedProperties(JsonObject jsonObject) {
+        synchronized (this) {
+            PanelCheckpoint before = new PanelCheckpoint();
+            try { applyAndValidate(jsonObject, new ArrayList<>(), new ArrayList<>()); }
+            finally { before.restore(); }
+        }
+    }
+
+    /**
+     * Applies every {@code jsonObject} field this class declares via {@code @ConfigEntry} to
+     * this instance, then validates the resulting state via {@link #validateFields()}. Never
+     * itself persists or restores anything - callers decide what happens next. {@code
+     * touchedFieldsOut}/{@code previousValuesOut} are populated even when {@link
+     * #validateFields()} throws, so a caller can still restore exactly what this call touched.
+     *
+     * @param jsonObject        the JSON object containing the candidate new properties
+     * @param touchedFieldsOut  populated, in application order, with every field this call applied
+     * @param previousValuesOut populated in the same order with each field's pre-call value
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if the post-update field state violates a constraint. A refusal of panel paths
+     *                                 names each path through the display rule of {@link #describeKey} - never a key
+     *                                 below a secret-shaped one, never a value - because the message is logged and
+     *                                 returned to the panel (#673, case 54)
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Resolve every panel owner and validate every candidate before publishing any field.
+    private Map<Field, List<List<String>>> applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
+        if (lastLoadUnparseable) {
+            throw new ConfigurationException("Protected configuration file " + configFilePath
+                    + ": its last load was unreadable or unparseable; reload a valid file before editing");
+        }
+        Map<Field, Object> proposed = new LinkedHashMap<>();
+        Map<Field, List<List<String>>> leaves = new LinkedHashMap<>();
+        compositeReads.clear();
+        compositeWrites.clear();
+        Set<Field> whole = new java.util.LinkedHashSet<>();
+        List<String> refused = new ArrayList<>();
+        JsonObject displayed = toJsonObject();
+        for (Map.Entry<String, JsonElement> edit : jsonObject.entrySet()) {
+            String path = edit.getKey();
+            Object raw = jsonToPlain(edit.getValue());
+            if (displayed.has(path) && PlainData.plainEquals(jsonToPlain(displayed.get(path)), raw)) { continue; }
+            Field owner = null;
+            for (Field field : configEntryFields()) {
+                String entry = fieldPath(field);
+                if (path.equals(entry)) { owner = field; break; }
+                if (path.startsWith(entry + ".") && (owner == null || entry.length() > fieldPath(owner).length())) {
+                    owner = field;
+                }
+            }
+            if (owner == null) { refused.add(describeUndeclared(path) + ": no declared entry"); continue; }
+            if (path.equals(fieldPath(owner))) {
+                proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
+            }
+            Object source = document == null ? null : document.get(keysIn(document, owner));
+            RawEntry lastRead = acknowledgedRaw.get(owner);
+            List<List<String>> matches = new ArrayList<>();
+            String rest = path.substring(fieldPath(owner).length() + 1);
+            matchMapPaths(source, rest, new ArrayList<>(), matches);
+            if (matches.size() != 1) {
+                refused.add(describeKey(owner, dottedKeys(rest)) + ": "
+                        + (matches.isEmpty() ? "not found" : "ambiguous " + describeReadings(owner, matches)));
+                continue;
+            }
+            List<String> match = matches.get(0);
+            int depth = splitDepth(declaredType(owner), match);
+            if (depth < match.size()) {
+                // An edit inside a value that is one value (a serializable, a list): the unit edited is that whole value, as
+                // the panel shows it with this field changed, so a module's unsaved change of the same value is not mixed
+                // in (17-65 review round 2 R2-01).
+                List<String> unit = new ArrayList<>(match.subList(0, depth));
+                List<String> inside = match.subList(depth, match.size());
+                // The unit is built from the whole value as last read, and that value becomes a precondition checked on
+                // the file at write time (route change, R3-01): an edit made on disk since is refused, never rebuilt over.
+                boolean readHolds = lastRead != null && lastRead.present && (unit.isEmpty() || mapContains(lastRead.value, unit));
+                if (!readHolds) {
+                    refused.add(describeKey(owner, match) + ": the file changed since it was read; reload first");
+                    continue;
+                }
+                Object readUnit = unit.isEmpty() ? lastRead.value : mapLeaf(lastRead.value, unit);
+                compositeReads.computeIfAbsent(owner, ignored -> new LinkedHashMap<>())
+                        .putIfAbsent(unit, new RawEntry(true, readUnit));
+                // The edited field takes the number type the module's own value holds there (a whole number sent for a
+                // Vector coordinate becomes 7.0), so the value written is one the module reads back (#609).
+                Object edited = isSerializedMap(readUnit) ? widenLike(raw, mapLeaf(mapLeaf(plainValue(owner), unit), inside))
+                        : raw;
+                if (unit.isEmpty()) {
+                    Object shown = whole.contains(owner) && proposed.containsKey(owner) ? proposed.get(owner) : readUnit;
+                    proposed.put(owner, patchedMap(shown, inside, edited)); leaves.remove(owner); whole.add(owner);
+                    continue;
+                }
+                Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
+                if (!(tree instanceof Map)) { refused.add(describeKey(owner, match) + ": not a map entry"); continue; }
+                if (!parentInMemory(tree, unit)) { refused.add(describeKey(owner, match) + ": not found in memory"); continue; }
+                List<List<String>> touched = leaves.get(owner);
+                Object shown = whole.contains(owner) || touched != null && touched.contains(unit) ? mapLeaf(tree, unit)
+                        : readUnit;
+                replaceMapLeaf(tree, unit, patchedMap(shown, inside, edited));
+                proposed.put(owner, tree);
+                if (!whole.contains(owner) && (touched == null || !touched.contains(unit))) {
+                    leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(unit);
+                }
+                continue;
+            }
+            Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
+            if (!(tree instanceof Map)) { refused.add(describeKey(owner, match) + ": not a map entry"); continue; }
+            // A group the module removed in memory (unsaved) is not there to edit: refused, never a runtime error (R4-I3).
+            if (!parentInMemory(tree, match)) { refused.add(describeKey(owner, match) + ": not found in memory"); continue; }
+            replaceMapLeaf(tree, match, raw);
+            proposed.put(owner, tree);
+            if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(match); }
+        }
+        for (Map.Entry<Field, Map<List<String>, RawEntry>> reads : compositeReads.entrySet()) {
+            Object proposal = proposed.get(reads.getKey());
+            Map<List<String>, Object> wholes = new LinkedHashMap<>();
+            for (List<String> unit : reads.getValue().keySet()) {
+                // The whole value as last read with only the edited fields changed: what the file gets (R4-I2).
+                wholes.put(unit, PlainData.copy(mapLeaf(proposal, unit)));
+            }
+            compositeWrites.put(reads.getKey(), wholes);
+        }
+        Map<Field, Object> converted = new LinkedHashMap<>();
+        for (Map.Entry<Field, Object> proposal : proposed.entrySet()) {
+            Field field = proposal.getKey();
+            try {
+                // Whole numbers inside a serialized composite are widened where the module's own value holds a
+                // floating-point number there, for the conversion only (#609, R4-I1): Bukkit's Vector reads its
+                // coordinates as Double without widening; the bytes the operator wrote are not changed by this.
+                Object candidate = widenLike(proposal.getValue(), plainValue(field), false);
+                ConversionResult<Object> result = registry().fromPlainResult(candidate, declaredType(field),
+                        configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+                if (!result.failures().isEmpty()) {
+                    for (ConversionFailure failure : result.failures()) {
+                        refused.add(describeFailure(field, failure.path()) + ": invalid panel value for "
+                                + typeName(failure.declaredType()));
+                    }
+                } else {
+                    converted.put(field, result.value());
+                }
+            } catch (ConversionException failure) {
+                refused.add(describeFailure(field, failure.path()) + ": invalid panel value for "
+                        + typeName(failure.declaredType()));
+            }
+        }
+        if (!refused.isEmpty()) { throw new ConfigurationException("File " + configFilePath + ": " + String.join("; ", refused)); }
+        for (Map.Entry<Field, Object> entry : converted.entrySet()) {
+            Field field = entry.getKey(); field.setAccessible(true);
+            touchedFieldsOut.add(field); previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
+            ReflectionUtil.setFieldValue(this, field, entry.getValue());
+        }
+        validateFields();
+        validateBindingRanges(touchedFieldsOut);
+        return leaves;
+    }
+
+    /**
+     * How a refusal names a panel path no declared setting owns: the rule of {@link #displayKeys} over its dotted
+     * segments, so everything below the first secret-shaped segment is redacted (#673).
+     */
+    private String describeUndeclared(String path) {
+        return "'" + String.join(".", displayKeys(false, dottedKeys(path))) + "'";
+    }
+
+    /**
+     * The dotted segments of a panel path whose real keys are not known, for display only: a whole key holding a dot is
+     * split, which can only redact more, never less (no secret-shaped word contains a dot).
+     */
+    private static List<String> dottedKeys(String path) { return Arrays.asList(path.split("\\.", -1)); }
+
+    /** Every reading of an ambiguous panel path, as the real keys of {@code owner}'s map displayed by {@link #displayKeys}. */
+    private List<List<String>> describeReadings(Field owner, List<List<String>> readings) {
+        List<List<String>> shown = new ArrayList<>(readings.size());
+        for (List<String> reading : readings) { shown.add(displayKeys(secretSetting(owner), reading)); }
+        return shown;
+    }
+
+    /**
+     * How a refusal names the path of a conversion failure of {@code field}: through {@link #describeKey} with the keys
+     * below the setting's declared keys; a path that does not start with them is displayed whole by the same rule.
+     */
+    private String describeFailure(Field field, List<String> path) {
+        List<String> declared = keys(field);
+        if (path.size() >= declared.size() && path.subList(0, declared.size()).equals(declared)) {
+            return describeKey(field, path.subList(declared.size(), path.size()));
+        }
+        return "'" + String.join(".", displayKeys(secretSetting(field), path)) + "'";
+    }
+
+    /** Whether the map holding the last key of {@code path} exists in {@code tree} (the module's value in memory). */
+    private static boolean parentInMemory(Object tree, List<String> path) {
+        return (path.size() == 1 ? tree : mapLeaf(tree, path.subList(0, path.size() - 1))) instanceof Map;
+    }
+
+    /** Whether {@code value} is a serialized Bukkit value: a map carrying the {@code ==} type key. */
+    private static boolean isSerializedMap(Object value) {
+        return value instanceof Map && ((Map<?, ?>) value).containsKey("==");
+    }
+
+    /**
+     * {@code value} with each whole number inside a serialized Bukkit value ({@link #isSerializedMap}) widened to a
+     * {@code Double} where {@code guide} - the module's own value, as plain data - holds a floating-point number at the
+     * same place; everything else as it is. A whole number given directly ({@code guide} a floating-point number) is
+     * widened too. Used for a panel edit's conversion and for the edited field it writes (#609, R4-I1).
+     */
+    private static Object widenLike(Object value, Object guide) {
+        return widenLike(value, guide, true);
+    }
+
+    private static Object widenLike(Object value, Object guide, boolean inSerialized) {
+        if (inSerialized && (guide instanceof Double || guide instanceof Float) && (value instanceof Integer
+                || value instanceof Long || value instanceof Short || value instanceof Byte)) {
+            return ((Number) value).doubleValue();
+        }
+        if (!(value instanceof Map) || !(guide instanceof Map)) { return value; }
+        boolean serialized = isSerializedMap(value);
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+            Object nested = ((Map<?, ?>) guide).get(entry.getKey());
+            result.put(String.valueOf(entry.getKey()), widenLike(entry.getValue(), nested, serialized));
+        }
+        return result;
+    }
+
+    private static Object mapLeaf(Object tree, List<String> path) {
+        Object value = tree;
+        for (String key : path) {
+            if (!(value instanceof Map)) { return null; }
+            value = ((Map<?, ?>) value).get(key);
+        }
+        return value;
+    }
+
+    private static boolean mapContains(Object tree, List<String> path) {
+        Object value = tree;
+        for (String key : path) {
+            if (!(value instanceof Map) || !((Map<?, ?>) value).containsKey(key)) { return false; }
+            value = ((Map<?, ?>) value).get(key);
+        }
+        return true;
+    }
+
+    /** A copy of {@code tree} without the entry at {@code path} (a copy of {@code tree} when it has none). */
+    private static Object withoutLeaf(Object tree, List<String> path) {
+        if (!(tree instanceof Map)) { return PlainData.copy(tree); }
+        Map<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) tree).entrySet()) {
+            copy.put(String.valueOf(entry.getKey()), PlainData.copy(entry.getValue()));
+        }
+        String key = path.get(0);
+        if (path.size() == 1) { copy.remove(key); }
+        else if (copy.containsKey(key)) { copy.put(key, withoutLeaf(copy.get(key), path.subList(1, path.size()))); }
+        return copy;
+    }
+
+    private static Object patchedMap(Object tree, List<String> path, Object value) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        if (tree instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) tree).entrySet()) {
+                copy.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        String key = path.get(0);
+        copy.put(key, path.size() == 1 ? value : patchedMap(copy.get(key), path.subList(1, path.size()), value));
+        return copy;
+    }
+
+    private static void matchMapPaths(Object node, String remaining, List<String> prefix, List<List<String>> matches) {
+        if (!(node instanceof Map)) { return; }
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) node).entrySet()) {
+            String key = String.valueOf(entry.getKey());
+            List<String> path = new ArrayList<>(prefix); path.add(key);
+            if (remaining.equals(key)) { matches.add(path); }
+            else if (remaining.startsWith(key + ".")) {
+                matchMapPaths(entry.getValue(), remaining.substring(key.length() + 1), path, matches);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked") // Plain-data maps have String keys, enforced by the converter boundary.
+    private static void replaceMapLeaf(Object tree, List<String> path, Object value) {
+        Map<String, Object> parent = (Map<String, Object>) tree;
+        for (int i = 0; i < path.size() - 1; i++) { parent = (Map<String, Object>) parent.get(path.get(i)); }
+        parent.put(path.get(path.size() - 1), PlainData.copy(value));
+    }
+
+    // Recursive JSON shape dispatch preserves exact integral overflow before typed conversion.
+    @SuppressWarnings("PMD.NPathComplexity")
+    private static Object jsonToPlain(JsonElement element) {
+        if (element.isJsonNull()) { return null; }
+        if (element.isJsonObject()) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            for (Map.Entry<String, JsonElement> entry : element.getAsJsonObject().entrySet()) {
+                result.put(entry.getKey(), jsonToPlain(entry.getValue()));
+            }
+            return result;
+        }
+        if (element.isJsonArray()) {
+            List<Object> result = new ArrayList<>();
+            for (JsonElement child : element.getAsJsonArray()) { result.add(jsonToPlain(child)); }
+            return result;
+        }
+        JsonPrimitive primitive = element.getAsJsonPrimitive();
+        if (primitive.isBoolean()) { return primitive.getAsBoolean(); }
+        if (primitive.isString()) { return primitive.getAsString(); }
+        try {
+            java.math.BigInteger integer = primitive.getAsBigDecimal().toBigIntegerExact();
+            try { return integer.longValueExact(); }
+            catch (ArithmeticException overflow) { return integer; }
+        } catch (ArithmeticException fractional) { return primitive.getAsDouble(); }
+    }
+
+    /**
+     * Refuses a panel write that sets a key bound by a config binding (#531) outside that binding's
+     * range, in the same shape as a {@code @Range} violation. Only the fields this write touched are
+     * checked: a bound field left as it was may hold a value a refused reload kept out of use, and
+     * editing another key must not fail because of it.
+     *
+     * @param touchedFields the fields this write applied
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 naming each bound key, its value and its range
+     */
+    private void validateBindingRanges(List<Field> touchedFields) {
+        if (bindingRanges.isEmpty()) {
+            return;
+        }
+        List<String> violations = new ArrayList<>();
+        for (Field field : touchedFields) {
+            ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
+            String path = annotation.path().isEmpty() ? field.getName() : annotation.path();
+            Map<String, Predicate<Long>> ranges = bindingRanges.get(path);
+            if (ranges == null) {
+                continue;
+            }
+            Object value = ReflectionUtil.getFieldValue(this, field);
+            Long seconds = value instanceof Number ? ((Number) value).longValue() : null;
+            for (Map.Entry<String, Predicate<Long>> range : ranges.entrySet()) {
+                if (!range.getValue().test(seconds)) {
+                    violations.add(String.format("key '%s' value %s is out of its binding's range: %s",
+                            path, value, range.getKey()));
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
+            throw ConfigurationException.validationFailed(moduleName, configFilePath, violations);
+        }
     }
 
     /**
      * Converts the configuration entity to a JSON object.
-     * <p>
-     * 将配置实体转换为JSON对象。
      *
-     * @return the JSON object representation of the configuration entity <br> 配置实体的JSON对象表示
+     * @return the JSON object representation of the configuration entity
      */
     public JsonObject toJsonObject() {
-        Gson gson = new Gson();
-        JsonObject jsonObject = new JsonObject();
-        Set<String> keys = config.getKeys(true);
-        for (String key : keys) {
-            if (!config.isConfigurationSection(key)) {
-                Object value = config.get(key);
-                jsonObject.add(key, gson.toJsonTree(value));
-            }
+        synchronized (this) {
+            JsonObject json = new JsonObject();
+            if (document != null) { addLeaves(json, "", document.toPlain(), new Gson()); }
+            return json;
         }
-        return jsonObject;
+    }
+
+    private static void addLeaves(JsonObject result, String prefix, Map<?, ?> values, Gson gson) {
+        for (Map.Entry<?, ?> entry : values.entrySet()) {
+            String path = prefix.isEmpty() ? String.valueOf(entry.getKey()) : prefix + "." + entry.getKey();
+            if (entry.getValue() instanceof Map) { addLeaves(result, path, (Map<?, ?>) entry.getValue(), gson); }
+            else { result.add(path, gson.toJsonTree(entry.getValue())); }
+        }
     }
 
     /**
      * Gets the comments of the configuration entity.
-     * <p>
-     * 获取配置实体的注释。
      *
-     * @return a JSON object containing the comments <br> 包含注释的JSON对象
+     * @return a JSON object containing the comments
      */
     public JsonObject getComments() {
         JsonObject jsonObject = new JsonObject();
-        // 与 updateProperties 同样的两处对齐：走完整字段树、空 path 归一到字段名。
-        // 不归一的话，没写 path 的字段其注释会被塞在 "" 这个键下，而 toJsonObject()
-        // 是按字段名发值的，面板两边对不上，那条注释永远显示不出来。
+        // Same two alignments as updateProperties: walk the full field tree, normalize an empty
+        // path to the field name. Without normalizing, a field with no path would have its
+        // comment filed under the "" key, while toJsonObject() sends values by field name - the
+        // panel's two sides would never match up and that comment would never display.
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
@@ -197,7 +2831,7 @@ public abstract class AbstractConfigEntity {
                 if (path.isEmpty()) {
                     path = field.getName();
                 }
-                jsonObject.addProperty(path, annotation.comment());
+                jsonObject.addProperty(path, panelComment(field));
             }
         }
         return jsonObject;
@@ -207,82 +2841,187 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Validates all fields annotated with validation annotations (@Range, @NotEmpty, @Size, @Pattern).
-     * Invalid values are reset to their Java field initializer defaults and a warning is logged.
-     * <p>
-     * 验证所有带验证注解的字段。无效值将重置为Java字段初始化默认值并记录警告。
+     * A violation refuses this config's module instead of rewriting the value - the operator's
+     * file is never modified (D-01). Every violating field is collected and named in a single
+     * refusal. At load the operator fixes the value(s) on disk and restarts; on a reload the running
+     * values are kept and fixing the file and reloading again is enough (#595).
+     *
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if any field violates its validation constraint, or if this
+     *                                 config class cannot be constructed through either of the
+     *                                 two framework-supported idioms (D-03)
      */
     protected void validateFields() {
-        Object defaultInstance;
-        try {
-            defaultInstance = this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
-        } catch (Exception e) {
-            LOGGER.log(Level.FINE, "Cannot create default instance for validation: " + this.getClass().getSimpleName());
+        List<Field> configFields = configEntryFields();
+        if (configFields.isEmpty()) {
             return;
         }
 
-        boolean modified = false;
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (!field.isAnnotationPresent(ConfigEntry.class)) {
-                continue;
-            }
+        // Proves this class still supports one of the two framework idioms (D-02/D-03) - the
+        // constructed instance itself is discarded, only its existence matters here.
+        ensureConstructable();
+
+        List<String> violations = new ArrayList<>();
+        for (Field field : configFields) {
             field.setAccessible(true);
             try {
-                if (validateSingleField(field, defaultInstance)) {
-                    modified = true;
+                String violation = validateSingleField(field);
+                if (violation != null) {
+                    violations.add(violation);
                 }
             } catch (IllegalAccessException e) {
                 LOGGER.log(Level.WARNING, "Failed to validate field: " + field.getName(), e);
             }
         }
 
-        if (modified && ultiToolsPlugin != null) {
-            try {
-                save();
-            } catch (IOException e) {
-                LOGGER.log(Level.WARNING, "Failed to save corrected config: " + configFilePath, e);
-            }
+        if (!violations.isEmpty()) {
+            String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
+            throw validatingReload
+                    ? ConfigurationException.reloadValidationFailed(moduleName, configFilePath, violations)
+                    : ConfigurationException.validationFailed(moduleName, configFilePath, violations);
         }
     }
 
-    private boolean validateSingleField(Field field, Object defaultInstance) throws IllegalAccessException {
-        Object value = field.get(this);
-        Object defaultValue = field.get(defaultInstance);
-        boolean reset = false;
+    /**
+     * Constructs and discards an instance of this config class through the same two-step
+     * fallback {@code ConfigManager.registerAll} uses at registration time - a {@code (String)}
+     * constructor first, then an accessible no-arg constructor. Existence, not the constructed
+     * value, is what this proves: the framework needs every registered config class to still be
+     * buildable through one of its two documented idioms (D-02). Neither resolving is a genuine
+     * config-class error (D-03).
+     *
+     * @throws ConfigurationException if neither constructor resolves
+     */
+    private void ensureConstructable() {
+        constructSibling();
+    }
 
+    /**
+     * Constructs a fresh instance of this config class through the {@code (String)} constructor, or
+     * failing that the no-arg constructor - the two idioms {@link #ensureConstructable()} proves -
+     * for the existing validation constructability precondition only.
+     *
+     * @return a new, uninitialized instance of this entity's class
+     * @throws ConfigurationException if neither constructor resolves
+     */
+    private AbstractConfigEntity constructSibling() {
+        try {
+            try {
+                return this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
+            } catch (NoSuchMethodException e) {
+                // Try no-arg constructor (class may hardcode path via super() call)
+                return this.getClass().getDeclaredConstructor().newInstance();
+            }
+        } catch (InstantiationException | InvocationTargetException | IllegalAccessException | NoSuchMethodException e) {
+            throw ConfigurationException.unconstructable(this.getClass().getName(), e);
+        }
+    }
+
+    /**
+     * Describes the single validation constraint {@code field} violates, if any.
+     *
+     * @param field the field to check, already made accessible
+     * @return a violation description naming the field, its actual value (redacted for
+     *         {@code @Pattern} on a secret-shaped field name, T-04-04) and the broken constraint,
+     *         or {@code null} if the field's value satisfies its annotations
+     */
+    private String validateSingleField(Field field) throws IllegalAccessException {
+        Object value = field.get(this);
+
+        String unreadable = unreadableKind(field, value);
+        if (unreadable != null) {
+            return unreadable;
+        }
         if (isRangeViolation(field, value)) {
             Range range = field.getAnnotation(Range.class);
-            logResetWarning("value %s out of range [%s, %s]", field, value, range.min(), range.max(), defaultValue);
-            reset = true;
-        } else if (isNotEmptyViolation(field, value)) {
-            logResetWarning("is empty", field, null, null, null, defaultValue);
-            reset = true;
-        } else if (isSizeViolation(field, value)) {
+            return String.format("field '%s' value %s is out of range [%s, %s]",
+                    field.getName(), value, range.min(), range.max());
+        }
+        if (isNotEmptyViolation(field, value)) {
+            return String.format("field '%s' must not be empty", field.getName());
+        }
+        if (isSizeViolation(field, value)) {
             Size size = field.getAnnotation(Size.class);
             int len = getValueLength(value);
-            logResetWarning("size %d out of bounds [%d, %d]", field, len, size.min(), size.max(), defaultValue);
-            reset = true;
-        } else if (isPatternViolation(field, value)) {
+            return String.format("field '%s' size %d is out of bounds [%d, %d]",
+                    field.getName(), len, size.min(), size.max());
+        }
+        if (isPatternViolation(field, value)) {
             Pattern pattern = field.getAnnotation(Pattern.class);
-            logResetWarning("value '%s' does not match pattern '%s'", field, value, pattern.regex(), null, defaultValue);
-            reset = true;
+            String displayValue = isSecretShapedFieldName(field.getName()) ? "<redacted>" : "'" + value + "'";
+            return String.format("field '%s' value %s does not match pattern '%s'",
+                    field.getName(), displayValue, pattern.regex());
         }
+        return null;
+    }
 
-        if (reset) {
-            field.set(this, defaultValue);
+    /**
+     * Whether a field name looks like it stores a secret. Only {@code @Pattern} violations echo
+     * an arbitrary string value; {@code @Range}/{@code @Size} violations always echo a number or
+     * a length, and {@code @NotEmpty} violations are empty by definition, so neither can leak a
+     * secret verbatim (T-04-04).
+     * <p>
+     * Widened in 6.3.0 (04-REVIEW.md WR-03) to also cover {@code key}/{@code auth}/
+     * {@code private}/{@code cert}, accepting the resulting false positives (a field merely
+     * named e.g. {@code publicKey} is redacted too) as the safer default, per Phase 2 D-15's
+     * fail-closed preference. The reason for the widening is new, not cosmetic: before the
+     * write-path refusal added by this same 6.3.0 change, a {@code @Pattern} refusal message
+     * went only to the local console; now both remote config-write handlers forward it
+     * verbatim to UltiPanel over the WebSocket (T-04-56), so a name-heuristic miss here leaks
+     * the server, not just the console.
+     */
+    private boolean isSecretShapedFieldName(String fieldName) {
+        String lower = fieldName.toLowerCase(Locale.ROOT);
+        return lower.contains("password") || lower.contains("secret")
+                || lower.contains("token") || lower.contains("credential")
+                || lower.contains("apikey") || lower.contains("api_key")
+                || lower.contains("key") || lower.contains("auth")
+                || lower.contains("private") || lower.contains("cert");
+    }
+
+    /**
+     * A violation for a bound value of a kind the field's annotation cannot read - possible only when the setting is
+     * declared as a supertype such as {@code Object} (final review of plan 17-76: a declared constraint works or is
+     * refused, never passes silently). {@code @Range} reads numbers, {@code @Pattern} text, {@code @Size} text,
+     * collections, maps and arrays, {@code @NotEmpty} the same kinds; {@code null} is left to {@code @NotEmpty} as before.
+     * It is a violation like any other, with that annotation's outcome (refused at load; at reload the reload is refused
+     * and the running values are kept). The message names the field and the value's kind, never the value.
+     *
+     * @return the violation, or {@code null} when every annotation on the field can read the value
+     */
+    private String unreadableKind(Field field, Object value) {
+        if (value == null) { return null; }
+        boolean text = value instanceof String || value instanceof Character;
+        boolean sized = text || getValueLength(value) >= 0;
+        String reason = null;
+        String annotation = null;
+        if (field.getAnnotation(Range.class) != null && !(value instanceof Number)) {
+            annotation = "@Range"; reason = "it checks numbers only";
+        } else if (field.getAnnotation(Pattern.class) != null && !text) {
+            annotation = "@Pattern"; reason = "it checks text only";
+        } else if (field.getAnnotation(Size.class) != null && !sized) {
+            annotation = "@Size"; reason = "it counts text, lists, sets, maps and arrays only";
+        } else if (field.getAnnotation(NotEmpty.class) != null && !sized) {
+            annotation = "@NotEmpty"; reason = "it applies to text, lists, sets, maps and arrays only";
         }
-        return reset;
+        return annotation == null ? null : String.format("field '%s' holds a %s, which %s cannot read (%s)",
+                field.getName(), value.getClass().getSimpleName(), annotation, reason);
     }
 
     private boolean isRangeViolation(Field field, Object value) {
         Range range = field.getAnnotation(Range.class);
         if (range == null || !(value instanceof Number)) return false;
         double num = ((Number) value).doubleValue();
-        return num < range.min() || num > range.max();
+        // Written as "not inside" so NaN, for which every comparison is false, is out of every range (#625); an
+        // infinity is inside only a range whose bound is that infinity.
+        return !(num >= range.min() && num <= range.max());
     }
 
     private boolean isNotEmptyViolation(Field field, Object value) {
+        // An empty list, set, map or array is a violation wherever nothing replaces it - a panel write (#630). A load or
+        // reload has already replaced the file's empty value with the declared default (useDeclaredDefaultIfEmpty).
         return field.getAnnotation(NotEmpty.class) != null
-                && (value == null || value.toString().trim().isEmpty());
+                && (value == null || isEmptyContainer(value) || value.toString().trim().isEmpty());
     }
 
     private boolean isSizeViolation(Field field, Object value) {
@@ -294,21 +3033,210 @@ public abstract class AbstractConfigEntity {
 
     private boolean isPatternViolation(Field field, Object value) {
         Pattern pattern = field.getAnnotation(Pattern.class);
-        return pattern != null && value instanceof String && !((String) value).matches(pattern.regex());
+        // A char is text too (#631): its one character is matched as a string.
+        return pattern != null && (value instanceof String || value instanceof Character)
+                && !String.valueOf(value).matches(pattern.regex());
     }
 
+    /**
+     * What {@code @Size} counts: a text's length (a {@code char} is one character), a collection's size, a map's
+     * entries and an array's length (maps and arrays since 6.3.0, #631); {@code -1} for anything else.
+     */
     private int getValueLength(Object value) {
         if (value instanceof java.util.Collection) return ((java.util.Collection<?>) value).size();
+        if (value instanceof Map) return ((Map<?, ?>) value).size();
         if (value instanceof String) return ((String) value).length();
+        if (value instanceof Character) return 1;
+        if (value != null && value.getClass().isArray()) return java.lang.reflect.Array.getLength(value);
         return -1;
     }
 
-    private void logResetWarning(String reason, Field field, Object val1, Object val2, Object val3, Object defaultValue) {
-        String msg = String.format("[UltiTools-API] Config '%s' field '%s' " + reason + ". Reset to default: %s",
-                configFilePath, field.getName(), val1, val2, val3, defaultValue);
-        // Remove trailing null args from message
-        msg = msg.replace(", null", "").replace("null, ", "");
-        LOGGER.warning(msg);
+    // ==================== @NotEmpty on lists, sets and maps (#630) ====================
+
+    /**
+     * The value kind {@code @NotEmpty} treats as a container on {@code field}: {@code "list"} (a list or an array),
+     * {@code "set"}, {@code "map"} or {@code "collection"} by the field's declared type, or {@code null} for any other
+     * type (text keeps its refusal).
+     */
+    private String containerKind(Field field) {
+        Class<?> raw = ConversionTypes.raw(declaredType(field));
+        if (Map.class.isAssignableFrom(raw)) { return "map"; }
+        if (Set.class.isAssignableFrom(raw)) { return "set"; }
+        // An array is written as a list in the file (#631).
+        if (List.class.isAssignableFrom(raw) || raw.isArray()) { return "list"; }
+        return java.util.Collection.class.isAssignableFrom(raw) ? "collection" : null;
+    }
+
+    /** Whether a container value holds nothing: {@code null}, an empty collection, map or array. */
+    private static boolean isEmptyContainer(Object value) {
+        return value == null || value instanceof java.util.Collection && ((java.util.Collection<?>) value).isEmpty()
+                || value instanceof Map && ((Map<?, ?>) value).isEmpty()
+                || value.getClass().isArray() && java.lang.reflect.Array.getLength(value) == 0;
+    }
+
+    /**
+     * A {@code @NotEmpty} list, set or map that a load or reload bound empty - the file holds it empty or {@code null},
+     * or every entry failed to bind - runs on the field's declared default in memory (#630, maintainer decision of
+     * 2026-10-06). One WARNING names the file, the key, the value kind, the value as written and the default; both are
+     * redacted when the field name, a key segment, or a map key inside the value or the default is secret-shaped, as a
+     * conversion warning is. It is not a violation, so the module loads.
+     * <p>
+     * Why it cannot overwrite operator content: nothing here writes. The setting's baseline becomes the default the
+     * field now holds (the load records the bound value after this call) and the file's value stays the one last read,
+     * so {@link #save()} finds no module change to write and never puts the default over the operator's empty value.
+     *
+     * @param field the setting just bound, already made accessible
+     * @param raw   the value as the file holds it
+     */
+    private void useDeclaredDefaultIfEmpty(Field field, Object raw) {
+        if (field.getAnnotation(NotEmpty.class) == null) { return; }
+        String kind = containerKind(field);
+        if (kind == null || !isEmptyContainer(ReflectionUtil.getFieldValue(this, field))) { return; }
+        Object declared = declaredDefaults.get(field);
+        try {
+            Object value = registry().fromPlainResult(declared, declaredType(field), configFilePath, keys(field),
+                    field.getAnnotation(ConfigEntry.class)).value();
+            ReflectionUtil.setFieldValue(this, field, value);
+        } catch (ConversionException invalidDefault) {
+            throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
+        }
+        boolean secret = isSecretShapedFieldName(field.getName()) || containsSecret(raw) || containsSecret(declared);
+        for (String key : keys(field)) { secret |= isSecretShapedFieldName(key); }
+        LOGGER.warning("File " + configFilePath + ", key '" + fieldPath(field) + "': the " + kind + " is empty (found "
+                + oneLine(secret, raw) + ") but the setting is declared @NotEmpty; using the declared default "
+                + oneLine(secret, declared) + " in memory (the file is not changed)");
+    }
+
+    /** A value for a warning on one log line, or {@code <redacted>}. */
+    private static String oneLine(boolean redacted, Object value) {
+        return redacted ? "<redacted>" : String.valueOf(value).replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ");
+    }
+
+    /**
+     * Refuses, at load and before the file is read, a constraint declaration the framework cannot hold (maintainer
+     * decision of 2026-10-06, option A; #630, #631). One refusal names every such field; no file is read or written:
+     * <ul>
+     *   <li>a constraint on a value type it can never check: {@code @Range} off numbers, {@code @Pattern} off text,
+     *       {@code @Size} and {@code @NotEmpty} off text, collections, maps and arrays (text is a {@code String} or a
+     *       {@code char});</li>
+     *   <li>a constraint on a field of this class that is not a {@code @ConfigEntry} setting;</li>
+     *   <li>a {@code @NotEmpty} list, set, map or array whose declared default is empty, or outside the field's own
+     *       {@code @Size}, which leaves nothing valid to run in place of an empty value.</li>
+     * </ul>
+     * Only this class's own fields are read, each by its declared type through {@link ConversionTypes#raw}: the check never
+     * walks into a setting's value type (maintainer decision of 2026-10-06, the simplest route). A constraint annotation
+     * on a field of a value type, a nested class or anything a converter produces is never checked and not reported - the
+     * documented limit (COMPATIBILITY.md); a module validates such fields in its converter.
+     */
+    private void checkConstraintDeclarations() {
+        List<String> errors = new ArrayList<>();
+        List<Field> entries = configEntryFields();
+        for (Field field : ReflectionUtil.getFields(getClass())) {
+            if (!entries.contains(field)) {
+                for (java.lang.annotation.Annotation constraint : constraintsOn(field)) {
+                    errors.add("field '" + field.getName() + "' carries @" + constraint.annotationType().getSimpleName()
+                            + " but is not a @ConfigEntry setting, so the framework cannot check it");
+                }
+                continue;
+            }
+            Class<?> raw = ConversionTypes.raw(declaredType(field));
+            String setting = "field '" + field.getName() + "' (key '" + fieldPath(field) + "')";
+            for (java.lang.annotation.Annotation constraint : constraintsOn(field)) {
+                String unsupported = unsupportedBy(constraint, raw);
+                if (unsupported != null) {
+                    errors.add(setting + ": @" + constraint.annotationType().getSimpleName() + " on " + raw.getSimpleName()
+                            + " - " + unsupported + ", so the framework cannot check it there");
+                }
+            }
+            String kind = containerKind(field);
+            if (field.getAnnotation(NotEmpty.class) != null && kind != null) {
+                String defaultError = defaultCannotStandIn(field, kind);
+                if (defaultError != null) { errors.add(setting + ": " + defaultError); }
+            }
+        }
+        if (!errors.isEmpty()) {
+            String module = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : getClass().getSimpleName();
+            throw new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED, "Module '" + module
+                    + "' refused to load: configuration class " + getClass().getName() + " (file '" + configFilePath
+                    + "') declares " + (errors.size() == 1 ? "a constraint" : errors.size() + " constraints")
+                    + " the framework cannot hold: " + String.join("; ", errors)
+                    + ". The file was not read or modified - this is a defect in the module's declaration, not in the file.");
+        }
+    }
+
+    /**
+     * Why the declared default of a {@code @NotEmpty} list, set, map or array cannot stand in for an empty value, or
+     * {@code null} when it can (#630, maintainer decision of 2026-10-06): it is empty itself, or it violates the field's
+     * other constraint - {@code @Size}, the only other one such a field can carry (the declaration check refuses
+     * {@code @Range} and {@code @Pattern} on it).
+     */
+    private String defaultCannotStandIn(Field field, String kind) {
+        // Measured on the Java default, not its plain form, which a converter or parser may shape differently.
+        Integer measured = declaredDefaultLengths.get(field);
+        int length = measured == null ? 0 : measured;
+        if (length == 0) {
+            return "@NotEmpty " + kind + " whose declared default is empty, so there is no value to use when the file"
+                    + " holds an empty one";
+        }
+        Size size = field.getAnnotation(Size.class);
+        if (size != null && length >= 0 && (length < size.min() || length > size.max())) {
+            return "the declared default of this @NotEmpty " + kind + " holds " + length + " entries, outside its own @Size ["
+                    + size.min() + ", " + size.max() + "], so it cannot stand in for an empty value";
+        }
+        return null;
+    }
+
+    /** The four constraint annotations {@code element} carries, in a fixed order. */
+    private static List<java.lang.annotation.Annotation> constraintsOn(java.lang.reflect.AnnotatedElement element) {
+        List<java.lang.annotation.Annotation> constraints = new ArrayList<>();
+        for (Class<? extends java.lang.annotation.Annotation> type : Arrays.asList(NotEmpty.class, Size.class,
+                Pattern.class, Range.class)) {
+            java.lang.annotation.Annotation constraint = element.getAnnotation(type);
+            if (constraint != null) { constraints.add(constraint); }
+        }
+        return constraints;
+    }
+
+    /**
+     * Why {@code constraint} cannot be checked on a setting declared as {@code raw}, or {@code null} when it can: the
+     * value kinds the validation step reads ({@link #isRangeViolation}, {@link #isPatternViolation},
+     * {@link #getValueLength}, {@link #isNotEmptyViolation}).
+     */
+    private static String unsupportedBy(java.lang.annotation.Annotation constraint, Class<?> raw) {
+        Class<? extends java.lang.annotation.Annotation> type = constraint.annotationType();
+        if (type == Range.class) { return isNumberType(raw) ? null : "@Range checks numbers only"; }
+        if (type == Pattern.class) { return isTextType(raw) ? null : "@Pattern checks text only"; }
+        if (isTextType(raw) || isContainerType(raw)) { return null; }
+        return type == Size.class ? "@Size counts text, lists, sets, maps and arrays only"
+                : "@NotEmpty applies to text, lists, sets, maps and arrays only";
+    }
+
+    /**
+     * Whether a field declared as {@code raw} can hold a value of one of {@code kinds}: {@code raw} is one of them, a
+     * subtype, or a supertype such as {@code Object}, {@code Serializable}, {@code Comparable}, {@code CharSequence} or
+     * {@code Number} (final review F1 of plan 17-76). The runtime validator checks the value bound at load, so only a
+     * declared type that can never hold a checkable value is a declaration error.
+     */
+    private static boolean canHold(Class<?> raw, List<Class<?>> kinds) {
+        Class<?> declared = ConversionTypes.boxed(raw);
+        for (Class<?> kind : kinds) {
+            if (declared.isAssignableFrom(kind) || kind.isAssignableFrom(declared)) { return true; }
+        }
+        return false;
+    }
+
+    private static boolean isNumberType(Class<?> raw) {
+        return raw != boolean.class && raw != char.class && raw != void.class
+                && (Number.class.isAssignableFrom(ConversionTypes.boxed(raw)) || canHold(raw, NUMBER_KINDS));
+    }
+
+    private static boolean isTextType(Class<?> raw) {
+        return canHold(raw, TEXT_KINDS);
+    }
+
+    private static boolean isContainerType(Class<?> raw) {
+        return java.util.Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw) || raw.isArray()
+                || canHold(raw, CONTAINER_KINDS);
     }
 
     // ==================== Configuration Change Listener Support ====================
@@ -316,10 +3244,8 @@ public abstract class AbstractConfigEntity {
     /**
      * Adds a configuration change listener.
      * The listener will be notified when the configuration is reloaded.
-     * <p>
-     * 添加配置变更监听器。当配置重载时，监听器将被通知。
      *
-     * @param listener the listener to add <br> 要添加的监听器
+     * @param listener the listener to add
      */
     public void addChangeListener(ConfigChangeListener listener) {
         if (listener != null) {
@@ -329,10 +3255,8 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Removes a configuration change listener.
-     * <p>
-     * 移除配置变更监听器。
      *
-     * @param listener the listener to remove <br> 要移除的监听器
+     * @param listener the listener to remove
      */
     public void removeChangeListener(ConfigChangeListener listener) {
         changeListeners.remove(listener);
@@ -340,8 +3264,6 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Removes all configuration change listeners.
-     * <p>
-     * 移除所有配置变更监听器。
      */
     public void clearChangeListeners() {
         changeListeners.clear();
@@ -349,10 +3271,8 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Gets the number of registered change listeners.
-     * <p>
-     * 获取已注册的变更监听器数量。
      *
-     * @return the number of listeners <br> 监听器数量
+     * @return the number of listeners
      */
     public int getChangeListenerCount() {
         return changeListeners.size();
@@ -361,8 +3281,6 @@ public abstract class AbstractConfigEntity {
     /**
      * Notifies all registered listeners about the configuration change.
      * Individual listener exceptions do not affect other listeners.
-     * <p>
-     * 通知所有已注册的监听器配置已变更。单个监听器的异常不影响其他监听器。
      */
     protected void notifyChangeListeners() {
         for (ConfigChangeListener listener : changeListeners) {
@@ -378,39 +3296,47 @@ public abstract class AbstractConfigEntity {
     /**
      * Reloads the configuration from file and notifies all listeners.
      * <p>
-     * 从文件重新加载配置并通知所有监听器。
+     * Since 6.3.0 a reload is all-or-nothing: if it fails for any reason (a validation
+     * violation, a conversion or I/O failure), every field value and every piece of load
+     * tracking is restored to what it was before the attempt, and the failure is rethrown
+     * without notifying listeners. A rejected file value therefore never becomes an unsaved
+     * in-memory edit that the next reload's three-way merge would keep over a corrected file.
+     * <p>
+     * Since 6.3.0 (#589) a file that cannot be read or parsed fails the reload the same way: it
+     * throws {@link ConfigurationException} naming the file and the safe cause (the exception class,
+     * or the parser's line and column - never file content), the running values and the file stay
+     * exactly as they were, and the file stays protected from writes until a later successful load.
+     * Nothing is logged by the entity for it: the caller reports the failure, as {@code /ul reload}
+     * does. Initial loading through {@link #init} is different and unchanged: it logs one SEVERE
+     * line, keeps the declared defaults, and never overwrites the file.
      *
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @throws ConfigurationException if the file cannot be read or parsed, or a value it holds
+     *                                fails validation or conversion; nothing changed
+     * @throws IOException if an I/O error occurs
      */
     public void reload() throws IOException {
-        if (ultiToolsPlugin == null) {
-            throw new IllegalStateException("Config not initialized. Call init() first.");
-        }
-        
-        // Reload from file
-        config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
-        
-        // Update field values
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                field.setAccessible(true);
-                ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-                String path = annotation.path();
-                if (path.isEmpty()) {
-                    path = field.getName();
-                }
-                Object configValue = config.get(path);
-                if (configValue != null) {
-                    Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                    ReflectionUtil.setFieldValue(this, field, parse);
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, "reload " + configFilePath)) { return; }
+        if (ultiToolsPlugin == null) { throw new IllegalStateException("Config not initialized. Call init() first."); }
+        synchronized (this) {
+            registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);
+            PanelCheckpoint before = new PanelCheckpoint();
+            boolean notRestored = fileNotRestored;
+            boolean loaded = false;
+            try {
+                load(false);
+                loaded = true;
+            } finally {
+                // Restore on every failure, unchecked errors included, then let it propagate. A file
+                // found unreadable or unparseable stays protected until a later successful load (#589),
+                // and a file a failed write could not put back stays so until then too (#622).
+                if (!loaded) {
+                    boolean protectFile = lastLoadUnparseable;
+                    before.restore();
+                    lastLoadUnparseable |= protectFile;
+                    fileNotRestored |= notRestored;
                 }
             }
         }
-
-        // Validate fields and reset invalid values to defaults
-        validateFields();
-
-        // Notify listeners
         notifyChangeListeners();
     }
 }

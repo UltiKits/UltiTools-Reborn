@@ -142,9 +142,17 @@ CLAUDE.md
 secring.gpg
 .claude/settings.local.json
 data.json
+.ultikits/
 
 # Eclipse / JDT
 .classpath
 .project
 .factorypath
 .settings/
+
+# GSD planning artifacts (local-only, never published)
+.planning/
+.gsd/
+
+# Python bytecode from .github/scripts/
+__pycache__/

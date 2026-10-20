@@ -12,26 +12,25 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * GridView 是一个网格布局 Widget，将子 Widget 按网格排列。
+ * GridView is a grid-layout Widget that arranges its children in a grid.
  * <p>
- * 支持：
+ * Supports:
  * <ul>
- *   <li>指定起始槽位和行列数</li>
- *   <li>自动计算子 Widget 位置</li>
- *   <li>支持数据列表自动映射</li>
+ *   <li>a specified starting slot and row/column count</li>
+ *   <li>automatic child Widget position calculation</li>
+ *   <li>automatic mapping from a data list</li>
  * </ul>
  *
- * <p><strong>使用示例：</strong></p>
+ * <p><strong>Usage example:</strong></p>
  * <pre>{@code
- * // 手动指定子 Widget
+ * // Manually specify child widgets
  * GridView.builder()
  *     .startSlot(10)
- *     .rows(4)
  *     .columns(7)
  *     .children(buttons)
  *     .build();
  *
- * // 从数据列表自动生成
+ * // Auto-generate from a data list
  * GridView.<ItemStack>builder()
  *     .startSlot(10)
  *     .columns(7)
@@ -43,13 +42,12 @@ import java.util.function.Function;
  * @author UltiTools Team
  * @version 1.0.0
  * @since 6.2.0
- * @param <T> 数据类型（如果使用数据列表）
+ * @param <T> the data type (when built from a data list)
  */
 public class GridView<T> extends Widget {
 
     private final int startSlot;
     private final int columns;
-    private final int maxRows;
     @NotNull
     private final List<Widget> children;
 
@@ -57,15 +55,14 @@ public class GridView<T> extends Widget {
         super(builder.key);
         this.startSlot = builder.startSlot;
         this.columns = builder.columns;
-        this.maxRows = builder.maxRows;
         this.children = Collections.unmodifiableList(new ArrayList<>(builder.children));
     }
 
     /**
-     * 创建 Builder。
+     * Creates a Builder.
      *
-     * @param <T> 数据类型
-     * @return Builder
+     * @param <T> the data type
+     * @return the Builder
      */
     @NotNull
     public static <T> Builder<T> builder() {
@@ -80,20 +77,16 @@ public class GridView<T> extends Widget {
         return columns;
     }
 
-    public int getMaxRows() {
-        return maxRows;
-    }
-
     @NotNull
     public List<Widget> getChildren() {
         return children;
     }
 
     /**
-     * 计算子 Widget 的实际槽位。
+     * Calculates the actual slot of a child Widget.
      *
-     * @param childIndex 子 Widget 索引
-     * @return 槽位索引
+     * @param childIndex the child Widget's index
+     * @return slot index
      */
     public int calculateSlotForChild(int childIndex) {
         int row = childIndex / columns;
@@ -113,7 +106,6 @@ public class GridView<T> extends Widget {
     public static class Builder<T> implements WidgetBuilder<GridView<T>> {
         private int startSlot = 0;
         private int columns = 9;
-        private int maxRows = 6;
         @NotNull
         private List<Widget> children = new ArrayList<>();
         @Nullable
@@ -129,11 +121,6 @@ public class GridView<T> extends Widget {
             return this;
         }
 
-        public Builder<T> rows(int rows) {
-            this.maxRows = rows;
-            return this;
-        }
-
         public Builder<T> child(@NotNull Widget child) {
             this.children.add(child);
             return this;
@@ -145,42 +132,22 @@ public class GridView<T> extends Widget {
         }
 
         /**
-         * 设置数据列表和构建器函数。
+         * Sets the data list and the item-builder function.
          * <p>
-         * 会自动将数据转换为 Widget，并计算位置。
+         * Each item is converted to a Widget and added to the child list as-is; position is no
+         * longer computed here — as of 6.3.0, {@link GridViewElement} writes the position at
+         * render time as parent data (D-11), applying uniformly to any Widget type rather than
+         * special-casing {@link ItemDisplay}.
          *
-         * @param items       数据列表
-         * @param itemBuilder 构建器函数
-         * @return Builder
+         * @param items       the data list
+         * @param itemBuilder the builder function
+         * @return the Builder
          */
         public Builder<T> items(@NotNull List<T> items, @NotNull Function<T, Widget> itemBuilder) {
-            for (int i = 0; i < items.size(); i++) {
-                T item = items.get(i);
-                Widget widget = itemBuilder.apply(item);
-                
-                // 如果是 ItemDisplay，自动设置槽位
-                if (widget instanceof ItemDisplay) {
-                    ItemDisplay display = (ItemDisplay) widget;
-                    int slot = calculateSlot(i);
-                    // 重建 ItemDisplay 并设置槽位
-                    widget = ItemDisplay.builder(display.getItemStack())
-                            .slot(slot)
-                            .name(display.getDisplayName())
-                            .lore(display.getLore())
-                            .onClick(display.getClickHandler())
-                            .key(display.getKey() != null ? display.getKey() : SlotKey.of("item-" + i))
-                            .build();
-                }
-                
-                this.children.add(widget);
+            for (T item : items) {
+                this.children.add(itemBuilder.apply(item));
             }
             return this;
-        }
-
-        private int calculateSlot(int index) {
-            int row = index / columns;
-            int col = index % columns;
-            return SlotUtils.toSlotIndex(startSlot, row, col);
         }
 
         public Builder<T> key(@Nullable SlotKey key) {

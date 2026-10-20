@@ -1,17 +1,27 @@
 package com.ultikits.ultitools.websocket;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.lenient;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URISyntaxException;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -19,6 +29,8 @@ import org.junit.jupiter.api.Timeout;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.TestHelper;
 
 /**
  * Unit tests for {@link UltiPanelWebSocketClient}.
@@ -320,6 +332,81 @@ class UltiPanelWebSocketClientTest {
             Method method = UltiPanelWebSocketClient.class.getMethod("isConnected");
 
             assertThat(method.getReturnType()).isEqualTo(boolean.class);
+        }
+    }
+
+    /**
+     * Gate-2 finding (review round 13, pull request #467), corrected by #584. {@code sendMessage()}'s
+     * {@code !isOpen()} branch is reached with a lock held: {@code ServerMonitorManager}'s drains
+     * hold {@code logDrainLock}, and {@code UltiPanelLogTransmitter#sendBatch}/{@code #flushLogs}
+     * hold {@code batchModeLock}. A diagnostic that reached the log stream from there took the
+     * other lock in the reverse order -- an AB-BA deadlock. #467 wrote it to {@code System.err} on
+     * the premise that standard error bypasses the logger; on Paper, {@code SysoutCatcher} re-logs
+     * it through the plugin logger, so the premise was false. The diagnostic is now a
+     * {@link PanelConnectionLog} record, which the stream never carries. The deadlock itself is
+     * reproduced in {@code SysErrRelogDeadlockTest}.
+     */
+    @Nested
+    @DisplayName("closed-socket sendMessage logs a panel-connection line, never System.err")
+    class ClosedSocketSendDiagnosticTests {
+
+        private final List<LogRecord> records = new CopyOnWriteArrayList<>();
+        private final Logger pluginLogger = Logger.getLogger("UltiTools-ClosedSocketSendDiagnosticTests");
+        private final Handler capture = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void flush() {
+                // Nothing buffered.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+        private PrintStream originalErr;
+
+        @AfterEach
+        void tearDown() throws Exception {
+            if (originalErr != null) {
+                System.setErr(originalErr);
+            }
+            pluginLogger.removeHandler(capture);
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+        }
+
+        @Test
+        @DisplayName("sendMessage on a never-opened client logs a marked panel-connection line and nothing to System.err")
+        void sendMessageOnClosedSocketLogsAMarkedPanelConnectionLine() throws URISyntaxException {
+            pluginLogger.setUseParentHandlers(false);
+            pluginLogger.setLevel(Level.ALL);
+            pluginLogger.addHandler(capture);
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                lenient().when(ultiTools.getLogger()).thenReturn(pluginLogger));
+            ByteArrayOutputStream err = new ByteArrayOutputStream();
+            originalErr = System.err;
+            System.setErr(new PrintStream(err, true));
+
+            UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
+                TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
+            assertThat(client.isOpen()).isFalse(); // never connected -- exercises the !isOpen() branch
+
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "batch_update");
+            client.sendMessage(message);
+
+            assertThat(records).hasSize(1);
+            assertThat(records.get(0).getMessage()).contains("WebSocket is not connected");
+            assertThat(records.get(0).getLevel()).isEqualTo(Level.WARNING);
+            assertThat(PanelConnectionLog.isPanelConnectionRecord(records.get(0)))
+                .as("marked, so SystemLogHandler never hands it to the transmitter").isTrue();
+            assertThat(err.size()).as("nothing is written to System.err").isZero();
         }
     }
 

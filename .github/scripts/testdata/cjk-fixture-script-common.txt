@@ -1,0 +1,3 @@
+Script=Common with Han in its script extensions, katakana middle dot: ・ (U+30FB) -- not in the contract.
+Script=Common with Han in its script extensions, parenthesized ideograph: ㈱ (U+3231) -- not in the contract.
+A Han control: 一 (U+4E00) -- in the contract.

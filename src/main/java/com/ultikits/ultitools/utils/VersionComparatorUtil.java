@@ -3,50 +3,63 @@ package com.ultikits.ultitools.utils;
 import java.util.Comparator;
 
 /**
- * 语义版本比较工具类
+ * Semantic version comparison utility class.
  * <p>
- * 替代 hutool VersionComparator
- * <p>
- * 支持格式: 1.0.0, 1.0.0-SNAPSHOT, 1.0.0-alpha.1, 1.0.0-beta
- * 
+ * The full ordering contract, since several build-gate checks in this repository depend on it:
+ * <ol>
+ *   <li>A leading version-prefix letter ({@code v} or {@code V}) is stripped before comparison.</li>
+ *   <li>The remaining string is split into segments on both {@code .} and {@code -}.</li>
+ *   <li>When both segments at a position parse as integers, they compare numerically.</li>
+ *   <li>When exactly one segment parses as an integer, the numeric segment sorts higher (a numeric
+ *   segment is always considered newer than a non-numeric one at the same position). When neither
+ *   parses as an integer, they fall back first to a pre-release priority ordering
+ *   ({@code alpha < beta < rc < SNAPSHOT < a plain release}), and only if that priority is equal do
+ *   they compare lexicographically, case-insensitively.</li>
+ *   <li>A missing trailing segment (the shorter version ran out of segments) is treated as {@code 0}
+ *   for that position, so {@code 1.2} and {@code 1.2.0} compare equal.</li>
+ * </ol>
+ * The pre-release fallback is what ranks a snapshot below the plain release of the same numeric
+ * core (e.g. {@code 1.2.0-SNAPSHOT} sorts below {@code 1.2.0}), since a non-numeric segment never
+ * outranks a numeric one and {@code SNAPSHOT}'s own priority (4) sits below a plain release's (5).
+ *
  * @author wisdomme
  * @since 6.2.0
  */
 public final class VersionComparatorUtil {
-    
+
     /**
-     * 版本比较器单例
+     * Singleton version comparator.
      */
     public static final Comparator<String> COMPARATOR = VersionComparatorUtil::compare;
-    
+
     private VersionComparatorUtil() {
         throw new UnsupportedOperationException("Utility class");
     }
-    
+
     /**
-     * 比较两个版本号
+     * Compares two version strings.
      *
-     * @param v1 版本1
-     * @param v2 版本2
-     * @return 负数: v1 &lt; v2, 0: v1 == v2, 正数: v1 &gt; v2
+     * @param v1 the first version
+     * @param v2 the second version
+     * @return negative if v1 &lt; v2, 0 if v1 == v2, positive if v1 &gt; v2
      */
     public static int compare(String v1, String v2) {
         if (v1 == null) v1 = "";
         if (v2 == null) v2 = "";
-        
-        // 去除前导 v 或 V
+
+        // Strip a leading v or V.
         v1 = stripPrefix(v1);
         v2 = stripPrefix(v2);
-        
-        // 分割版本号
+
+        // Split the version into segments.
         String[] parts1 = v1.split("[.\\-]");
         String[] parts2 = v2.split("[.\\-]");
-        
+
         int maxLen = Math.max(parts1.length, parts2.length);
         for (int i = 0; i < maxLen; i++) {
             String p1 = i < parts1.length ? parts1[i] : "0";
             String p2 = i < parts2.length ? parts2[i] : "0";
-            
+
             int cmp = compareSegment(p1, p2);
             if (cmp != 0) {
                 return cmp;
@@ -54,30 +67,30 @@ public final class VersionComparatorUtil {
         }
         return 0;
     }
-    
+
     /**
-     * 判断 v1 是否小于 v2
+     * Returns whether v1 is less than v2.
      */
     public static boolean isLessThan(String v1, String v2) {
         return compare(v1, v2) < 0;
     }
-    
+
     /**
-     * 判断 v1 是否大于 v2
+     * Returns whether v1 is greater than v2.
      */
     public static boolean isGreaterThan(String v1, String v2) {
         return compare(v1, v2) > 0;
     }
-    
+
     /**
-     * 判断 v1 是否等于 v2
+     * Returns whether v1 is equal to v2.
      */
     public static boolean isEqual(String v1, String v2) {
         return compare(v1, v2) == 0;
     }
-    
+
     /**
-     * 去除版本号前缀
+     * Strips the version prefix.
      */
     private static String stripPrefix(String version) {
         if (version.startsWith("v") || version.startsWith("V")) {
@@ -85,40 +98,37 @@ public final class VersionComparatorUtil {
         }
         return version;
     }
-    
+
     /**
-     * 比较单个版本段
-     * <p>
-     * 数字优先，非数字按字典序
-     * 特殊处理: SNAPSHOT, alpha, beta, rc 等预发布标识
+     * Compares a single version segment.
      */
     private static int compareSegment(String s1, String s2) {
-        // 尝试作为数字比较
+        // Try comparing as numbers.
         Integer n1 = parseIntOrNull(s1);
         Integer n2 = parseIntOrNull(s2);
-        
+
         if (n1 != null && n2 != null) {
             return n1.compareTo(n2);
         }
-        
-        // 数字优先于非数字
+
+        // A numeric segment outranks a non-numeric one.
         if (n1 != null) return 1;
         if (n2 != null) return -1;
-        
-        // 预发布版本优先级
+
+        // Pre-release priority.
         int p1 = getPreReleasePriority(s1);
         int p2 = getPreReleasePriority(s2);
-        
+
         if (p1 != p2) {
             return p1 - p2;
         }
-        
-        // 字典序比较
+
+        // Lexicographic comparison.
         return s1.compareToIgnoreCase(s2);
     }
-    
+
     /**
-     * 解析整数，失败返回 null
+     * Parses an integer, returning null on failure.
      */
     private static Integer parseIntOrNull(String s) {
         try {
@@ -127,9 +137,9 @@ public final class VersionComparatorUtil {
             return null;
         }
     }
-    
+
     /**
-     * 获取预发布版本优先级
+     * Gets the pre-release priority.
      * <p>
      * alpha &lt; beta &lt; rc &lt; SNAPSHOT &lt; (release)
      */
@@ -139,6 +149,6 @@ public final class VersionComparatorUtil {
         if (lower.equals("beta") || lower.startsWith("beta")) return 2;
         if (lower.equals("rc") || lower.startsWith("rc")) return 3;
         if (lower.equals("snapshot")) return 4;
-        return 5; // 正式版
+        return 5; // plain release
     }
 }

@@ -27,8 +27,6 @@ import com.ultikits.ultitools.interfaces.DataOperator;
  *     }
  * }
  * </pre>
- * <p>
- * 外部 Bukkit 插件接入 UltiTools 框架的公开 API。
  *
  * @since 6.2.2
  */
@@ -40,13 +38,40 @@ public final class UltiToolsAPI {
     /**
      * Connect an external Bukkit plugin to UltiTools framework.
      * Scans the plugin's package for @Service, @CmdExecutor, @EventListener, etc.
-     * <p>
-     * 将外部 Bukkit 插件连接到 UltiTools 框架。
      *
      * @param plugin the external JavaPlugin to connect
      * @throws IllegalStateException if UltiTools is not loaded
      */
     public static void connect(JavaPlugin plugin) {
+        connect(plugin, new Class<?>[0]);
+    }
+
+    /**
+     * Connect an external Bukkit plugin to UltiTools framework, declaring entity classes that
+     * legitimately live outside the plugin's own JAR (D-19) -- a shared library JAR, or a
+     * multi-module build's common artifact. The plugin's own JAR is always scanned for
+     * {@code @Table} classes automatically; {@code additionalEntities} is additive to that scan,
+     * not a replacement for it. The single-argument {@link #connect(JavaPlugin)} overload is
+     * unchanged and delegates here with an empty array.
+     * <p>
+     * <b>{@code additionalEntities} is validated, not trusted (02-14).</b> Each class must live on
+     * {@code plugin}'s own classpath -- either its own JAR, or a jar/module not already known to
+     * belong to a different, currently-loaded plugin. A class that structurally belongs to a
+     * DIFFERENT plugin (its own JAR, or one already recorded as owned by another plugin) is
+     * refused with an {@link IllegalStateException} wrapping a
+     * {@code com.ultikits.ultitools.exceptions.PluginModuleException}, and no partial registration
+     * is left behind -- {@code additionalEntities} cannot be used to obtain a working
+     * {@link DataOperator} for another plugin's entity, only to declare entities this plugin
+     * genuinely owns but does not package.
+     *
+     * @param plugin            the external JavaPlugin to connect
+     * @param additionalEntities entity classes owned by this plugin that live outside its own JAR
+     * @throws IllegalStateException if UltiTools is not loaded, or if an entity in
+     *                                {@code additionalEntities} does not live on {@code plugin}'s
+     *                                own classpath (02-14)
+     * @since 6.3.0
+     */
+    public static void connect(JavaPlugin plugin, Class<?>... additionalEntities) {
         if (UltiTools.getInstance() == null) {
             throw new IllegalStateException("UltiTools is not loaded! Add 'depend: [UltiTools]' to your plugin.yml");
         }
@@ -60,7 +85,7 @@ public final class UltiToolsAPI {
         adapters.put(plugin, adapter);
 
         try {
-            UltiTools.getInstance().getPluginManager().registerExternal(adapter);
+            UltiTools.getInstance().getPluginManager().registerExternal(adapter, additionalEntities);
             adapter.setConnected(true);
             Bukkit.getLogger().log(Level.INFO,
                     "[UltiTools-API] External plugin connected: " + plugin.getName() + " v" + adapter.getVersion());
@@ -72,8 +97,6 @@ public final class UltiToolsAPI {
 
     /**
      * Disconnect an external Bukkit plugin from UltiTools framework.
-     * <p>
-     * 断开外部 Bukkit 插件与 UltiTools 框架的连接。
      *
      * @param plugin the external JavaPlugin to disconnect
      */
@@ -99,27 +122,44 @@ public final class UltiToolsAPI {
 
     /**
      * Get a DataOperator for an external plugin's data entity.
-     * Data is stored in the plugin's own data folder.
+     * Data is stored in the plugin's own data folder. Refuses outright if {@code dataEntity} is
+     * not registered to {@code plugin} (D-14) -- checked against the same {@link
+     * com.ultikits.ultitools.manager.DataScope} minted for this plugin at {@code connect(...)}
+     * time, via the same refusal {@code DataStore.getOperator(DataScope, Class)} builds, so the
+     * exception type, error code, and message shape are identical regardless of which entry point
+     * a caller reaches.
      * <p>
-     * 获取外部插件的数据操作器。数据存储在插件自己的数据文件夹中。
+     * <strong>02-13 (CR-03):</strong> before this, {@code scope.owns(...)} was checked here inline
+     * and this method then delegated to the deprecated {@code getOperator(File, Class)} overload
+     * directly -- so {@code DataStore.getOperator(DataScope, Class)}, the method D-17/02-07 built
+     * specifically as the credential-typed supported path, had zero real callers anywhere in the
+     * framework. This now routes through it, so production actually uses the path it was built
+     * for. {@code scope} is normally non-null by the time a connected plugin calls this (set by
+     * {@code PluginManager.registerExternal} right after minting); the {@code null} fallback below
+     * only covers an adapter that predates that wiring, where the deprecated overload's own {@code
+     * checkOwnership(...)} call still refuses correctly on its own.
      *
      * @param plugin the external JavaPlugin
      * @param dataEntity the data entity class (must have @Table annotation)
      * @param <T> entity type
      * @return data operator
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataEntity} is not
+     *         registered to {@code plugin}
      */
     public static <T extends BaseDataEntity<String>> DataOperator<T> getDataOperator(JavaPlugin plugin, Class<T> dataEntity) {
         ExternalPluginAdapter adapter = adapters.get(plugin);
         if (adapter == null) {
             throw new IllegalStateException("Plugin " + plugin.getName() + " is not connected to UltiTools");
         }
+        com.ultikits.ultitools.manager.DataScope scope = adapter.getDataScope();
+        if (scope != null) {
+            return UltiTools.getInstance().getDataStore().getOperator(scope, dataEntity);
+        }
         return UltiTools.getInstance().getDataStore().getOperator(adapter.getDataFolder(), dataEntity);
     }
 
     /**
      * Get the UltiTools EventBus for inter-plugin communication.
-     * <p>
-     * 获取 UltiTools 事件总线。
      *
      * @return the EventBus instance
      */
@@ -160,8 +200,6 @@ public final class UltiToolsAPI {
     /**
      * Auto-disconnect a plugin when it is disabled.
      * Called by the PluginDisableEvent listener in PluginManager.
-     * <p>
-     * 插件禁用时自动断开连接。由 PluginManager 中的 PluginDisableEvent 监听器调用。
      *
      * @param plugin the plugin being disabled
      * @since 6.2.2
@@ -174,8 +212,6 @@ public final class UltiToolsAPI {
 
     /**
      * Disconnect all external plugins. Called during UltiTools shutdown.
-     * <p>
-     * 断开所有外部插件的连接。在 UltiTools 关闭时调用。
      *
      * @since 6.2.2
      */

@@ -2,6 +2,9 @@ package com.ultikits.ultitools.manager;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -9,17 +12,22 @@ import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
+import org.bukkit.configuration.ConfigurationSection;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.AccessDecision;
+import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * 命令执行管理器
- * 负责处理来自WebSocket的命令执行请求
+ * Command execution manager.
+ * Handles command execution requests received over the WebSocket connection.
  */
 @ApiStatus.Internal
 public class CommandExecutionManager {
@@ -28,8 +36,38 @@ public class CommandExecutionManager {
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     /**
-     * 远程命令执行黑名单
-     * Blocklist of dangerous commands that should not be executed remotely
+     * The literal config path {@link #loadConfiguration()} reads and every configurable refusal
+     * this class produces names — {@code ultipanel.commands.blocklist}.
+     */
+    private static final String BLOCKLIST_CONFIG_KEY = "ultipanel.commands.blocklist";
+
+    /**
+     * The {@link RemoteActionLog.Entry#getAction()} literal for every entry this class records.
+     */
+    private static final String ACTION_EXECUTE_COMMAND = "execute_command";
+
+    /**
+     * The {@code command_result} text for a command the server console accepted. A panel command
+     * is typed into the server console (maintainer decision, 6.3.0): it runs as the console sender,
+     * and Paper sends a console command's replies to the console itself, never to a sender the
+     * framework could read, so the result cannot carry them. They reach the panel through the log
+     * stream, which mirrors the console ({@code ConsoleMirror}).
+     */
+    static final String DISPATCHED_OUTPUT = "Command dispatched to the server console. "
+            + "Its output appears in the server log stream.";
+
+    /**
+     * The {@code command_result} text for a command the server console did not accept
+     * ({@code Bukkit.dispatchCommand} returned {@code false}: an unknown command, or a command
+     * whose executor reported a usage error).
+     */
+    static final String NOT_ACCEPTED_OUTPUT = "The server console did not accept the command. "
+            + "Any message it printed appears in the server log stream.";
+
+    /**
+     * Blocklist of dangerous commands that should not be executed remotely. This is the shipped
+     * default, kept when {@code ultipanel.commands.blocklist} is absent from config.yml or when
+     * its present value is rejected as not a list of strings — see {@link #loadConfiguration()}.
      */
     private Set<String> blockedCommands = new HashSet<>(Arrays.asList(
         "op", "deop", "stop", "restart", "reload", "ban-ip",
@@ -38,11 +76,122 @@ public class CommandExecutionManager {
 
     public CommandExecutionManager() {
         this.pendingCommands = new ConcurrentHashMap<>();
+        loadConfiguration();
     }
 
     /**
-     * 设置命令黑名单
-     * Set the blocklist of commands that should not be executed remotely
+     * Loads {@code ultipanel.commands.blocklist} from config.yml, copying
+     * {@code ErrorReportCollector.loadConfiguration()}'s exact shape: a null-guard on
+     * {@link UltiTools#getInstance()}, one try/catch whose failure branch keeps the current
+     * blocklist and logs a warning naming the key.
+     * <p>
+     * Distinguishes an absent key from an explicit empty list via {@code isSet(path)} — Bukkit's
+     * {@code getStringList} returns an empty list for both, and collapsing that distinction would
+     * make D-03's honest "block nothing" escape value silently impossible (T-06-12). The shipped
+     * ten-command default applies only when the key is absent; an explicit empty list is honored
+     * as the operator deliberately granting every command.
+     * <p>
+     * A present value is validated as a whole before anything is installed: it must be a list
+     * whose every element is a string. The raw value is read, not Bukkit's converting
+     * {@code getStringList}, because that getter turns a non-list into an empty list, drops
+     * mapping, nested-list and null elements, and stringifies numbers and booleans — so its output
+     * cannot show what the operator wrote, and installing it would silently replace the policy
+     * with an empty or partial one. Any other shape (a scalar, a map, or a list with any
+     * non-string element) rejects the whole value: one warning naming the key and the rejected
+     * shape (the value's type, or the first offending element's position and type) is logged,
+     * never the value itself, and the current in-memory blocklist is kept — the shipped default on
+     * a newly constructed manager, the previous valid list on a repeated call. A valid list is
+     * trimmed and lower-cased with {@link Locale#ROOT} into one new set, installed through a single
+     * {@link #setBlockedCommands(Set)} call.
+     * <p>
+     * This method never writes config.yml or the loaded configuration: it neither saves nor repairs
+     * an invalid value, so the operator's file and the in-memory section keep exactly what the
+     * operator wrote.
+     */
+    public final void loadConfiguration() {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance == null) {
+                return;
+            }
+            if (!instance.getConfig().isSet(BLOCKLIST_CONFIG_KEY)) {
+                // Absent key — keep the shipped ten-command default this field was constructed with.
+                return;
+            }
+            Object raw = instance.getConfig().get(BLOCKLIST_CONFIG_KEY);
+            String rejection = describeInvalidBlocklist(raw);
+            if (rejection != null) {
+                instance.getLogger().log(Level.WARNING,
+                        "Ignoring " + BLOCKLIST_CONFIG_KEY + " in config.yml: " + rejection
+                                + "; keeping the current blocklist");
+                return;
+            }
+            Set<String> normalized = new HashSet<>();
+            for (Object entry : (List<?>) raw) {
+                normalized.add(((String) entry).trim().toLowerCase(Locale.ROOT));
+            }
+            setBlockedCommands(normalized);
+        } catch (Exception e) {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance != null) {
+                instance.getLogger().log(Level.WARNING,
+                        "Failed to load " + BLOCKLIST_CONFIG_KEY + ", keeping current blocklist: "
+                                + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Describes why a raw blocklist value is not a list of strings, naming only its shape.
+     *
+     * @param raw the raw value at {@code ultipanel.commands.blocklist}
+     * @return {@code null} for a list whose every element is a string; otherwise the value's type,
+     *         or the first non-string element's 1-based position and type — never the value itself
+     */
+    private static String describeInvalidBlocklist(Object raw) {
+        if (!(raw instanceof List)) {
+            return "the value is " + describeShape(raw) + ", expected a list of strings";
+        }
+        List<?> elements = (List<?>) raw;
+        for (int i = 0; i < elements.size(); i++) {
+            Object element = elements.get(i);
+            if (!(element instanceof String)) {
+                return "element " + (i + 1) + " is " + describeShape(element) + ", expected a string";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Names a raw configuration value's type for a diagnostic, without its content.
+     */
+    private static String describeShape(Object value) {
+        if (value == null) {
+            return "null";
+        }
+        if (value instanceof String) {
+            return "a string";
+        }
+        if (value instanceof Map || value instanceof ConfigurationSection) {
+            return "a map";
+        }
+        if (value instanceof List) {
+            return "a list";
+        }
+        if (value instanceof Number) {
+            return "a number";
+        }
+        if (value instanceof Boolean) {
+            return "a boolean";
+        }
+        return "a value of type " + value.getClass().getSimpleName();
+    }
+
+    /**
+     * Set the blocklist of commands that should not be executed remotely. This is now
+     * {@link #loadConfiguration()}'s config-load target, not just a test-only seam — it has zero
+     * production call sites of its own, but every operator-configured blocklist reaches this
+     * class through it.
      *
      * @param commands Set of command names to block (case-insensitive)
      */
@@ -51,16 +200,25 @@ public class CommandExecutionManager {
     }
 
     /**
-     * 检查命令是否允许远程执行
-     * Check if a command is allowed for remote execution.
-     * Extracts the base command (first word) and checks against blocklist.
+     * Whether a command is allowed for remote execution.
+     * <p>
+     * Extracts the base command (the first word) and strips any namespace prefix (e.g.
+     * {@code bukkit:op} -> {@code op}, {@code minecraft:stop} -> {@code stop}) BEFORE checking it
+     * against the operator-configured blocklist at {@code ultipanel.commands.blocklist} in
+     * {@code plugins/UltiTools/config.yml} — so both the bare command and its namespaced form are
+     * blocked; the stripping order is what makes that true. The blocklist is editable in both
+     * directions — an operator may remove any of the ten shipped defaults, add to them, or clear
+     * the list entirely — and there is deliberately no unoverridable floor beneath it (D-04): a
+     * floor would constrain the operator without constraining an attacker who already holds the
+     * operator's identity, since the same outcomes remain reachable through other commands or a
+     * third-party plugin's own admin commands.
      *
      * @param command The command to check (with or without leading slash)
-     * @return true if command is allowed, false if blocked or invalid
+     * @return an {@link AccessDecision} naming why a refused command was refused
      */
-    public boolean isCommandAllowed(String command) {
+    public AccessDecision isCommandAllowed(String command) {
         if (command == null || command.trim().isEmpty()) {
-            return false;
+            return AccessDecision.deniedNonConfigurable("command is empty");
         }
 
         String trimmed = command.trim();
@@ -70,7 +228,7 @@ public class CommandExecutionManager {
         }
 
         // Extract base command (first word before space)
-        String baseCommand = trimmed.split("\\s+")[0].toLowerCase();
+        String baseCommand = trimmed.split("\\s+")[0].toLowerCase(Locale.ROOT);
 
         // Strip namespace prefix (e.g., "bukkit:op" -> "op", "minecraft:stop" -> "stop")
         int colonIndex = baseCommand.indexOf(':');
@@ -78,19 +236,24 @@ public class CommandExecutionManager {
             baseCommand = baseCommand.substring(colonIndex + 1);
         }
 
-        return !blockedCommands.contains(baseCommand);
+        if (blockedCommands.contains(baseCommand)) {
+            return AccessDecision.deniedConfigurable(
+                    "command '" + baseCommand + "' is on the remote command blocklist",
+                    BLOCKLIST_CONFIG_KEY);
+        }
+        return AccessDecision.allowed();
     }
-    
+
     /**
-     * 设置WebSocket客户端
-     * @param client WebSocket客户端
+     * Sets the WebSocket client.
+     * @param client the WebSocket client
      */
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
         this.webSocketClient = client;
     }
     
     /**
-     * 执行命令
+     * Executes a command received from the panel.
      */
     public void executeCommand(JsonObject commandData) {
         try {
@@ -106,32 +269,50 @@ public class CommandExecutionManager {
                 return;
             }
 
-            // 安全检查：检查命令是否在黑名单中
             // Security check: verify command is not blocked
-            if (!isCommandAllowed(command)) {
+            AccessDecision decision = isCommandAllowed(command);
+            if (!decision.isAllowed()) {
+                // Keep this WARNING line — it is the control that proves the interception path
+                // was already observable before D-05/D-22. The panel-facing message no longer
+                // builds its own truncated command string: decision.getMessage() already names
+                // the resolved base command plus its config key and file (D-05).
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("[远程命令] 已拦截: %s", command));
-                String blockedCmd = command.trim().startsWith("/")
-                    ? command.trim().substring(1).split("\\s+")[0]
-                    : command.trim().split("\\s+")[0];
-                sendCommandResult(commandId, false, "Command blocked by security policy: " + blockedCmd, 0);
+                    FrameworkText.format("[远程命令] 已拦截: %s", command));
+                RemoteActionLog deniedLog = UltiTools.getInstance().getRemoteActionLog();
+                if (deniedLog != null) {
+                    deniedLog.record(RemoteActionLog.Entry.denied(Capability.COMMANDS,
+                            ACTION_EXECUTE_COMMAND, command, resolveActor(executor), decision.getMessage()));
+                }
+                sendCommandResult(commandId, false, decision.getMessage(), 0);
                 return;
             }
-            
-            // 记录命令执行开始时间
+
+            // Record command execution start time
             long startTime = System.currentTimeMillis();
-            
+
             UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("[远程命令] > %s", command));
-            
+                FrameworkText.format("[远程命令] > %s", command));
+
+            // Record the policy decision BEFORE the dispatch hop, not inside it or after it
+            // (D-22). The log records the decision, not the execution result — a decision
+            // recorded only after a successful Bukkit.dispatchCommand would omit exactly the
+            // commands that crashed the server, which is the forensics case this log exists for.
+            RemoteActionLog allowedLog = UltiTools.getInstance().getRemoteActionLog();
+            if (allowedLog != null) {
+                allowedLog.record(RemoteActionLog.Entry.allowed(Capability.COMMANDS,
+                        ACTION_EXECUTE_COMMAND, command, resolveActor(executor)));
+            }
+
             // Bukkit.dispatchCommand() MUST run on the main server thread.
-            // Paper's AsyncCatcher will reject async dispatch.
-            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
-                executeCommandInternal(command, executor, commandId, startTime);
-            });
-            
+            // Paper's AsyncCatcher will reject async dispatch. While UltiTools is disabling the
+            // hand-off is dropped with one FINE line instead (#621).
+            PluginInitiationUtils.scheduleUnlessDisabling("remote command",
+                () -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+                    executeCommandInternal(command, executor, commandId, startTime);
+                }));
+
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "执行命令时发生错误: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("执行命令时发生错误: %s", e.getMessage()));
             String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull() 
                 ? commandData.get("commandId").getAsString() : null;
             sendCommandResult(commandId, false, "Internal error: " + e.getMessage(), 0);
@@ -139,54 +320,59 @@ public class CommandExecutionManager {
     }
     
     /**
-     * 内部命令执行逻辑
+     * Internal command execution logic.
      */
     private void executeCommandInternal(String command, String executor, String commandId, long startTime) {
         try {
             CommandSender sender;
             
-            // 确定命令执行者
+            // Determine the command executor
             if ("console".equals(executor)) {
                 sender = Bukkit.getConsoleSender();
             } else {
-                // 如果是玩家UUID，查找对应玩家（暂不实现）
+                // If it's a player UUID, look up the corresponding player (not yet implemented)
                 sender = Bukkit.getConsoleSender();
             }
             
-            // 创建自定义CommandSender来捕获输出
-            CommandOutputCapture outputCapture = new CommandOutputCapture(sender);
-            
-            // 执行命令 (CommandOutputCapture implements ConsoleCommandSender
-            // so Paper's Brigadier dispatcher recognizes the sender type)
-            boolean success = Bukkit.dispatchCommand(outputCapture, command);
+            // Dispatched as the console sender itself, exactly as if typed into the console. Paper
+            // replaces any ConsoleCommandSender with the real console source before running the
+            // command, so no wrapper could read the replies; they appear in the log stream.
+            boolean success = Bukkit.dispatchCommand(sender, command);
 
-            // 计算执行时间
+            // Calculate execution time
             long executionTime = System.currentTimeMillis() - startTime;
 
             if (!success) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("[远程命令] 命令执行失败: %s", command));
+                    FrameworkText.format("[远程命令] 命令执行失败: %s", command));
             }
-            
-            // 获取命令输出
-            String output = outputCapture.getOutput();
-            if (output.isEmpty()) {
-                output = success ? "Command executed successfully" : "Command execution failed";
-            }
-            
-            // 发送执行结果
+
+            String output = success ? DISPATCHED_OUTPUT : NOT_ACCEPTED_OUTPUT;
+
+            // Send execution result
             sendCommandResult(commandId, success, output, executionTime);
             
         } catch (Exception e) {
             long executionTime = System.currentTimeMillis() - startTime;
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                String.format("[远程命令] 命令执行异常: %s", command), e);
+                FrameworkText.format("[远程命令] 命令执行异常: %s", command), e);
             sendCommandResult(commandId, false, "Error executing command: " + e.getMessage(), executionTime);
         }
     }
     
     /**
-     * 发送命令执行结果
+     * The action-log {@code actor} field — the inbound {@code executor} field verbatim, or the
+     * literal {@code "panel"} when absent. Mirrors
+     * {@code PluginInitiationUtils.resolveActor(JsonObject)} exactly: the framework cannot
+     * attribute a remote command to an individual panel operator today (see
+     * {@link RemoteActionLog.Entry}'s javadoc), so this never invents a per-operator identity.
+     */
+    private static String resolveActor(String executor) {
+        return executor != null ? executor : "panel";
+    }
+
+    /**
+     * Sends the command execution result.
      */
     private void sendCommandResult(String commandId, boolean success, String output, long executionTime) {
         try {
@@ -205,12 +391,12 @@ public class CommandExecutionManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送命令结果失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("发送命令结果失败: %s", e.getMessage()));
         }
     }
     
     /**
-     * 命令结果数据类
+     * Command result data class.
      */
     public static class CommandResult {
         private final boolean success;
@@ -226,196 +412,5 @@ public class CommandExecutionManager {
         public boolean isSuccess() { return success; }
         public String getOutput() { return output; }
         public long getExecutionTime() { return executionTime; }
-    }
-    
-    /**
-     * 命令输出捕获器
-     * Implements ConsoleCommandSender (not just CommandSender) because Paper 1.21+
-     * requires the sender to be a recognized type when dispatching commands through
-     * Brigadier. Paper's VanillaCommandWrapper.getListener() checks instanceof for
-     * ConsoleCommandSender, Player, etc. A plain CommandSender implementation would
-     * cause dispatchCommand() to return false.
-     */
-    private static class CommandOutputCapture implements org.bukkit.command.ConsoleCommandSender {
-        private final CommandSender delegate;
-        private final StringBuilder output;
-
-        public CommandOutputCapture(CommandSender delegate) {
-            this.delegate = delegate;
-            this.output = new StringBuilder();
-        }
-
-        @Override
-        public void sendMessage(String message) {
-            output.append(message).append("\n");
-            // Log via Bukkit root logger (no [UltiTools] prefix) so it appears
-            // in both server console and web console (via SystemLogHandler → JUL)
-            String clean = org.bukkit.ChatColor.stripColor(message);
-            if (clean != null && !clean.isEmpty()) {
-                Bukkit.getLogger().info(clean);
-            }
-        }
-
-        @Override
-        public void sendMessage(net.kyori.adventure.text.Component message) {
-            // Paper 1.21+ commands use Adventure Component API
-            try {
-                String plain = net.kyori.adventure.text.serializer.plain
-                        .PlainTextComponentSerializer.plainText().serialize(message);
-                output.append(plain).append("\n");
-                if (!plain.isEmpty()) {
-                    Bukkit.getLogger().info(plain);
-                }
-            } catch (Exception e) {
-                String fallback = message.toString();
-                output.append(fallback).append("\n");
-                Bukkit.getLogger().info(fallback);
-            }
-        }
-
-        @Override
-        public void sendMessage(String... messages) {
-            for (String message : messages) {
-                sendMessage(message);
-            }
-        }
-
-        @Override
-        public void sendMessage(java.util.UUID sender, String message) {
-            sendMessage(message);
-        }
-
-        @Override
-        public void sendMessage(java.util.UUID sender, String... messages) {
-            for (String message : messages) {
-                sendMessage(message);
-            }
-        }
-
-        public String getOutput() {
-            return output.toString().trim();
-        }
-
-        // Conversable interface methods (required by ConsoleCommandSender)
-        @Override
-        public boolean isConversing() {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                return ((org.bukkit.conversations.Conversable) delegate).isConversing();
-            }
-            return false;
-        }
-
-        @Override
-        public void acceptConversationInput(String input) {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                ((org.bukkit.conversations.Conversable) delegate).acceptConversationInput(input);
-            }
-        }
-
-        @Override
-        public boolean beginConversation(org.bukkit.conversations.Conversation conversation) {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                return ((org.bukkit.conversations.Conversable) delegate).beginConversation(conversation);
-            }
-            return false;
-        }
-
-        @Override
-        public void abandonConversation(org.bukkit.conversations.Conversation conversation) {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                ((org.bukkit.conversations.Conversable) delegate).abandonConversation(conversation);
-            }
-        }
-
-        @Override
-        public void abandonConversation(org.bukkit.conversations.Conversation conversation, org.bukkit.conversations.ConversationAbandonedEvent details) {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                ((org.bukkit.conversations.Conversable) delegate).abandonConversation(conversation, details);
-            }
-        }
-
-        @Override
-        public void sendRawMessage(String message) {
-            output.append(message).append("\n");
-            String clean = org.bukkit.ChatColor.stripColor(message);
-            if (clean != null && !clean.isEmpty()) {
-                Bukkit.getLogger().info(clean);
-            }
-        }
-
-        @Override
-        public void sendRawMessage(java.util.UUID sender, String message) {
-            sendRawMessage(message);
-        }
-
-        // CommandSender delegate methods
-        @Override
-        public org.bukkit.Server getServer() { return delegate.getServer(); }
-
-        @Override
-        public String getName() { return delegate.getName(); }
-
-        @Override
-        public net.kyori.adventure.text.Component name() {
-            return delegate.name();
-        }
-
-        @Override
-        public boolean isPermissionSet(String name) { return delegate.isPermissionSet(name); }
-
-        @Override
-        public boolean isPermissionSet(org.bukkit.permissions.Permission perm) { return delegate.isPermissionSet(perm); }
-
-        @Override
-        public boolean hasPermission(String name) { return delegate.hasPermission(name); }
-
-        @Override
-        public boolean hasPermission(org.bukkit.permissions.Permission perm) { return delegate.hasPermission(perm); }
-
-        @Override
-        public org.bukkit.permissions.PermissionAttachment addAttachment(org.bukkit.plugin.Plugin plugin, String name, boolean value) {
-            return delegate.addAttachment(plugin, name, value);
-        }
-
-        @Override
-        public org.bukkit.permissions.PermissionAttachment addAttachment(org.bukkit.plugin.Plugin plugin) {
-            return delegate.addAttachment(plugin);
-        }
-
-        @Override
-        public org.bukkit.permissions.PermissionAttachment addAttachment(org.bukkit.plugin.Plugin plugin, String name, boolean value, int ticks) {
-            return delegate.addAttachment(plugin, name, value, ticks);
-        }
-
-        @Override
-        public org.bukkit.permissions.PermissionAttachment addAttachment(org.bukkit.plugin.Plugin plugin, int ticks) {
-            return delegate.addAttachment(plugin, ticks);
-        }
-
-        @Override
-        public void removeAttachment(org.bukkit.permissions.PermissionAttachment attachment) {
-            delegate.removeAttachment(attachment);
-        }
-
-        @Override
-        public void recalculatePermissions() {
-            delegate.recalculatePermissions();
-        }
-
-        @Override
-        public java.util.Set<org.bukkit.permissions.PermissionAttachmentInfo> getEffectivePermissions() {
-            return delegate.getEffectivePermissions();
-        }
-
-        @Override
-        public boolean isOp() { return delegate.isOp(); }
-
-        @Override
-        public void setOp(boolean value) { delegate.setOp(value); }
-
-        @Override
-        public org.bukkit.command.CommandSender.Spigot spigot() {
-            return delegate.spigot();
-        }
     }
 }

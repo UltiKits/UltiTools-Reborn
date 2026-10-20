@@ -8,23 +8,23 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * BuildContext 是构建 Widget 树时的上下文信息。
+ * BuildContext carries the contextual information available while building a Widget tree.
  * <p>
- * 它包含构建过程中需要访问的信息，如：
+ * It holds the information the build process needs to access, such as:
  * <ul>
- *   <li>当前玩家</li>
- *   <li>GUI 配置（行数、标题等）</li>
- *   <li>父 Widget 的继承属性</li>
- *   <li>自定义的上下文数据</li>
+ *   <li>the current player</li>
+ *   <li>GUI configuration (row count, title, etc.)</li>
+ *   <li>properties inherited from the parent Widget</li>
+ *   <li>custom context data</li>
  * </ul>
  *
- * <p><strong>使用示例：</strong></p>
+ * <p><strong>Usage example:</strong></p>
  * <pre>{@code
  * @Override
  * public Widget build(BuildContext context) {
  *     Player player = context.getPlayer();
  *     int rows = context.getRows();
- *     
+ *
  *     return Container.builder()
  *         .title("Welcome, " + player.getName())
  *         .rows(rows)
@@ -41,15 +41,15 @@ public class BuildContext {
 
     @NotNull
     private final Player player;
-    
+
     @NotNull
     private final String guiId;
-    
+
     private final int rows;
-    
+
     @Nullable
     private final Element parentElement;
-    
+
     @NotNull
     private final Map<String, Object> inheritedProperties;
 
@@ -62,12 +62,12 @@ public class BuildContext {
     }
 
     /**
-     * 创建根 BuildContext。
+     * Creates the root BuildContext.
      *
-     * @param player 玩家
-     * @param guiId  GUI ID
-     * @param rows   行数
-     * @return 新的 BuildContext
+     * @param player the player
+     * @param guiId  the GUI ID
+     * @param rows   the row count
+     * @return a new BuildContext
      */
     @NotNull
     public static BuildContext root(@NotNull Player player, @NotNull String guiId, int rows) {
@@ -75,10 +75,10 @@ public class BuildContext {
     }
 
     /**
-     * 为此 Context 创建一个子 Context。
-     * 用于传递父 Widget 的属性给子 Widget。
+     * Creates a child Context for this Context.
+     * Used to pass a parent Widget's properties down to a child Widget.
      *
-     * @return 子 BuildContext
+     * @return the child BuildContext
      */
     @NotNull
     public BuildContext child(@NotNull Element parentElement) {
@@ -90,9 +90,9 @@ public class BuildContext {
     // Getters
 
     /**
-     * 获取当前玩家。
+     * Gets the current player.
      *
-     * @return 玩家
+     * @return the player
      */
     @NotNull
     public Player getPlayer() {
@@ -100,9 +100,9 @@ public class BuildContext {
     }
 
     /**
-     * 获取 GUI ID。
+     * Gets the GUI ID.
      *
-     * @return GUI ID
+     * @return the GUI ID
      */
     @NotNull
     public String getGuiId() {
@@ -110,27 +110,27 @@ public class BuildContext {
     }
 
     /**
-     * 获取 GUI 行数。
+     * Gets the GUI row count.
      *
-     * @return 行数
+     * @return the row count
      */
     public int getRows() {
         return rows;
     }
 
     /**
-     * 获取 GUI 槽位总数。
+     * Gets the total number of GUI slots.
      *
-     * @return 槽位总数
+     * @return the total slot count
      */
     public int getSize() {
         return rows * 9;
     }
 
     /**
-     * 获取父 Element。
+     * Gets the parent Element.
      *
-     * @return 父 Element，如果是根则返回 null
+     * @return the parent Element, or null at the root
      */
     @Nullable
     public Element getParentElement() {
@@ -138,10 +138,10 @@ public class BuildContext {
     }
 
     /**
-     * 获取继承的属性值。
+     * Gets an inherited property value.
      *
-     * @param key 属性名
-     * @return 属性值，不存在则返回 null
+     * @param key the property name
+     * @return the property value, or null if it does not exist
      */
     @Nullable
     public Object getInheritedProperty(@NotNull String key) {
@@ -149,17 +149,17 @@ public class BuildContext {
     }
 
     /**
-     * 检查是否有指定的继承属性。
+     * Checks whether the given inherited property exists.
      *
-     * @param key 属性名
-     * @return 如果存在则返回 true
+     * @param key the property name
+     * @return true if it exists
      */
     public boolean hasInheritedProperty(@NotNull String key) {
         return inheritedProperties.containsKey(key);
     }
 
     /**
-     * 创建一个新的 Builder，复制当前 Context 的配置。
+     * Creates a new Builder that copies this Context's configuration.
      */
     @NotNull
     public Builder toBuilder() {
@@ -167,7 +167,7 @@ public class BuildContext {
     }
 
     /**
-     * BuildContext 的构建器。
+     * Builder for BuildContext.
      */
     public static class Builder {
         @NotNull

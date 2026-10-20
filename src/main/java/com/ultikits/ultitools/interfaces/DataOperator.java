@@ -5,14 +5,14 @@ import java.util.concurrent.Callable;
 
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.impl.data.QueryImpl;
 
 /**
  * Data operation interface.
- * <p>
- * 数据操作接口
  *
- * @param <T> 数据类型，继承自BaseDataEntity
+ * @param <T> Data type inherited from BaseDataEntity
  */
 public interface DataOperator<T extends BaseDataEntity<String>> {
 
@@ -22,129 +22,209 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
 
     /**
      * Check if the data record exists.
-     * <p>
-     * 查询记录数据是否存在。
      *
-     * @param object Data record entity <br> 数据记录实体
-     * @return Whether the record exists <br> 记录是否存在
+     * @param object Data record entity
+     * @return Whether the record exists
      */
     boolean exist(T object);
 
     /**
      * Check if the data record exists.
-     * <p>
-     * 使用条件查询记录是否存在
      *
-     * @param whereConditions Conditions <br> 条件参数
-     * @return Whether the record exists <br> 记录是否存在
+     * @param whereConditions Conditions
+     * @return Whether the record exists
      */
     boolean exist(WhereCondition... whereConditions);
 
     /**
      * Get data record by ID.
-     * <p>
-     * 使用ID获取记录
      *
-     * @param id Record ID <br> 记录ID
-     * @return Data record <br> 数据记录
+     * @param id Record ID
+     * @return Data record
      */
     T getById(Object id);
 
     /**
      * Get all data record.
-     * <p>
-     * 查询所有记录
      *
-     * @return Data record list <br> 数据记录列表
+     * @return Data record list
      */
     List<T> getAll();
 
     /**
      * Get all data record by conditions.
-     * <p>
-     * 查询所有符合条件的记录
      *
-     * @param whereConditions Conditions <br> 条件参数
-     * @return Data record list <br> 数据记录列表
+     * @param whereConditions Conditions
+     * @return Data record list
      */
     List<T> getAll(WhereCondition... whereConditions);
 
     /**
      * Fuzzy Query
-     * <p>
-     * 模糊查询
      *
-     * @param column   Column name <br> 列名
-     * @param value    Query value <br> 查询值
-     * @param likeType Like type <br> 模糊查询类型 <br>{@link LikeType}
-     * @return Data record list <br> 数据记录列表
+     * @param column   Column name
+     * @param value    Query value
+     * @param likeType Like type
+     * @return Data record list
      */
     List<T> getLike(String column, String value, LikeType likeType);
 
     /**
      * Get data record by page.
-     * <p>
-     * 分页查询
      *
-     * @param page            Page number <br> 页码
-     * @param size            Page size <br> 页大小
-     * @param whereConditions Conditions <br> 条件参数
-     * @return Data record list <br> 数据记录列表
+     * @param page            Page number
+     * @param size            Page size
+     * @param whereConditions Conditions
+     * @return Data record list
      */
     List<T> page(int page, int size, WhereCondition... whereConditions);
 
     /**
      * Insert data record.
-     * <p>
-     * 新增记录
      *
-     * @param obj Data record <br> 数据记录
+     * @param obj Data record
      */
     void insert(T obj);
 
     /**
      * Delete data record by conditions.
      * <p>
-     * 按照条件删除记录
+     * Since 6.3.0, a call with no conditions (a {@code null} or zero-length
+     * {@code whereConditions}) is rejected with a {@code DataAccessException} instead of
+     * deleting every row of the table — this is a behavioral change with no migration period
+     * (COMPATIBILITY.md's security-fix channel); see 02-CONTEXT.md D-12.
      *
-     * @param whereConditions Conditions <br> 条件参数
+     * @param whereConditions Conditions
      */
     void del(WhereCondition... whereConditions);
 
     /**
      * Delete data record by ID.
-     * <p>
-     * 按照ID删除记录
      *
-     * @param id Record ID <br> 记录ID
+     * @param id Record ID
      */
     void delById(Object id);
 
     /**
      * Update one field of one record.
-     * <p>
-     * 更新某个记录的某个值
      *
-     * @param column Column name <br> 列名
-     * @param value  New value <br> 新值
-     * @param id     Record ID <br> 记录ID
+     * @param column Column name
+     * @param value  New value
+     * @param id     Record ID
      */
     void update(String column, Object value, Object id);
 
     /**
      * Update data record by object. It will not update the fields that the incoming entity does not have.
-     * <p>
-     * 使用实体更新记录。不会更新传入实体没有的字段。
      *
-     * @param obj Data record <br> 数据记录
+     * @param obj Data record
      * @throws IllegalAccessException Please refer{@link IllegalAccessException}
      */
     void update(T obj) throws IllegalAccessException;
 
     /**
-     * Returns a new fluent query builder for this data operator.
+     * Counted update: {@link #update(BaseDataEntity)}, returning how many rows it wrote, so the
+     * caller can tell that nothing was written (#558).
      * <p>
-     * 返回此数据操作器的新流式查询构建器。
+     * An update by a non-null id that matches no row writes nothing on every backend: SQLite,
+     * MySQL and JSON each log one WARNING naming the table and the id, and return normally.
+     * {@code update(T)} gives the caller no way to see that; this method returns {@code 0}
+     * instead of {@code 1}. Use it wherever "the row was gone" must be treated as a failure --
+     * for example a write that credits an account that another server has just removed. For a
+     * write that should apply only while the stored row still has the values you read, use
+     * {@link #updateIf} instead.
+     * <p>
+     * The framework's operators return the backend's own affected-row count. This default, which
+     * a third-party implementation inherits unless it overrides it, checks with
+     * {@link #exist(WhereCondition...)} whether a row with the entity's id exists, returns
+     * {@code 0} without writing if it does not, and otherwise calls {@code update(T)} and returns
+     * {@code 1}. It cannot see what that {@code update} wrote, so one case remains in which it
+     * reports {@code 1} although nothing was written: another writer deleting the row during that
+     * one call.
+     *
+     * @param entity the new state of the row, carrying the id of the row to write
+     * @return the number of rows written: {@code 1}, or {@code 0} when no row has that id
+     * @throws DataAccessException if {@code entity}'s id is {@code null}, or the write fails
+     * @since 6.3.0
+     */
+    default int updateCounted(T entity) {
+        Object id = entity.getId();
+        if (id == null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to update a " + entity.getClass().getName() + " by a null id: no row can be addressed by it.");
+        }
+        if (!exist(WhereCondition.builder().column("id").value(id).build())) {
+            return 0;
+        }
+        try {
+            update(entity);
+        } catch (IllegalAccessException e) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "Failed to access entity fields", e);
+        }
+        return 1;
+    }
+
+    /**
+     * Conditional update: writes {@code entity} over the stored row with the same id only if
+     * that row still matches every one of {@code expected}, and reports whether it did (#543).
+     * <p>
+     * The check and the write are one step: on SQLite and MySQL a single
+     * {@code UPDATE ... WHERE id = ? AND <expected>} whose affected-row count decides the result,
+     * so it holds across servers sharing one database; on the JSON backend the check and the write
+     * run under the operator's own lock (a JSON store is local to one server). The conditions mean
+     * exactly what they mean in {@link #getAll(WhereCondition...)} on the same backend, values are
+     * bound as parameters, and a condition whose {@code isEmpty()} is true is ignored.
+     * <p>
+     * Typical use is compare-and-set: read a row, compute the new state, and write it conditioned
+     * on the value that was read; if another writer changed the row in between, nothing is
+     * written and {@code false} comes back, so the caller re-reads and decides again rather than
+     * writing on top. UltiEconomy's one-time wallet merge uses it this way, conditioned on the
+     * balance it read:
+     * <pre>{@code
+     * Account read = accounts.getById(id);
+     * double seen = read.getBalance();
+     * read.setBalance(seen + amount);
+     * if (!accounts.updateIf(read, WhereCondition.builder().column("balance").value(seen).build())) {
+     *     // someone else wrote first: re-read and decide again
+     * }
+     * }</pre>
+     * Like {@link #update(BaseDataEntity)}, every mapped field of {@code entity} is written, and
+     * {@code onUpdate()} fires on {@code entity} before the fields are read, whether or not the
+     * write then applies.
+     * <p>
+     * <b>A {@code null} expected value means {@code IS NULL}</b> under the default
+     * {@link com.ultikits.ultitools.entities.Comparison#EQUAL} comparison: the condition holds only
+     * while the stored column is unset -- on SQLite and MySQL {@code <column> IS NULL} inside the
+     * same single statement, on JSON an entry whose field is absent or JSON null. A compare-and-set
+     * against a column that was unset when it was read therefore misses, and keeps the value, when
+     * another writer filled the column in between. This meaning belongs to {@code updateIf} alone:
+     * {@link #getAll(WhereCondition...)}, {@link #exist(WhereCondition...)},
+     * {@link #del(WhereCondition...)} and {@link #page(int, int, WhereCondition...)} treat a
+     * {@code null} condition value as they always have. (6.3.0 snapshots published before this
+     * change refused a {@code null} expected value; no release did.)
+     *
+     * @param entity   the new state of the row, carrying the id of the row to write
+     * @param expected the conditions the stored row must still meet
+     * @return {@code true} if the row matched and was written; {@code false} if no row with that
+     *         id matched every condition, in which case nothing was written
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code entity}'s id is
+     *         {@code null}, a condition is {@code null}, a condition names a column the entity does
+     *         not map with {@code @Column} (also when its value is {@code null}), or a condition's
+     *         value is {@code null} under a comparison other than {@code EQUAL} (only {@code EQUAL}
+     *         gives {@code null} a meaning; under any other the write could never apply) -- on every
+     *         backend, so a misspelt column cannot turn a retry loop into an endless one
+     * @throws UnsupportedOperationException if this implementation does not provide conditional
+     *         writes -- the default, so a third-party implementation is never silently
+     *         unconditional
+     * @since 6.3.0
+     */
+    default boolean updateIf(T entity, WhereCondition... expected) {
+        throw new UnsupportedOperationException(getClass().getName()
+                + " does not implement DataOperator#updateIf, so it cannot perform a conditional write.");
+    }
+
+    /**
+     * Returns a new fluent query builder for this data operator.
      *
      * @return a new Query builder
      */
@@ -154,10 +234,34 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
 
     /**
      * Execute operations within a transaction. All operations commit together
-     * or roll back on exception. For SQL backends, uses database transactions.
-     * For JSON, uses snapshot-based rollback.
+     * or roll back on exception.
      * <p>
-     * 在事务中执行操作。所有操作一起提交或在异常时回滚。
+     * Every backend this framework ships (SQLite, MySQL, JSON) runs the action in a
+     * transaction: it joins the transaction already active on the calling thread, if any,
+     * and any {@link Throwable} the action throws rolls it back and is rethrown. SQLite and
+     * MySQL use a database transaction. On JSON, the action's writes are staged until commit
+     * and are invisible to other threads until then; the commit applies them together, so
+     * other threads see all of them at once; a rollback discards them.
+     * <p>
+     * On JSON, a transaction this method begins locks each table at its first read or write and
+     * holds the lock until it commits or rolls back, so a read-modify-write inside the action
+     * cannot lose an update, as in 6.2.5, where each JSON {@code transaction(...)} callback ran
+     * alone per operator. A read inside the action can therefore wait for another transaction
+     * that holds the table: at most 5 seconds, then it fails with a
+     * {@link com.ultikits.ultitools.exceptions.DataAccessException} and the transaction rolls
+     * back. A call that joins an active transaction keeps that transaction's isolation: inside a
+     * {@code @Transactional} method at the default isolation, JSON reads take no table lock.
+     * <p>
+     * When the commit itself fails: on SQLite and MySQL, the exception does not tell whether the
+     * database stored the transaction (the outcome is unknown; see
+     * {@link TransactionManager#commit()}), and nothing is retried, so code that must not apply a
+     * write twice re-reads the data, or uses {@link #updateIf}, before trying again. On JSON a
+     * failed commit commits nothing. An
+     * {@link com.ultikits.ultitools.exceptions.UnexpectedRollbackException} from the commit means
+     * the transaction was rolled back, none of its writes stored, on every backend.
+     * <p>
+     * This default implementation, used only by a third-party operator that does not override
+     * it, runs the action directly without a transaction.
      *
      * @param action the operations to execute
      * @param <R> the return type
@@ -169,9 +273,13 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     }
 
     /**
-     * Execute operations within a transaction (void variant).
+     * Execute operations within a transaction (void variant), with the same guarantees as
+     * {@link #transaction(Callable)} on every shipped backend, including the JSON backend's table
+     * lock at the first read of a transaction this method begins. The same commit outcomes apply:
+     * see {@link #transaction(Callable)}.
      * <p>
-     * 在事务中执行操作（无返回值）。
+     * This default implementation, used only by a third-party operator that does not override
+     * it, runs the action directly without a transaction.
      *
      * @param action the operations to execute
      */
@@ -180,9 +288,9 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     }
 
     /**
-     * Insert multiple entities atomically. Uses JDBC batch for SQL backends.
-     * <p>
-     * 批量原子插入。SQL后端使用JDBC批处理。
+     * Insert multiple entities atomically: on every shipped backend either all of them are
+     * stored or, if one fails, none is. Uses JDBC batch for SQL backends; on JSON the batch is
+     * one transaction. Inside an active transaction the batch joins it.
      *
      * @param entities the entities to insert
      */
@@ -195,9 +303,12 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     }
 
     /**
-     * Update multiple entities atomically. Uses JDBC batch for SQL backends.
+     * Update multiple entities atomically: on every shipped backend either all of them are
+     * updated or, if one fails, none is. Uses JDBC batch for SQL backends; on JSON the batch is
+     * one transaction. Inside an active transaction the batch joins it.
      * <p>
-     * 批量原子更新。SQL后端使用JDBC批处理。
+     * This default implementation, used only by a third-party operator that does not override
+     * it, updates the entities one by one without a transaction.
      *
      * @param entities the entities to update
      * @throws IllegalAccessException if field access fails

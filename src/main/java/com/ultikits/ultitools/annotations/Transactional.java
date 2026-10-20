@@ -13,6 +13,17 @@ import java.lang.annotation.Target;
  * be wrapped in a database transaction. The transaction will be committed if the
  * method completes normally, or rolled back if an exception is thrown.
  * <p>
+ * A method that joins a transaction already active on the thread ({@link Propagation#REQUIRED},
+ * the default, or {@link Propagation#SUPPORTS} or {@link Propagation#MANDATORY} called inside a
+ * transaction) does not end it. When such a method throws an exception its
+ * {@link #rollbackFor()}/{@link #noRollbackFor()} rules accept, the whole transaction is marked
+ * rollback-only, even if the caller catches the exception: the outermost commit then rolls back
+ * every write of the transaction and throws
+ * {@link com.ultikits.ultitools.exceptions.UnexpectedRollbackException}. An exception the rules do
+ * not accept leaves the transaction committable. This is Spring's default
+ * ({@code AbstractPlatformTransactionManager}, {@code globalRollbackOnParticipationFailure = true}),
+ * and it applies on every backend (SQLite, MySQL and JSON).
+ * <p>
  * Usage examples:
  * <pre>{@code
  * // Basic usage - starts a new transaction or joins existing one
@@ -43,9 +54,24 @@ import java.lang.annotation.Target;
  *
  * <p><b>Important:</b>
  * <ul>
- *   <li>Self-invocation (calling a @Transactional method from within the same class) bypasses the proxy</li>
- *   <li>Only public methods can be transactional</li>
- *   <li>The class must not be final (CGLIB limitation)</li>
+ *   <li>Self-invocation (calling a {@code @Transactional} method on {@code this} from within the
+ *       same class) <b>is</b> intercepted: the framework's generated proxy is a subclass of the
+ *       bean itself, not a delegate wrapping a separate target, so a call to
+ *       {@code this.method()} dispatches virtually onto the proxy's override. Re-verified against
+ *       three pre-existing {@code shouldInterceptSelfInvocation} test classes (2026-08-27)</li>
+ *   <li>Private, static, and final methods cannot be transactional - each is dispatched in a way
+ *       that bypasses the proxy (respectively: {@code invokespecial}, {@code invokestatic}, and
+ *       no override is possible); a package-private method is also ineligible when it is declared
+ *       in a different package than the bean class</li>
+ *   <li>The class must not be final (subclass proxy limitation)</li>
+ *   <li>On the JSON backend ({@code datasource.type: json}), table locks belong to the thread: a
+ *       {@link Propagation#REQUIRES_NEW} or {@link Propagation#NOT_SUPPORTED} method re-enters the
+ *       table locks its suspended caller holds instead of waiting for them, and if both write the
+ *       same key, the caller's later commit is the value that stays. (On the JDBC backends the
+ *       inner call would wait for its own caller's row lock until the lock-wait timeout.)</li>
+ *   <li>Work whose failure the caller wants to survive goes in a {@link Propagation#REQUIRES_NEW}
+ *       method, which commits or rolls back alone; a joined method's failure marks the caller's
+ *       whole transaction rollback-only (see above).</li>
  * </ul>
  *
  * @author wisdomme
@@ -73,6 +99,12 @@ public @interface Transactional {
      * <p>
      * Defaults to {@link Isolation#DEFAULT}, which uses the database's
      * default isolation level.
+     * <p>
+     * On the JSON backend, dirty writes and blind overwrites are prevented at every level by table
+     * write locks held from a transaction's first write to a table until it commits or rolls back;
+     * at the default level a read takes no lock, so a read-modify-write can lose an update: use
+     * {@code DataOperator#updateIf} or {@code isolation = REPEATABLE_READ} or {@code SERIALIZABLE},
+     * which lock the table at the first read.
      *
      * @return the isolation level
      */
@@ -81,7 +113,37 @@ public @interface Transactional {
     /**
      * The transaction timeout in seconds.
      * <p>
-     * Defaults to -1 (no timeout / use database default).
+     * Defaults to -1 (no timeout / use database default). Only a value greater than 0 is ever
+     * acted on at all -- the interceptor skips calling {@code TransactionManager.setTimeout(int)}
+     * entirely for -1 or 0, so both mean exactly "no timeout requested," on every backend.
+     * <p>
+     * <b>The bound is per statement against a shared, shrinking budget -- not a wall-clock
+     * limit on the method body.</b> (D-10, Spring's approach.) When a value greater than 0 is
+     * set, the transaction gets a deadline {@code N} seconds out from when it began. Every
+     * individual JDBC statement issued afterward -- through the ORM's normal read/write methods,
+     * and through the direct batch paths in {@code insertAll}/{@code updateAll} -- is given a
+     * query timeout equal to whatever time is <em>left</em> in that budget when the statement is
+     * prepared, floored at 1 second so an exhausted budget still fails fast rather than becoming
+     * unlimited ({@code setQueryTimeout(0)} means "no limit" in the JDBC contract). This is
+     * deliberately <em>not</em> a wall-clock bound on the method as a whole: non-database work
+     * inside the method (a slow computation, a network call to something else) is never
+     * interrupted, because plain JDBC has no mechanism to cancel work already in flight, and
+     * this framework does not add one (see {@code REQUIREMENTS.md}'s "out of scope" section).
+     * <p>
+     * Per backend:
+     * <ul>
+     *   <li>SQLite, MySQL (JDBC-backed): enforced exactly as described above.</li>
+     *   <li>JSON-backed: the same deadline, {@code N} seconds after the transaction began. Every
+     *       data operation inside the transaction checks it before it starts and fails with a
+     *       {@code DataAccessException} once it has passed, and every wait for another
+     *       transaction's table lock ends at the deadline if that comes before the 5-second
+     *       lock-wait bound. Either failure marks the transaction rollback-only before it is
+     *       thrown, as Spring's {@code ResourceHolderSupport#checkTransactionTimeout} does, so a
+     *       method that catches it still ends in a rollback and
+     *       {@code UnexpectedRollbackException}.</li>
+     * </ul>
+     * A method that leaves this attribute at its default is unaffected on every backend, since
+     * the interceptor never calls {@code setTimeout} for it.
      *
      * @return the timeout in seconds
      */
@@ -92,26 +154,44 @@ public @interface Transactional {
      * <p>
      * A read-only transaction may allow database optimizations and is
      * useful for methods that only query data.
+     * <p>
+     * On the JSON backend every write inside a read-only transaction is rejected with a
+     * {@code DataAccessException} before anything is staged or locked.
      *
      * @return true if read-only
      */
     boolean readOnly() default false;
 
     /**
-     * Exception types that should trigger a rollback.
+     * Exception types that should trigger a rollback, in addition to the {@code RuntimeException}/
+     * {@code Error} default.
      * <p>
-     * By default, transactions are rolled back for RuntimeException and Error.
-     * Specify additional exception types here if needed.
+     * This is additive, not a replacement: an exception that matches neither {@code rollbackFor}
+     * nor {@code noRollbackFor} still falls through to the unchecked default, exactly as if
+     * neither attribute were set. When an exception matches both this and {@link #noRollbackFor()},
+     * the rule whose listed class is the <b>shallower</b> inheritance-depth match to the thrown
+     * exception wins (Spring's {@code RuleBasedTransactionAttribute} tiebreak); on an exact-depth
+     * tie - including the same class appearing in both arrays - the transaction rolls back.
+     * <p>
+     * For a method that joins an existing transaction, these rules decide whether its exception
+     * marks that transaction rollback-only.
      *
-     * @return exception types to rollback for
+     * @return exception types to additionally rollback for
+     * @since 6.3.0 additive combination with {@link #noRollbackFor()} and the depth tiebreak
+     *        (D-06, D-07); before 6.3.0 a non-empty, unmatched {@code rollbackFor} silently
+     *        committed instead of falling through to the default.
      */
     Class<? extends Throwable>[] rollbackFor() default {};
 
     /**
-     * Exception types that should NOT trigger a rollback.
+     * Exception types that should NOT trigger a rollback, overriding the {@code RuntimeException}/
+     * {@code Error} default for those types.
      * <p>
-     * Use this to prevent rollback for specific exceptions that would
-     * normally cause a rollback.
+     * Combines with {@link #rollbackFor()} by shallowest-inheritance-depth match, described there;
+     * on an exact-depth tie the transaction still rolls back.
+     * <p>
+     * For a method that joins an existing transaction, these rules decide whether its exception
+     * marks that transaction rollback-only: an exception listed here leaves it committable.
      *
      * @return exception types to not rollback for
      */

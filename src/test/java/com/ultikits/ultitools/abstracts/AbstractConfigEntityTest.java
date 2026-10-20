@@ -7,8 +7,12 @@ import static org.mockito.Mockito.lenient;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
@@ -64,12 +68,23 @@ class AbstractConfigEntityTest {
 
     @Test
     @DisplayName("Should initialize config entity with default values")
-    void testInitWithDefaults() throws IOException {
+    void testInitWithDefaults() throws Exception {
         TestConfigEntity entity = new TestConfigEntity("test-config.yml");
         entity.init(mockPlugin);
-        
+
         assertThat(entity.getUltiToolsPlugin()).isEqualTo(mockPlugin);
-        assertThat(entity.getConfig()).isNotNull();
+        assertThat(ConfigFileView.read(entity)).isNotNull();
+
+        // The file didn't exist before init() - every @ConfigEntry key on it is newly added, so
+        // each one arrives with its default value AND its comment (D-07/D-09).
+        File savedFile = new File(tempDir.toFile(), "test-config.yml");
+        YamlConfiguration withComments = new YamlConfiguration();
+        withComments.options().parseComments(true);
+        withComments.load(savedFile);
+        assertThat(withComments.getString("test.string")).isEqualTo("default");
+        assertThat(withComments.getComments("test.string")).containsExactly("Test string config");
+        assertThat(withComments.getInt("test.int")).isEqualTo(100);
+        assertThat(withComments.getComments("test.int")).containsExactly("Test integer config");
     }
 
     @Test
@@ -207,15 +222,26 @@ class AbstractConfigEntityTest {
 
     @Test
     @DisplayName("Should create missing config file on init")
-    void testCreateMissingConfigFile() throws IOException {
+    void testCreateMissingConfigFile() throws Exception {
         File nonExistentFile = new File(tempDir.toFile(), "new-config.yml");
         assertThat(nonExistentFile).doesNotExist();
-        
+
         TestConfigEntity entity = new TestConfigEntity("new-config.yml");
         entity.init(mockPlugin);
-        
+
         // 配置应该被创建
-        assertThat(entity.getConfig()).isNotNull();
+        assertThat(ConfigFileView.read(entity)).isNotNull();
+        assertThat(nonExistentFile).exists();
+
+        // Every @ConfigEntry key on a freshly-created file is newly added, so each one carries
+        // both its default value and its comment (D-07/D-09) - not just an empty file.
+        YamlConfiguration withComments = new YamlConfiguration();
+        withComments.options().parseComments(true);
+        withComments.load(nonExistentFile);
+        assertThat(withComments.getString("test.string")).isEqualTo("default");
+        assertThat(withComments.getComments("test.string")).containsExactly("Test string config");
+        assertThat(withComments.getInt("test.int")).isEqualTo(100);
+        assertThat(withComments.getComments("test.int")).containsExactly("Test integer config");
     }
 
     @Test
@@ -337,6 +363,56 @@ class AbstractConfigEntityTest {
         }
     }
 
+    /**
+     * 测试携带 {@code Map} 字段的配置实体 —— Phase 06 UAT 发现的
+     * {@code InaccessibleObjectException} 复现载体：{@code save()} 对该字段值调用的
+     * {@code DefaultConfigParser}（默认解析器）在 Java 16+ 上会因为反射进入
+     * {@code LinkedHashMap} 自身的实现字段而抛出该异常。
+     */
+    private static class TestConfigEntityWithMap extends AbstractConfigEntity {
+        @ConfigEntry(path = "settings", comment = "Arbitrary key-value settings")
+        private Map<String, String> settings = new LinkedHashMap<>();
+
+        public TestConfigEntityWithMap(String configFilePath) {
+            super(configFilePath);
+        }
+
+        public Map<String, String> getSettings() {
+            return settings;
+        }
+
+        public void setSettings(Map<String, String> settings) {
+            this.settings = settings;
+        }
+    }
+
+    @Test
+    @DisplayName("Should save and reload a Map-typed config field without reflecting into JDK internals")
+    void testSaveMapTypedFieldSurvivesRoundTrip() throws IOException {
+        TestConfigEntityWithMap entity = new TestConfigEntityWithMap("map-config.yml");
+        entity.init(mockPlugin);
+
+        Map<String, String> populated = new LinkedHashMap<>();
+        populated.put("alpha", "one");
+        populated.put("beta", "two");
+        entity.setSettings(populated);
+
+        // Exactly the call chain UltiTools.onDisable() -> ConfigManager.saveAll() ->
+        // AbstractConfigEntity.save() exercises for every module config on shutdown.
+        assertThatCode(entity::save).doesNotThrowAnyException();
+
+        File savedFile = new File(tempDir.toFile(), "map-config.yml");
+        YamlConfiguration config = YamlConfiguration.loadConfiguration(savedFile);
+        assertThat(config.getString("settings.alpha")).isEqualTo("one");
+        assertThat(config.getString("settings.beta")).isEqualTo("two");
+
+        // Round trip: what save() wrote, a fresh init() must read back as an equal map -
+        // not just "no exception".
+        TestConfigEntityWithMap reloaded = new TestConfigEntityWithMap("map-config.yml");
+        reloaded.init(mockPlugin);
+        assertThat(reloaded.getSettings()).isEqualTo(populated);
+    }
+
     // ==================== 四个遍历方法必须对得上 ====================
     //
     // init() / save() / reload() / updateProperties() 各自遍历 @ConfigEntry 字段。
@@ -423,6 +499,65 @@ class AbstractConfigEntityTest {
         // getDeclaredFields()，于是父类字段读得出、写不进。
         assertThat(entity.getImplicitPath()).isEqualTo("from-parent");
         assertThat(entity.getChildValue()).isEqualTo("from-child");
+    }
+
+    // ==================== reload() 的注释保留顺序 (#357) ====================
+    //
+    // reload() 过去直接调用裸的 YamlConfiguration.loadConfiguration(file) 静态工厂，
+    // 该工厂在返回前已经在内部完成解析，所以之后再设置 parseComments(true) 根本作用不到
+    // 这次读取——于是 reload() 之后紧跟的 save() 会把这份已丢失注释的内存态写回操作员的文件。
+    // 这里测的是 reload() 后紧跟 save() 这条真正会破坏内容的序列，不是 reload() 单独调用。
+
+    @Test
+    @DisplayName("reload() 之后紧跟 save()，操作员文件里的注释应该原样保留 (#357)")
+    void reloadThenSavePreservesOperatorComments() throws Exception {
+        TestConfigEntity entity = new TestConfigEntity("test-config.yml");
+        // 文件不存在：init() 会把缺失的键连同它们的注释一起写入 (D-07/D-09)。
+        entity.init(mockPlugin);
+
+        File savedFile = new File(tempDir.toFile(), "test-config.yml");
+        YamlConfiguration beforeReload = new YamlConfiguration();
+        beforeReload.options().parseComments(true);
+        beforeReload.load(savedFile);
+        assertThat(beforeReload.getComments("test.string"))
+                .as("init() must have written the comment before reload() runs, or this test proves nothing")
+                .containsExactly("Test string config");
+
+        entity.reload();
+        entity.save();
+
+        YamlConfiguration afterReloadThenSave = new YamlConfiguration();
+        afterReloadThenSave.options().parseComments(true);
+        afterReloadThenSave.load(savedFile);
+        assertThat(afterReloadThenSave.getComments("test.string"))
+                .as("reload() must parse comments the same way init() does, or the save() right "
+                        + "after it silently strips them")
+                .containsExactly("Test string config");
+        assertThat(afterReloadThenSave.getComments("test.int"))
+                .containsExactly("Test integer config");
+    }
+
+    // paper-api 1.21.11's own default for options().parseComments() is `true` unless the
+    // operator explicitly sets -DPaper.parseYamlCommentsByDefault=false (that boolean is a
+    // static final field, evaluated once per JVM at class-load - it cannot be flipped mid-test
+    // without a fresh classloader). Under this repository's actual test JVM, reload()'s old
+    // bare-factory call and the fixed explicit sequence are therefore behaviourally identical -
+    // the destructive symptom is only observable under that named platform flag, exactly as
+    // #357 itself records. The genuinely discriminating, environment-independent proof is this
+    // source-shape assertion: it fails against the pre-fix source (the bare call, and the
+    // pre-fix comment that names it) and passes once neither remains anywhere in the file.
+    @Test
+    @DisplayName("reload() 不应该再直接调用裸的 YamlConfiguration.loadConfiguration(File) 静态工厂 (#357)")
+    void reloadNoLongerUsesTheBareStaticFactory() throws IOException {
+        Path sourceFile = Paths.get("src", "main", "java", "com", "ultikits", "ultitools",
+                "abstracts", "AbstractConfigEntity.java");
+        String source = new String(Files.readAllBytes(sourceFile), StandardCharsets.UTF_8);
+        assertThat(source)
+                .as("reload() must build its own parser and enable comment parsing before "
+                        + "load() runs, the same way init() does - the bare static factory "
+                        + "parses the file inside itself before returning, so parseComments"
+                        + "(true) could never reach that read (#357)")
+                .doesNotContain("YamlConfiguration.loadConfiguration(");
     }
 
     @Test

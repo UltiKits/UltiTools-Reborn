@@ -173,10 +173,174 @@ class SystemLogHandlerTest {
         LogRecord record = new LogRecord(Level.INFO, "Hello %d"); // Expects integer
         record.setParameters(new Object[]{"World"}); // String provided
         record.setLoggerName("test");
-        
+
         handler.publish(record);
-        
+
         // Expect fallback: "Hello %d [参数: World]"
         verify(mockTransmitter).sendLog(eq("info"), eq("Hello %d [参数: World]"), anyString(), isNull());
+    }
+
+    // ==================== CR-02: ErrorReportCollector decoupled from the levels filter ====================
+
+    @Test
+    void testErrorReportingReachesCollectorEvenWhenErrorLevelExcludedFromDelivery() {
+        // #433 made the levels filter genuinely effective; CR-02: excluding "error" from the
+        // panel's live log view must NOT also silently disable ErrorReportCollector's automatic
+        // SEVERE-exception reporting -- the two are independent declared surfaces.
+        handler.removeEnabledLevel("error");
+
+        Throwable thrown = new RuntimeException("boom");
+        LogRecord record = new LogRecord(Level.SEVERE, "Severe with throwable");
+        record.setLoggerName("plugin.MyPlugin");
+        record.setThrown(thrown);
+
+        com.ultikits.ultitools.manager.ErrorReportCollector mockErc =
+                mock(com.ultikits.ultitools.manager.ErrorReportCollector.class);
+        com.ultikits.ultitools.UltiTools mockInstance = mock(com.ultikits.ultitools.UltiTools.class);
+        org.mockito.Mockito.when(mockInstance.getErrorReportCollector()).thenReturn(mockErc);
+
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> staticMock =
+                org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class)) {
+            staticMock.when(com.ultikits.ultitools.UltiTools::getInstance).thenReturn(mockInstance);
+
+            handler.publish(record);
+        }
+
+        // Panel delivery IS suppressed (levels filter excludes "error")...
+        verifyNoInteractions(mockTransmitter);
+        // ...but the ErrorReportCollector report is NOT suppressed.
+        verify(mockErc).reportError(eq(thrown), eq("MyPlugin"), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void testErrorReportingStillWorksWhenErrorLevelIsEnabled() {
+        // Control: the "error" level stays enabled by default, so both the panel delivery AND
+        // the ErrorReportCollector report fire -- proves the decoupling didn't accidentally
+        // break the ordinary case.
+        Throwable thrown = new RuntimeException("boom");
+        LogRecord record = new LogRecord(Level.SEVERE, "Severe with throwable, error enabled");
+        record.setLoggerName("plugin.MyPlugin");
+        record.setThrown(thrown);
+
+        com.ultikits.ultitools.manager.ErrorReportCollector mockErc =
+                mock(com.ultikits.ultitools.manager.ErrorReportCollector.class);
+        com.ultikits.ultitools.UltiTools mockInstance = mock(com.ultikits.ultitools.UltiTools.class);
+        org.mockito.Mockito.when(mockInstance.getErrorReportCollector()).thenReturn(mockErc);
+
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> staticMock =
+                org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class)) {
+            staticMock.when(com.ultikits.ultitools.UltiTools::getInstance).thenReturn(mockInstance);
+
+            handler.publish(record);
+        }
+
+        verify(mockTransmitter).sendLog(eq("error"), eq("Severe with throwable, error enabled"),
+                eq("plugin:MyPlugin"), eq(thrown));
+        verify(mockErc).reportError(eq(thrown), eq("MyPlugin"), org.mockito.ArgumentMatchers.any());
+    }
+
+    // ==================== Gate-2 P2: enabling "debug" must lower the handler's own JUL floor ====================
+
+    @Test
+    void testDebugNotInEnabledLevelsFineRecordNeverReachesTransmitter() {
+        // Control: "debug" is NOT in the default enabledLevels ({info, warning, error}) -- a FINE
+        // record should not be delivered, same as before this fix.
+        LogRecord record = new LogRecord(Level.FINE, "Fine, debug not enabled");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        verifyNoInteractions(mockTransmitter);
+    }
+
+    @Test
+    void testEnablingDebugViaSetEnabledLevelsLetsFineRecordsThrough() {
+        // Gate-2 P2: before this fix, java.util.logging.Handler#isLoggable(record) (called from
+        // shouldProcessRecord BEFORE this class's own enabledLevels check) rejected FINE records
+        // outright, because the handler's own level floor stayed at Level.INFO regardless of
+        // what enabledLevels said -- so a panel request enabling "debug" had no observable effect.
+        java.util.Set<String> withDebug = new java.util.HashSet<>(handler.getEnabledLevels());
+        withDebug.add("debug");
+        handler.setEnabledLevels(withDebug);
+
+        LogRecord record = new LogRecord(Level.FINE, "Fine, debug now enabled");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        verify(mockTransmitter).sendLog(eq("debug"), eq("Fine, debug now enabled"), eq("plugin:MyPlugin"), isNull());
+    }
+
+    @Test
+    void testAddEnabledLevelDebugAlsoLowersTheHandlerFloor() {
+        LogRecord record = new LogRecord(Level.FINEST, "Finest, via addEnabledLevel");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.addEnabledLevel("debug");
+        handler.publish(record);
+
+        verify(mockTransmitter).sendLog(eq("debug"), eq("Finest, via addEnabledLevel"), eq("plugin:MyPlugin"), isNull());
+    }
+
+    @Test
+    void testRemovingDebugRestoresTheHandlerFloorToInfo() {
+        handler.addEnabledLevel("debug");
+        handler.removeEnabledLevel("debug");
+
+        LogRecord record = new LogRecord(Level.FINE, "Fine, debug removed again");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        // Restored to the INFO floor -- the record never reaches isLoggable's threshold at all,
+        // let alone the (now again debug-less) enabledLevels check.
+        verifyNoInteractions(mockTransmitter);
+    }
+
+    // ==================== Gate-2 P1 (round 9): PUBLISHING reentrancy guard ====================
+
+    @Test
+    void testReentrantPublishIsDroppedNotRecursed() {
+        // Gate-2 finding, round 9: a diagnostic logged from WITHIN sendLog() (through the shared
+        // plugin logger) can re-enter publish() on the SAME thread before the outer call returns
+        // -- exactly the shape that produced three separate StackOverflowError instances in
+        // earlier rounds. The PUBLISHING ThreadLocal guard must drop the re-entrant call outright
+        // rather than let it recurse.
+        LogRecord inner = new LogRecord(Level.INFO, "Inner, re-entrant");
+        inner.setLoggerName("plugin.MyPlugin");
+
+        LogRecord outer = new LogRecord(Level.INFO, "Outer");
+        outer.setLoggerName("plugin.MyPlugin");
+
+        org.mockito.Mockito.doAnswer(invocation -> {
+            // Simulate a call back into this same handler, synchronously, on the same thread --
+            // the shape a diagnostic logged from inside sendLog() would take.
+            handler.publish(inner);
+            return null;
+        }).when(mockTransmitter).sendLog(eq("info"), eq("Outer"), anyString(), isNull());
+
+        handler.publish(outer);
+
+        // Only the OUTER call's own sendLog fired; the re-entrant INNER call was dropped before
+        // it ever reached sendLog.
+        verify(mockTransmitter).sendLog(eq("info"), eq("Outer"), anyString(), isNull());
+        verify(mockTransmitter, org.mockito.Mockito.never())
+                .sendLog(eq("info"), eq("Inner, re-entrant"), anyString(), isNull());
+    }
+
+    @Test
+    void testPublishingGuardIsResetAfterEachTopLevelCallSoSubsequentCallsStillWork() {
+        // The ThreadLocal must be cleared in a finally block, so a later, genuinely NEW top-level
+        // call on the same thread is still processed normally -- the guard must not leak "true"
+        // across unrelated calls.
+        LogRecord first = new LogRecord(Level.INFO, "First");
+        first.setLoggerName("plugin.MyPlugin");
+        handler.publish(first);
+        verify(mockTransmitter).sendLog(eq("info"), eq("First"), anyString(), isNull());
+
+        LogRecord second = new LogRecord(Level.INFO, "Second");
+        second.setLoggerName("plugin.MyPlugin");
+        handler.publish(second);
+        verify(mockTransmitter).sendLog(eq("info"), eq("Second"), anyString(), isNull());
     }
 }

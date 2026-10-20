@@ -1,8 +1,11 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -21,6 +24,7 @@ import org.bukkit.command.ConsoleCommandSender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
@@ -37,6 +41,9 @@ import com.ultikits.ultitools.utils.PluginInstallUtils;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
 
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallCommandsTest {
@@ -64,7 +71,8 @@ class PluginInstallCommandsTest {
         config.set("api-url", "http://localhost");
         mockedUltiTools.when(UltiTools::getEnv).thenReturn(config);
         
-        File dataFolder = new File("target/test-data");
+        // A server layout: the update records live under the data folder's grandparent (the server root).
+        File dataFolder = new File("target/test-data/plugins/UltiTools");
         dataFolder.mkdirs();
         when(instance.getDataFolder()).thenReturn(dataFolder);
         
@@ -85,14 +93,12 @@ class PluginInstallCommandsTest {
             // Setup default mock behaviors
             mockedUtils.when(() -> PluginInstallUtils.getPluginList(anyInt(), anyInt()))
                     .thenReturn(new ArrayList<>());
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin(anyString(), anyString()))
-                    .thenReturn(true);
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any()))
+                    .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1"));
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
+                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
@@ -266,8 +272,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin("test-plugin", "1.0.0"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -288,8 +294,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin("test-plugin", "1.0.0"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -310,8 +316,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -332,8 +338,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -399,8 +405,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -412,7 +418,7 @@ class PluginInstallCommandsTest {
         
         assertThat(result).isTrue();
         String message = player.nextMessage();
-        assertThat(message).contains("卸载成功");
+        assertThat(message).contains("卸载完成");
     }
 
     @Test
@@ -421,8 +427,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -443,7 +449,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
                 .thenThrow(new IOException("File access error"));
         } catch (Exception e) {
             // Skip if mocking not available
@@ -457,6 +463,224 @@ class PluginInstallCommandsTest {
         assertThat(result).isTrue();
         String message = player.nextMessage();
         assertThat(message).contains("删除失败");
+    }
+
+    @Test
+    @DisplayName("#501: a successful uninstall has already deleted the jar, so the reply never asks for a manual delete")
+    void uninstallSuccess_replyDoesNotAskForManualDelete() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        List<String> messages = drainMessages();
+        assertThat(messages).as("the command must reply at all").isNotEmpty();
+        assertThat(messages.get(0)).contains("卸载完成");
+        assertThat(messages)
+                .as("uninstallPlugin returns true only after deleting the jar (#501) -- telling the "
+                        + "operator to delete it manually describes work that is not needed")
+                .noneMatch(m -> m.contains("手动删除"))
+                .noneMatch(m -> m.contains("文件位置"));
+    }
+
+    @Test
+    @DisplayName("#501: a failed jar delete is reported as a failure naming the jar that is still on disk")
+    void uninstallDeleteFailure_replyNamesTheJarStillOnDisk() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String jarPath = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenThrow(new java.nio.file.FileSystemException(jarPath, null, "Permission denied"));
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        List<String> messages = drainMessages();
+        assertThat(messages).as("the command must reply at all").isNotEmpty();
+        assertThat(messages).noneMatch(m -> m.contains("卸载完成"));
+        assertThat(messages.get(0)).contains("失败");
+        assertThat(String.join("\n", messages))
+                .as("the operator must be told which file will load again on restart")
+                .contains(jarPath);
+    }
+
+    @Test
+    @DisplayName("#501 review WR-02: a failed uninstall names every module jar still on disk")
+    void uninstallSeveralUndeletableJars_replyNamesEveryJar() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String first = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        String second = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-2.0.0.jar";
+        java.nio.file.FileSystemException failure =
+                new java.nio.file.FileSystemException(first, null, "Permission denied");
+        failure.addSuppressed(new java.nio.file.FileSystemException(second, null, "Permission denied"));
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList())).thenThrow(failure);
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("失败").contains(first).contains(second).doesNotContain("卸载完成");
+    }
+
+    @Test
+    @DisplayName("#501 review WR-03: a module unloaded without a jar on disk is reported as such, not as a misspelling")
+    void uninstallLoadedModuleWithoutJar_replySaysUnloadedAndNoJarFound() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenThrow(new java.nio.file.NoSuchFileException(folder, null, "no module JAR named test-plugin"));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all)
+                .contains("模块已卸载")
+                .contains(folder)
+                .doesNotContain("拼写")
+                .doesNotContain("卸载完成")
+                .doesNotContain("文件访问错误");
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws is reported, together with the jars having been deleted")
+    void uninstallUnloadThrew_jarsDeleted_replyReportsBoth() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList())).thenThrow(unloadThrew(null));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).as("the operator must get a reply, not a generic command error").isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains("均已删除").doesNotContain("卸载完成");
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws and a jar that cannot be deleted are both reported, naming the jar")
+    void uninstallUnloadThrew_jarNotDeleted_replyNamesTheJar() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenThrow(unloadThrew(new java.nio.file.FileSystemException(jar, null, "Permission denied")));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains(jar).doesNotContain("均已删除");
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws with no jar on disk says so")
+    void uninstallUnloadThrew_noJar_replySaysNoJarFound() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenThrow(unloadThrew(new java.nio.file.NoSuchFileException(folder, null, "no module JAR")));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains(folder).doesNotContain("均已删除");
+    }
+
+    @Test
+    @DisplayName("state C: the reply says how many JARs could not be read, and what that means")
+    void uninstallWithUndeterminedEntries_replySaysWhatIsUnknown() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String unreadable = "/srv/minecraft/plugins/UltiTools/plugins/zz-corrupt.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.singletonList(unreadable)));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).as("the uninstall succeeded and must say so").contains("卸载完成");
+        assertThat(all)
+                .as("the operator must be told what is unknown, and what follows from it")
+                .contains("1")
+                .contains("重启");
+        assertThat(all)
+                .as("the reply states the uncertainty rather than resolving it")
+                .contains("无法判断")
+                .doesNotContain("卸载失败");
+    }
+
+    @Test
+    @DisplayName("state C is reported once, however many branches of a failure carry it")
+    void uninstallUnloadThrew_noJarWithUndetermined_reportsThemOnce() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        String unreadable = folder + "/zz-corrupt.jar";
+        java.nio.file.NoSuchFileException noJar = new java.nio.file.NoSuchFileException(folder, null, "no module JAR");
+        noJar.addSuppressed(PluginInstallUtils.UndeterminedEntriesException.of(Collections.singletonList(unreadable)));
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenThrow(unloadThrew(noJar));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        List<String> messages = drainMessages();
+        assertThat(messages.stream().filter(m -> m.contains("无法确认身份")).count())
+                .as("it must be reported, and reported once: twice is the operator reading the same files twice")
+                .isEqualTo(1L);
+        assertThat(String.join("\n", messages)).contains(unreadable);
+    }
+
+    @Test
+    @DisplayName("state D reached through a failed unload is still reported as a folder, not as a JAR")
+    void uninstallUnloadThrew_folderUnlistable_replySaysNothingCanBeConcluded() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenThrow(unloadThrew(new java.nio.file.AccessDeniedException(folder, null, "could not be listed")));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains("模块目录").contains(folder);
+        assertThat(all)
+                .as("the folder is not a JAR that failed to delete, and must not be named as one")
+                .doesNotContain("JAR 文件无法删除");
+    }
+
+    @Test
+    @DisplayName("state D: a modules folder that could not be listed is reported as that")
+    void uninstallWithUnlistableFolder_replySaysNothingCanBeConcluded() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
+                .thenThrow(new java.nio.file.AccessDeniedException(folder, null, "could not be listed"));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all)
+                .contains("模块目录")
+                .contains(folder)
+                .doesNotContain("卸载完成")
+                .doesNotContain("拼写");
+    }
+
+    private static PluginInstallUtils.ModuleUnloadFailedException unloadThrew(Exception jarOutcome) {
+        PluginInstallUtils.ModuleUnloadFailedException failure = PluginInstallUtils.ModuleUnloadFailedException.of(
+                "Module test-plugin was removed from the loaded modules, but its unload threw",
+                new IllegalStateException("module unload step boom"));
+        if (jarOutcome != null) {
+            failure.addSuppressed(jarOutcome);
+        }
+        return failure;
+    }
+
+    private List<String> drainMessages() {
+        List<String> messages = new ArrayList<>();
+        String msg;
+        while ((msg = player.nextMessage()) != null) {
+            messages.add(msg);
+        }
+        return messages;
     }
 
     @Test
@@ -501,8 +725,8 @@ class PluginInstallCommandsTest {
         ConsoleCommandSender console = server.getConsoleSender();
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -792,5 +1016,423 @@ class PluginInstallCommandsTest {
         assertThat(allMessages)
             .contains("check")
             .contains("update");
+    }
+
+    /**
+     * #439: {@code listPlugins}'s player branch used to decide "installed" via a direct
+     * {@code installedPlugin.getPluginName().equals(plugin.getName())} string comparison between
+     * a loaded module's Bukkit {@code plugin.yml} name and the catalogue's display name. Every
+     * in-repo module names itself with the literal {@code "UltiTools-"} vendor prefix
+     * ({@code UltiTools-Economy}, {@code UltiTools-Menu}, ...) while the catalogue's own display
+     * name omits it, so a genuinely-loaded, genuinely-matching module was reported not installed.
+     * These tests exercise the extracted, package-private {@code isSameModule} decision directly
+     * (same package as {@link PluginInstallCommands}, so no reflection is needed) -- this is the
+     * exact function the fix changed, and testing it directly avoids depending on Adventure
+     * component rendering, which this file's other tests do not assert content on either.
+     */
+    @Nested
+    @DisplayName("#439 installed-state matching by stable identifier")
+    class InstalledStateMatchingTests {
+
+        @Test
+        @DisplayName("a catalogue entry whose display name differs but shares identifyString matches")
+        void matchesByIdentifyStringDespiteDifferentDisplayName() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn("com.ultikits.economy");
+
+            PluginEntity catalogueEntry = new PluginEntity();
+            catalogueEntry.setName("Economy System"); // deliberately a DIFFERENT display string
+            catalogueEntry.setIdentifyString("com.ultikits.economy");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, catalogueEntry)).isTrue();
+        }
+
+        @Test
+        @DisplayName("#439's two named modules match via the shared 'UltiTools-' prefix normalisation")
+        void matchesTheTwoNamedModulesByPrefixNormalisation() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            UltiToolsPlugin menu = mock(UltiToolsPlugin.class);
+            when(menu.getPluginName()).thenReturn("UltiTools-Menu");
+            when(menu.getIdentifyString()).thenReturn(null);
+
+            PluginEntity economyEntry = new PluginEntity();
+            economyEntry.setName("Economy");
+
+            PluginEntity menuEntry = new PluginEntity();
+            menuEntry.setName("Menu");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, economyEntry)).isTrue();
+            assertThat(PluginInstallCommands.isSameModule(menu, menuEntry)).isTrue();
+        }
+
+        @Test
+        @DisplayName("a module whose name already exactly equals the catalogue name still matches (no regression)")
+        void exactNameMatchStillWorks() {
+            UltiToolsPlugin exact = mock(UltiToolsPlugin.class);
+            when(exact.getPluginName()).thenReturn("UltiLogin");
+            when(exact.getIdentifyString()).thenReturn(null);
+
+            PluginEntity entry = new PluginEntity();
+            entry.setName("UltiLogin");
+
+            assertThat(PluginInstallCommands.isSameModule(exact, entry)).isTrue();
+        }
+
+        @Test
+        @DisplayName("a catalogue entry for a module that is genuinely not loaded does not match")
+        void genuinelyAbsentModuleDoesNotMatch() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            PluginEntity notLoaded = new PluginEntity();
+            notLoaded.setName("SomethingElseEntirely");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, notLoaded)).isFalse();
+        }
+
+        /**
+         * The guard against over-fixing: a catalogue name that merely RESEMBLES a loaded module's
+         * -- sharing a prefix or substring -- must be rejected, not treated as the same module. A
+         * looser match that mislabels a different module as installed is a worse defect than the
+         * one #439 reports.
+         */
+        @Test
+        @DisplayName("a catalogue entry whose name resembles but is not a loaded module's is rejected")
+        void resemblingButDifferentModuleIsRejected() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            PluginEntity lookAlike = new PluginEntity();
+            lookAlike.setName("EconomyPro"); // resembles "Economy" but names a DIFFERENT module
+            lookAlike.setIdentifyString(null);
+
+            assertThat(PluginInstallCommands.isSameModule(economy, lookAlike)).isFalse();
+        }
+
+        @Test
+        @DisplayName("both sides carrying a blank identifyString never auto-matches on that alone")
+        void blankIdentifyStringOnBothSidesIsNotAMatch() {
+            UltiToolsPlugin noIdentify = mock(UltiToolsPlugin.class);
+            when(noIdentify.getPluginName()).thenReturn("UltiTools-Economy");
+            when(noIdentify.getIdentifyString()).thenReturn("");
+
+            PluginEntity blankEntry = new PluginEntity();
+            blankEntry.setName("SomethingElseEntirely");
+            blankEntry.setIdentifyString("");
+
+            assertThat(PluginInstallCommands.isSameModule(noIdentify, blankEntry)).isFalse();
+        }
+
+        @Test
+        @DisplayName("an empty catalogue page renders without error")
+        void emptyCataloguePageRendersWithoutError() {
+            if (executor == null) return;
+
+            try {
+                mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
+                        .thenReturn(new ArrayList<>());
+            } catch (Exception e) {
+                return;
+            }
+            when(mockPluginManager.getPluginList()).thenReturn(new ArrayList<>());
+
+            boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+            server.getScheduler().performTicks(20);
+
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        @DisplayName("a server with no modules loaded reports every catalogue entry as not installed")
+        void noModulesLoadedMatchesNothing() {
+            PluginEntity entry1 = new PluginEntity();
+            entry1.setName("First");
+            PluginEntity entry2 = new PluginEntity();
+            entry2.setName("Second");
+
+            // With NO loaded modules, isSameModule is never even asked about a candidate -- but
+            // the fact that pins "not installed" is that it would say no for ANY catalogue entry,
+            // which the reject/absent tests above already establish. This test additionally
+            // exercises the full command path with zero loaded modules to confirm no exception.
+            if (executor == null) return;
+            try {
+                mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
+                        .thenReturn(Arrays.asList(entry1, entry2));
+            } catch (Exception e) {
+                return;
+            }
+            when(mockPluginManager.getPluginList()).thenReturn(new ArrayList<>());
+
+            boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+            server.getScheduler().performTicks(20);
+
+            assertThat(result).isTrue();
+        }
+    }
+
+    /**
+     * Gate-2 Codex review round 1 (three P2 findings on the #439 fix, all with a concrete failure
+     * scenario):
+     * <ul>
+     *   <li>the installed branch's uninstall click command used the catalogue's display name, but
+     *       {@code PluginInstallUtils#uninstallPlugin} matches only the loaded module's own
+     *       runtime name -- for exactly the newly-recognised display-name-mismatch case this fix
+     *       exists to handle, clicking "uninstall" would silently fail;</li>
+     *   <li>two non-blank but DIFFERENT {@code identifyString} values fell through to the name/
+     *       prefix fallback instead of being treated as an authoritative "not the same module";</li>
+     *   <li>the {@code identifyString} comparison was case-sensitive, unlike {@code
+     *       PluginInstallUtils#normalizeIdentifyString}'s trim+lowercase convention used
+     *       everywhere else identify strings are compared.</li>
+     * </ul>
+     */
+    @Nested
+    @DisplayName("gate-2 Codex round 1: uninstall identity, conflicting IDs, ID normalisation")
+    class GateTwoCodexRoundOneTests {
+
+        @Test
+        @DisplayName("resolves the loaded module's own runtime name for uninstall, not the catalogue's display name")
+        void resolvesInstalledRuntimeNameNotCatalogueDisplayName() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            PluginEntity economyEntry = new PluginEntity();
+            economyEntry.setName("Economy"); // catalogue display name, deliberately NOT the runtime name
+
+            String resolved = PluginInstallCommands.resolveInstalledRuntimeName(
+                    Collections.singletonList(economy), economyEntry);
+
+            assertThat(resolved)
+                    .as("PluginInstallUtils#uninstallPlugin matches only the runtime name -- using "
+                            + "the catalogue's display name here would silently fail to uninstall")
+                    .isEqualTo("UltiTools-Economy");
+        }
+
+        @Test
+        @DisplayName("resolves null when no loaded module matches the catalogue entry")
+        void resolvesNullWhenNoMatch() {
+            PluginEntity notLoaded = new PluginEntity();
+            notLoaded.setName("SomethingElseEntirely");
+
+            String resolved = PluginInstallCommands.resolveInstalledRuntimeName(
+                    Collections.emptyList(), notLoaded);
+
+            assertThat(resolved).isNull();
+        }
+
+        @Test
+        @DisplayName("two different, non-blank identifyStrings are authoritative -- never falls through to the name/prefix fallback")
+        void conflictingIdentifyStringsAreAuthoritative() {
+            UltiToolsPlugin foo = mock(UltiToolsPlugin.class);
+            when(foo.getPluginName()).thenReturn("UltiTools-Foo");
+            when(foo.getIdentifyString()).thenReturn("author-a.foo");
+
+            PluginEntity catalogueFoo = new PluginEntity();
+            catalogueFoo.setName("Foo"); // would match via the prefix fallback if the ID check didn't short-circuit
+            catalogueFoo.setIdentifyString("author-b.foo");
+
+            assertThat(PluginInstallCommands.isSameModule(foo, catalogueFoo))
+                    .as("two present but DIFFERENT stable identifiers prove these are different "
+                            + "modules; the name/prefix heuristic must not override that")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("identifyString comparison is case-insensitive and trims whitespace, matching PluginInstallUtils' own normalisation")
+        void identifyStringComparisonIsCaseInsensitiveAndTrimmed() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn("Com.UltiKits.Economy");
+
+            PluginEntity entry = new PluginEntity();
+            entry.setName("Something Else Entirely"); // deliberately not name-matching, to prove the ID path fires
+            entry.setIdentifyString("  com.ultikits.economy  ");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, entry)).isTrue();
+        }
+    }
+
+    /**
+     * Phase 18 real-machine finding: on Paper 1.21.11 the {@code /upm list} install and uninstall
+     * buttons arrived with text and colour only, so clicking them did nothing. The command built the
+     * right click event; the send path dropped it. These tests read what the player actually received.
+     *
+     * <p>中文：真机上 {@code /upm list} 的安装/卸载按钮点击无反应；按钮带的点击事件在发送途中丢失。
+     */
+    @Nested
+    @DisplayName("/upm list buttons reach the player with their click events")
+    class ListButtonClickDeliveryTests {
+
+        @Test
+        @DisplayName("installed entry's Uninstall button runs /upm uninstall <runtime name>; missing entry's Install button runs /upm install <identify string>")
+        void listButtonsCarryRunCommandClickEvents() {
+            UltiTools instance = UltiTools.getInstance();
+            when(instance.getName()).thenReturn("UltiTools");
+            when(instance.getDescription()).thenReturn(new org.bukkit.plugin.PluginDescriptionFile(
+                    "UltiTools", "6.3.0", "com.ultikits.ultitools.UltiTools"));
+            when(instance.getLogger()).thenReturn(java.util.logging.Logger.getLogger("UltiTools"));
+            when(instance.isEnabled()).thenReturn(true);
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn("com.ultikits.economy");
+            when(mockPluginManager.getPluginList()).thenReturn(Collections.singletonList(economy));
+
+            PluginEntity installed = new PluginEntity();
+            installed.setName("UltiEconomy");
+            installed.setIdentifyString("com.ultikits.economy");
+            installed.setShortDescription("economy");
+            PluginEntity missing = new PluginEntity();
+            missing.setName("UltiMail");
+            missing.setIdentifyString("com.ultikits.mail");
+            missing.setShortDescription("mail");
+            mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
+                    .thenReturn(Arrays.asList(installed, missing));
+
+            executor.listPlugins(player, "1");
+            server.getScheduler().performTicks(2);
+
+            List<String> commands = new ArrayList<>();
+            int componentMessages = 0;
+            Component received;
+            while ((received = player.nextComponentMessage()) != null) {
+                componentMessages++;
+                collectRunCommands(received, commands);
+            }
+            assertThat(commands)
+                    .as("each button must carry the command it advertises; without it a click does nothing")
+                    .containsExactly("/upm uninstall UltiTools-Economy", "/upm install com.ultikits.mail");
+            assertThat(componentMessages)
+                    .as("the whole list is one component; a legacy-text fallback splits it per line")
+                    .isEqualTo(1);
+        }
+
+        private void collectRunCommands(Component node, List<String> out) {
+            ClickEvent click = node.clickEvent();
+            if (click != null && click.action() == ClickEvent.Action.RUN_COMMAND) {
+                out.add(click.value());
+            }
+            for (Component child : node.children()) {
+                collectRunCommands(child, out);
+            }
+        }
+    }
+
+    /**
+     * The replies {@code /upm install} gives when the API-level check refuses a module (plan 18-40),
+     * read through {@code lang/en.json} as a server with {@code language: en} reads them: each one
+     * names the module, the level where known, this framework's level and the accepted range.
+     */
+    @Nested
+    @DisplayName("API-level refusals reply with the reason, in English under language: en (18-40)")
+    class ApiLevelReplies {
+
+        private Map<String, String> english;
+
+        @BeforeEach
+        void englishCatalogue() throws IOException {
+            try (java.io.Reader reader = new java.io.InputStreamReader(
+                    PluginInstallCommandsTest.class.getResourceAsStream("/lang/en.json"),
+                    java.nio.charset.StandardCharsets.UTF_8)) {
+                english = new com.google.gson.Gson().fromJson(reader,
+                        new com.google.gson.reflect.TypeToken<Map<String, String>>() { }.getType());
+            }
+            // Read the instance first: a static-mock call inside when(...) leaves the stubbing unfinished.
+            UltiTools instance = UltiTools.getInstance();
+            org.mockito.Mockito.doAnswer(invocation -> english.getOrDefault(invocation.getArgument(0),
+                    "<missing en.json entry: " + invocation.getArgument(0) + ">"))
+                    .when(instance).i18n(anyString());
+        }
+
+        private String englishOf(String key, Object... args) {
+            assertThat(english).as("lang/en.json carries " + key).containsKey(key);
+            return String.format(english.get(key), args);
+        }
+
+        private String reply(String... args) {
+            executor.onCommand(player, mockCommand, "upm", args);
+            server.getScheduler().performOneTick();
+            return player.nextMessage();
+        }
+
+        @Test
+        @DisplayName("/upm install demo, the downloaded JAR declaring api-version 620: the English refusal naming 620, 630 and 630..630")
+        void downloadedJarRefused_repliesWithTheLevels() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED,
+                            "demo", "1.1", "620", 630, 630, 630));
+
+            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED, "demo", "1.1", "620", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm install demo, the downloaded JAR declaring no api-version: the English refusal saying it declares none")
+        void downloadedJarWithoutLevel_repliesWithTheRange() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL,
+                            "demo", "1.1", 630, 630, 630));
+
+            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL, "demo", "1.1", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm install demo, the catalogue having no compatible version: the English 'no version this server can install' line")
+        void noCompatibleVersion_repliesWithTheRange() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION,
+                            "demo", 630, 630, 630));
+
+            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, "demo", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm install demo 2.0.0, that version incompatible: the English 'that version cannot be installed' line")
+        void namedVersionIncompatible_repliesWithTheRange() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", "2.0.0")).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE,
+                            "demo", "2.0.0", 630, 630, 630));
+
+            assertThat(reply("install", "demo", "2.0.0")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, "demo", "2.0.0", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm versions demo with no compatible version: one English line naming the range, not an empty list")
+        void versionsWithNoCompatibleVersion_saysSo() {
+            if (executor == null) return;
+            mockedUltiTools.when(UltiTools::getPluginVersion).thenReturn(630);
+            mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("demo")).thenReturn(Collections.emptyList());
+
+            assertThat(reply("versions", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
+                    "demo", 630, 630, 630));
+            assertThat(player.nextMessage()).isNull();
+        }
+
+        @Test
+        @DisplayName("a failure without a reason keeps the bare failure line; a success keeps the success line")
+        void otherOutcomes_keepTheirLines() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("gone", null))
+                    .thenReturn(PluginInstallUtils.InstallResult.failed());
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null))
+                    .thenReturn(PluginInstallUtils.InstallResult.installed("demo-1.1.jar"));
+
+            assertThat(reply("install", "gone")).isEqualTo(org.bukkit.ChatColor.RED + englishOf("安装失败！"));
+            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.GREEN
+                    + englishOf("安装成功！请重启服务器！请务必删除旧版本模块！"));
+        }
     }
 }

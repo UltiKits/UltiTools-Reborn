@@ -1,8 +1,11 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -13,8 +16,10 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
@@ -29,12 +34,17 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Answers;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.interfaces.DataStore;
 
 import org.bukkit.Bukkit;
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -105,13 +115,14 @@ class PluginManagerTest {
         }
 
         @Test
-        @DisplayName("返回的列表应该是可变的")
-        void returnedListShouldBeMutable() {
+        @DisplayName("the returned list is an unmodifiable snapshot (#507)")
+        void returnedListShouldBeUnmodifiable() {
             // Act
             List<UltiToolsPlugin> list = pluginManager.getPluginList();
 
-            // Assert - 列表应该是可操作的（虽然不推荐直接修改）
-            assertThat(list).isInstanceOf(ArrayList.class);
+            // Assert - #507: callers read the loaded modules; only PluginManager changes them
+            assertThatThrownBy(() -> list.add(mock(UltiToolsPlugin.class)))
+                    .isInstanceOf(UnsupportedOperationException.class);
         }
     }
 
@@ -142,171 +153,11 @@ class PluginManagerTest {
         }
     }
 
-    @Nested
-    @DisplayName("validateJarFile 测试")
-    class ValidateJarFileTests {
-
-        @Test
-        @DisplayName("null 文件应该返回 false")
-        void nullFileShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, (File) null);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("不存在的文件应该返回 false")
-        void nonExistentFileShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File nonExistent = new File(tempDir, "nonexistent.jar");
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, nonExistent);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("非 jar 扩展名应该返回 false")
-        void nonJarExtensionShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File txtFile = new File(tempDir, "test.txt");
-            txtFile.createNewFile();
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, txtFile);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("目录应该返回 false")
-        void directoryShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File dir = new File(tempDir, "testdir");
-            dir.mkdirs();
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, dir);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-    }
-
-
-    @Nested
-    @DisplayName("validateConstructorArgs 测试")
-    class ValidateConstructorArgsTests {
-
-        @Test
-        @DisplayName("null 参数数组应该返回 true")
-        void nullArgsShouldReturnTrue() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateConstructorArgs", Object[].class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, (Object) null);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("空参数数组应该返回 true")
-        void emptyArgsShouldReturnTrue() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateConstructorArgs", Object[].class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, (Object) new Object[0]);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("超过 10 个参数应该返回 false")
-        void tooManyArgsShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateConstructorArgs", Object[].class);
-            method.setAccessible(true);
-            Object[] args = new Object[11];
-            for (int i = 0; i < 11; i++) {
-                args[i] = "arg" + i;
-            }
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, (Object) args);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("包含 null 元素的参数应该被接受")
-        void argsWithNullElementsShouldBeAccepted() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateConstructorArgs", Object[].class);
-            method.setAccessible(true);
-            Object[] args = new Object[]{"valid", null, "another"};
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, (Object) args);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-    }
-
-    @Nested
-    @DisplayName("isSafeParameterType 测试")
-    class IsSafeParameterTypeTests {
-
-        @Test
-        @DisplayName("String 类型应该是安全的")
-        void stringShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, String.class);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("Integer 类型应该是安全的")
-        void integerShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, Integer.class);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-    }
+    // validateJarFile's own reflective test coverage moved with the implementation
+    // (04-03, WIRE-11): PluginManager.validateJarFile(File) was deleted and its call
+    // site now calls SecurityPolicy.isValidModuleJar(File) directly. See
+    // SecurityPolicyJarValidationTest for the equivalent (and superset) coverage:
+    // null/non-existent/directory/non-.jar-suffix/unreadable-archive/entry-count-boundary.
 
     @Nested
     @DisplayName("pluginClassList 字段测试")
@@ -348,12 +199,131 @@ class PluginManagerTest {
     @DisplayName("unregister 测试")
     class UnregisterTests {
 
+        /**
+         * unregister's own path never calls {@code getListenerManager()}/{@code getEventBus()}
+         * with anything but a real instance in production -- the shared top-level
+         * {@link #setUp()} only stubs {@code getLogger()}, so unregister's unconditional
+         * {@code UltiTools.getInstance().getListenerManager().unregisterAll(plugin)} call would
+         * NPE on a bare mock. Re-mocking here (mirroring {@code CompatibilityGateOrderingTests}'s
+         * own {@code setUpGate()}) supplies both.
+         */
+        @BeforeEach
+        void setUpUnregister() {
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getListenerManager()).thenReturn(new ListenerManager());
+                when(ultiTools.getEventBus()).thenReturn(new EventBus());
+            });
+        }
+
         @Test
         @DisplayName("应该能够调用 unregister 方法")
         void shouldBeAbleToCallUnregister() throws Exception {
             // 由于需要完整的插件实例，这里只测试方法存在
             Method method = PluginManager.class.getDeclaredMethod("unregister", UltiToolsPlugin.class);
             assertThat(method).isNotNull();
+        }
+
+        @Test
+        @DisplayName("从未注册过的实例调用 unregister 不应抛出异常（SILENT-19，#338）")
+        void unregisterNeverRegisteredInstance_doesNotThrow() {
+            // getContext() is unstubbed -> null, mirroring a hand-constructed UltiToolsPlugin
+            // instance that was never registered through PluginManager at all.
+            UltiToolsPlugin neverRegistered = mock(UltiToolsPlugin.class);
+            when(neverRegistered.getPluginName()).thenReturn("NeverRegistered");
+
+            assertDoesNotThrow(() -> pluginManager.unregister(neverRegistered));
+
+            // unregisterSelf() does not dereference the context, so it still runs -- a
+            // never-registered instance still gets its own teardown hook.
+            verify(neverRegistered).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("已注册实例调用 unregister 仍会关闭它的 context（正对照，防止 unregister 变成空操作）")
+        void unregisterRegisteredInstance_stillClosesContext() {
+            UltiToolsPlugin registered = mock(UltiToolsPlugin.class);
+            when(registered.getPluginName()).thenReturn("Registered");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(registered.getContext()).thenReturn(context);
+
+            assertDoesNotThrow(() -> pluginManager.unregister(registered));
+
+            verify(context).close();
+            verify(registered).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("unregisterSelf() 抛出异常时仍会关闭 context（Codex review on #457: \"Close the module context when its unload hook throws\"）")
+        void unregisterSelfThrowing_stillClosesContext() {
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("Throwing");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(plugin.getContext()).thenReturn(context);
+            doThrow(new RuntimeException("onUnregister boom")).when(plugin).unregisterSelf();
+
+            assertThrows(RuntimeException.class, () -> pluginManager.unregister(plugin));
+
+            verify(context).close();
+        }
+
+        @Test
+        @DisplayName("taskManager.cancelAll() 抛出异常时仍会运行 unregisterSelf() 并关闭 context（Codex review on #457: \"Preserve mandatory cleanup before swallowing unregister failures\"）")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // injecting a mock TaskManager
+        // mirrors the reflection idiom already used throughout this package's own field tests
+        void earlyStepThrowing_stillRunsUnregisterSelfAndClosesContext() throws Exception {
+            TaskManager mockTaskManager = mock(TaskManager.class);
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("EarlyStepThrows");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(plugin.getContext()).thenReturn(context);
+            doThrow(new Error("BukkitTask.cancel() boom")).when(mockTaskManager).cancelAll(plugin);
+
+            Field taskManagerField = PluginManager.class.getDeclaredField("taskManager");
+            taskManagerField.setAccessible(true);
+            taskManagerField.set(pluginManager, mockTaskManager);
+
+            // An Error from a step BEFORE unregisterSelf() must not skip this module's own
+            // mandatory cleanup (its commands/listeners via unregisterSelf(), and its context) --
+            // otherwise the module's handlers and container stay live but PluginManager.close()'s
+            // own try/catch (WR-01) would still clear pluginList, losing track of them entirely.
+            // Each registry-cleanup step is isolated and logged, not rethrown (Codex review on
+            // #457, round 4: "Run all registry cleanup after an earlier failure") -- only
+            // unregisterSelf()'s own exception still propagates, matching WR-01's design ("a
+            // throwing hook is surfaced to the caller, not swallowed").
+            assertDoesNotThrow(() -> pluginManager.unregister(plugin));
+
+            verify(plugin).unregisterSelf();
+            verify(context).close();
+        }
+
+        @Test
+        @DisplayName("一个早期清理步骤抛出异常不会跳过后面的其它清理步骤（Codex review on #457: \"Run all registry cleanup after an earlier failure\"）")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // injecting a mock TaskManager
+        // mirrors the reflection idiom already used throughout this package's own field tests
+        void earlyStepThrowing_stillRunsLaterRegistryCleanupSteps() throws Exception {
+            EventBus mockEventBus = mock(EventBus.class);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getListenerManager()).thenReturn(new ListenerManager());
+                when(ultiTools.getEventBus()).thenReturn(mockEventBus);
+            });
+
+            TaskManager mockTaskManager = mock(TaskManager.class);
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("EarlyStepThrows2");
+            doThrow(new Error("BukkitTask.cancel() boom")).when(mockTaskManager).cancelAll(plugin);
+
+            Field taskManagerField = PluginManager.class.getDeclaredField("taskManager");
+            taskManagerField.setAccessible(true);
+            taskManagerField.set(pluginManager, mockTaskManager);
+
+            assertDoesNotThrow(() -> pluginManager.unregister(plugin));
+
+            // EventBus.unregisterAll is a LATER registry-cleanup step than taskManager.cancelAll
+            // -- it must still run even though the earlier step threw.
+            verify(mockEventBus).unregisterAll(plugin.getPluginName());
+            verify(plugin).unregisterSelf();
         }
     }
 
@@ -433,180 +403,97 @@ class PluginManagerTest {
     }
 
     @Nested
-    @DisplayName("异常处理测试")
-    class ExceptionHandlingTests {
+    @DisplayName("拒绝日志路径应展示最内层 UltiToolsException 的消息 (WR-02)")
+    class RefusalLoggingTests {
 
-        @Test
-        @DisplayName("isSafeParameterType 处理 null 应该返回 false")
-        void isSafeParameterTypeShouldHandleNull() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
+        private final List<LogRecord> bukkitLogs = new ArrayList<>();
+        private Handler captureHandler;
 
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, (Class<?>) null);
+        @BeforeEach
+        void captureBukkitLog() {
+            bukkitLogs.clear();
+            captureHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    bukkitLogs.add(record);
+                }
 
-            // Assert
-            assertThat(result).isFalse();
-        }
-    }
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
 
-    @Nested
-    @DisplayName("原始类型参数测试")
-    class PrimitiveTypeParameterTests {
-
-        @Test
-        @DisplayName("int 原始类型应该是安全的")
-        void intPrimitiveShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, int.class);
-
-            // Assert
-            assertThat(result).isTrue();
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            Bukkit.getLogger().addHandler(captureHandler);
         }
 
-        @Test
-        @DisplayName("boolean 原始类型应该是安全的")
-        void booleanPrimitiveShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
+        @AfterEach
+        void releaseBukkitLog() {
+            Bukkit.getLogger().removeHandler(captureHandler);
+        }
 
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, boolean.class);
-
-            // Assert
-            assertThat(result).isTrue();
+        private LogRecord lastWarning() {
+            for (int i = bukkitLogs.size() - 1; i >= 0; i--) {
+                if (Level.WARNING.equals(bukkitLogs.get(i).getLevel())) {
+                    return bukkitLogs.get(i);
+                }
+            }
+            return null;
         }
 
         @Test
-        @DisplayName("double 原始类型应该是安全的")
-        void doublePrimitiveShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
+        @DisplayName("应从三层异常链中提取字段/值/约束，而不是外层包装消息")
+        void shouldSurfaceInnermostMessageFromThreeDeepChain() {
+            ConfigurationException innermost = ConfigurationException.validationFailed(
+                    "TestModule", "range.yml",
+                    Collections.singletonList("field 'interval' value 9999 is out of range [1, 1200]"));
+            InvocationTargetException middle = new InvocationTargetException(innermost);
+            IllegalStateException outer =
+                    new IllegalStateException("Failed to initialize plugin: com.example.MyPlugin", middle);
 
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, double.class);
+            // Package-private, called directly - PluginManagerTest lives in the same package, so
+            // this needs no reflection and no setAccessible(true).
+            PluginManager.logPluginInitializationFailure("com.example.MyPlugin", outer);
 
-            // Assert
-            assertThat(result).isTrue();
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage())
+                    .contains("interval")
+                    .contains("9999")
+                    .contains("1200");
+            assertThat(record.getThrown()).isSameAs(outer);
         }
 
         @Test
-        @DisplayName("Long 包装类型应该是安全的")
-        void longWrapperShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
+        @DisplayName("异常链中没有 UltiToolsException 时应回退到外层异常自身的消息")
+        void shouldFallBackWhenNoUltiToolsExceptionInChain() {
+            RuntimeException outer = new RuntimeException("plain failure", new IllegalArgumentException("bad arg"));
 
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, Long.class);
+            PluginManager.logPluginInitializationFailure("com.example.MyPlugin", outer);
 
-            // Assert
-            assertThat(result).isTrue();
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage()).contains("plain failure");
+            assertThat(record.getThrown()).isSameAs(outer);
         }
 
         @Test
-        @DisplayName("Boolean 包装类型应该是安全的")
-        void booleanWrapperShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
+        @Timeout(value = 5, unit = TimeUnit.SECONDS)
+        @DisplayName("自引用的异常链应终止而不是卡死")
+        void shouldTerminateOnCyclicCauseChain() {
+            RuntimeException first = new RuntimeException("first");
+            RuntimeException second = new RuntimeException("second", first);
+            first.initCause(second); // deliberately cyclic: first -> second -> first
 
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, Boolean.class);
+            assertDoesNotThrow(() -> PluginManager.logPluginInitializationFailure("com.example.MyPlugin", first));
 
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("Double 包装类型应该是安全的")
-        void doubleWrapperShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, Double.class);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("float 原始类型应该是安全的")
-        void floatPrimitiveShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, float.class);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("long 原始类型应该是安全的")
-        void longPrimitiveShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, long.class);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("byte 原始类型应该是安全的")
-        void bytePrimitiveShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, byte.class);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("short 原始类型应该是安全的")
-        void shortPrimitiveShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, short.class);
-
-            // Assert
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("char 原始类型应该是安全的")
-        void charPrimitiveShouldBeSafe() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("isSafeParameterType", Class.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, char.class);
-
-            // Assert
-            assertThat(result).isTrue();
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage()).isNotBlank();
         }
     }
 
@@ -667,38 +554,18 @@ class PluginManagerTest {
     }
 
     @Nested
-    @DisplayName("register 带构造参数测试")
-    class RegisterWithArgsTests {
-
-        @Test
-        @DisplayName("带参数的 register 方法应该存在")
-        void registerWithArgsMethodShouldExist() throws Exception {
-            // 检查是否有多个参数的 register 方法
-            Method[] methods = PluginManager.class.getDeclaredMethods();
-            boolean found = false;
-            for (Method m : methods) {
-                if (m.getName().equals("register") && m.getParameterCount() > 1) {
-                    found = true;
-                    break;
-                }
-            }
-            assertThat(found).isTrue();
-        }
-    }
-
-    @Nested
     @DisplayName("pluginList 测试")
     class PluginListTests {
 
         @Test
-        @DisplayName("getPluginList 应该返回相同列表引用")
-        void getPluginListShouldReturnSameReference() {
+        @DisplayName("each getPluginList call returns an independent snapshot (#507)")
+        void getPluginListShouldReturnIndependentSnapshots() {
             // Act
             List<UltiToolsPlugin> list1 = pluginManager.getPluginList();
             List<UltiToolsPlugin> list2 = pluginManager.getPluginList();
 
-            // Assert
-            assertThat(list1).isSameAs(list2);
+            // Assert - #507: a snapshot, never the live internal list
+            assertThat(list1).isNotSameAs(list2).isEqualTo(list2);
         }
 
         @Test
@@ -774,6 +641,24 @@ class PluginManagerTest {
             lenient().when(dependenceManagers.getContext()).thenReturn(new SimpleContainer());
             lenient().when(ultiTools.getDependenceManagers()).thenReturn(dependenceManagers);
             lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+
+            // wireAop (02-01) now resolves a DataSource through UltiTools.getInstance().getDataStore()
+            // for the @Transactional advisor. This suite is about the compatibility gate, not
+            // persistence, so CALLS_REAL_METHODS lets the interface's own default
+            // getDataSource(DataScope) run and throw UnsupportedOperationException - the same
+            // graceful "declare unavailable" fallback wireAop already has for a backend that
+            // doesn't support one, rather than letting a bare mock's null answer surface as an NPE.
+            DataStore dataStore = mock(DataStore.class, Answers.CALLS_REAL_METHODS);
+            lenient().when(ultiTools.getDataStore()).thenReturn(dataStore);
+
+            // register(UltiToolsPlugin) now assembles through the shared assemblePluginContainer
+            // method (WIRE-05, 04-07), which reads UltiTools.getInstance().getConfigManager() for
+            // config-entity beans -- a bare mock's unstubbed getConfigManager() returns null,
+            // which would NPE on .getAllConfigEntities(plugin). None of these tests care about
+            // config entities, so an empty ConfigManager mock (unstubbed
+            // getAllConfigEntities(...) returns null, which the production code already
+            // null-checks) is enough.
+            lenient().when(ultiTools.getConfigManager()).thenReturn(mock(ConfigManager.class));
 
             // getPluginVersion() 走 getEnv() → getInstance().getTextResource("env.yml")，
             // 而那个方法在 JavaPlugin 里是 protected，测试包里打不了桩，所以直接桩静态方法。
@@ -858,7 +743,28 @@ class PluginManagerTest {
 
             // Assert
             assertThat(result).isTrue();
-            verify(plugin).setContext(any());
+            ArgumentCaptor<SimpleContainer> contextCaptor = ArgumentCaptor.forClass(SimpleContainer.class);
+            verify(plugin).setContext(contextCaptor.capture());
+            // Pins call site 1 (register(UltiToolsPlugin)): if PluginManager.wireAop(pluginContext)
+            // is ever removed from that path, this container comes back with no resolver attached
+            // and @ExceptionCatch/@Transactional silently stop doing anything again. See issue #190.
+            assertThat(contextCaptor.getValue().getAopProxyResolver()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("成功注册的模块应该能通过 getPluginList() 取回（#338 第二个断言不成立）")
+        void successfullyRegisteredModuleShouldBeRetrievableViaGetPluginList() throws Exception {
+            // Arrange
+            UltiToolsPlugin plugin = modules("RetrievableModule", "com.example.RetrievableModule",
+                    "1.0.0", CURRENT_API_VERSION);
+            when(plugin.registerSelf()).thenReturn(true);
+
+            // Act
+            boolean result = pluginManager.register(plugin);
+
+            // Assert
+            assertThat(result).isTrue();
+            assertThat(pluginManager.getPluginList()).contains(plugin);
         }
 
         @Test
@@ -868,7 +774,7 @@ class PluginManagerTest {
             UltiToolsPlugin loaded = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
             UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
             when(loaded.isNewerVersionThan(older)).thenReturn(true);
-            pluginManager.getPluginList().add(loaded);
+            PluginListSeeding.add(pluginManager, loaded);
 
             // Act
             boolean result = pluginManager.register(older);
@@ -887,7 +793,7 @@ class PluginManagerTest {
             UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
             when(newer.isNewerVersionThan(older)).thenReturn(true);
             when(newer.registerSelf()).thenReturn(true);
-            pluginManager.getPluginList().add(older);
+            PluginListSeeding.add(pluginManager, older);
 
             // Act
             boolean result = pluginManager.register(newer);
@@ -909,7 +815,7 @@ class PluginManagerTest {
             UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
             when(newer.isNewerVersionThan(older)).thenReturn(true);
             when(newer.registerSelf()).thenReturn(false);
-            pluginManager.getPluginList().add(older);
+            PluginListSeeding.add(pluginManager, older);
 
             boolean result = pluginManager.register(newer);
 
@@ -924,7 +830,7 @@ class PluginManagerTest {
             UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
             when(newer.isNewerVersionThan(older)).thenReturn(true);
             when(newer.registerSelf()).thenThrow(new java.io.IOException("激活失败"));
-            pluginManager.getPluginList().add(older);
+            PluginListSeeding.add(pluginManager, older);
 
             boolean result = pluginManager.register(newer);
 
@@ -939,7 +845,7 @@ class PluginManagerTest {
             UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
             UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION + 1);
             lenient().when(newer.isNewerVersionThan(older)).thenReturn(true);
-            pluginManager.getPluginList().add(older);
+            PluginListSeeding.add(pluginManager, older);
 
             // Act
             boolean result = pluginManager.register(newer);

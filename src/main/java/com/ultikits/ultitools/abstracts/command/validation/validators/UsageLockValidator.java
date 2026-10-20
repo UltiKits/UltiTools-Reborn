@@ -3,8 +3,13 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.annotations.PlayerCache;
+import com.ultikits.ultitools.annotations.PlayerCacheSaver;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -16,107 +21,228 @@ import java.util.concurrent.ConcurrentHashMap;
  * Validates and manages command usage locks to prevent concurrent execution.
  * Supports sender-specific and server-wide locks.
  * <p>
- * 验证和管理命令使用锁以防止并发执行。
- * 支持发送者特定锁和服务器范围锁。
+ * <b>Acquire-then-execute (D-02, GEN-09, @since 6.3.0):</b> acquisition is no longer a
+ * separate step called by field from {@code BaseCommandExecutor.executeCommand}. It happens
+ * inside {@link #validate(CommandContext)} itself -- "acquire-as-you-validate" -- so that on
+ * the synchronous dispatch path there is no scheduling point between deciding the lock is free
+ * and taking it. A failed acquisition surfaces as an ordinary {@link ValidationResult#failure}
+ * through the normal validation-rejection path; the mapped method is never invoked. Release
+ * happens in {@link #onComplete(CommandContext, boolean)}, driven by the validator chain that
+ * actually ran this validator (see {@link CommandValidator#onComplete(CommandContext, boolean)}) --
+ * never called twice, and never called for an invocation whose acquisition failed -- or, when the
+ * dispatch is refused after this validator acquired the lock but before the method runs, in
+ * {@link #onRefused(CommandContext)} (#568).
+ * <p>
+ * <b>Player-cache lifecycle (case 48, @since 6.3.0):</b> an instance registers itself with {@link
+ * PlayerCacheManager} at its first {@link #validate(CommandContext)}, so quits and the periodic
+ * sweep reach its per-player state. It is released when the last executor that has dispatched
+ * through it unloads -- {@code BaseCommandExecutor}'s teardown decides that and calls {@link
+ * #releasePlayerCacheRegistration()} -- and it registers again on its next use, so a chain reused
+ * after a release keeps being swept.
  *
  * @author wisdomme
  * @version 2.0.0
  * @since 6.2.0
  */
-public class UsageLockValidator implements CommandValidator {
-    
+public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
+
     private static final int ORDER = 250;
-    
+
     /**
      * Locks per sender: player UUID -> set of locked method keys
+     * <p>
+     * {@code saveBeforeRemove = true} so {@link #savePlayerData(UUID)} -- which delegates to
+     * the pre-existing {@link #clearPlayerLocks(UUID)}, clearing BOTH this field and {@link
+     * #serverLocks} in one call -- fires exactly once per quit (GEN-08, D-03). {@link
+     * #serverLocks} deliberately does NOT also carry {@code saveBeforeRemove = true}: doing so
+     * would fire {@link #savePlayerData(UUID)} a second, redundant time per quit.
      */
+    @PlayerCache(saveBeforeRemove = true)
     private final Map<UUID, Set<String>> senderLocks = new ConcurrentHashMap<>();
-    
+
     /**
      * Server-wide locks: method key -> locking player UUID
      */
+    @PlayerCache
     private final Map<String, UUID> serverLocks = new ConcurrentHashMap<>();
-    
+
+    /**
+     * True once this instance has registered {@link #senderLocks}/{@link #serverLocks} with the
+     * live {@link PlayerCacheManager} for quit-based sweeping (GEN-08, D-03). Set lazily from
+     * {@link #validate(CommandContext)} rather than the constructor, mirroring {@code
+     * CooldownValidator}'s identical field of the same name and rationale: a bare {@code new
+     * UsageLockValidator()} must never attempt contact with a core plugin that may not exist
+     * yet, and a failed attempt is retried on the next call rather than permanently abandoned.
+     * <p>
+     * Cleared by {@link #releasePlayerCacheRegistration()} when the last executor that has
+     * dispatched through this instance unloads, so a reused instance registers again on its next
+     * {@link #validate(CommandContext)} instead of staying unswept (case 48).
+     */
+    private volatile boolean playerCacheRegistered = false;
+
+    /**
+     * Validates -- and, per the acquire-then-execute contract on this class, ATTEMPTS TO
+     * ACQUIRE -- the lock for this invocation. Delegates entirely to {@link #acquireLock(CommandContext)}:
+     * a successful acquisition is a successful validation; a failed acquisition is reported as
+     * an ordinary validation failure carrying the scope-appropriate i18n key.
+     *
+     * @param context the command context
+     * @return the validation result
+     */
     @Override
     public ValidationResult validate(CommandContext context) {
+        ensurePlayerCacheRegistered();
+
+        if (acquireLock(context)) {
+            return ValidationResult.success();
+        }
+
+        // acquireLock() only returns false when the method (or its declaring class, per D-01
+        // follow-up most-derived-wins resolution) carries @UsageLimit with a SENDER or ALL
+        // scope, so this resolves non-null here.
         Method method = context.getMatchedMethod();
-        if (method == null || !method.isAnnotationPresent(UsageLimit.class)) {
-            return ValidationResult.success();
-        }
-        
-        UsageLimit limit = method.getAnnotation(UsageLimit.class);
-        String methodKey = method.toString();
-        
-        // Check if sender must be a player for this limit
-        if (!context.isPlayer() && !limit.ContainConsole()) {
-            return ValidationResult.success();
-        }
-        
+        UsageLimit limit = resolveLimit(method, context.getExecutorClass());
         if (limit.value() == UsageLimit.LimitType.SENDER) {
-            return validateSenderLock(context, methodKey);
-        } else if (limit.value() == UsageLimit.LimitType.ALL) {
-            return validateServerLock(context, methodKey);
-        }
-        
-        return ValidationResult.success();
-    }
-    
-    private ValidationResult validateSenderLock(CommandContext context, String methodKey) {
-        if (!context.isPlayer()) {
-            return ValidationResult.success();
-        }
-        
-        UUID playerId = context.getPlayer().getUniqueId();
-        Set<String> locks = senderLocks.get(playerId);
-        
-        if (locks != null && locks.contains(methodKey)) {
             return ValidationResult.failure(
                     ChatColor.RED + UltiTools.getInstance().i18n("请先等待上一条命令执行完毕！"),
                     "command.error.sender_locked"
             );
         }
-        
-        return ValidationResult.success();
+        return ValidationResult.failure(
+                ChatColor.RED + UltiTools.getInstance().i18n("请先等待其他玩家发送的命令执行完毕！"),
+                "command.error.server_locked"
+        );
     }
-    
-    private ValidationResult validateServerLock(CommandContext context, String methodKey) {
-        if (serverLocks.containsKey(methodKey)) {
-            return ValidationResult.failure(
-                    ChatColor.RED + UltiTools.getInstance().i18n("请先等待其他玩家发送的命令执行完毕！"),
-                    "command.error.server_locked"
-            );
+
+    /**
+     * Post-action hook that releases the lock acquired by {@link #validate(CommandContext)} for
+     * this invocation. Delegates to {@link #releaseLock(CommandContext)} and is invoked only by
+     * a chain that actually ran this validator for the current dispatch -- see
+     * {@link CommandValidator#onComplete(CommandContext, boolean)}. An invocation whose
+     * acquisition failed never reaches this hook (it is absent from the chain's
+     * passed-validator list), so there is nothing here to release on that path.
+     *
+     * @param context          the command context
+     * @param commandSucceeded ignored -- the lock releases whether the mapped method
+     *                         succeeded or threw
+     * @since 6.3.0
+     */
+    @Override
+    public void onComplete(CommandContext context, boolean commandSucceeded) {
+        releaseLock(context);
+    }
+
+    /**
+     * Releases the lock this validator acquired for a dispatch that was then refused before the
+     * mapped method ran -- by a later validator (such as the cooldown, which runs after this one),
+     * the argument-count check, or parameter parsing. Before 6.3.0 nothing released it on those
+     * paths, and the lock stayed held until the player quit (#568).
+     *
+     * @param context the command context
+     * @since 6.3.0
+     */
+    @Override
+    public void onRefused(CommandContext context) {
+        releaseLock(context);
+    }
+
+    /**
+     * Attempts lazy first-use registration of this instance with the live {@link
+     * PlayerCacheManager} singleton. Safe to call unconditionally on every {@link
+     * #validate(CommandContext)} invocation: a no-op once {@link #playerCacheRegistered} is
+     * true, and a cheap, safely-no-op-on-failure retry otherwise (see that field's javadoc).
+     */
+    private void ensurePlayerCacheRegistered() {
+        if (playerCacheRegistered) {
+            return;
         }
-        
-        return ValidationResult.success();
+        UltiTools instance = UltiTools.getInstance();
+        // Checking getPluginManager() too, not just getInstance(), matters: a mock/test double
+        // that stands up UltiTools.getInstance() without yet wiring getPluginManager() would
+        // otherwise latch this flag true on a no-op attempt, permanently skipping the retry that
+        // would have succeeded once the chain was genuinely live.
+        if (instance == null || instance.getPluginManager() == null) {
+            return;
+        }
+        PlayerCacheManager.tryRegister(this);
+        playerCacheRegistered = true;
     }
-    
+
+    /**
+     * Stops {@link PlayerCacheManager} tracking of this instance and re-arms its lazy
+     * registration, so the next {@link #validate(CommandContext)} registers it again (case 48).
+     * <p>
+     * Called by {@code BaseCommandExecutor}'s unload teardown once no other loaded executor that
+     * has dispatched still uses this validator. Not intended for module code: releasing a
+     * validator that a loaded executor still uses stops the quit sweep from reaching it until its
+     * next dispatch; the locks it holds are left as they are ({@link #clearAllLocks()} is the
+     * teardown's separate step).
+     *
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final void releasePlayerCacheRegistration() {
+        PlayerCacheManager.tryUnregister(this);
+        playerCacheRegistered = false;
+    }
+
+    /**
+     * {@link PlayerCacheSaver} hook: fired by {@link PlayerCacheManager#onPlayerQuit(UUID)}
+     * ("the quit sweep") for the quitting player -- before the generic {@code @PlayerCache}
+     * field sweep removes the (by then already-empty) {@link #senderLocks}/{@link #serverLocks}
+     * entries. Delegates to the pre-existing {@link #clearPlayerLocks(UUID)} rather than
+     * re-deriving its predicate -- the SAME predicate {@code PlayerCacheManager}'s own
+     * value-side sweep branch was built from -- giving that previously zero-caller method a
+     * real, quit-path-reached production call site (GEN-08). Only {@link #senderLocks} carries
+     * {@code saveBeforeRemove = true}, so this fires exactly once per quit despite clearing both
+     * maps.
+     *
+     * @param playerId the UUID of the player quitting
+     * @since 6.3.0
+     */
+    @Override
+    public void savePlayerData(UUID playerId) {
+        clearPlayerLocks(playerId);
+    }
+
     /**
      * Acquires a lock for command execution.
-     * Should be called before executing the command.
-     * 获取命令执行的锁。
-     * 应在执行命令之前调用。
+     * Should be called before executing the command. As of 6.3.0 this is also the method
+     * {@link #validate(CommandContext)} itself calls -- see the class-level acquire-then-execute
+     * note.
      *
      * @param context the command context
      * @return true if lock was acquired, false if already locked
      */
     public boolean acquireLock(CommandContext context) {
         Method method = context.getMatchedMethod();
-        if (method == null || !method.isAnnotationPresent(UsageLimit.class)) {
+        UsageLimit limit = resolveLimit(method, context.getExecutorClass());
+        if (limit == null) {
             return true;
         }
-        
-        UsageLimit limit = method.getAnnotation(UsageLimit.class);
+
         String methodKey = method.toString();
         
         if (!context.isPlayer() && !limit.ContainConsole()) {
             return true;
         }
         
-        if (limit.value() == UsageLimit.LimitType.SENDER && context.isPlayer()) {
+        if (limit.value() == UsageLimit.LimitType.SENDER) {
+            if (!context.isPlayer()) {
+                // senderLocks is keyed by player UUID -- a non-player sender permitted through
+                // by ContainConsole() can never OWN a SENDER-scope lock, so it acquires nothing.
+                return true;
+            }
             UUID playerId = context.getPlayer().getUniqueId();
             return senderLocks.computeIfAbsent(playerId, k -> ConcurrentHashMap.newKeySet())
                     .add(methodKey);
-        } else if (limit.value() == UsageLimit.LimitType.ALL && context.isPlayer()) {
+        } else if (limit.value() == UsageLimit.LimitType.ALL) {
+            if (!context.isPlayer()) {
+                // serverLocks' value is a player UUID -- a non-player sender permitted through
+                // by ContainConsole() can never OWN an ALL-scope lock either, but it is still
+                // gated by whatever player currently holds it.
+                return !serverLocks.containsKey(methodKey);
+            }
             return serverLocks.putIfAbsent(methodKey, context.getPlayer().getUniqueId()) == null;
         }
         
@@ -125,19 +251,19 @@ public class UsageLockValidator implements CommandValidator {
     
     /**
      * Releases a lock after command execution.
-     * Should be called after command execution completes (success or failure).
-     * 在命令执行后释放锁。
-     * 应在命令执行完成（成功或失败）后调用。
+     * Should be called after command execution completes (success or failure). As of 6.3.0 this
+     * is also the method {@link #onComplete(CommandContext, boolean)} calls -- see the
+     * class-level acquire-then-execute note.
      *
      * @param context the command context
      */
     public void releaseLock(CommandContext context) {
         Method method = context.getMatchedMethod();
-        if (method == null || !method.isAnnotationPresent(UsageLimit.class)) {
+        UsageLimit limit = resolveLimit(method, context.getExecutorClass());
+        if (limit == null) {
             return;
         }
-        
-        UsageLimit limit = method.getAnnotation(UsageLimit.class);
+
         String methodKey = method.toString();
         
         if (limit.value() == UsageLimit.LimitType.SENDER && context.isPlayer()) {
@@ -149,16 +275,44 @@ public class UsageLockValidator implements CommandValidator {
                     senderLocks.remove(playerId);
                 }
             }
-        } else if (limit.value() == UsageLimit.LimitType.ALL) {
-            serverLocks.remove(methodKey);
+        } else if (limit.value() == UsageLimit.LimitType.ALL && context.isPlayer()) {
+            // Ownership-gated, atomic conditional removal (Pitfall 5 / T-05-03): only the
+            // sender recorded as the holder at acquisition time may release an ALL-scope lock.
+            // A prior build removed unconditionally here, letting any sender free any other
+            // sender's server-wide lock.
+            serverLocks.remove(methodKey, context.getPlayer().getUniqueId());
         }
     }
     
     /**
+     * Resolves the effective {@code @UsageLimit} for {@code method}: the method's own
+     * declaration, falling back to a class-level one on the CONCRETE executor class dispatching
+     * this command, falling back to a class-level one on the method's declaring class --
+     * most-derived-wins, via {@link ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class,
+     * Class)}. This is the SAME resolution {@code PluginManager}'s load-time refusal treats as
+     * satisfying the contract (SILENT-11 / D-01 follow-up, WR-02 / 05-REVIEW.md fix): a
+     * class-level {@code @UsageLimit} that passes the load-time check -- whether declared on a
+     * shared abstract base or on the concrete executor class itself -- now actually locks every
+     * inherited mapping that does not declare its own.
+     *
+     * @param method        the matched command mapping method, or {@code null}
+     * @param executorClass the concrete executor class dispatching this command (WR-02,
+     *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
+     *                      pre-WR-02, declaring-class-only resolution in that case
+     * @return the resolved annotation, or {@code null} when {@code method} is {@code null} or
+     *         neither the method, {@code executorClass}, nor its declaring class carries one
+     * @since 6.3.0
+     */
+    private static UsageLimit resolveLimit(Method method, Class<?> executorClass) {
+        if (method == null) {
+            return null;
+        }
+        return ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, UsageLimit.class);
+    }
+
+    /**
      * Clears all locks for a player.
      * Useful when a player disconnects.
-     * 清除玩家的所有锁。
-     * 当玩家断开连接时很有用。
      *
      * @param playerId the player's UUID
      */
@@ -169,7 +323,6 @@ public class UsageLockValidator implements CommandValidator {
     
     /**
      * Clears all locks.
-     * 清除所有锁。
      */
     public void clearAllLocks() {
         senderLocks.clear();
@@ -178,7 +331,6 @@ public class UsageLockValidator implements CommandValidator {
     
     /**
      * Checks if a specific method is locked for a player.
-     * 检查特定方法是否对玩家锁定。
      *
      * @param playerId  the player's UUID
      * @param methodKey the method key

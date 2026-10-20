@@ -1,0 +1,4 @@
+messages:
+  welcome: '&eWelcome to the server, {player}! Please read the rules at /rules before you start building anything here.'
+  motd: This is a long plain line that the operator wrote by hand on one single line and it goes well past eighty columns.
+  quoted: "A double quoted message that is also much longer than eighty characters, written on one line by hand."

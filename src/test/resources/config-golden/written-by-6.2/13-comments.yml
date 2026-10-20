@@ -1,0 +1,12 @@
+general:
+  # Server language
+  language: en
+  # Line one of the comment
+  # Line two of the comment
+  motd: Hello
+  no-comment: 1
+storage:
+  # json, sqlite or mysql
+  type: sqlite
+# A top-level key
+top-level: value

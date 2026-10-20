@@ -359,6 +359,7 @@ class FileUtilsTest {
 
         @Test
         @DisplayName("私有构造函数应该抛出 UnsupportedOperationException")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void privateConstructorShouldThrowException() throws Exception {
             Constructor<FileUtils> constructor = FileUtils.class.getDeclaredConstructor();
             constructor.setAccessible(true);

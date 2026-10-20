@@ -1,0 +1,8 @@
+texts:
+  literal: |
+    line one
+    line two
+  stripped: |-
+    first
+    second
+  after: done

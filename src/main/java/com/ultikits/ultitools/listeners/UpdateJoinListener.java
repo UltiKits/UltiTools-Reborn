@@ -10,8 +10,6 @@ import com.ultikits.ultitools.manager.UpdateManager;
 /**
  * Notifies OP players about available updates when they join.
  * Each player is only notified once per server session.
- * <br>
- * 当OP玩家加入时通知可用更新。每个玩家每次服务器会话只通知一次。
  *
  * @since 6.2.0
  */

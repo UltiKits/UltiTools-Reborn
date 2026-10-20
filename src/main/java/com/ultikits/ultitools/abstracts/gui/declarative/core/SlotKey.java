@@ -5,33 +5,33 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Objects;
 
 /**
- * SlotKey 用于在 Widget 树中唯一标识一个 Widget。
+ * SlotKey uniquely identifies a Widget within the Widget tree.
  * <p>
- * 在列表或动态内容中，SlotKey 对于 diff 算法至关重要。
- * 它允许框架识别哪些 Widget 是"同一个"（只是数据变化），
- * 哪些是新增或删除的，从而避免不必要的重建。
+ * In lists or dynamic content, SlotKey is essential to the diff algorithm. It lets the framework
+ * recognize which Widgets are "the same one" (just with changed data) versus which were added or
+ * removed, avoiding unnecessary rebuilds.
  * <p>
- * <b>使用场景：</b>
+ * <b>When to use it:</b>
  * <ul>
- *   <li>列表项需要稳定的 key 来保持状态（如滚动位置、选中状态）</li>
- *   <li>动态内容需要 key 来触发正确的动画或过渡</li>
- *   <li>复用 Element 以提高性能</li>
+ *   <li>List items need a stable key to preserve state (e.g. scroll position, selection state)</li>
+ *   <li>Dynamic content needs a key to trigger the correct animation or transition</li>
+ *   <li>Reusing an Element improves performance</li>
  * </ul>
  *
- * <p><strong>最佳实践：</strong></p>
+ * <p><strong>Best practice:</strong></p>
  * <pre>{@code
- * // 好的做法：使用业务唯一标识作为 key
+ * // Good: use a stable business identifier as the key
  * ListView.builder()
  *     .children(players.stream()
  *         .map(p -> PlayerWidget.builder()
- *             .key(SlotKey.of(p.getUniqueId().toString()))  // 稳定的 UUID
+ *             .key(SlotKey.of(p.getUniqueId().toString()))  // stable UUID
  *             .player(p)
  *             .build())
  *         .toList())
  *     .build();
  *
- * // 避免：使用列表索引作为 key（除非列表是静态的）
- * // 这样会导致数据更新时，key 与实际内容不匹配
+ * // Avoid: using the list index as the key (unless the list is static)
+ * // This makes the key mismatch the actual content once the data updates
  * }</pre>
  *
  * @author UltiTools Team
@@ -49,11 +49,11 @@ public final class SlotKey {
     }
 
     /**
-     * 创建一个 SlotKey。
+     * Creates a SlotKey.
      *
-     * @param value key 值，不能为空
-     * @return 新的 SlotKey 实例
-     * @throws IllegalArgumentException 如果 value 为空
+     * @param value the key value, must not be empty
+     * @return a new SlotKey instance
+     * @throws IllegalArgumentException if value is empty
      */
     @NotNull
     public static SlotKey of(@NotNull String value) {
@@ -64,11 +64,11 @@ public final class SlotKey {
     }
 
     /**
-     * 创建一个带有前缀的 SlotKey。
+     * Creates a SlotKey with a prefix.
      *
-     * @param prefix 前缀
-     * @param value  key 值
-     * @return 新的 SlotKey 实例
+     * @param prefix the prefix
+     * @param value  the key value
+     * @return a new SlotKey instance
      */
     @NotNull
     public static SlotKey of(@NotNull String prefix, @NotNull String value) {
@@ -76,9 +76,9 @@ public final class SlotKey {
     }
 
     /**
-     * 获取 key 的字符串值。
+     * Gets the key's string value.
      *
-     * @return key 值
+     * @return the key value
      */
     @NotNull
     public String getValue() {

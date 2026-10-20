@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
@@ -36,7 +38,7 @@ class ErrorReportCollectorTest {
 
     @BeforeEach
     void setUp() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
 
@@ -55,10 +57,7 @@ class ErrorReportCollectorTest {
     @AfterEach
     void tearDown() {
         collector.shutdown();
-        try {
-            MockBukkit.unmock();
-        } catch (Exception ignored) {
-        }
+        MockBukkitHelper.safeUnmock();
     }
 
     @Nested
@@ -641,7 +640,7 @@ class ErrorReportCollectorTest {
     /**
      * Set a private field via reflection.
      */
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.AvoidThrowingRawExceptionTypes"})
     private void setField(Object obj, String fieldName, Object value) {
         try {
             Field field = obj.getClass().getDeclaredField(fieldName);
@@ -655,7 +654,7 @@ class ErrorReportCollectorTest {
     /**
      * Clear the dedup map (simulates window reset).
      */
-    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "unchecked"})
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "unchecked", "PMD.AvoidThrowingRawExceptionTypes"})
     private void clearDedupMap(ErrorReportCollector collector) {
         try {
             Field field = ErrorReportCollector.class.getDeclaredField("dedupMap");

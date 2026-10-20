@@ -12,10 +12,6 @@ import com.ultikits.ultitools.services.GameMailService;
  * No-op implementation of GameMailService.
  * Used as a fallback when no mail module is loaded.
  * All operations return false/0 indicating unavailable.
- * <p>
- * GameMailService 的空实现。
- * 当没有加载邮件模块时作为兜底使用。
- * 所有操作返回 false/0 表示不可用。
  *
  * @author wisdomme
  * @version 1.0.0

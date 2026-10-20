@@ -7,8 +7,6 @@ import java.lang.annotation.Target;
 
 /**
  * Column annotation.
- * <p>
- * 数据集列注解。
  *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/data-storage.html#column">@Column</a>
  */

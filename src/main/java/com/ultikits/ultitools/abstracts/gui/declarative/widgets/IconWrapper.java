@@ -5,9 +5,9 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * IconWrapper 是对 Icon 的简单包装，用于在 Widget 树中传递。
+ * IconWrapper is a simple wrapper around Icon, used to pass it through the Widget tree.
  * <p>
- * 它不可变，可以在多个 Widget 之间安全共享。
+ * It is immutable and can be safely shared across multiple Widgets.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -32,10 +32,10 @@ public class IconWrapper {
     }
 
     /**
-     * 创建 IconWrapper 的构建器。
+     * Creates a builder for IconWrapper.
      *
-     * @param itemStack 物品堆
-     * @return Builder
+     * @param itemStack the item stack
+     * @return the Builder
      */
     @NotNull
     public static Builder builder(@NotNull ItemStack itemStack) {

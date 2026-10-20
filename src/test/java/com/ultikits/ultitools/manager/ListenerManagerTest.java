@@ -2,10 +2,19 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.File;
+import java.io.FileWriter;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -13,16 +22,23 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.Bukkit;
+import org.bukkit.Server;
 import org.bukkit.event.Listener;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.PluginManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.context.AutowireFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
 
@@ -65,6 +81,22 @@ class ListenerManagerTest {
     }
 
     /**
+     * Registers {@code instance} for {@code plugin} through the surviving
+     * {@code register(UltiToolsPlugin, Class)} entry point, stubbing {@code plugin.getContext()}
+     * to hand back {@code instance} for {@code listenerClass}. Plan 07-14 (GEN-04) removed the
+     * public {@code register(UltiToolsPlugin, Listener)} overload these tests used to call
+     * directly on an already-constructed instance; this helper drives the same underlying
+     * tracking behaviour (map population, dedup, per-plugin isolation) through the class-based
+     * path so that coverage is preserved rather than dropped.
+     */
+    private <T extends Listener> void registerViaClass(UltiToolsPlugin plugin, Class<T> listenerClass, T instance) {
+        SimpleContainer mockContext = mock(SimpleContainer.class);
+        when(plugin.getContext()).thenReturn(mockContext);
+        when(mockContext.getBean(listenerClass)).thenReturn(instance);
+        listenerManager.register(plugin, listenerClass);
+    }
+
+    /**
      * 测试用监听器 - 有 @EventListener 注解
      */
     @EventListener
@@ -85,7 +117,7 @@ class ListenerManagerTest {
     }
 
     @Nested
-    @DisplayName("register(plugin, listener) 测试")
+    @DisplayName("register(plugin, class) 的监听器跟踪行为测试 (GEN-04：register(plugin, listener) 已移除)")
     class RegisterWithListenerTests {
 
         @Test
@@ -95,7 +127,7 @@ class ListenerManagerTest {
             TestListener listener = new TestListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -114,8 +146,8 @@ class ListenerManagerTest {
             TestListener listener = new TestListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener);
-            listenerManager.register(mockPlugin, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -134,8 +166,8 @@ class ListenerManagerTest {
             NoAnnotationListener listener2 = new NoAnnotationListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener1);
-            listenerManager.register(mockPlugin, listener2);
+            registerViaClass(mockPlugin, TestListener.class, listener1);
+            registerViaClass(mockPlugin, NoAnnotationListener.class, listener2);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -183,7 +215,7 @@ class ListenerManagerTest {
         void shouldUnregisterListener() {
             // Arrange
             TestListener listener = new TestListener();
-            listenerManager.register(mockPlugin, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
 
             // Act & Assert - 不应该抛出异常
             assertDoesNotThrow(() -> listenerManager.unregister(listener));
@@ -306,32 +338,6 @@ class ListenerManagerTest {
     }
 
     @Nested
-    @DisplayName("registerAll(plugin, packageName) 测试")
-    class RegisterAllWithPackageTests {
-
-        @Test
-        @DisplayName("扫描空包不应该注册任何监听器")
-        void emptyPackageShouldNotRegisterAnyListeners() throws Exception {
-            // Arrange
-            SimpleContainer mockContext = mock(SimpleContainer.class);
-            AutowireFactory mockFactory = mock(AutowireFactory.class);
-            when(mockPlugin.getContext()).thenReturn(mockContext);
-            when(mockContext.getAutowireCapableBeanFactory()).thenReturn(mockFactory);
-
-            // Act - 使用一个不存在的包名
-            listenerManager.registerAll(mockPlugin, "com.nonexistent.package");
-
-            // Assert
-            Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
-            mapField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            Map<UltiToolsPlugin, List<Listener>> map = (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
-
-            assertThat(map.get(mockPlugin)).isNull();
-        }
-    }
-
-    @Nested
     @DisplayName("listenerListMap 字段测试")
     class ListenerListMapFieldTests {
 
@@ -371,7 +377,7 @@ class ListenerManagerTest {
             TestListener listener = new TestListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -392,8 +398,8 @@ class ListenerManagerTest {
             NoAnnotationListener listener2 = new NoAnnotationListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener1);
-            listenerManager.register(plugin2, listener2);
+            registerViaClass(mockPlugin, TestListener.class, listener1);
+            registerViaClass(plugin2, NoAnnotationListener.class, listener2);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -403,6 +409,100 @@ class ListenerManagerTest {
 
             assertThat(map.get(mockPlugin)).containsExactly(listener1);
             assertThat(map.get(plugin2)).containsExactly(listener2);
+        }
+    }
+
+    /**
+     * Binds an already-registered instance under a second name through the protected
+     * {@code addSingleton}, exactly as {@code ComponentScanner.processBeanMethod} binds the alias
+     * names of a {@code @Bean(name = {primary, alias})} product.
+     */
+    static class AliasingContainer extends SimpleContainer {
+        void bindAlias(String alias, Object instance) {
+            addSingleton(alias, instance);
+        }
+    }
+
+    /**
+     * C50, registration half: {@code registerAll} enumerates bean <em>names</em>, so one listener
+     * bound under two names reached Bukkit's {@code registerEvents} twice, and every handler on it
+     * then fired twice per event.
+     */
+    @Nested
+    @DisplayName("C50: registerAll registers an aliased listener instance once")
+    class AliasedInstanceRegistrationTests {
+
+        private PluginManager bukkitPluginManager;
+
+        private void runWithBukkitPluginManager(Runnable action) {
+            bukkitPluginManager = mock(PluginManager.class);
+            Server server = mock(Server.class);
+            when(server.getPluginManager()).thenReturn(bukkitPluginManager);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getServer).thenReturn(server);
+                action.run();
+            }
+        }
+
+        private ExternalPluginAdapter externalAdapter(SimpleContainer context) {
+            ExternalPluginAdapter adapter = mock(ExternalPluginAdapter.class);
+            when(adapter.getContext()).thenReturn(context);
+            when(adapter.getPluginName()).thenReturn("ExternalPlugin");
+            return adapter;
+        }
+
+        @Test
+        @DisplayName("module registerAll: one listener under two names reaches registerEvents once")
+        void aliasedListenerRegisteredOnceForModule() {
+            TestListener listener = new TestListener();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("aliasedListener", listener);
+            context.bindAlias("aliasedListenerAlias", listener);
+            when(mockPlugin.getContext()).thenReturn(context);
+
+            runWithBukkitPluginManager(() -> listenerManager.registerAll(mockPlugin));
+
+            verify(bukkitPluginManager, times(1)).registerEvents(same(listener), any(Plugin.class));
+        }
+
+        @Test
+        @DisplayName("external registerAllExternal: one listener under two names reaches registerEvents once")
+        void aliasedListenerRegisteredOnceForExternalPlugin() throws Exception {
+            TestListener listener = new TestListener();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("aliasedListener", listener);
+            context.bindAlias("aliasedListenerAlias", listener);
+            ExternalPluginAdapter adapter = externalAdapter(context);
+
+            runWithBukkitPluginManager(() -> listenerManager.registerAllExternal(adapter));
+
+            verify(bukkitPluginManager, times(1)).registerEvents(same(listener), any(Plugin.class));
+            Field mapField = ListenerManager.class.getDeclaredField("externalListenerMap");
+            mapField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, List<Listener>> map = (Map<String, List<Listener>>) mapField.get(listenerManager);
+            assertThat(map.get("ExternalPlugin"))
+                    .as("the external tracking list must hold the instance once, so unload releases it once")
+                    .containsExactly(listener);
+        }
+
+        @Test
+        @DisplayName("two distinct listener instances under two names are both registered")
+        void distinctListenersAreBothRegistered() {
+            TestListener first = new TestListener();
+            TestListener second = new TestListener();
+            ManualRegisterListener manual = new ManualRegisterListener();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("firstListener", first);
+            context.registerSingleton("secondListener", second);
+            context.registerSingleton("manualListener", manual);
+            when(mockPlugin.getContext()).thenReturn(context);
+
+            runWithBukkitPluginManager(() -> listenerManager.registerAll(mockPlugin));
+
+            verify(bukkitPluginManager, times(1)).registerEvents(same(first), any(Plugin.class));
+            verify(bukkitPluginManager, times(1)).registerEvents(same(second), any(Plugin.class));
+            verify(bukkitPluginManager, never()).registerEvents(same(manual), any(Plugin.class));
         }
     }
 }

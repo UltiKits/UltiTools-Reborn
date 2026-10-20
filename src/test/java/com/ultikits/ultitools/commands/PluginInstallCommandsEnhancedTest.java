@@ -3,7 +3,9 @@ package com.ultikits.ultitools.commands;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -38,8 +40,9 @@ import com.ultikits.ultitools.utils.PluginInstallUtils;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import net.kyori.adventure.text.event.ClickEvent;
 
 @DisplayName("PluginInstallCommands Enhanced Coverage Tests")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -71,7 +74,8 @@ class PluginInstallCommandsEnhancedTest {
         config.set("api-url", "http://localhost");
         mockedUltiTools.when(UltiTools::getEnv).thenReturn(config);
         
-        File dataFolder = new File("target/test-data");
+        // A server layout: the update records live under the data folder's grandparent (the server root).
+        File dataFolder = new File("target/test-data/plugins/UltiTools");
         dataFolder.mkdirs();
         when(instance.getDataFolder()).thenReturn(dataFolder);
         when(instance.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
@@ -103,18 +107,11 @@ class PluginInstallCommandsEnhancedTest {
                     p.sendMessage(msg);
                     return null;
                 });
-            mockedMessageUtils.when(() -> MessageUtils.sendMessage(
-                    (Player) org.mockito.ArgumentMatchers.any(), 
-                    (TextComponent) org.mockito.ArgumentMatchers.any()))
+            mockedMessageUtils.when(() -> MessageUtils.sendMessage(any(Player.class), any(TextComponent.class)))
                 .thenAnswer(invocation -> {
-                    try {
-                        Player p = invocation.getArgument(0);
-                        TextComponent t = invocation.getArgument(1);
-                        String msg = LegacyComponentSerializer.legacySection().serialize(t);
-                        p.sendMessage(msg);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    Player p = invocation.getArgument(0);
+                    TextComponent t = invocation.getArgument(1);
+                    p.sendMessage(t);
                     return null;
                 });
             mockingAvailable = true;
@@ -122,14 +119,12 @@ class PluginInstallCommandsEnhancedTest {
             // Setup default behaviors
             mockedUtils.when(() -> PluginInstallUtils.getPluginList(anyInt(), anyInt()))
                     .thenReturn(new ArrayList<>());
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin(anyString(), anyString()))
-                    .thenReturn(true);
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any()))
+                    .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1", "1.1.0"));
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
+                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
@@ -270,6 +265,32 @@ class PluginInstallCommandsEnhancedTest {
     }
 
     @Test
+    @DisplayName("Player list - install and uninstall buttons keep their run-command click events")
+    void testPlayerListButtonsKeepClickEvents() {
+        assertThat(mockingAvailable).as("the component-delivery fixture must be available").isTrue();
+
+        UltiToolsPlugin installed = mock(UltiToolsPlugin.class);
+        when(installed.getPluginName()).thenReturn("UltiTools-Economy");
+        when(installed.getIdentifyString()).thenReturn("com.ultikits.economy");
+        when(mockPluginManager.getPluginList()).thenReturn(Collections.singletonList(installed));
+        mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10)).thenReturn(Arrays.asList(
+                createPlugin("UltiEconomy", "com.ultikits.economy", "Installed module"),
+                createPlugin("UltiMail", "com.ultikits.mail", "Available module")));
+
+        executor.listPlugins(player, "1");
+        server.getScheduler().performTicks(2);
+
+        Component received = player.nextComponentMessage();
+        assertThat(received).as("the player must receive the list component").isNotNull();
+        List<String> commands = new ArrayList<>();
+        collectRunCommands(received, commands);
+        assertThat(commands)
+                .as("uninstall uses the loaded runtime name; install uses the catalogue identifier")
+                .containsExactly("/upm uninstall UltiTools-Economy", "/upm install com.ultikits.mail");
+        assertThat(player.nextComponentMessage()).as("one list component is one message").isNull();
+    }
+
+    @Test
     @DisplayName("Player list - should handle default page (page 1)")
     void testPlayerListDefaultPage() {
         if (!mockingAvailable) return;
@@ -318,19 +339,23 @@ class PluginInstallCommandsEnhancedTest {
     @DisplayName("Player list - should handle invalid page number gracefully")
     void testPlayerListInvalidPageNumber() {
         if (!mockingAvailable) return;
-        
+
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
-        
+
         mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
                 .thenReturn(Collections.emptyList());
-        
+
         executor.listPlugins(player, "invalid");
-        
+
         waitForAsync();
-        
-        // Should default to page 1
+
+        // #380: this used to assert only that *some* message came back, which the removed
+        // behaviour satisfied by silently serving page 1. The contract now is that a non-integer
+        // page is reported rather than guessed at, so the assertion names the message.
         List<String> messages = collectAllMessages(player);
-        assertThat(messages).isNotEmpty();
+        assertThat(messages)
+                .as("a non-integer page must be reported, not silently treated as page 1")
+                .anyMatch(msg -> msg.contains("Failed to parse 'invalid' as Integer"));
     }
 
     @Test
@@ -365,7 +390,11 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
                 .thenReturn(Collections.singletonList(entity));
         
-        executor.listPlugins(player, "invalid");
+        // Uses a valid page deliberately. This test is about the console's plain-text rendering,
+        // and it previously passed "invalid" only because that was silently treated as page 1
+        // (#380). Now a bad page returns before any listing happens, which would make this test
+        // pass for the wrong reason.
+        executor.listPlugins(player, "1");
         
         waitForAsync();
         
@@ -398,8 +427,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallPluginWithVersion() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installPlugin("test-plugin", "1.0.0"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"install", "test-plugin", "1.0.0"});
@@ -416,8 +445,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallPluginWithVersionFailure() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installPlugin("bad-plugin", "1.0.0"))
-                .thenReturn(false);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("bad-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"install", "bad-plugin", "1.0.0"});
@@ -432,8 +461,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallLatestPlugin() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("latest-plugin"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("latest-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"install", "latest-plugin"});
@@ -450,8 +479,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallLatestPluginFailure() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("fail-plugin"))
-                .thenReturn(false);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("fail-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"install", "fail-plugin"});
@@ -466,8 +495,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallFromConsole() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("console-plugin"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("console-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
         boolean result = executor.onCommand(console, mockCommand, "upm", 
                 new String[]{"install", "console-plugin"});
@@ -534,7 +563,9 @@ class PluginInstallCommandsEnhancedTest {
         List<String> messages = collectAllMessages(player);
         String fullMessage = String.join("\n", messages);
         
-        assertThat(fullMessage).contains("可用版本列表");
+        // 18-40: the catalogue lists only versions this framework installs, so an empty list is
+        // reported as "no version can be installed on this server", not as an empty table.
+        assertThat(fullMessage).contains("没有可以安装在本服务器上的版本").doesNotContain("可用版本列表");
     }
 
     @Test
@@ -560,8 +591,8 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginSuccess() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("remove-plugin"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("remove-plugin"), anyList()))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"uninstall", "remove-plugin"});
@@ -570,9 +601,12 @@ class PluginInstallCommandsEnhancedTest {
         List<String> messages = collectAllMessages(player);
         String fullMessage = String.join("\n", messages);
         
+        // #501: uninstallPlugin returns true only after deleting the jar, so the success reply
+        // no longer points the operator at the plugins folder to delete it by hand.
         assertThat(fullMessage)
-            .contains("卸载成功")
-            .contains("文件位置");
+            .contains("卸载完成")
+            .doesNotContain("文件位置")
+            .doesNotContain("手动删除");
     }
 
     @Test
@@ -580,8 +614,8 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginNotFound() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("missing-plugin"))
-                .thenReturn(false);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("missing-plugin"), anyList()))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"uninstall", "missing-plugin"});
@@ -596,7 +630,7 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginIOException() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("io-error-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("io-error-plugin"), anyList()))
                 .thenThrow(new IOException("File access error"));
         
         executor.onCommand(player, mockCommand, "upm", 
@@ -616,8 +650,8 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallFromConsole() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("console-uninstall"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("console-uninstall"), anyList()))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
         boolean result = executor.onCommand(console, mockCommand, "upm", 
                 new String[]{"uninstall", "console-uninstall"});
@@ -645,6 +679,16 @@ class PluginInstallCommandsEnhancedTest {
         return messages;
     }
 
+    private static void collectRunCommands(Component component, List<String> commands) {
+        ClickEvent click = component.clickEvent();
+        if (click != null && click.action() == ClickEvent.Action.RUN_COMMAND) {
+            commands.add(click.value());
+        }
+        for (Component child : component.children()) {
+            collectRunCommands(child, commands);
+        }
+    }
+
     private void waitForAsync() {
         try {
             Thread.sleep(100);
@@ -654,6 +698,7 @@ class PluginInstallCommandsEnhancedTest {
         server.getScheduler().performTicks(20);
     }
     
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private void registerPluginToMockBukkit(org.bukkit.plugin.Plugin plugin) {
         try {
             org.bukkit.plugin.PluginManager pluginManager = server.getPluginManager();

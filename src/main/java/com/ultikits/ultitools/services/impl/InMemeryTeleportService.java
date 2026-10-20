@@ -1,9 +1,9 @@
 package com.ultikits.ultitools.services.impl;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -13,24 +13,64 @@ import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.Sounds;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.utils.XVersionUtils;
 
 /**
- * 传送服务实现类
+ * Teleport service implementation.
  *
  * @author wisdomme
  * @version 1.0.0
  */
 @Service
 public class InMemeryTeleportService implements TeleportService {
-    private final static Map<UUID, Boolean> teleportingPlayers = new HashMap<>();
-    private final static Map<UUID, String> locationMap = new HashMap<>();
+    @PlayerCache
+    private final static Map<UUID, Boolean> teleportingPlayers = new ConcurrentHashMap<>();
+    @PlayerCache
+    private final static Map<UUID, String> locationMap = new ConcurrentHashMap<>();
 
-    private final static Map<UUID, Location> inMemoryLocationRecord = new HashMap<>();
+    @PlayerCache
+    private final static Map<UUID, Location> inMemoryLocationRecord = new ConcurrentHashMap<>();
     private static volatile boolean schedulerInitialized = false;
+
+    /**
+     * True once ANY instance of this class has registered {@link #teleportingPlayers}/{@link
+     * #locationMap}/{@link #inMemoryLocationRecord} -- static fields shared by every instance --
+     * with the live {@link PlayerCacheManager} for quit-based sweeping (GEN-08, D-03). A STATIC
+     * flag, not per-instance, mirroring the identical rationale on {@code
+     * InMemoryNotificationService#playerCacheRegistered}: only the first instance to reach {@link
+     * #delayTeleport(Player, Location, int)} registers. Set lazily rather than in a constructor
+     * for the same reason as {@code CooldownValidator}'s field of the same name: a bare {@code
+     * new InMemeryTeleportService()} must never attempt contact with a core plugin that may not
+     * exist yet.
+     */
+    private static volatile boolean playerCacheRegistered = false;
+
+    /**
+     * Attempts lazy first-use registration of THIS instance -- as the reference-identity handle
+     * for the three shared static fields above -- with the live {@link PlayerCacheManager}
+     * singleton. See {@link #playerCacheRegistered}'s javadoc for the static-flag rationale.
+     */
+    private void ensurePlayerCacheRegistered() {
+        if (playerCacheRegistered) {
+            return;
+        }
+        UltiTools instance = UltiTools.getInstance();
+        // Checking getPluginManager() too, not just getInstance(), matters especially here:
+        // playerCacheRegistered is a STATIC flag shared by every instance, so an earlier test
+        // (or an earlier caller) reaching this method while getInstance() is stubbed but
+        // getPluginManager() is not would otherwise latch it true forever, permanently skipping
+        // the retry a later, genuinely-live chain would have needed.
+        if (instance == null || instance.getPluginManager() == null) {
+            return;
+        }
+        PlayerCacheManager.tryRegister(this);
+        playerCacheRegistered = true;
+    }
 
     /**
      * Initialize the movement check scheduler. Called lazily to avoid static initializer issues in tests.
@@ -71,7 +111,10 @@ public class InMemeryTeleportService implements TeleportService {
      */
     static boolean checkPlayerMovement(UUID playerUUID) {
         if (!teleportingPlayers.getOrDefault(playerUUID, false)) {
-            locationMap.put(playerUUID, null);
+            // ConcurrentHashMap.put(key, null) throws NullPointerException, unlike the HashMap
+            // this field used to be -- remove() is the value-agnostic equivalent: absent from
+            // the map reads as null via get() either way (D-05/GEN-08 concurrency conversion).
+            locationMap.remove(playerUUID);
             return false;
         }
         Player player = Bukkit.getPlayer(playerUUID);
@@ -95,6 +138,7 @@ public class InMemeryTeleportService implements TeleportService {
 
     @Override
     public void teleport(Player player, Location location) {
+        ensurePlayerCacheRegistered();
         inMemoryLocationRecord.put(player.getUniqueId(), player.getLocation());
         player.teleport(location);
         player.playSound(player.getLocation(), XVersionUtils.getSound(Sounds.ENTITY_ENDERMAN_TELEPORT), 1, 0);
@@ -102,6 +146,7 @@ public class InMemeryTeleportService implements TeleportService {
 
     @Override
     public void delayTeleport(Player player, Location location, int delay) {
+        ensurePlayerCacheRegistered();
         initScheduler();
         teleportingPlayers.put(player.getUniqueId(), true);
         Chunk chunk = location.getChunk();
@@ -190,8 +235,23 @@ public class InMemeryTeleportService implements TeleportService {
         return Optional.ofNullable(inMemoryLocationRecord.get(uuid));
     }
 
+    /**
+     * The display name. English, named after the service interface, like {@code DefaultEmailService}'s
+     * {@code "EmailService"}; it is no longer the folder name, see {@link #getResourceFolderName()}.
+     */
     @Override
     public String getName() {
+        return "TeleportService";
+    }
+
+    /**
+     * The resource folder name, kept at its pre-6.3.0 value so an existing install keeps its folder.
+     * {@link com.ultikits.ultitools.interfaces.BaseService#getResourceFolderName()} defaults to
+     * {@link #getName()}, which changed; this override pins the folder instead. It is an identifier,
+     * not text shown to anyone.
+     */
+    @Override
+    public String getResourceFolderName() {
         return "传送服务";
     }
 

@@ -1,0 +1,2 @@
+This is a plain ASCII line with no CJK content at all.
+这是一行故意包含中文的测试数据，用来证明门禁能够真正触发。

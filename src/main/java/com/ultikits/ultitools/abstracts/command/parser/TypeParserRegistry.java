@@ -14,8 +14,12 @@ import java.util.function.Function;
  * Registry for type parsers. Supports custom parser registration and provides built-in parsers.
  * Thread-safe singleton implementation.
  * <p>
- * 类型解析器注册表。支持自定义解析器注册并提供内置解析器。
- * 线程安全的单例实现。
+ * Built-in coverage: {@code String} (highest priority), the primitive wrapper types and their
+ * primitive/array forms ({@code Boolean}, {@code Integer}, {@code Double}, {@code Float},
+ * {@code Long}, {@code Short}, {@code Byte}), the core Bukkit types {@code Player},
+ * {@code OfflinePlayer}, {@code Material}, {@code UUID}, and the extended Bukkit types
+ * {@code World}, {@code Location}, {@code GameMode}, {@code Enchantment}. Register additional
+ * types with {@link #register(TypeParser)}.
  *
  * @author wisdomme
  * @version 2.0.0
@@ -35,7 +39,6 @@ public final class TypeParserRegistry {
     
     /**
      * Gets the singleton instance of the registry.
-     * 获取注册表的单例实例。
      *
      * @return the registry instance
      */
@@ -52,7 +55,6 @@ public final class TypeParserRegistry {
     
     /**
      * Registers a type parser.
-     * 注册类型解析器。
      *
      * @param parser the parser to register
      * @param <T>    the type the parser handles
@@ -68,7 +70,6 @@ public final class TypeParserRegistry {
     
     /**
      * Unregisters a type parser.
-     * 取消注册类型解析器。
      *
      * @param parser the parser to unregister
      * @param <T>    the type the parser handles
@@ -82,7 +83,6 @@ public final class TypeParserRegistry {
     
     /**
      * Gets a parser for the specified type.
-     * 获取指定类型的解析器。
      *
      * @param type the type to get a parser for
      * @param <T>  the type
@@ -106,7 +106,6 @@ public final class TypeParserRegistry {
     
     /**
      * Parses a value to the specified type.
-     * 将值解析为指定类型。
      *
      * @param value the string value to parse
      * @param type  the target type
@@ -124,7 +123,6 @@ public final class TypeParserRegistry {
     
     /**
      * Parses values to an array of the specified type.
-     * 将值解析为指定类型的数组。
      *
      * @param values the string values to parse
      * @param type   the target component type
@@ -143,7 +141,6 @@ public final class TypeParserRegistry {
     
     /**
      * Checks if a parser is registered for the specified type.
-     * 检查是否为指定类型注册了解析器。
      *
      * @param type the type to check
      * @return true if a parser is registered
@@ -154,7 +151,6 @@ public final class TypeParserRegistry {
     
     /**
      * Gets all registered parsers.
-     * 获取所有已注册的解析器。
      *
      * @return unmodifiable list of parsers
      */
@@ -164,7 +160,6 @@ public final class TypeParserRegistry {
     
     /**
      * Registers all built-in parsers.
-     * 注册所有内置解析器。
      */
     @SuppressWarnings("deprecation")
     private void registerBuiltInParsers() {
@@ -206,7 +201,6 @@ public final class TypeParserRegistry {
     
     /**
      * Simple implementation of TypeParser using a parsing function.
-     * 使用解析函数的 TypeParser 简单实现。
      */
     private static class SimpleTypeParser<T> implements TypeParser<T> {
         private final Class<T> primaryType;

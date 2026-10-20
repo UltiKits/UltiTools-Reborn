@@ -1,0 +1,14 @@
+lists:
+  # Enabled worlds
+  worlds:
+  - world
+  - world_nether
+  empty: []
+  numbers:
+  - 1
+  - 2
+  - 3
+  quoted:
+  - 'yes'
+  - '&aGreen'
+  - 'a: b'

@@ -1,9 +1,16 @@
 package com.ultikits.ultitools.manager;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.StringReader;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -14,20 +21,42 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.config.document.AtomicConfigWriter;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Safe server.properties manager for remote editing via WebSocket.
  * Only exposes a curated whitelist of non-sensitive keys.
+ * <p>
+ * <b>Why a panel edit cannot overwrite operator content</b> (maintainer decisions of 2026-10-04, "operator-written
+ * configuration is never overwritten" and "what code may write, by file type": a panel edit writes only the named
+ * key; UltiKits/UltiTools-Reborn#607). The file is never re-emitted: an edit replaces the value text of the one
+ * physical line that defines the key and nothing else - the header and operator comments, key order, the key text
+ * and separator as written, line terminators and every other value keep their bytes. The file is decoded the way
+ * the running server reads it (measured from the Paper 1.21.11 jar, {@code Settings#loadFromFile}: strict UTF-8,
+ * falling back to ISO-8859-1 when the file is not valid UTF-8), the new value is escaped with the
+ * {@link Properties} value grammar in a form that reader returns exactly, and the result is re-encoded in the
+ * charset it was decoded with. Before publishing, every other line is checked byte for byte and a fresh parse must
+ * return the new value and every other key unchanged; a key defined on more than one line, or over continuation
+ * lines, is refused with a reason. Publication is atomic through {@link AtomicConfigWriter}, and only while the file
+ * still holds the bytes the edit was made against. A refusal writes nothing and logs one WARNING naming the file,
+ * the key and the reason, never a value.
  */
 @ApiStatus.Internal
 public class ServerPropertiesManager {
+    private static final Logger LOGGER = Logger.getLogger(ServerPropertiesManager.class.getName());
+    /** Serializes panel edits of the file within this server run. */
+    private static final Object WRITE_LOCK = new Object();
+    private static final String FILE_NAME = "server.properties";
+
     private final File serverRoot;
     private UltiPanelWebSocketClient webSocketClient;
 
@@ -46,15 +75,20 @@ public class ServerPropertiesManager {
         this.webSocketClient = client;
     }
 
+    /**
+     * The whitelisted keys the file defines, decoded the way the server reads them (see the class description).
+     *
+     * @return key to value; empty when the file is absent, unreadable or unparseable
+     */
     public Map<String, String> getSafeProperties() {
         Map<String, String> result = new LinkedHashMap<>();
-        File propsFile = new File(serverRoot, "server.properties");
+        File propsFile = new File(serverRoot, FILE_NAME);
         if (!propsFile.exists()) return result;
 
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(propsFile)) {
-            props.load(fis);
-        } catch (IOException e) {
+        Properties props;
+        try {
+            props = PropertiesText.read(propsFile.toPath()).parse();
+        } catch (IOException | IllegalArgumentException e) {
             return result;
         }
 
@@ -68,52 +102,496 @@ public class ServerPropertiesManager {
     }
 
     public boolean setProperty(String key, String value) {
-        return writeProperty(key, value) == WriteOutcome.WRITTEN;
+        return writeProperty(key, value).outcome == WriteOutcome.WRITTEN;
     }
 
     /**
      * Why this exists next to {@link #setProperty(String, String)}: the boolean is lossy.
-     * A {@code false} could mean "the key is not on the whitelist", "there is no
-     * server.properties to write to", or "the write itself failed" — three situations
-     * with three different fixes, collapsed into one value. The batch path has to tell
-     * the caller which one happened, so the real outcome is produced here and
-     * {@code setProperty} keeps its original contract by narrowing it.
+     * A {@code false} could mean "the key is not on the whitelist", "the running server
+     * server's server.properties does not have the key", "there is no server.properties to write to", or "the write
+     * itself failed" — four situations with four different fixes, collapsed into one value.
+     * The batch path has to tell the caller which one happened, so the real outcome is
+     * produced here and {@code setProperty} keeps its original contract by narrowing it.
      * <p>
-     * 为什么要在 {@link #setProperty(String, String)} 旁边多这一个：那个布尔值是有损的。
-     * {@code false} 可能是「键不在白名单」「没有 server.properties 可写」或「写入本身失败」，
-     * 三种处置完全不同的情况被压成了同一个值。批量路径必须告诉调用方是哪一种，
-     * 所以真实结果在这里产生，{@code setProperty} 通过收窄它来保持原有契约。
+     * The write changes only the line defining {@code key} (see the class description for why nothing else can
+     * change); a refusal carries its reason.
      */
-    private WriteOutcome writeProperty(String key, String value) {
-        if (!SAFE_KEYS.contains(key)) return WriteOutcome.REJECTED;
+    @SuppressWarnings("PMD.NPathComplexity") // Each refusal is checked and reported separately before the one-line write.
+    private WriteResult writeProperty(String key, String value) {
+        if (!SAFE_KEYS.contains(key)) return WriteResult.of(WriteOutcome.REJECTED);
 
-        File propsFile = new File(serverRoot, "server.properties");
-        if (!propsFile.exists()) return WriteOutcome.FAILED;
+        File propsFile = new File(serverRoot, FILE_NAME);
+        if (!propsFile.exists()) return WriteResult.of(WriteOutcome.FAILED);
 
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(propsFile)) {
-            props.load(fis);
-        } catch (IOException e) {
-            return WriteOutcome.FAILED;
+        synchronized (WRITE_LOCK) {
+            Path path = propsFile.toPath();
+            PropertiesText read;
+            Properties props;
+            try {
+                read = PropertiesText.read(path);
+                props = read.parse();
+            } catch (IOException e) {
+                return WriteResult.of(WriteOutcome.FAILED);
+            } catch (IllegalArgumentException malformedEscape) {
+                return refuse(path, key, "the file cannot be parsed (a malformed \\u escape)");
+            }
+
+            // D-15 / SAFE_KEYS issue: SAFE_KEYS is a ceiling across every Paper version this
+            // framework supports (plugin.yml declares api-version: 1.19), not a promise that every
+            // key exists on the version actually running. Writing a key Paper does not read is
+            // silently ignored by the platform, so the operator must be told before it happens --
+            // not after a "success" response that never took effect.
+            if (props.getProperty(key) == null) {
+                return WriteResult.of(WriteOutcome.NOT_PRESENT_ON_THIS_SERVER);
+            }
+
+            List<Definition> definitions = read.definitionsOf(key);
+            if (definitions.size() > 1) {
+                return refuse(path, key, "the key is defined on more than one line (lines " + lineNumbers(definitions) + ")");
+            }
+            if (definitions.isEmpty()) {
+                return refuse(path, key, "the line defining the key cannot be located");
+            }
+            Definition definition = definitions.get(0);
+            if (definition.continued) {
+                return refuse(path, key, "the key's definition continues onto the next line (line "
+                        + (definition.line + 1) + ")");
+            }
+
+            byte[] next;
+            try {
+                next = read.replaceValue(definition, value);
+            } catch (CharacterCodingException unencodable) {
+                return refuse(path, key, "the new value cannot be encoded in the file's character encoding");
+            }
+            String failure = read.verify(next, definition, key, value, props);
+            if (failure != null) {
+                return refuse(path, key, failure);
+            }
+            if (Arrays.equals(next, read.bytes)) {
+                return WriteResult.of(WriteOutcome.WRITTEN);
+            }
+            try {
+                AtomicConfigWriter.StagedWrite staged = AtomicConfigWriter.stage(path, next);
+                if (!staged.commitIfUnchanged(read.bytes)) {
+                    return refuse(path, key, "the file changed while the edit was being prepared");
+                }
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "server.properties " + path.toAbsolutePath() + " was not written for key "
+                        + key + ": " + e.getClass().getSimpleName());
+                return WriteResult.of(WriteOutcome.FAILED);
+            }
+            return WriteResult.of(WriteOutcome.WRITTEN);
         }
-
-        props.setProperty(key, value);
-
-        try (FileOutputStream fos = new FileOutputStream(propsFile)) {
-            props.store(fos, null);
-        } catch (IOException e) {
-            return WriteOutcome.FAILED;
-        }
-        return WriteOutcome.WRITTEN;
     }
 
-    /** What actually happened to one key. 一个键的真实去向。 */
+    private static WriteResult refuse(Path path, String key, String reason) {
+        // Values are deliberately omitted.
+        LOGGER.warning("server.properties " + path.toAbsolutePath() + " was not written: " + reason + ". Key: " + key
+                + ". The file is unchanged.");
+        return new WriteResult(WriteOutcome.FAILED, "server.properties was not written: " + reason);
+    }
+
+    private static String lineNumbers(List<Definition> definitions) {
+        List<String> numbers = new ArrayList<>();
+        for (Definition definition : definitions) {
+            numbers.add(String.valueOf(definition.line + 1));
+        }
+        return String.join(", ", numbers);
+    }
+
+    /** An outcome, and for a refusal the reason (no value). */
+    private static final class WriteResult {
+        private final WriteOutcome outcome;
+        private final String reason;
+
+        private WriteResult(WriteOutcome outcome, String reason) {
+            this.outcome = outcome;
+            this.reason = reason;
+        }
+
+        static WriteResult of(WriteOutcome outcome) {
+            return new WriteResult(outcome, null);
+        }
+
+        String describe() {
+            return reason != null ? reason : describeOutcome(outcome);
+        }
+    }
+
+    /** One physical line that defines a key, located with the {@link Properties} grammar. */
+    private static final class Definition {
+        /** Physical line index, 0-based. */
+        private final int line;
+        /** Whether the logical line continues onto following physical lines. */
+        private final boolean continued;
+        /** Offset in the decoded text where the value text starts. */
+        private final int valueStart;
+        /** Offset in the decoded text where the line's content ends (before its terminator). */
+        private final int contentEnd;
+        /** Whether the key runs to the end of the line, with no separator at all. */
+        private final boolean bareKey;
+
+        Definition(int line, boolean continued, int valueStart, int contentEnd, boolean bareKey) {
+            this.line = line;
+            this.continued = continued;
+            this.valueStart = valueStart;
+            this.contentEnd = contentEnd;
+            this.bareKey = bareKey;
+        }
+    }
+
+    /**
+     * The file's bytes and its text as the server decodes them: strict UTF-8, or ISO-8859-1 when the bytes are not
+     * valid UTF-8 (Paper 1.21.11 {@code Settings#loadFromFile}, measured from the server jar). Every line break is a
+     * single byte in both encodings, so lines split the same way in the bytes and in the text.
+     */
+    private static final class PropertiesText {
+        private final byte[] bytes;
+        private final String text;
+        private final Charset charset;
+
+        private PropertiesText(byte[] bytes, String text, Charset charset) {
+            this.bytes = bytes;
+            this.text = text;
+            this.charset = charset;
+        }
+
+        static PropertiesText read(Path path) throws IOException {
+            return decode(Files.readAllBytes(path));
+        }
+
+        static PropertiesText decode(byte[] bytes) {
+            try {
+                String text = StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(bytes)).toString();
+                return new PropertiesText(bytes, text, StandardCharsets.UTF_8);
+            } catch (CharacterCodingException notUtf8) {
+                return new PropertiesText(bytes, new String(bytes, StandardCharsets.ISO_8859_1), StandardCharsets.ISO_8859_1);
+            }
+        }
+
+        /** The table the server reads; {@link IllegalArgumentException} for a malformed <code>&#92;u</code> escape, as the server. */
+        Properties parse() {
+            Properties properties = new Properties();
+            try {
+                properties.load(new StringReader(text));
+            } catch (IOException impossible) {
+                throw new IllegalStateException(impossible);
+            }
+            return properties;
+        }
+
+        /** Physical lines as {@code [start, contentEnd, end]} offsets into {@link #text}. */
+        List<int[]> lines() {
+            List<int[]> lines = new ArrayList<>();
+            int start = 0;
+            int length = text.length();
+            int i = 0;
+            while (i < length) {
+                char c = text.charAt(i);
+                if (c == '\n' || c == '\r') {
+                    int end = c == '\r' && i + 1 < length && text.charAt(i + 1) == '\n' ? i + 2 : i + 1;
+                    lines.add(new int[]{start, i, end});
+                    start = end;
+                    i = end;
+                } else {
+                    i++;
+                }
+            }
+            if (start < length) {
+                lines.add(new int[]{start, length, length});
+            }
+            return lines;
+        }
+
+        /** Every logical line whose key is {@code key}, with the grammar of {@link Properties#load(java.io.Reader)}. */
+        List<Definition> definitionsOf(String key) {
+            List<Definition> found = new ArrayList<>();
+            List<int[]> lines = lines();
+            int i = 0;
+            while (i < lines.size()) {
+                int[] line = lines.get(i);
+                int first = skipWhitespace(line[0], line[1]);
+                if (first == line[1] || text.charAt(first) == '#' || text.charAt(first) == '!') {
+                    i++;
+                    continue;
+                }
+                StringBuilder logical = new StringBuilder(text.substring(first, line[1]));
+                int last = i;
+                while (endsWithOddBackslashes(logical)) {
+                    logical.setLength(logical.length() - 1);
+                    if (last + 1 >= lines.size()) {
+                        break;
+                    }
+                    last++;
+                    int[] next = lines.get(last);
+                    logical.append(text, skipWhitespace(next[0], next[1]), next[1]);
+                }
+                int[] split = splitKey(logical);
+                if (key.equals(unescape(logical.substring(0, split[0])))) {
+                    found.add(new Definition(i, last > i, first + split[1], line[1], first + split[0] == line[1]));
+                }
+                i = last + 1;
+            }
+            return found;
+        }
+
+        /** The new bytes: only the value text of {@code definition}'s line replaced, re-encoded in the file's charset. */
+        byte[] replaceValue(Definition definition, String value) throws CharacterCodingException {
+            String replaced = text.substring(0, definition.valueStart) + (definition.bareKey ? "=" : "")
+                    + escape(value, StandardCharsets.UTF_8.equals(charset)) + text.substring(definition.contentEnd);
+            ByteBuffer encoded = charset.newEncoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .encode(CharBuffer.wrap(replaced));
+            byte[] result = new byte[encoded.remaining()];
+            encoded.get(result);
+            return result;
+        }
+
+        /**
+         * Why {@code next} must not be written, or {@code null}: every line other than the edited one keeps its bytes,
+         * and the server's own reading of {@code next} returns {@code value} for {@code key} and every other key
+         * unchanged.
+         */
+        String verify(byte[] next, Definition definition, String key, String value, Properties before) {
+            List<byte[]> left = byteLines(bytes);
+            List<byte[]> right = byteLines(next);
+            if (left.size() != right.size()) {
+                return "the edit would change the number of lines";
+            }
+            for (int i = 0; i < left.size(); i++) {
+                if (i != definition.line && !Arrays.equals(left.get(i), right.get(i))) {
+                    return "the edit would change line " + (i + 1);
+                }
+            }
+            Properties after;
+            try {
+                after = decode(next).parse();
+            } catch (IllegalArgumentException e) {
+                return "the edited file would not parse";
+            }
+            if (!value.equals(after.getProperty(key))) {
+                return "the server would not read the new value back exactly";
+            }
+            Properties others = new Properties();
+            others.putAll(before);
+            others.remove(key);
+            Properties othersAfter = new Properties();
+            othersAfter.putAll(after);
+            othersAfter.remove(key);
+            if (!others.equals(othersAfter)) {
+                return "the edit would change how the server reads other keys";
+            }
+            return null;
+        }
+
+        private int skipWhitespace(int from, int to) {
+            int i = from;
+            while (i < to && isWhitespace(text.charAt(i))) {
+                i++;
+            }
+            return i;
+        }
+    }
+
+    private static boolean isWhitespace(char c) {
+        return c == ' ' || c == '\t' || c == '\f';
+    }
+
+    private static boolean endsWithOddBackslashes(CharSequence line) {
+        int count = 0;
+        for (int i = line.length() - 1; i >= 0 && line.charAt(i) == '\\'; i--) {
+            count++;
+        }
+        return count % 2 == 1;
+    }
+
+    /**
+     * Where the key ends and the value starts in one logical line, exactly as {@code Properties#load0} decides: the
+     * key ends at the first unescaped {@code =}, {@code :} or whitespace; then whitespace, at most one {@code =} or
+     * {@code :}, and whitespace are skipped.
+     *
+     * @return {@code [keyLength, valueStart]}
+     */
+    private static int[] splitKey(CharSequence line) {
+        int limit = line.length();
+        int keyLength = 0;
+        int valueStart = limit;
+        boolean hasSeparator = false;
+        boolean precedingBackslash = false;
+        while (keyLength < limit) {
+            char c = line.charAt(keyLength);
+            if ((c == '=' || c == ':') && !precedingBackslash) {
+                valueStart = keyLength + 1;
+                hasSeparator = true;
+                break;
+            } else if (isWhitespace(c) && !precedingBackslash) {
+                valueStart = keyLength + 1;
+                break;
+            }
+            precedingBackslash = c == '\\' && !precedingBackslash;
+            keyLength++;
+        }
+        while (valueStart < limit) {
+            char c = line.charAt(valueStart);
+            if (!isWhitespace(c)) {
+                if (!hasSeparator && (c == '=' || c == ':')) {
+                    hasSeparator = true;
+                } else {
+                    break;
+                }
+            }
+            valueStart++;
+        }
+        return new int[]{keyLength, valueStart};
+    }
+
+    /** {@code Properties#loadConvert}: <code>&#92;uXXXX</code>, <code>&#92;t &#92;n &#92;r &#92;f</code>, and <code>&#92;x</code> for any other x. */
+    private static String unescape(String escaped) {
+        StringBuilder out = new StringBuilder(escaped.length());
+        int i = 0;
+        while (i < escaped.length()) {
+            char c = escaped.charAt(i++);
+            if (c != '\\' || i >= escaped.length()) {
+                out.append(c);
+                continue;
+            }
+            c = escaped.charAt(i++);
+            if (c == 'u') {
+                if (i + 4 > escaped.length()) {
+                    throw new IllegalArgumentException("Malformed \\uxxxx encoding.");
+                }
+                out.append((char) Integer.parseInt(escaped.substring(i, i + 4), 16));
+                i += 4;
+            } else if (c == 't') {
+                out.append('\t');
+            } else if (c == 'r') {
+                out.append('\r');
+            } else if (c == 'n') {
+                out.append('\n');
+            } else if (c == 'f') {
+                out.append('\f');
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * {@code Properties#saveConvert} for a value: a leading space, <code>&#92;</code>, {@code = : # !} and the four control
+     * escapes are escaped; any other control character, a lone surrogate, and - in a file the server reads as
+     * ISO-8859-1 - every character above {@code ~} is written as <code>&#92;uXXXX</code>, which the reader decodes in both
+     * charsets. In a UTF-8 file other characters are written as they are, as the server itself writes them.
+     */
+    private static String escape(String value, boolean utf8) {
+        StringBuilder out = new StringBuilder(value.length() + 8);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case ' ':
+                    out.append(i == 0 ? "\\ " : " ");
+                    break;
+                case '\\':
+                    out.append("\\\\");
+                    break;
+                case '\t':
+                    out.append("\\t");
+                    break;
+                case '\n':
+                    out.append("\\n");
+                    break;
+                case '\r':
+                    out.append("\\r");
+                    break;
+                case '\f':
+                    out.append("\\f");
+                    break;
+                case '=':
+                case ':':
+                case '#':
+                case '!':
+                    out.append('\\').append(c);
+                    break;
+                default:
+                    boolean pairedSurrogate = Character.isHighSurrogate(c) && i + 1 < value.length()
+                            && Character.isLowSurrogate(value.charAt(i + 1))
+                            || Character.isLowSurrogate(c) && i > 0 && Character.isHighSurrogate(value.charAt(i - 1));
+                    boolean loneSurrogate = Character.isSurrogate(c) && !pairedSurrogate;
+                    if (c < 0x20 || c == 0x7f || loneSurrogate || (c > 0x7e && !utf8)) {
+                        out.append(String.format("\\u%04X", (int) c));
+                    } else {
+                        out.append(c);
+                    }
+            }
+        }
+        return out.toString();
+    }
+
+    /** Splits bytes into lines, each with its terminator (LF, CR or CRLF). */
+    private static List<byte[]> byteLines(byte[] bytes) {
+        List<byte[]> lines = new ArrayList<>();
+        int start = 0;
+        int i = 0;
+        while (i < bytes.length) {
+            if (bytes[i] == '\n' || bytes[i] == '\r') {
+                int end = bytes[i] == '\r' && i + 1 < bytes.length && bytes[i + 1] == '\n' ? i + 2 : i + 1;
+                lines.add(Arrays.copyOfRange(bytes, start, end));
+                start = end;
+                i = end;
+            } else {
+                i++;
+            }
+        }
+        if (start < bytes.length) {
+            lines.add(Arrays.copyOfRange(bytes, start, bytes.length));
+        }
+        return lines;
+    }
+
+    /**
+     * One line naming why a single-key write did not happen, or {@code null} when it
+     * {@link WriteOutcome#WRITTEN did}. Exposed through {@link #handleSet(JsonObject)}'s
+     * response so a panel operator is told the reason, not just {@code success: false}.
+     */
+    private static String describeOutcome(WriteOutcome outcome) {
+        switch (outcome) {
+            case WRITTEN:
+                return null;
+            case REJECTED:
+                return "Key is not in the allowed list";
+            case NOT_PRESENT_ON_THIS_SERVER:
+                // #473: states only what is known. A key absent from the file may be one this
+                // server version does not have, or one the file simply omits (Paper then uses its
+                // built-in default); nothing tells the two apart -- the Bukkit Server API lists no
+                // server.properties keys (measured on paper-api 1.21.11: no property-listing method
+                // on org.bukkit.Server) and the version's own key set lives in version-specific
+                // server internals.
+                return "This key is not in this server's server.properties";
+            default:
+                return "Failed to read or write server.properties";
+        }
+    }
+
+    /** What actually happened to one key. */
     private enum WriteOutcome {
-        /** Written to disk. 已写入。 */
+        /** Written to disk. */
         WRITTEN,
-        /** Not on {@link #SAFE_KEYS}; never attempted. 不在白名单，根本没尝试。 */
+        /** Not on {@link #SAFE_KEYS}; never attempted. */
         REJECTED,
-        /** On the whitelist, but reading or writing the file failed. 在白名单里，但读写失败。 */
+        /**
+         * On {@link #SAFE_KEYS} (a ceiling across every Paper version this framework supports),
+         * but the running server's own {@code server.properties} has no such key -- either an
+         * older or newer Paper version than the one that added it, or a file that omits it; the
+         * two cannot be told apart (#473). Writing it anyway could be silently ignored by the
+         * platform, so this is refused rather than written (D-15, SAFE_KEYS issue).
+         */
+        NOT_PRESENT_ON_THIS_SERVER,
+        /** On the whitelist and present in the file, but reading or writing the file failed. */
         FAILED
     }
 
@@ -125,11 +603,6 @@ public class ServerPropertiesManager {
      * single key. Keys carrying an explicit JSON {@code null} are not part of that
      * promise — a {@code null} reads as "leave this one alone", so it is recorded in
      * {@link #getSkipped()} for visibility but never fails the batch.
-     * <p>
-     * 一次 {@code set_all} 的结果。{@link #isSuccess()} 的含义是
-     * <em>调用方要求写的每一个键现在都在磁盘上</em>，也就是单键 {@code set} 早就在报的那件事的批量版。
-     * 值为 JSON {@code null} 的键不在这个承诺范围内 —— {@code null} 读作「这个别动」，
-     * 因此它只被记进 {@link #getSkipped()} 以便可见，不会让整批失败。
      */
     @ApiStatus.Internal
     public static final class SetAllResult {
@@ -138,69 +611,130 @@ public class ServerPropertiesManager {
         private final List<String> failed;
         private final List<String> skipped;
         private final List<String> malformed;
+        private final List<String> notPresentOnServer;
+        private final Map<String, String> failureReasons;
 
         /**
          * Public so callers outside this package can build one. Each list is copied before
          * being wrapped — {@code unmodifiableList} is a view, so wrapping the caller's list
          * directly would leave this "immutable" object mutable through the original reference.
-         * <p>
-         * 公开是为了包外也能构造。每个列表都先复制再包装 —— {@code unmodifiableList} 是视图，
-         * 直接包装调用方的列表会让这个「不可变」对象仍能通过原引用被改。
+         *
+         * @param notPresentOnServer keys allowlisted but absent from THIS server's own
+         *        {@code server.properties} (D-15) — Gate-2 finding: kept distinct from
+         *        {@code failed} so the response can say "this key is not in this server's server.properties"
+         *        rather than making it indistinguishable from a genuine read/write I/O error,
+         *        matching what a single-key {@code action: "set"} already reports via
+         *        {@link #describeOutcome(WriteOutcome)}.
          */
         public SetAllResult(List<String> updated, List<String> rejected, List<String> failed,
-                            List<String> skipped, List<String> malformed) {
+                            List<String> skipped, List<String> malformed, List<String> notPresentOnServer) {
+            this(updated, rejected, failed, skipped, malformed, notPresentOnServer, Collections.<String, String>emptyMap());
+        }
+
+        /**
+         * As the six-list constructor, with the reason a failed key was refused (UltiKits/UltiTools-Reborn#607: a key
+         * defined on more than one line, or over continuation lines, is not written). Reasons never carry a value.
+         *
+         * @param failureReasons failed key to the reason it was refused; keys without a reason failed on I/O
+         * @since 6.3.0
+         */
+        public SetAllResult(List<String> updated, List<String> rejected, List<String> failed,
+                            List<String> skipped, List<String> malformed, List<String> notPresentOnServer,
+                            Map<String, String> failureReasons) {
+            this.failureReasons = Collections.unmodifiableMap(new LinkedHashMap<>(failureReasons));
             this.updated = Collections.unmodifiableList(new ArrayList<>(updated));
             this.rejected = Collections.unmodifiableList(new ArrayList<>(rejected));
             this.failed = Collections.unmodifiableList(new ArrayList<>(failed));
             this.skipped = Collections.unmodifiableList(new ArrayList<>(skipped));
             this.malformed = Collections.unmodifiableList(new ArrayList<>(malformed));
+            this.notPresentOnServer = Collections.unmodifiableList(new ArrayList<>(notPresentOnServer));
         }
 
-        /** Keys written to disk. 已写入磁盘的键。 */
+        /** Keys written to disk. */
         public List<String> getUpdated() { return updated; }
 
-        /** Keys refused because they are not on the whitelist. 因不在白名单而被拒的键。 */
+        /** Keys refused because they are not on the whitelist. */
         public List<String> getRejected() { return rejected; }
 
-        /** Whitelisted keys whose write failed. 在白名单里但写入失败的键。 */
+        /** Whitelisted keys whose write failed. */
         public List<String> getFailed() { return failed; }
 
-        /** Keys whose value was an explicit JSON null. 值为 JSON null 因而被跳过的键。 */
+        /**
+         * Why a failed key was refused, for the keys that were refused rather than failing on I/O.
+         *
+         * @return failed key to reason (never a value)
+         * @since 6.3.0
+         */
+        public Map<String, String> getFailureReasons() { return failureReasons; }
+
+        /** Keys whose value was an explicit JSON null. */
         public List<String> getSkipped() { return skipped; }
 
-        /** Keys whose value was not a JSON primitive. 值不是 JSON 原始值因而无法作为属性写入的键。 */
+        /** Keys whose value was not a JSON primitive. */
         public List<String> getMalformed() { return malformed; }
 
-        /** Every requested key was written. 要求写的键全部写成功。 */
+        /**
+         * Keys on {@link #SAFE_KEYS} but absent from THIS server's own {@code server.properties}
+         * (D-15). Distinct from {@link #getFailed()} — writing one of these was never attempted;
+         * it is a version mismatch, not an I/O failure.
+         */
+        public List<String> getNotPresentOnServer() { return notPresentOnServer; }
+
+        /** Every requested key was written. */
         public boolean isSuccess() {
-            return rejected.isEmpty() && failed.isEmpty() && malformed.isEmpty();
+            return rejected.isEmpty() && failed.isEmpty() && malformed.isEmpty() && notPresentOnServer.isEmpty();
         }
 
         /**
          * One line naming what went wrong, for a log record or an error response.
          * Returns {@code null} when nothing went wrong.
          * <p>
-         * The three categories stay separate because they need three different actions:
-         * a rejected key means stop asking for it, a failed key means look at the disk,
-         * and a malformed key means fix the payload. Collapsing them into one label would
-         * send the reader looking in the wrong place — which is the failure mode this
-         * whole change exists to remove.
-         * <p>
-         * 一句话说明哪里没成，用于日志或错误响应；全部成功时返回 {@code null}。
-         * 三类分开写，是因为它们要三种不同的处置：被拒 = 别再要这个键，写入失败 = 去看磁盘，
-         * 畸形 = 去修载荷。合成一个标签会把人指向错误的方向，而那正是这次改动要消灭的失败形态。
+         * The categories stay separate because they need different actions: a rejected key means
+         * stop asking for it, a failed key means look at the disk, a malformed key means fix the
+         * payload, and a not-present-on-server key means this Paper version does not have it.
+         * Collapsing them into one label would send the reader looking in the wrong place —
+         * which is the failure mode this whole change exists to remove.
          */
         public String describeFailure() {
+            return describe(true);
+        }
+
+        /**
+         * As {@link #describeFailure()}, but without the failed keys that carry a refusal reason: the manager has
+         * already logged each of those once, with its reason, when it refused the key (17-66 review R66-I1), so the
+         * batch summary line names only what nothing else has reported. Returns {@code null} when nothing is left.
+         */
+        String describeUnreportedFailure() {
+            return describe(false);
+        }
+
+        @SuppressWarnings("PMD.NPathComplexity") // Four independent outcome lists, each named only when non-empty.
+        private String describe(boolean includeRefusedWithReason) {
             if (isSuccess()) return null;
-            StringBuilder sb = new StringBuilder("server.properties 批量设置未完全生效");
-            if (!rejected.isEmpty()) {
-                sb.append("；不在白名单因而被拒的键: ").append(String.join(", ", rejected));
+            List<String> named = new ArrayList<>();
+            for (String key : failed) {
+                String reason = failureReasons.get(key);
+                if (reason == null) {
+                    named.add(key);
+                } else if (includeRefusedWithReason) {
+                    named.add(key + " (" + reason + ")");
+                }
             }
-            if (!failed.isEmpty()) {
-                sb.append("；写入失败的键: ").append(String.join(", ", failed));
+            if (rejected.isEmpty() && named.isEmpty() && malformed.isEmpty() && notPresentOnServer.isEmpty()) {
+                return null;
+            }
+            StringBuilder sb = new StringBuilder(FrameworkText.text("server.properties 批量设置未完全生效"));
+            if (!rejected.isEmpty()) {
+                sb.append(FrameworkText.text("；不在白名单因而被拒的键: ")).append(String.join(", ", rejected));
+            }
+            if (!named.isEmpty()) {
+                sb.append(FrameworkText.text("；写入失败的键: ")).append(String.join(", ", named));
             }
             if (!malformed.isEmpty()) {
-                sb.append("；值不是字符串或数字因而无法写入的键: ").append(String.join(", ", malformed));
+                sb.append(FrameworkText.text("；值不是字符串或数字因而无法写入的键: ")).append(String.join(", ", malformed));
+            }
+            if (!notPresentOnServer.isEmpty()) {
+                sb.append(FrameworkText.text("；本服务器版本没有的键: ")).append(String.join(", ", notPresentOnServer));
             }
             return sb.toString();
         }
@@ -243,12 +777,16 @@ public class ServerPropertiesManager {
         String value = data.has("value") ? data.get("value").getAsString() : null;
         if (key == null || value == null) return;
 
-        boolean success = setProperty(key, value);
+        WriteResult result = writeProperty(key, value);
         JsonObject response = new JsonObject();
         response.addProperty("type", "server_properties_result");
         response.addProperty("action", "set");
-        response.addProperty("success", success);
+        response.addProperty("success", result.outcome == WriteOutcome.WRITTEN);
         response.addProperty("key", key);
+        String reason = result.describe();
+        if (reason != null) {
+            response.addProperty("reason", reason);
+        }
         sendResponse(response);
     }
 
@@ -269,12 +807,6 @@ public class ServerPropertiesManager {
      * {@code config_update_response} is supposed to distinguish "delivered" from
      * "took effect". Before this returned anything, that path had no way to learn the
      * answer and reported success unconditionally.
-     * <p>
-     * 应用一批属性、把结果发回面板，并把结果交还给调用方。
-     * <b>返回值才是重点</b>：{@code handleSetAll} 用不到它（它只负责拼一条消息），
-     * 但 {@code fileName: server_properties} 的 {@code update_config} 也走这里，
-     * 而它的 {@code config_update_response} 要区分「已下发」和「已生效」。
-     * 在这个方法有返回值之前，那条路径没有任何途径知道答案，只能无条件报成功。
      *
      * @param values key → value, an explicit JSON null meaning "leave this key alone"
      * @return what happened to each key
@@ -285,6 +817,8 @@ public class ServerPropertiesManager {
         List<String> failed = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
         List<String> malformed = new ArrayList<>();
+        List<String> notPresentOnServer = new ArrayList<>();
+        Map<String, String> failureReasons = new LinkedHashMap<>();
 
         for (String key : values.keySet()) {
             JsonElement value = values.get(key);
@@ -301,31 +835,37 @@ public class ServerPropertiesManager {
             // been written as motd=Hello. One malformed key used to abort the whole batch
             // before any response was built, which is the same "nobody can tell why"
             // shape this issue is about.
-            //
-            // server.properties 是一张扁平的字符串表，所以非 JSON 原始值不是「值」而是畸形请求。
-            // 守卫必须放在取值之前，因为 Gson 的失败方式并不统一：JsonObject 抛
-            // UnsupportedOperationException，空数组和多元素数组抛 IllegalStateException，
-            // 而**单元素数组根本不抛** —— 它静默拆包，{"motd": ["Hello"]} 会被写成 motd=Hello。
-            // 而且过去一个畸形键就会在任何响应被构造之前中断整批，正是本 issue 说的那种
-            // 「没人查得到原因」的形状。
             if (!value.isJsonPrimitive()) {
                 malformed.add(key);
                 continue;
             }
-            switch (writeProperty(key, value.getAsString())) {
+            WriteResult written = writeProperty(key, value.getAsString());
+            switch (written.outcome) {
                 case WRITTEN:
                     updated.add(key);
                     break;
                 case REJECTED:
                     rejected.add(key);
                     break;
+                case NOT_PRESENT_ON_THIS_SERVER:
+                    // Gate-2 finding: kept distinct from `failed` -- this is a version mismatch
+                    // ("this server does not have this key"), not a read/write I/O error, and
+                    // collapsing the two made a set_all response indistinguishable from an actual
+                    // disk failure even though the single-key action: "set" path already reports
+                    // the two separately via describeOutcome(WriteOutcome).
+                    notPresentOnServer.add(key);
+                    break;
                 default:
                     failed.add(key);
+                    if (written.reason != null) {
+                        failureReasons.put(key, written.reason);
+                    }
                     break;
             }
         }
 
-        SetAllResult result = new SetAllResult(updated, rejected, failed, skipped, malformed);
+        SetAllResult result = new SetAllResult(updated, rejected, failed, skipped, malformed, notPresentOnServer,
+                failureReasons);
         warnIfIncomplete(result);
         sendResponse(buildSetAllResponse(result));
         return result;
@@ -336,12 +876,21 @@ public class ServerPropertiesManager {
         response.addProperty("type", "server_properties_result");
         response.addProperty("action", "set_all");
         response.addProperty("success", result.isSuccess());
-        // updated 保持数字，面板一直读的是这个字段；被挡下的键走新增的数组字段。
+        // "updated" stays a number — the panel has always read this field; blocked keys
+        // go through the newly added array fields.
         response.addProperty("updated", result.getUpdated().size());
         response.add("rejected", toJsonArray(result.getRejected()));
         response.add("failed", toJsonArray(result.getFailed()));
         response.add("skipped", toJsonArray(result.getSkipped()));
         response.add("malformed", toJsonArray(result.getMalformed()));
+        response.add("notPresentOnServer", toJsonArray(result.getNotPresentOnServer()));
+        // Additive (17-66 review R66-I1): why each failed key was refused, as the single-key "set" reply's
+        // "reason" already says. A key that failed on I/O has no entry. Reasons never carry a value.
+        JsonObject reasons = new JsonObject();
+        for (Map.Entry<String, String> reason : result.getFailureReasons().entrySet()) {
+            reasons.addProperty(reason.getKey(), reason.getValue());
+        }
+        response.add("failureReasons", reasons);
         return response;
     }
 
@@ -357,15 +906,15 @@ public class ServerPropertiesManager {
      * The response above is what the panel reads; this is what a server operator reads.
      * Both are needed: someone changing a setting that silently does not apply otherwise
      * finds nothing on either side.
-     * <p>
-     * 上面那条响应是给面板读的，这条是给服主读的。两边都要有：
-     * 否则改了个设置没生效的人，面板和服务器日志两头都查不到原因。
      */
     private void warnIfIncomplete(SetAllResult result) {
-        String failure = result.describeFailure();
+        // A key refused with a reason was already logged once by refuse(); this line names only the rest.
+        String failure = result.describeUnreportedFailure();
         if (failure == null) return;
-        // 这个管理器由 initWebSocketManagers() 在 onEnable 里构造，生产环境下单例一定就绪；
-        // 判空是为了让纯文件逻辑的单元测试不必先装一个全局单例。
+        // This manager is constructed by initWebSocketManagers() in onEnable, so in
+        // production the singleton is always ready by the time this runs; the null check
+        // exists so a pure-file-logic unit test does not need to stand up a global
+        // singleton first.
         UltiTools instance = UltiTools.getInstance();
         if (instance != null && instance.getLogger() != null) {
             instance.getLogger().log(Level.WARNING, failure);

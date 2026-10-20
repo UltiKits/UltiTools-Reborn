@@ -1,25 +1,28 @@
 name: 🔑 GPG Key Expiry
 
-# 提前预警 Maven Central 发布用的 GPG 签名密钥到期。
+# Warns ahead of time when the GPG signing key used for Maven Central releases is about to expire.
 #
-# 密钥过期是静默的：日常 mvn test / mvn package 不签名，PR 上的 mvn clean verify
-# 也不签名（签名只在 release profile 里），所以只有发版当天真正跑 gpg:sign 才会暴露。
-# 这个 job 每月查一次，剩余不足 30 天就变红。
+# Key expiry is silent: everyday mvn test / mvn package does not sign, and mvn clean verify on a
+# PR does not sign either (signing lives only in the release profile), so it only ever surfaces
+# when gpg:sign actually runs on release day. This job checks once a month and turns red once
+# fewer than 30 days remain.
 #
-# 只用公钥，不碰任何 secret。公钥从 keyserver 按指纹取——指纹是公开信息，
-# 它随每一个发到 Maven Central 的 .asc 签名一起分发，本来就是给使用者验签用的。
+# Uses only the public key, and touches no secret. The public key is fetched from the keyserver by
+# fingerprint -- the fingerprint is public information, distributed alongside every .asc signature
+# pushed to Maven Central, and exists precisely so a consumer can verify the signature.
 #
-# ⚠ schedule 触发器只对**默认分支**上的 workflow 生效。这个仓库默认分支是 main，
-#   开发在 alpha，所以定时预警要等 alpha 合进 main 之后才真正开始跑。
-#   在那之前，发布路径上的实时闸门（publish-packages.yml 里的密钥有效期检查）
-#   才是主要防线。
+# ⚠ The schedule trigger only fires for a workflow on the **default branch**. This repository's
+#   default branch is main, while development happens on alpha, so the scheduled warning only
+#   really starts running once alpha is merged into main. Until then, the real-time gate on the
+#   publish path (the key-validity check inside publish-packages.yml) is the primary line of
+#   defense.
 
 on:
   schedule:
-    # 每月 1 号 09:00 UTC
+    # 09:00 UTC on the 1st of every month
     - cron: '0 9 1 * *'
   workflow_dispatch:
-  # 检查脚本自己被改动时自测一次，免得这套预警本身悄悄坏掉。
+  # Self-tests when the check script itself changes, so this warning system does not quietly break.
   pull_request:
     paths:
       - '.github/workflows/gpg-key-expiry.yml'
@@ -39,25 +42,29 @@ jobs:
 
       - name: 🔎 Fetch public key from keyserver
         env:
-          # 换签名密钥时这里要同步改。这是公钥指纹，不是凭据。
+          # Update this in step when the signing key rotates. This is the public-key fingerprint,
+          # not a credential.
           KEY_FPR: 2334303E84CA28D14B6A0746C27654300A2E94D6
         run: |
           set -euo pipefail
 
-          # 用 keyserver.ubuntu.com。不要换成 keys.openpgp.org：后者对未验证的密钥
-          # 会剥掉 uid，返回的确实是 HTTP 200 加一个合法的 PGP 块，但 gpg 导入时会以
-          # "contains no user ID - skipped" 跳过，钥匙串是空的。HTTP 成功不等于拿到了密钥。
+          # Uses keyserver.ubuntu.com. Do not switch to keys.openpgp.org: for an unverified key it
+          # strips the uid, and the response really is an HTTP 200 with a well-formed PGP block,
+          # but gpg's import then skips it with "contains no user ID - skipped" and the keyring
+          # ends up empty. An HTTP success does not mean the key was actually obtained.
           curl -sSf --retry 3 --retry-delay 5 --max-time 30 \
             -o pubkey.asc \
             "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${KEY_FPR}&options=mr"
 
-          # 导入输出里带 uid（维护者邮箱），这是公开仓库的公开日志，丢掉不打印。
+          # The import output includes the uid (the maintainer's email); this is a public log on a
+          # public repository, so it is discarded rather than printed.
           gpg --batch --import pubkey.asc > /dev/null 2>&1 || true
 
-          # 断言真的导入到了这把密钥，而不是拿到一坨解析不了的东西。
+          # Assert this exact key was actually imported, not just that something unparseable
+          # came back.
           if ! gpg --list-keys --with-colons "${KEY_FPR}" > /dev/null 2>&1; then
-            echo "::error::从 keyserver 取到了响应，但 ${KEY_FPR: -16} 没有成功导入钥匙串。"
-            echo "        检查这把密钥是否还在 keyserver 上，或者指纹是否已经变了。"
+            echo "::error::got a response from the keyserver, but ${KEY_FPR: -16} was not successfully imported into the keyring."
+            echo "        Check whether this key is still on the keyserver, or whether the fingerprint has changed."
             exit 1
           fi
 

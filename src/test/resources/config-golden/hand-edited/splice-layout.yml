@@ -1,0 +1,11 @@
+---
+enabled: true    # aligned note
+worlds: [ world, world_nether ]
+key:   value   
+two:
+  nested: 1  
+four:
+    nested: 2    # second width
+# removable key comment
+remove-me: gone
+change: old

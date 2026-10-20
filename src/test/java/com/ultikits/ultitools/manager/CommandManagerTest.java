@@ -6,44 +6,57 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.command.SimpleCommandMap;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.PluginDescriptionFile;
+import org.bukkit.plugin.SimplePluginManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdSender;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.context.AutowireFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockito.Answers;
+import org.mockito.MockedStatic;
 
 /**
  * CommandManager 测试
@@ -87,7 +100,7 @@ class CommandManagerTest {
      * 测试用命令执行器 - 有 @CmdExecutor 注解
      */
     @CmdExecutor(alias = {"testcmd"}, permission = "test.cmd", description = "Test command")
-    static class TestCommandExecutor extends AbstractCommandExecutor {
+    static class TestCommandExecutor extends BaseCommandExecutor {
 
         @CmdMapping(format = "")
         public void execute(@CmdSender CommandSender sender) {
@@ -106,6 +119,24 @@ class CommandManagerTest {
         }
     }
 
+    /** A second module's command, for close() over several modules. */
+    @CmdExecutor(alias = {"secondcmd"}, permission = "test.second", description = "Second command")
+    static class SecondCommandExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            sender.sendMessage("Help for second command");
+        }
+    }
+
+    /** A third module's command, for close() over several modules. */
+    @CmdExecutor(alias = {"thirdcmd"}, permission = "test.third", description = "Third command")
+    static class ThirdCommandExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            sender.sendMessage("Help for third command");
+        }
+    }
+
     /**
      * 测试用命令执行器 - 无 @CmdExecutor 注解
      */
@@ -120,7 +151,7 @@ class CommandManagerTest {
      * 测试用命令执行器 - manualRegister = true
      */
     @CmdExecutor(alias = {"manualcmd"}, permission = "manual.cmd", description = "Manual command", manualRegister = true)
-    static class ManualRegisterCommandExecutor extends AbstractCommandExecutor {
+    static class ManualRegisterCommandExecutor extends BaseCommandExecutor {
         @Override
         public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
             return true;
@@ -282,6 +313,53 @@ class CommandManagerTest {
             // Act & Assert - 不应该抛出异常
             commandManager.close();
         }
+
+        /**
+         * unregisterAll drops a module's entry once its commands are released, so close() must not iterate
+         * the live key set: with two or more modules left it would throw ConcurrentModificationException
+         * after the first one and leave the rest registered. Needs a real command map, which MockBukkit's
+         * own plugin manager does not expose (see CommandManagerKnownCommandsCleanupTest).
+         */
+        @Test
+        @DisplayName("close() after one module was unloaded releases every remaining module's command and tracks none")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reaches the private register(plugin, executor) primitive and the private map
+        void closeAfterUnloadReleasesEveryRemainingModule() throws Exception {
+            SimpleCommandMap realCommandMap = new SimpleCommandMap(server, new HashMap<>());
+            SimplePluginManager realPluginManager = new SimplePluginManager(server, realCommandMap);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getDescription()).thenReturn(
+                        new PluginDescriptionFile("ultitools", "1.0", "com.ultikits.ultitools.UltiTools"));
+            });
+            Method register = CommandManager.class.getDeclaredMethod("register", UltiToolsPlugin.class, CommandExecutor.class);
+            register.setAccessible(true);
+            Field mapField = CommandManager.class.getDeclaredField("commandListMap");
+            mapField.setAccessible(true);
+            UltiToolsPlugin unloaded = moduleNamed("Unloaded");
+            UltiToolsPlugin second = moduleNamed("Second");
+            UltiToolsPlugin third = moduleNamed("Third");
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class, Answers.CALLS_REAL_METHODS)) {
+                bukkit.when(Bukkit::getPluginManager).thenReturn(realPluginManager);
+                register.invoke(commandManager, unloaded, new TestCommandExecutor());
+                register.invoke(commandManager, second, new SecondCommandExecutor());
+                register.invoke(commandManager, third, new ThirdCommandExecutor());
+                commandManager.unregisterAll(unloaded);
+
+                assertDoesNotThrow(commandManager::close);
+
+                assertThat(realCommandMap.getCommand("secondcmd")).as("the second module's command is released").isNull();
+                assertThat(realCommandMap.getCommand("thirdcmd")).as("the third module's command is released").isNull();
+                assertThat((Map<?, ?>) mapField.get(commandManager)).as("no module is tracked after close()").isEmpty();
+            }
+        }
+
+        private UltiToolsPlugin moduleNamed(String name) {
+            UltiToolsPlugin module = mock(UltiToolsPlugin.class);
+            when(module.getPluginName()).thenReturn(name);
+            when(module.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            return module;
+        }
     }
 
     @Nested
@@ -431,38 +509,6 @@ class CommandManagerTest {
     }
 
     @Nested
-    @DisplayName("register(CommandExecutor) 废弃方法测试")
-    class RegisterDeprecatedTests {
-
-        @Test
-        @DisplayName("带注解的 CommandExecutor 应该能注册")
-        void shouldRegisterWithAnnotation() {
-            // Arrange
-            TestCommandExecutor executor = new TestCommandExecutor();
-
-            // Act & Assert - 验证注册不会抛出意外异常（NPE在MockBukkit环境中是预期的）
-            try {
-                commandManager.register(executor);
-                // 如果注册成功，commandManager应该仍然有效
-                assertThat(commandManager).isNotNull();
-            } catch (NullPointerException e) {
-                // 预期行为 - MockBukkit 环境中 CommandMap 为 null
-                assertThat(e).isNotNull();
-            }
-        }
-
-        @Test
-        @DisplayName("无注解的 CommandExecutor 应该记录警告")
-        void shouldLogWarningWithoutAnnotation() {
-            // Arrange
-            NoAnnotationCommandExecutor executor = new NoAnnotationCommandExecutor();
-
-            // Act & Assert - 应该记录警告日志但不抛出异常
-            assertDoesNotThrow(() -> commandManager.register(executor));
-        }
-    }
-
-    @Nested
     @DisplayName("registerCoreCommand 测试")
     class RegisterCoreCommandTests {
 
@@ -488,27 +534,6 @@ class CommandManagerTest {
 
             // Act & Assert - 应该记录警告但不抛出异常
             assertDoesNotThrow(() -> commandManager.registerCoreCommand(executor));
-        }
-    }
-
-    @Nested
-    @DisplayName("register(CommandExecutor, permission, description, aliases) 废弃方法测试")
-    class RegisterWithParamsDeprecatedTests {
-
-        @Test
-        @DisplayName("应该尝试注册命令")
-        void shouldTryToRegister() {
-            // Arrange
-            TestCommandExecutor executor = new TestCommandExecutor();
-
-            // Act & Assert - 验证注册过程不会导致意外崩溃
-            try {
-                commandManager.register(executor, "test.perm", "Test description", "testcmd", "tc");
-                assertThat(commandManager).isNotNull();
-            } catch (NullPointerException e) {
-                // 预期 - MockBukkit 中 CommandMap 为 null
-                assertThat(e).isNotNull();
-            }
         }
     }
 
@@ -639,7 +664,7 @@ class CommandManagerTest {
             executor.handleHelp(sender);
 
             // Assert
-            org.mockito.Mockito.verify(sender).sendMessage("Help for test command");
+            verify(sender).sendMessage("Help for test command");
         }
     }
 
@@ -664,6 +689,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("handleHelp 应该发送帮助消息")
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void handleHelpShouldSendMessage() {
             // Arrange
             ManualRegisterCommandExecutor executor = new ManualRegisterCommandExecutor();
@@ -673,7 +699,7 @@ class CommandManagerTest {
             executor.handleHelp(sender);
 
             // Assert
-            org.mockito.Mockito.verify(sender).sendMessage("Help for manual command");
+            verify(sender).sendMessage("Help for manual command");
         }
     }
 
@@ -842,46 +868,6 @@ class CommandManagerTest {
     }
 
     @Nested
-    @DisplayName("register 废弃方法详细测试")
-    class RegisterDeprecatedDetailedTests {
-
-        @Test
-        @DisplayName("register(CommandExecutor, permission, description, aliases) 应该设置命令属性")
-        void shouldSetCommandProperties() throws Exception { // NOPMD - uses Mockito verify()
-            // Arrange
-            TestCommandExecutor executor = new TestCommandExecutor();
-            
-            // 获取 getCommand 方法来验证命令被创建
-            Method getCommandMethod = CommandManager.class.getDeclaredMethod("getCommand", String.class, Plugin.class);
-            getCommandMethod.setAccessible(true);
-            
-            // Act - 由于 getCommandMap 返回 null，会抛出 NPE
-            try {
-                commandManager.register(executor, "test.permission", "Test description", "testcmd", "tc");
-            } catch (NullPointerException e) {
-                // 预期行为 - 但代码执行到了设置 aliases, permission, description 之后
-            }
-        }
-
-        @Test
-        @DisplayName("register(CommandExecutor) 应该检查注解并调用 register")
-        void shouldCheckAnnotationAndCallRegister() {
-            // Arrange
-            TestCommandExecutor executor = new TestCommandExecutor();
-            
-            // Act - 由于 getCommandMap 返回 null，会抛出 NPE
-            try {
-                commandManager.register(executor);
-            } catch (NullPointerException e) {
-                // 预期行为
-            }
-            
-            // Assert - 验证注解被检查
-            assertThat(executor.getClass().isAnnotationPresent(CmdExecutor.class)).isTrue();
-        }
-    }
-
-    @Nested
     @DisplayName("registerCoreCommand 详细测试")
     class RegisterCoreCommandDetailedTests {
 
@@ -1010,15 +996,6 @@ class CommandManagerTest {
         }
 
         @Test
-        @DisplayName("registerAll(UltiToolsPlugin, String) 应该存在")
-        void registerAllWithPackageShouldExist() throws Exception {
-            Method method = CommandManager.class.getDeclaredMethod(
-                "registerAll", UltiToolsPlugin.class, String.class);
-            assertThat(method).isNotNull();
-            assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
-        }
-
-        @Test
         @DisplayName("registerAll(UltiToolsPlugin) 应该存在")
         void registerAllShouldExist() throws Exception {
             Method method = CommandManager.class.getDeclaredMethod("registerAll", UltiToolsPlugin.class);
@@ -1041,16 +1018,6 @@ class CommandManagerTest {
             assertThat(java.lang.reflect.Modifier.isPrivate(method2.getModifiers())).isTrue();
         }
 
-        @Test
-        @DisplayName("废弃方法应该有 @Deprecated 注解")
-        void deprecatedMethodsShouldHaveAnnotation() throws Exception {
-            Method registerWithParams = CommandManager.class.getDeclaredMethod(
-                "register", CommandExecutor.class, String.class, String.class, String[].class);
-            assertThat(registerWithParams.isAnnotationPresent(Deprecated.class)).isTrue();
-            
-            Method registerSimple = CommandManager.class.getDeclaredMethod("register", CommandExecutor.class);
-            assertThat(registerSimple.isAnnotationPresent(Deprecated.class)).isTrue();
-        }
     }
 
     @Nested
@@ -1101,59 +1068,6 @@ class CommandManagerTest {
 
             // Assert - 命令不应该被重复添加
             assertThat(map.get(mockPlugin)).hasSize(1);
-        }
-    }
-
-    @Nested
-    @DisplayName("registerAll(UltiToolsPlugin, String) 测试")
-    class RegisterAllWithPackageTests {
-
-        @Test
-        @DisplayName("应该扫描指定包下的类")
-        void shouldScanPackage() { // NOPMD - uses Mockito verify()
-            // 注意：这个测试主要验证方法不会抛出异常
-            // 实际的扫描逻辑依赖于 PackageScanUtils 和 ClassLoader
-            
-            // Act - 使用不存在的包名
-            commandManager.registerAll(mockPlugin, "com.nonexistent.package");
-
-            // Assert - 不应该抛出异常
-        }
-
-        @Test
-        @DisplayName("BaseCommandExecutor 不属于本重载强转的类型——这是弃用它的全部依据")
-        void baseCommandExecutorIsNotAssignableToTheCastTarget() {
-            // 本重载把扫描到的每个类强转为 AbstractCommandExecutor。当代命令类继承的是
-            // BaseCommandExecutor，它 implements TabExecutor 而不继承前者，所以那次强转
-            // 必抛 ClassCastException——而外层 catch 只列了四个反射类受检异常，异常会逃出去。
-            //
-            // 这条断言钉住的是那个结论的**全部依据**：一条类型关系。不去跑真实包扫描，
-            // 因为那需要往测试树里放一个 @CmdExecutor 类，会被别的扫描测试捎带上，而这个
-            // 方法在 6.3.0 就删了，不值得为一个版本的寿命引入那种耦合。
-            //
-            // 如果哪天有人让 BaseCommandExecutor 继承了 AbstractCommandExecutor，弃用理由
-            // 就不再成立——这条会立刻变红，提醒去重新评估 issue #272 的结论。
-            assertThat(AbstractCommandExecutor.class.isAssignableFrom(BaseCommandExecutor.class))
-                    .as("BaseCommandExecutor 若继承了 AbstractCommandExecutor，#272 的弃用理由需重新评估")
-                    .isFalse();
-        }
-
-        @Test
-        @DisplayName("本重载应当带着 forRemoval 标注，下游才会被 -Xlint:removal 点名")
-        void castingOverloadShouldBeMarkedForRemoval() throws Exception {
-            // COMPATIBILITY.md 把「你确实被点名警告过」定为可以移除的前提，而 javac 的
-            // -Xlint:removal 默认开启、-Xlint:deprecation 默认关闭。所以标注掉了不只是
-            // 文档不同步，是下游拿不到警告就被删了 API。
-            Method method = CommandManager.class.getDeclaredMethod(
-                    "registerAll", UltiToolsPlugin.class, String.class);
-            Deprecated deprecated = method.getAnnotation(Deprecated.class);
-
-            assertThat(deprecated)
-                    .as("registerAll(UltiToolsPlugin, String) 的 @Deprecated 标注不见了")
-                    .isNotNull();
-            assertThat(deprecated.forRemoval())
-                    .as("forRemoval 被改成了 false，下游将只收到不含 API 名的笼统提示")
-                    .isTrue();
         }
     }
 
@@ -1340,24 +1254,27 @@ class CommandManagerTest {
     }
 
     /**
-     * 废弃方法 register(CommandExecutor, String, String, String...) 深度测试
+     * 私有 registerCommandDirect(CommandExecutor, String, String, String...) / registerCommandDirect(CommandExecutor)
+     * 深度测试。计划 07-14（GEN-04）删除了这两个方法原先所在的公开废弃 register(CommandExecutor, ...)
+     * 重载；这里的断言原本钉住的就是这段底层注册原语本身的行为（NPE 路径、注解检查路径），
+     * 现在改为直接反射这两个私有方法，行为未变，变的只是它们不再是公开、废弃的入口。
      */
     @Nested
-    @DisplayName("废弃 register 方法深度测试")
+    @DisplayName("registerCommandDirect 私有方法深度测试")
     class DeprecatedRegisterDeepTests {
 
         @Test
-        @DisplayName("废弃的 register 方法应该设置命令属性")
+        @DisplayName("registerCommandDirect 方法应该设置命令属性")
         void deprecatedRegisterShouldSetCommandProperties() throws Exception {
-            // 这个测试验证废弃方法的行为
+            // 这个测试验证底层注册原语的行为
             // 由于 getCommandMap() 返回 null，会抛出 NullPointerException
-            
+
             Method registerMethod = CommandManager.class.getDeclaredMethod(
-                "register", CommandExecutor.class, String.class, String.class, String[].class);
+                "registerCommandDirect", CommandExecutor.class, String.class, String.class, String[].class);
             registerMethod.setAccessible(true);
-            
+
             CommandExecutor executor = mock(CommandExecutor.class);
-            
+
             // Act & Assert - 预期 NullPointerException 因为 getCommandMap() 返回 null
             try {
                 registerMethod.invoke(commandManager, executor, "permission", "description", new String[]{"cmd"});
@@ -1368,33 +1285,33 @@ class CommandManagerTest {
         }
 
         @Test
-        @DisplayName("废弃的 register(CommandExecutor) 应该检查注解")
+        @DisplayName("registerCommandDirect(CommandExecutor) 应该检查注解")
         void deprecatedRegisterWithExecutorShouldCheckAnnotation() throws Exception { // NOPMD - uses Mockito verify()
             // 测试无注解的 executor 行为
-            Method registerMethod = CommandManager.class.getDeclaredMethod("register", CommandExecutor.class);
+            Method registerMethod = CommandManager.class.getDeclaredMethod("registerCommandDirect", CommandExecutor.class);
             registerMethod.setAccessible(true);
-            
+
             NoAnnotationCommandExecutor executor = new NoAnnotationCommandExecutor();
-            
+
             // Act - 应该记录警告但不抛出异常
             registerMethod.invoke(commandManager, executor);
-            
-            // 方法应该完成而不抛出异常（因为没有调用 register(perm, desc, aliases)）
+
+            // 方法应该完成而不抛出异常（因为没有调用 registerCommandDirect(perm, desc, aliases)）
         }
 
         @Test
-        @DisplayName("废弃的 register(CommandExecutor) 有注解时应该调用完整 register")
+        @DisplayName("registerCommandDirect(CommandExecutor) 有注解时应该调用完整 registerCommandDirect")
         void deprecatedRegisterWithAnnotatedExecutorShouldCallFullRegister() throws Exception {
-            Method registerMethod = CommandManager.class.getDeclaredMethod("register", CommandExecutor.class);
+            Method registerMethod = CommandManager.class.getDeclaredMethod("registerCommandDirect", CommandExecutor.class);
             registerMethod.setAccessible(true);
-            
+
             TestCommandExecutor executor = new TestCommandExecutor();
-            
-            // Act & Assert - 有注解，会调用 register(perm, desc, aliases) 但 getCommandMap 返回 null
+
+            // Act & Assert - 有注解，会调用 registerCommandDirect(perm, desc, aliases) 但 getCommandMap 返回 null
             try {
                 registerMethod.invoke(commandManager, executor);
             } catch (Exception e) {
-                // 预期行为 - 调用 register(perm, desc, aliases) 时 getCommandMap() 返回 null
+                // 预期行为 - 调用 registerCommandDirect(perm, desc, aliases) 时 getCommandMap() 返回 null
                 assertThat(e.getCause()).isInstanceOf(NullPointerException.class);
             }
         }
@@ -1605,6 +1522,56 @@ class CommandManagerTest {
     }
 
     /**
+     * #347: the five-argument register(plugin, class, permission, description, aliases...) used
+     * to resolve the command bean from the CORE container ({@code UltiTools.getInstance()
+     * .getDependenceManagers().getContext()}) instead of the module's own container ({@code
+     * plugin.getContext()}), the way the two-argument overload register(plugin, class) already
+     * does -- a module author who explicitly passes permission/description/aliases got back a
+     * core-container bean of the same type, not the instance they registered themselves.
+     */
+    @Nested
+    @DisplayName("register(plugin, class, permission, description, aliases) container resolution (#347)")
+    class FiveArgRegisterContainerResolutionTests {
+
+        @Test
+        @DisplayName("should resolve the bean from the module's own container, not the core container")
+        void resolvesCommandBeanFromModuleContainerNotCoreContainer() {
+            // Arrange -- the module's own container holds ONE instance.
+            SimpleContainer moduleContext = mock(SimpleContainer.class);
+            TestCommandExecutor moduleExecutor = new TestCommandExecutor();
+            when(mockPlugin.getContext()).thenReturn(moduleContext);
+            when(moduleContext.getBean(TestCommandExecutor.class)).thenReturn(moduleExecutor);
+            when(mockPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+
+            // Arrange -- the CORE container holds a DIFFERENT instance of the SAME type, so a
+            // registration path that resolves from the wrong container is observably wrong
+            // rather than accidentally correct (the shadowing case the plan requires).
+            DependenceManagers mockDependenceManagers = mock(DependenceManagers.class);
+            SimpleContainer coreContext = mock(SimpleContainer.class);
+            TestCommandExecutor coreExecutor = new TestCommandExecutor();
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getDependenceManagers()).thenReturn(mockDependenceManagers);
+            });
+            when(mockDependenceManagers.getContext()).thenReturn(coreContext);
+            when(coreContext.getBean(TestCommandExecutor.class)).thenReturn(coreExecutor);
+
+            // Act -- getCommandMap() returns null under MockBukkit, so the eventual NPE is
+            // expected; it happens strictly AFTER the bean-resolution call below is already
+            // observable, so the assertions below are unaffected by it.
+            try {
+                commandManager.register(mockPlugin, TestCommandExecutor.class, "test.perm", "Test desc", "testcmd");
+            } catch (NullPointerException e) {
+                // Expected: getCommandMap() returns null under MockBukkit
+            }
+
+            // Assert -- the module's container was consulted; the core container never was.
+            verify(moduleContext).getBean(TestCommandExecutor.class);
+            verify(coreContext, never()).getBean(TestCommandExecutor.class);
+        }
+    }
+
+    /**
      * 私有 register(UltiToolsPlugin, CommandExecutor, String, String, String...) 测试
      */
     @Nested
@@ -1789,35 +1756,6 @@ class CommandManagerTest {
     }
 
     /**
-     * registerAll(UltiToolsPlugin, String) 深度测试
-     */
-    @Nested
-    @DisplayName("registerAll 包扫描深度测试")
-    class RegisterAllPackageScanDeepTests {
-
-        @Test
-        @DisplayName("扫描空包应该不注册任何命令")
-        void emptyPackageShouldNotRegisterAnyCommands() throws Exception {
-            // Arrange - 使用一个不存在的包名
-            // Act & Assert - 验证扫描空包不会抛出异常
-            assertDoesNotThrow(() ->
-                commandManager.registerAll(mockPlugin, "com.nonexistent.package.that.does.not.exist"),
-                "registerAll should not throw for empty/nonexistent package");
-        }
-
-        @Test
-        @DisplayName("扫描的类必须有无参构造函数")
-        void scannedClassMustHaveNoArgConstructor() {
-            // 这个测试验证 NoSuchMethodException 的处理
-            // registerAll 捕获 NoSuchMethodException 并忽略
-            // Act & Assert - 验证类没有无参构造函数时异常会被捕获
-            assertDoesNotThrow(() ->
-                commandManager.registerAll(mockPlugin, "com.ultikits.ultitools.manager"),
-                "registerAll should handle classes without no-arg constructor gracefully");
-        }
-    }
-
-    /**
      * 异常处理测试
      */
     @Nested
@@ -1919,6 +1857,130 @@ class CommandManagerTest {
             commandManager.registerAll(mockPlugin);
             
             // Assert - 所有命令被跳过，没有异常
+        }
+    }
+
+    /**
+     * Binds an already-registered instance under a second name through the protected
+     * {@code addSingleton}, exactly as {@code ComponentScanner.processBeanMethod} binds the alias
+     * names of a {@code @Bean(name = {primary, alias})} product.
+     */
+    static class AliasingContainer extends SimpleContainer {
+        void bindAlias(String alias, Object instance) {
+            addSingleton(alias, instance);
+        }
+    }
+
+    /**
+     * C50, registration half: {@code registerAll} enumerates bean <em>names</em>, so one executor
+     * bound under two names reached Bukkit's command map twice. Bukkit registration is observed
+     * on a spied real {@link SimpleCommandMap} behind a real {@link SimplePluginManager}, the
+     * same pair {@code CommandManagerKnownCommandsCleanupTest} uses, because MockBukkit's own
+     * plugin manager is not a {@code SimplePluginManager}.
+     */
+    @Nested
+    @DisplayName("C50: registerAll registers an aliased executor instance once")
+    class AliasedInstanceRegistrationTests {
+
+        private SimpleCommandMap commandMap;
+        private SimplePluginManager pluginManager;
+
+        @BeforeEach
+        void setUpCommandMap() {
+            // Republish the UltiTools mock with a description: registerCommandDirect reads its
+            // name as the fallback prefix. All stubbing happens before publication (issue #250).
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getDescription()).thenReturn(
+                        new PluginDescriptionFile("ultitools", "1.0", "com.ultikits.ultitools.UltiTools"));
+            });
+            commandMap = spy(new SimpleCommandMap(server, new HashMap<>()));
+            pluginManager = new SimplePluginManager(server, commandMap);
+        }
+
+        private int bukkitRegistrationsOf(CommandExecutor executor) {
+            return (int) org.mockito.Mockito.mockingDetails(commandMap).getInvocations().stream()
+                    .filter(invocation -> "register".equals(invocation.getMethod().getName())
+                            && invocation.getArguments().length == 2
+                            && invocation.getArguments()[1] instanceof PluginCommand
+                            && ((PluginCommand) invocation.getArguments()[1]).getExecutor() == executor)
+                    .count();
+        }
+
+        private ExternalPluginAdapter externalAdapter(SimpleContainer context) {
+            ExternalPluginAdapter adapter = mock(ExternalPluginAdapter.class);
+            when(adapter.getContext()).thenReturn(context);
+            when(adapter.getPluginName()).thenReturn("ExternalPlugin");
+            return adapter;
+        }
+
+        @Test
+        @DisplayName("module registerAll: one executor under two names reaches Bukkit once")
+        void aliasedExecutorRegisteredOnceForModule() {
+            TestCommandExecutor executor = new TestCommandExecutor();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("aliasedCommand", executor);
+            context.bindAlias("aliasedCommandAlias", executor);
+            when(mockPlugin.getContext()).thenReturn(context);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                bukkit.when(Bukkit::getLogger).thenReturn(mockLogger);
+
+                commandManager.registerAll(mockPlugin);
+            }
+
+            assertThat(bukkitRegistrationsOf(executor))
+                    .as("an alias is another name for the same executor; Bukkit must see it once")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("external registerAllExternal: one executor under two names reaches Bukkit once")
+        void aliasedExecutorRegisteredOnceForExternalPlugin() {
+            TestCommandExecutor executor = new TestCommandExecutor();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("aliasedCommand", executor);
+            context.bindAlias("aliasedCommandAlias", executor);
+            ExternalPluginAdapter adapter = externalAdapter(context);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                bukkit.when(Bukkit::getLogger).thenReturn(mockLogger);
+
+                commandManager.registerAllExternal(adapter);
+            }
+
+            assertThat(bukkitRegistrationsOf(executor))
+                    .as("an alias is another name for the same executor; Bukkit must see it once")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("two distinct executor instances under two names are both registered")
+        void distinctExecutorsAreBothRegistered() {
+            TestCommandExecutor first = new TestCommandExecutor();
+            TestCommandExecutor second = new TestCommandExecutor();
+            ManualRegisterCommandExecutor manual = new ManualRegisterCommandExecutor();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("firstCommand", first);
+            context.registerSingleton("secondCommand", second);
+            context.registerSingleton("manualCommand", manual);
+            when(mockPlugin.getContext()).thenReturn(context);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                bukkit.when(Bukkit::getLogger).thenReturn(mockLogger);
+
+                commandManager.registerAll(mockPlugin);
+            }
+
+            assertThat(bukkitRegistrationsOf(first)).isEqualTo(1);
+            assertThat(bukkitRegistrationsOf(second)).isEqualTo(1);
+            assertThat(bukkitRegistrationsOf(manual))
+                    .as("manualRegister = true still keeps an executor out of registerAll")
+                    .isZero();
+            verify(commandMap, times(2)).register(eq("ultitools"), argThat(c -> c instanceof PluginCommand));
         }
     }
 }

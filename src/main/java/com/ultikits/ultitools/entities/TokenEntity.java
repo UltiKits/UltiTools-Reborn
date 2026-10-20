@@ -13,25 +13,25 @@ import lombok.Data;
 
 @Data
 public class TokenEntity {
-    // OAuth2 响应字段
+    // OAuth2 response fields
     private String access_token;
     private String refresh_token;
     private String token_type;
     private int expires_in;
     private String scope;
     private String jti;
-    
-    // JWT payload 字段
-    private Long user_id;      // 用户ID (数字类型)
-    private String user_name;  // 用户名
-    private String email;      // 邮箱
-    private String[] authorities; // 权限数组
-    private Long exp;          // 过期时间戳
-    private Long iat;          // 签发时间戳
-    private String client_id;  // 客户端ID
-    
+
+    // JWT payload fields
+    private Long user_id;      // User ID (numeric)
+    private String user_name;  // Username
+    private String email;      // Email
+    private String[] authorities; // Authorities array
+    private Long exp;          // Expiration timestamp
+    private Long iat;          // Issued-at timestamp
+    private String client_id;  // Client ID
+
     /**
-     * 从access_token中解码JWT payload并填充字段
+     * Decode the JWT payload from access_token and populate the fields.
      */
     public void decodeJwtPayload() {
         if (access_token == null || access_token.isEmpty()) {
@@ -39,26 +39,26 @@ public class TokenEntity {
         }
         
         try {
-            // JWT格式: header.payload.signature
+            // JWT format: header.payload.signature
             String[] parts = access_token.split("\\.");
             if (parts.length != 3) {
                 return;
             }
-            
-            // 解码payload部分 (Base64)
+
+            // Decode the payload part (Base64)
             String payload = parts[1];
-            // 添加必要的padding
+            // Add the necessary padding
             while (payload.length() % 4 != 0) {
                 payload += "=";
             }
-            
+
             byte[] decodedBytes = Base64.getDecoder().decode(payload);
             String decodedPayload = new String(decodedBytes, StandardCharsets.UTF_8);
-            
-            // 解析JSON payload
+
+            // Parse the JSON payload
             JsonObject payloadJson = JsonParser.parseString(decodedPayload).getAsJsonObject();
-            
-            // 填充字段
+
+            // Populate the fields
             if (payloadJson.has("user_id")) {
                 this.user_id = payloadJson.get("user_id").getAsLong();
             }
@@ -89,15 +89,15 @@ public class TokenEntity {
             }
             
         } catch (Exception e) {
-            // 如果解码失败，记录错误但不抛出异常
+            // If decoding fails, log the error but do not throw
             java.util.logging.Logger.getLogger(TokenEntity.class.getName())
                     .log(java.util.logging.Level.WARNING, "Failed to decode JWT payload", e);
         }
     }
     
     /**
-     * 获取解码后的payload信息（用于调试）
-     * @return 包含解码信息的字符串
+     * Get the decoded payload information (for debugging).
+     * @return a string containing the decoded information
      */
     public String getDecodedInfo() {
         StringBuilder sb = new StringBuilder();
@@ -115,8 +115,8 @@ public class TokenEntity {
     }
     
     /**
-     * 检查token是否已过期
-     * @return true如果已过期，false如果仍有效
+     * Check whether the token has expired.
+     * @return true if expired, false if still valid
      */
     public boolean isExpired() {
         if (exp == null) {
@@ -126,8 +126,8 @@ public class TokenEntity {
     }
     
     /**
-     * 获取token过期时间
-     * @return 过期时间的Date对象，如果没有设置则返回null
+     * Get the token's expiration time.
+     * @return the expiration time as a Date, or null if not set
      */
     public Date getExpirationDate() {
         if (exp == null) {
@@ -137,8 +137,8 @@ public class TokenEntity {
     }
     
     /**
-     * 获取token签发时间
-     * @return 签发时间的Date对象，如果没有设置则返回null
+     * Get the token's issued-at time.
+     * @return the issued-at time as a Date, or null if not set
      */
     public Date getIssuedAt() {
         if (iat == null) {
@@ -148,9 +148,9 @@ public class TokenEntity {
     }
     
     /**
-     * 检查用户是否具有指定权限
-     * @param authority 要检查的权限
-     * @return true如果用户具有该权限，false否则
+     * Check whether the user has the given authority.
+     * @param authority the authority to check
+     * @return true if the user has that authority, false otherwise
      */
     public boolean hasAuthority(String authority) {
         if (authorities == null || authority == null) {
@@ -160,8 +160,8 @@ public class TokenEntity {
     }
     
     /**
-     * 获取用户ID的字符串形式（为了兼容性）
-     * @return 用户ID的字符串形式，如果为null则返回null
+     * Get the user ID as a string (for compatibility).
+     * @return the user ID as a string, or null if it is null
      */
     public String getUserIdAsString() {
         return user_id != null ? user_id.toString() : null;

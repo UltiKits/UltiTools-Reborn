@@ -2,9 +2,14 @@ package com.ultikits.ultitools.manager;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.handler.ConsoleMirror;
 import com.ultikits.ultitools.handler.SystemLogHandler;
+import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import lombok.Getter;
 import org.bukkit.Bukkit;
@@ -14,25 +19,37 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.server.ServerLoadEvent;
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * 日志流管理器
- * 负责实时监控服务器日志并通过WebSocket传输到UltiPanel
- * 
+ * Log stream manager.
+ * Responsible for monitoring server logs in real time and transmitting them to UltiPanel via WebSocket.
+ *
  * @author UltiKits
  * @version 2.0.0
  */
 @ApiStatus.Internal
 public class LogStreamManager implements Listener {
-    
+
+    /**
+     * The only level names {@link SystemLogHandler} ever recognises -- exactly the vocabulary
+     * its own level mapping can produce ("info"/"warning"/"error"/"debug"), so a level a client
+     * asks to enable can always actually be reached by a published record's mapped level.
+     */
+    private static final Set<String> VALID_LOG_LEVELS =
+            new HashSet<>(Arrays.asList("info", "warning", "error", "debug"));
+
     private static LogStreamManager instance;
     private UltiPanelWebSocketClient webSocketClient;
-    private final AtomicBoolean streaming = new AtomicBoolean(false);
-    private final ConcurrentHashMap<String, Boolean> subscribedClients = new ConcurrentHashMap<>();
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     
     @Getter
@@ -40,11 +57,11 @@ public class LogStreamManager implements Listener {
     private SystemLogHandler systemLogHandler;
     
     private LogStreamManager() {
-        // 注册事件监听器
+        // Register the event listener
         try {
             Bukkit.getPluginManager().registerEvents(this, UltiTools.getInstance());
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("注册事件监听器失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("注册事件监听器失败: %s", e.getMessage()));
         }
     }
     
@@ -56,21 +73,29 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 初始化日志流管理器
+     * Initializes the log stream manager.
      */
     public void initialize(UltiPanelWebSocketClient client) {
-        // 幂等：重复调用必须先拆掉上一轮留下的东西。
+        // Idempotent: a repeat call must first tear down whatever the previous round left behind.
         //
-        // 这个方法由 onConnectHandler 调用，而 onConnectHandler 在**每一次** onOpen 都会跑
-        // ——包括重连窗口内的 reconnect()，以及 reinitWebSocket 造出新客户端之后的那次。
-        // 原先它无条件 new 一个 UltiPanelLogTransmitter（起一条传输线程）并往 JVM root logger
-        // 挂一个新的 SystemLogHandler，而 removeHandler 只写在 shutdown() 里，shutdown() 的
-        // 唯一调用者是 onDisable。于是连接每抖动一次就泄漏一个 handler 加一条线程，
-        // 每行日志被重复发送 N 次。见 issue #181。
+        // This method is called by onConnectHandler, and onConnectHandler runs on **every**
+        // onOpen -- including reconnect() within the reconnect window, and the call after
+        // reinitWebSocket builds a fresh client. It used to unconditionally `new` a
+        // UltiPanelLogTransmitter (spinning up a transmission thread) and attach a new
+        // SystemLogHandler to the JVM root logger, while removeHandler only ever ran inside
+        // shutdown(), and shutdown()'s only caller is onDisable. So every connection blip leaked
+        // one handler plus one thread, and every log line got sent N times over. See issue #181.
         detachAllSystemLogHandlers();
+        // #486: what the previous transmitter could not send -- a batch held from a failed send and
+        // anything still queued -- is carried to the new one below instead of being dropped with the
+        // old object. Its shutdown flush first sends what the old connection still can (the same
+        // client reconnecting); after a reconnect on a fresh client that flush fails and the records
+        // are still here.
+        JsonArray unsent = null;
         if (logTransmitter != null) {
             try {
                 logTransmitter.shutdown();
+                unsent = logTransmitter.takePending();
             } catch (Exception e) {
                 UltiTools.getInstance().getLogger().warning(
                     "[UltiPanel] Error shutting down previous log transmitter: " + e.getMessage());
@@ -79,40 +104,93 @@ public class LogStreamManager implements Listener {
 
         this.webSocketClient = client;
 
-        // 初始化日志传输器
+        // Initialize the log transmitter
         String serverId = getServerId();
         this.logTransmitter = new UltiPanelLogTransmitter(client, serverId);
+        this.logTransmitter.adoptPending(unsent);
 
-        // 从配置文件加载批量发送设置
+        // Gate-2 finding (round 4): externalDrainMode must be re-applied to EVERY freshly-created
+        // transmitter, not only once from ServerMonitorManager#startMonitoring(). wireManagers()
+        // calls startMonitoring() BEFORE this method on first boot, so the very first transmitter
+        // did not exist yet when startMonitoring() tried to enable drain mode on it -- the
+        // (defensive, still-present) call there saw a null transmitter and never retried. Every
+        // reconnect after the first calls THIS method again to build a fresh transmitter, while
+        // startMonitoring() itself early-returns on isMonitoring() already being true, so it would
+        // never reach a later transmitter either. Querying monitoring state here, at the one place
+        // a transmitter is actually constructed, covers both the first-boot ordering and every
+        // reconnect -- without needing to reorder wireManagers() or special-case reconnects.
+        ServerMonitorManager serverMonitorManager = UltiTools.getInstance().getServerMonitorManager();
+        if (serverMonitorManager != null && serverMonitorManager.isMonitoring()) {
+            this.logTransmitter.setExternalDrainMode(true);
+            // Gate-2 finding (round 6): under external drain mode, addToBatch()'s own
+            // size-threshold trigger is otherwise silently swallowed by sendBatch()'s own
+            // early return, so a configured batchSize never shortens delivery latency while
+            // monitoring is active. Wire an immediate-drain request back to the monitor.
+            this.logTransmitter.setExternalSizeThresholdCallback(serverMonitorManager::drainLogsNow);
+            // Gate-2 finding (round 9): coordinate disable-time flushes (setBatchEnabled(false))
+            // against the monitor's own drain paths, via the SAME lock object.
+            this.logTransmitter.setExternalDrainCoordinationLock(serverMonitorManager.getLogDrainLock());
+        }
+
+        // Load the batch-send settings from the config file
         loadBatchConfiguration();
 
-        // 创建并配置系统日志处理器
+        // Create and configure the system log handler
         this.systemLogHandler = new SystemLogHandler(logTransmitter);
         this.systemLogHandler.loadConfiguration();
 
-        // 添加系统日志处理器到根Logger
+        // Add the system log handler to the root Logger -- after replaying, oldest first, what
+        // the early capture attached in UltiTools#onLoad() kept, so the lines logged before the
+        // panel connection opened reach the stream too (#487). On a reconnect there is no capture
+        // any more and this only attaches the handler.
+        //
+        // The replay goes through the handler's replay path and is delivered in log_batch messages
+        // of at most 64 KiB, the first at once and then about one per second, whatever the live
+        // batch settings (as of 6.3.0; UltiPanelLogTransmitter#REPLAY_CHUNK_MAX_BYTES). Replayed one message per record, about 350 start-up
+        // records at connect exceeded the panel's per-client quota (50 messages in 10 seconds) on a
+        // real server. Records a previous transmitter could not deliver (#486) are not part of
+        // this replay: they were adopted into the queue above and follow the live batching path.
+        //
+        // The console mirror (as of 6.3.0) feeds Paper's own Log4j console output into whichever of
+        // the two handlers is attached; installed in UltiTools#onLoad(), and again here (it does
+        // nothing when already installed) for a stream started after it was removed.
+        ConsoleMirror.install();
         Logger rootLogger = Logger.getLogger("");
-        rootLogger.addHandler(systemLogHandler);
+        SystemLogHandler liveHandler = systemLogHandler;
+        int notKept = EarlyLogCapture.drainInto(liveHandler.replayHandler(), () -> rootLogger.addHandler(liveHandler));
+        logTransmitter.startReplay();
+        if (notKept > 0) {
+            UltiTools.getInstance().getLogger().info(String.format(
+                    "[UltiPanel] %d start-up log record(s) were not kept for the panel: the start-up buffer "
+                            + "holds at most %d records and about %d KiB.", notKept, EarlyLogCapture.MAX_RECORDS,
+                    EarlyLogCapture.MAX_BYTES / 1024));
+        }
 
-        // 自动启动日志流（立即开始监控和发送日志）
-        startLogStream("auto", "info");
-        
+        // D-20 (maintainer decision, 2026-09-15): this used to call startLogStream("auto",
+        // "info") here to auto-subscribe a permanent sentinel client. That call did nothing real
+        // -- the handler was already attached to the root logger two lines above, the "level"
+        // parameter was never applied to anything (SystemLogHandler#setEnabledLevels is the only
+        // real level gate, and this code path never called it), and the only observable effect
+        // was mutating now-removed subscribedClients/streaming bookkeeping plus broadcasting a
+        // spurious "started" acknowledgment to no one in particular. Delivery to the panel is
+        // unconditional once this handler is attached, for as long as the WebSocket connection is
+        // up -- there is nothing left to "start" here.
         UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager initialized and log streaming started");
-        
-        // 发送初始化完成日志
+
+        // Send the initialization-complete logs
         sendInitializationLogs();
     }
-    
+
     /**
-     * 从配置文件加载批量发送配置
+     * Loads the batch-send configuration from the config file.
      */
     private void loadBatchConfiguration() {
         if (logTransmitter == null) {
             return;
         }
-        
+
         try {
-            // 加载批量发送配置
+            // Load the batch-send configuration
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.batch.enabled")) {
                 boolean batchEnabled = UltiTools.getInstance().getConfig().getBoolean("ultipanel.logging.batch.enabled", true);
                 logTransmitter.setBatchEnabled(batchEnabled);
@@ -120,47 +198,72 @@ public class LogStreamManager implements Listener {
             
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.batch.size")) {
                 int batchSize = UltiTools.getInstance().getConfig().getInt("ultipanel.logging.batch.size", 10);
-                logTransmitter.setBatchSize(Math.max(1, batchSize));
+                // Gate-2 finding (round 9): the boot-time path used to CLAMP an invalid value
+                // (Math.max(1, batchSize)) while the live setter REJECTS one, keeping the
+                // previous value in effect -- two different behaviours for the same invariant.
+                // Reject here too, keeping the transmitter's compiled-in default rather than
+                // silently substituting a clamped value the operator never asked for.
+                try {
+                    logTransmitter.setBatchSize(batchSize);
+                } catch (IllegalArgumentException e) {
+                    UltiTools.getInstance().getLogger().warning(FrameworkText.format(
+                            "[UltiPanel] ultipanel.logging.batch.size 配置值无效 (%d): %s，保留默认值 %d",
+                            batchSize, e.getMessage(), logTransmitter.getBatchSize()));
+                }
             }
-            
+
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.batch.interval")) {
                 int interval = UltiTools.getInstance().getConfig().getInt("ultipanel.logging.batch.interval", 5000);
-                logTransmitter.setIntervalMs(Math.max(1000, interval));
+                // Gate-2 finding (round 9): same reject-not-clamp fix as batch.size above -- this
+                // used to clamp via Math.max(MIN_INTERVAL_MS, interval), silently applying
+                // 1000ms for a configured 500ms instead of rejecting it and keeping the default
+                // 5000ms, contradicting config.yml's own comment (corrected in an earlier round)
+                // that says both paths share one floor-enforcement behaviour.
+                try {
+                    logTransmitter.setIntervalMs(interval);
+                } catch (IllegalArgumentException e) {
+                    UltiTools.getInstance().getLogger().warning(FrameworkText.format(
+                            "[UltiPanel] ultipanel.logging.batch.interval 配置值无效 (%d): %s，保留默认值 %dms",
+                            interval, e.getMessage(), logTransmitter.getIntervalMs()));
+                }
             }
             
-            UltiTools.getInstance().getLogger().info(String.format(
+            UltiTools.getInstance().getLogger().info(FrameworkText.format(
                 "[UltiPanel] 日志传输配置 - 批量发送: %s, 批量大小: %d, 发送间隔: %dms",
                 logTransmitter.isBatchEnabled(), logTransmitter.getBatchSize(), logTransmitter.getIntervalMs()));
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 加载批量发送配置失败，使用默认配置: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 加载批量发送配置失败，使用默认配置: %s", e.getMessage()));
         }
     }
     
     /**
-     * 发送初始化完成相关日志
+     * Sends the initialization-complete logs. Both lines are direct entries at {@code "info"} and
+     * obey the panel's levels like every other direct entry ({@link #isDirectLevelEnabled}).
      */
     private void sendInitializationLogs() {
-        // 发送服务器启动信息
-        logTransmitter.info("UltiTools 日志传输系统已启动", "plugin:UltiTools");
-        
-        // 发送当前在线玩家信息
-        int onlineCount = Bukkit.getOnlinePlayers().size();
-        logTransmitter.info(String.format("当前在线玩家数量: %d", onlineCount), "server");
-        
-        // 发送系统配置信息
+        if (isDirectLevelEnabled("info")) {
+            // Send the server-startup information
+            logTransmitter.info(FrameworkText.text("UltiTools 日志传输系统已启动"), "plugin:UltiTools");
+
+            // Send the current online-player-count information
+            int onlineCount = Bukkit.getOnlinePlayers().size();
+            logTransmitter.info(FrameworkText.format("当前在线玩家数量: %d", onlineCount), "server");
+        }
+
+        // Send the system configuration information
         if (systemLogHandler != null) {
             String configInfo = systemLogHandler.getConfigurationInfo();
             UltiTools.getInstance().getLogger().info(configInfo);
         }
     }
-    
+
     /**
-     * 处理日志流消息
+     * Handles a log stream message.
      */
     public void handleLogStreamMessage(JsonObject data) {
         if (data == null) {
-            UltiTools.getInstance().getLogger().warning("LogStreamManager: 收到空的日志流消息");
+            UltiTools.getInstance().getLogger().warning(FrameworkText.text("LogStreamManager: 收到空的日志流消息"));
             return;
         }
         
@@ -169,30 +272,28 @@ public class LogStreamManager implements Listener {
         String clientId = data.has("clientId") && !data.get("clientId").isJsonNull() 
             ? data.get("clientId").getAsString() : null;
         String level = data.has("level") && !data.get("level").isJsonNull() 
-            ? data.get("level").getAsString() : null; // 可选的日志级别过滤
+            ? data.get("level").getAsString() : null; // Optional log-level filter
         
         if (clientId == null) {
             clientId = "default";
         }
         
         UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 处理日志流操作 - 动作: %s, 客户端: %s, 级别: %s", 
+            FrameworkText.format("LogStreamManager: 处理日志流操作 - 动作: %s, 客户端: %s, 级别: %s", 
                 action, clientId, level));
         
         switch (action != null ? action : "") {
             case "start":
-                startLogStream(clientId, level);
-                break;
             case "stop":
-                stopLogStream(clientId);
-                break;
             case "pause":
-                pauseLogStream(clientId);
-                break;
             case "resume":
-                resumeLogStream(clientId);
+                // D-19/D-20 (maintainer decisions, 2026-09-14/2026-09-15): none of these four
+                // control actions is implemented -- see sendControlActionRejection()'s javadoc.
+                sendControlActionRejection(clientId, action);
                 break;
             case "status":
+                // D-20: status is a read-only introspection action, not a control toggle -- it
+                // is answered honestly rather than rejected. See sendStreamStatus()'s javadoc.
                 sendStreamStatus(clientId);
                 break;
             case "config":
@@ -200,110 +301,348 @@ public class LogStreamManager implements Listener {
                 break;
             default:
                 UltiTools.getInstance().getLogger().warning(
-                    String.format("LogStreamManager: 未知的日志流操作: %s", action));
+                    FrameworkText.format("LogStreamManager: 未知的日志流操作: %s", action));
                 sendErrorResponse(clientId, "Unknown log stream action: " + action);
                 break;
         }
     }
     
     /**
-     * 处理配置更新
+     * Handles a configuration update.
+     * <p>
+     * #433: a request naming an unrecognised level rejects the WHOLE request (previously-applied
+     * levels are left untouched) rather than partially applying the recognised entries -- a
+     * client that made a typo should not silently end up with a different filter than it asked
+     * for. An empty {@code levels} array is applied literally: it is a request for zero levels,
+     * so zero levels are enabled and nothing is delivered until the client sets levels again --
+     * this framework's own front end never actually sends this field today (measured against
+     * both {@code UltiPanelFrontend} and {@code ultipanel-api-worker} while planning this fix),
+     * so there is no real product behaviour to match, and applying the request literally is the
+     * one reading that never has to guess what the caller "really" meant.
+     * <p>
+     * Gate-2 finding: BOTH the {@code levels} section and the {@code batchConfig} section are
+     * parsed and validated FIRST, before either is applied. Before this fix, {@code levels} was
+     * applied immediately upon parsing; a request combining valid {@code levels} with an invalid
+     * {@code batchConfig} field left the levels change already in effect by the time the
+     * {@code batchConfig} validation failed and returned an error for the WHOLE request -- the
+     * same "declared rejection, partial effect" defect WR-02 already closed within
+     * {@code batchConfig} alone, reoccurring one level up, across the two top-level sections.
      */
     private void handleConfigUpdate(JsonObject data, String clientId) {
         try {
-            // 更新日志级别配置
-            if (data.has("levels") && systemLogHandler != null) {
-                // 这里可以动态更新日志级别配置
-                UltiTools.getInstance().getLogger().info("[UltiPanel] 收到日志级别配置更新请求");
+            // ---------- Parse and validate every present section; apply nothing yet ----------
+            // Extracted into parseAndValidateLevels/parseAndValidateBatchConfig (Codacy Gate-2
+            // finding: this method's own NPath complexity peaked at 117301 against a threshold
+            // of 200 once both sections' parsing/validation lived inline here).
+            LevelsSection levels = new LevelsSection();
+            if (!parseAndValidateLevels(data, clientId, levels)) {
+                return; // rejection response already sent
             }
-            
-            // 更新批量发送配置
-            if (data.has("batchConfig") && logTransmitter != null) {
-                JsonObject batchConfig = data.getAsJsonObject("batchConfig");
-                if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
-                    logTransmitter.setBatchEnabled(batchConfig.get("enabled").getAsBoolean());
-                }
-                if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
-                    logTransmitter.setBatchSize(batchConfig.get("size").getAsInt());
-                }
-                if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
-                    logTransmitter.setIntervalMs(batchConfig.get("interval").getAsInt());
-                }
-                UltiTools.getInstance().getLogger().info("[UltiPanel] 批量发送配置已更新");
+            BatchConfigSection batchConfig = new BatchConfigSection();
+            if (!parseAndValidateBatchConfig(data, clientId, batchConfig)) {
+                return; // rejection response already sent
             }
-            
-            sendStreamResponse(clientId, "config_updated", "Configuration updated successfully");
-            
+
+            // ---------- Both sections validated -- now apply ----------
+            List<String> changes = new ArrayList<>();
+            applyLevels(levels, changes);
+            applyBatchConfig(batchConfig, changes);
+
+            if (changes.isEmpty()) {
+                // #433: a config action naming neither levels nor batchConfig changed nothing --
+                // say so, rather than answering the same "success" a real change would get.
+                sendStreamResponse(clientId, "config_unchanged", "No configuration changes were requested");
+                return;
+            }
+
+            sendStreamResponse(clientId, "config_updated", "Configuration updated: " + String.join("; ", changes));
+
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 更新配置失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 更新配置失败: %s", e.getMessage()));
             sendErrorResponse(clientId, "Failed to update configuration: " + e.getMessage());
         }
     }
-    
+
     /**
-     * 开始日志流
+     * Applies an already-validated {@code levels} section (if present) and appends a description
+     * to {@code changes} -- extracted from {@link #handleConfigUpdate(JsonObject, String)}
+     * alongside {@link #applyBatchConfig(BatchConfigSection, List)} (Codacy Gate-2 NPath
+     * complexity finding).
      */
-    public void startLogStream(String clientId, String level) {
-        subscribedClients.put(clientId, true);
-        streaming.set(true);
-        
-        UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 为客户端 %s 启动日志流，级别: %s", clientId, level));
-        
-        // 发送确认消息
-        sendStreamResponse(clientId, "started", "Log stream started successfully");
-    }
-    
-    /**
-     * 开始日志流（兼容旧版本）
-     */
-    public void startLogStream(String clientId) {
-        startLogStream(clientId, "info");
-    }
-    
-    /**
-     * 停止日志流
-     */
-    public void stopLogStream(String clientId) {
-        subscribedClients.remove(clientId);
-        if (subscribedClients.isEmpty()) {
-            streaming.set(false);
+    private void applyLevels(LevelsSection levels, List<String> changes) {
+        if (!levels.present) {
+            return;
         }
-        
-        UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 为客户端 %s 停止日志流", clientId));
-        
-        // 发送确认消息
-        sendStreamResponse(clientId, "stopped", "Log stream stopped successfully");
+        systemLogHandler.setEnabledLevels(levels.levels);
+        changes.add(levels.levels.isEmpty()
+                ? "levels updated to an empty set (no log records will be delivered "
+                        + "until levels are set again)"
+                : "levels updated to " + levels.levels);
     }
-    
+
     /**
-     * 暂停日志流
+     * Applies an already-validated {@code batchConfig} section (if present) and appends a
+     * description to {@code changes} -- extracted from {@link #handleConfigUpdate(JsonObject,
+     * String)} alongside {@link #applyLevels(LevelsSection, List)} (Codacy Gate-2 NPath
+     * complexity finding).
      */
-    public void pauseLogStream(String clientId) {
-        subscribedClients.put(clientId, false); // 标记为暂停状态
-        
-        UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 为客户端 %s 暂停日志流", clientId));
-        
-        sendStreamResponse(clientId, "paused", "Log stream paused");
+    private void applyBatchConfig(BatchConfigSection batchConfig, List<String> changes) {
+        if (!batchConfig.present) {
+            return;
+        }
+        boolean batchChanged = false;
+        if (batchConfig.enabled != null) {
+            logTransmitter.setBatchEnabled(batchConfig.enabled);
+            batchChanged = true;
+        }
+        if (batchConfig.size != null) {
+            logTransmitter.setBatchSize(batchConfig.size);
+            batchChanged = true;
+        }
+        if (batchConfig.interval != null) {
+            logTransmitter.setIntervalMs(batchConfig.interval);
+            batchChanged = true;
+        }
+        if (batchChanged) {
+            changes.add("batch settings updated");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 批量发送配置已更新"));
+        }
     }
-    
+
+    /** Parsed, validated {@code levels} section of a config-update request; {@link #present} is false if absent. */
+    private static final class LevelsSection {
+        boolean present;
+        Set<String> levels;
+    }
+
+    /** Parsed, validated {@code batchConfig} section; each field is null when not present in the request. */
+    private static final class BatchConfigSection {
+        boolean present;
+        Boolean enabled;
+        Integer size;
+        Integer interval;
+    }
+
     /**
-     * 恢复日志流
+     * Parses and validates the {@code levels} array from a config-update request into
+     * {@code out}, WITHOUT applying it (extracted from {@link #handleConfigUpdate(JsonObject,
+     * String)}, Codacy Gate-2 NPath complexity finding). {@code out.present} stays {@code false}
+     * if {@code levels} is absent from the request or {@link #systemLogHandler} is not yet wired
+     * -- that is not a rejection.
+     * <p>
+     * Rejects (sends the error response itself, matching this class's own established
+     * "validator sends its own rejection" convention) the WHOLE request if {@code levels} is
+     * present but not a JSON array (Gate-2 round 3), or if any entry is not one of
+     * {@link #VALID_LOG_LEVELS} (#433) -- previously-applied levels survive either way.
+     *
+     * @return {@code true} if absent or valid; {@code false} if rejected -- the caller must
+     *         return immediately without applying anything from either section
      */
-    public void resumeLogStream(String clientId) {
-        subscribedClients.put(clientId, true);
-        streaming.set(true);
-        
-        UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 为客户端 %s 恢复日志流", clientId));
-        
-        sendStreamResponse(clientId, "resumed", "Log stream resumed");
+    private boolean parseAndValidateLevels(JsonObject data, String clientId, LevelsSection out) {
+        if (!data.has("levels") || systemLogHandler == null) {
+            return true;
+        }
+        JsonElement levelsElement = data.get("levels");
+        if (levelsElement == null || !levelsElement.isJsonArray()) {
+            // Gate-2 finding (round 3): a `levels` field present but NOT a JSON array (a string,
+            // object, or null) used to silently leave levelsPresent false -- the malformed
+            // section was dropped rather than rejected, so an accompanying valid batchConfig
+            // would still apply and report config_updated, silently ignoring the requested
+            // (malformed) level change. Reject the whole request instead, matching #433's own
+            // "reject the whole request" precedent for an unrecognised level value.
+            sendErrorResponse(clientId, "Failed to update configuration: 'levels' must be "
+                    + "a JSON array of level names");
+            return false;
+        }
+
+        out.present = true;
+        JsonArray levelsArray = levelsElement.getAsJsonArray();
+        out.levels = new LinkedHashSet<>();
+        for (JsonElement levelElement : levelsArray) {
+            String rawLevel = (levelElement == null || levelElement.isJsonNull())
+                    ? null : levelElement.getAsString();
+            String normalizedLevel = rawLevel == null
+                    ? null : rawLevel.toLowerCase(Locale.ROOT);
+            if (normalizedLevel == null || !VALID_LOG_LEVELS.contains(normalizedLevel)) {
+                // Reject the whole request -- nothing (from either section) is applied.
+                sendErrorResponse(clientId, "Unrecognized log level: " + rawLevel);
+                return false;
+            }
+            out.levels.add(normalizedLevel);
+        }
+        return true;
+    }
+
+    /**
+     * Parses and validates the {@code batchConfig} object from a config-update request into
+     * {@code out}, WITHOUT applying it (extracted from {@link #handleConfigUpdate(JsonObject,
+     * String)}, Codacy Gate-2 NPath complexity finding). {@code out.present} stays {@code false}
+     * if {@code batchConfig} is absent from the request or {@link #logTransmitter} is not yet
+     * wired -- that is not a rejection.
+     * <p>
+     * WR-01/WR-02: every present field is validated before any is applied -- a rejected
+     * {@code size} or {@code interval} must not leave the OTHER fields in this same
+     * {@code batchConfig} object already applied.
+     *
+     * @return {@code true} if absent or valid; {@code false} if rejected -- the caller must
+     *         return immediately without applying anything from either section
+     */
+    private boolean parseAndValidateBatchConfig(JsonObject data, String clientId, BatchConfigSection out) {
+        if (!data.has("batchConfig") || logTransmitter == null) {
+            return true;
+        }
+        out.present = true;
+        JsonObject batchConfig = data.getAsJsonObject("batchConfig");
+
+        return parseAndValidateBatchEnabled(batchConfig, clientId, out)
+                && parseAndValidateBatchSize(batchConfig, clientId, out)
+                && parseAndValidateBatchInterval(batchConfig, clientId, out);
+    }
+
+    /**
+     * Parses and validates {@code batchConfig.enabled} into {@code out} -- extracted from
+     * {@link #parseAndValidateBatchConfig(JsonObject, String, BatchConfigSection)} alongside its
+     * two siblings (Codacy Gate-2 NPath complexity finding, round 7: the combined method peaked
+     * at 540 against a threshold of 200 once the round-6 strict-type checks were added inline).
+     */
+    private boolean parseAndValidateBatchEnabled(JsonObject batchConfig, String clientId, BatchConfigSection out) {
+        if (!batchConfig.has("enabled") || batchConfig.get("enabled").isJsonNull()) {
+            return true;
+        }
+        // Gate-2 finding (round 6): Gson's getAsBoolean() on a JSON STRING silently applies
+        // Boolean.parseBoolean, which returns false for any non-"true" string (e.g.
+        // "disabled" -> false) instead of rejecting a malformed value -- a typo would
+        // silently disable batching rather than being refused.
+        JsonElement enabledElement = batchConfig.get("enabled");
+        if (!enabledElement.isJsonPrimitive() || !enabledElement.getAsJsonPrimitive().isBoolean()) {
+            sendErrorResponse(clientId, "Failed to update configuration: "
+                    + "'batchConfig.enabled' must be a boolean");
+            return false;
+        }
+        out.enabled = enabledElement.getAsBoolean();
+        return true;
+    }
+
+    /**
+     * Parses and validates {@code batchConfig.size} into {@code out} -- see
+     * {@link #parseAndValidateBatchEnabled(JsonObject, String, BatchConfigSection)}'s javadoc for
+     * why this is a separate method.
+     */
+    private boolean parseAndValidateBatchSize(JsonObject batchConfig, String clientId, BatchConfigSection out) {
+        if (!batchConfig.has("size") || batchConfig.get("size").isJsonNull()) {
+            return true;
+        }
+        Integer parsedSize = parseStrictInt(batchConfig.get("size"), "batchConfig.size", clientId);
+        if (parsedSize == null) {
+            return false;
+        }
+        out.size = parsedSize;
+        if (out.size < 1) {
+            // Gate-2 finding: a size below 1 makes sendBatch()'s own
+            // `for (int i = 0; i < batchSize; ...)` loop consume nothing, so a
+            // negative/zero size silently stalls delivery rather than being rejected.
+            sendErrorResponse(clientId, "Failed to update configuration: Batch size "
+                    + "must be at least 1, got: " + out.size);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Parses and validates {@code batchConfig.interval} into {@code out} -- see
+     * {@link #parseAndValidateBatchEnabled(JsonObject, String, BatchConfigSection)}'s javadoc for
+     * why this is a separate method.
+     */
+    private boolean parseAndValidateBatchInterval(JsonObject batchConfig, String clientId, BatchConfigSection out) {
+        if (!batchConfig.has("interval") || batchConfig.get("interval").isJsonNull()) {
+            return true;
+        }
+        Integer parsedInterval = parseStrictInt(batchConfig.get("interval"), "batchConfig.interval", clientId);
+        if (parsedInterval == null) {
+            return false;
+        }
+        out.interval = parsedInterval;
+        if (out.interval < UltiPanelLogTransmitter.MIN_INTERVAL_MS) {
+            sendErrorResponse(clientId, "Failed to update configuration: Batch interval "
+                    + "must be at least " + UltiPanelLogTransmitter.MIN_INTERVAL_MS
+                    + "ms, got: " + out.interval);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Parses {@code element} as a strict Java {@code int} -- rejects a non-numeric value, a
+     * non-integral number (e.g. {@code 1.9}), and a value outside {@code int} range (Gate-2
+     * finding, round 6: Gson's {@code getAsInt()} silently truncates a fractional value and can
+     * wrap an out-of-range one, rather than validating that the payload is genuinely an integer).
+     * Sends the rejection response itself, matching this class's other validators.
+     *
+     * @return the parsed value, or {@code null} if invalid (rejection response already sent)
+     */
+    private Integer parseStrictInt(JsonElement element, String fieldName, String clientId) {
+        if (element == null || !element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            sendErrorResponse(clientId, "Failed to update configuration: '" + fieldName
+                    + "' must be an integer");
+            return null;
+        }
+        java.math.BigDecimal value = element.getAsBigDecimal();
+        if (value.stripTrailingZeros().scale() > 0
+                || value.compareTo(java.math.BigDecimal.valueOf(Integer.MIN_VALUE)) < 0
+                || value.compareTo(java.math.BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) {
+            sendErrorResponse(clientId, "Failed to update configuration: '" + fieldName
+                    + "' must be an integer");
+            return null;
+        }
+        return value.intValueExact();
     }
     
     /**
-     * 发送流响应消息
+     * Rejects a {@code start}/{@code stop}/{@code pause}/{@code resume} request (D-19/D-20,
+     * maintainer decisions 2026-09-14/2026-09-15).
+     * <p>
+     * This framework has no per-viewer identity to gate any of these four actions with: the
+     * delivery messages ({@code log_stream}/{@code log_batch}) carry no per-client address at
+     * all -- {@link UltiPanelLogTransmitter#sendLog} broadcasts once over the single WebSocket
+     * connection this server holds to the panel relay, which fans a delivered record out to
+     * however many browser viewers are subscribed on that connection, invisibly to this
+     * framework. A server-side "real" implementation of any of the four would necessarily
+     * silence or resume delivery for every viewer of the server at once, not the one browser tab
+     * that asked.
+     * <p>
+     * {@code pause}/{@code resume} (D-19): #434's original fix (a global "does any subscriber
+     * want delivery" check) could never actually suppress anything in production, because
+     * {@link #initialize} used to permanently subscribe a synthetic {@code "auto"} client that
+     * was never paused -- see {@code 16-REVIEW-panel.md} CR-01.
+     * <p>
+     * {@code start}/{@code stop} (D-20, issue #468): measured end to end -- the shipped frontend
+     * sends {@code start}/{@code stop} only from its own toggle button and never gates rendering
+     * on the toggle state; the Worker's REST endpoint is a stateless relay minting a disposable
+     * {@code clientId} per call with no per-browser stream state anywhere in its Durable Object;
+     * and this framework's own (now-removed) {@code stopLogStream} mutated only its own internal
+     * bookkeeping, which nothing on the delivery path ever consulted. {@code stop} never actually
+     * stopped delivery for any real client, on any released version, before or after this
+     * change -- it changes only the response, not the underlying (already-inert) behaviour.
+     * <p>
+     * The framework states plainly instead: it streams logs to the panel for as long as it is
+     * connected, with no per-viewer on/off state to toggle. Turning the live view on/off, or
+     * pausing/resuming it, is the panel view's own concern (stop/start rendering, optionally
+     * buffer client-side) -- not a request this server can selectively honour for one viewer.
+     * The removed {@code startLogStream(String, String)}/{@code startLogStream(String)}/
+     * {@code stopLogStream(String)}/{@code isStreaming()}/{@code getSubscriberCount()} and (from
+     * D-19) {@code pauseLogStream(String)}/{@code resumeLogStream(String)} public methods are
+     * recorded in {@code COMPATIBILITY.md} under the same-release exception.
+     */
+    private void sendControlActionRejection(String clientId, String action) {
+        sendErrorResponse(clientId, "The '" + action + "' action is not supported: this "
+                + "framework streams logs to the panel for as long as it is connected, with no "
+                + "per-viewer on/off state to toggle -- turning the live view on/off, or "
+                + "pausing/resuming it, is the panel view's own action (stop/start rendering, "
+                + "optionally buffer client-side).");
+    }
+
+    /**
+     * Sends a stream response message (used by the {@code config} action's acknowledgment).
      */
     private void sendStreamResponse(String clientId, String status, String message) {
         if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -315,25 +654,23 @@ public class LogStreamManager implements Listener {
             response.addProperty("type", "log_stream_response");
             response.addProperty("serverId", getServerId());
             response.addProperty("timestamp", System.currentTimeMillis());
-            
+
             JsonObject data = new JsonObject();
             data.addProperty("status", status);
             data.addProperty("message", message);
             data.addProperty("clientId", clientId);
-            data.addProperty("subscriberCount", subscribedClients.size());
-            data.addProperty("streaming", streaming.get());
-            
+
             response.add("data", data);
             webSocketClient.sendMessage(response);
-            
+
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning(
-                String.format("LogStreamManager: 发送流响应失败: %s", e.getMessage()));
+            PanelConnectionLog.log(Level.WARNING, 
+                FrameworkText.format("LogStreamManager: 发送流响应失败: %s", e.getMessage()));
         }
     }
-    
+
     /**
-     * 发送错误响应
+     * Sends an error response.
      */
     private void sendErrorResponse(String clientId, String error) {
         if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -355,97 +692,125 @@ public class LogStreamManager implements Listener {
             webSocketClient.sendMessage(response);
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning(
-                String.format("LogStreamManager: 发送错误响应失败: %s", e.getMessage()));
+            PanelConnectionLog.log(Level.WARNING, 
+                FrameworkText.format("LogStreamManager: 发送错误响应失败: %s", e.getMessage()));
         }
     }
     
     /**
-     * 发送流状态
+     * Sends the stream status (D-20, maintainer decision 2026-09-15).
+     * <p>
+     * Unlike {@code start}/{@code stop}/{@code pause}/{@code resume}, {@code status} asks
+     * nothing to be toggled -- it is a read-only introspection request, and every field it
+     * reports is backed by something genuinely tracked, not bookkeeping that no client's
+     * request ever actually drove. There is no longer a {@code subscriberCount} or
+     * {@code streaming} field: this framework has no concept of an individual subscribed
+     * viewer to count (see {@link #sendControlActionRejection}'s javadoc), and delivery is
+     * unconditional once the handler is attached, for as long as the panel connection is up --
+     * which is exactly what the new {@code connected} field reports honestly. {@code
+     * logTransmitterEnabled}/{@code queueSize} are unchanged; both were already backed by real
+     * {@link UltiPanelLogTransmitter} state.
      */
     private void sendStreamStatus(String clientId) {
         JsonObject message = new JsonObject();
         message.addProperty("type", "log_stream_response");
         message.addProperty("timestamp", System.currentTimeMillis());
         message.addProperty("serverId", getServerId());
-        
+
         JsonObject data = new JsonObject();
         data.addProperty("action", "status");
-        data.addProperty("streaming", streaming.get());
-        data.addProperty("subscriberCount", subscribedClients.size());
+        data.addProperty("connected", webSocketClient != null && webSocketClient.isConnected());
         data.addProperty("clientId", clientId);
         data.addProperty("logTransmitterEnabled", logTransmitter != null && logTransmitter.isLogTransmissionEnabled());
         data.addProperty("queueSize", logTransmitter != null ? logTransmitter.getQueueSize() : 0);
         message.add("data", data);
-        
+
         if (webSocketClient != null) {
             webSocketClient.sendMessage(message);
         }
     }
-    
+
     /**
-     * 获取当前流状态
-     */
-    public boolean isStreaming() {
-        return streaming.get();
-    }
-    
-    /**
-     * 获取订阅客户端数量
-     */
-    public int getSubscriberCount() {
-        return subscribedClients.size();
-    }
-    
-    /**
-     * 直接发送自定义日志消息
-     * 用于插件特定事件的日志记录
+     * Sends a custom log message directly.
+     * Used for logging plugin-specific events.
+     * <p>
+     * The panel's {@code levels} apply: the entry is sent only if its level is currently enabled
+     * in the {@link SystemLogHandler}'s level state (a null or blank level counts as
+     * {@code "info"}, matched case-insensitively; the level text sent is left as given). The
+     * panel's {@code excluded-loggers} do not apply, because a direct entry has no logger name.
      */
     public void sendCustomLog(String level, String message, String source) {
-        if (logTransmitter != null) {
+        if (logTransmitter != null && isDirectLevelEnabled(level)) {
             logTransmitter.sendLog(level, message, source, null);
         }
     }
-    
+
     /**
-     * 发送玩家事件日志
+     * Decides whether a log entry this class sends directly, rather than through
+     * {@link SystemLogHandler#publish}, may be sent at {@code level} (case 29b95cd4).
+     * <p>
+     * The handler stays the single level state: this reads its current enabled set on every call,
+     * so a panel {@code config} request governs direct entries and handler records alike. A null
+     * or blank level counts as {@code "info"}, as {@link UltiPanelLogTransmitter} records it; the
+     * comparison lower-cases with {@link Locale#ROOT} because the handler's set is lower case. With
+     * no handler wired yet there is no level state to apply and the entry is sent as before.
+     */
+    private boolean isDirectLevelEnabled(String level) {
+        SystemLogHandler handler = systemLogHandler;
+        if (handler == null) {
+            return true;
+        }
+        String normalized = level == null || level.trim().isEmpty()
+                ? "info" : level.toLowerCase(Locale.ROOT);
+        Set<String> enabled = handler.getEnabledLevels();
+        return enabled != null && enabled.contains(normalized);
+    }
+
+    /**
+     * Sends a player-event log at {@code "info"}.
+     * <p>
+     * The panel's {@code levels} apply, as for {@link #sendCustomLog}; the panel's
+     * {@code excluded-loggers} do not, because a direct entry has no logger name.
      */
     public void sendPlayerEventLog(String eventType, String playerName, String message) {
         sendCustomLog("info", 
-            String.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
+            FrameworkText.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
             "plugin:UltiTools");
     }
-    
+
     /**
-     * 发送插件操作日志
+     * Sends a plugin-action log at {@code "info"}.
+     * <p>
+     * The panel's {@code levels} apply, as for {@link #sendCustomLog}; the panel's
+     * {@code excluded-loggers} do not, because a direct entry has no logger name.
      */
     public void sendPluginActionLog(String action, String details) {
         sendCustomLog("info",
-            String.format("[插件操作] %s: %s", action, details),
+            FrameworkText.format("[插件操作] %s: %s", action, details),
             "plugin:UltiTools");
     }
-    
-    // ========== Bukkit事件处理器 ==========
+
+    // ========== Bukkit event handlers ==========
     
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         String playerName = event.getPlayer().getName();
-        sendPlayerEventLog("JOIN", playerName, "玩家加入服务器");
+        sendPlayerEventLog("JOIN", playerName, FrameworkText.text("玩家加入服务器"));
     }
     
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         String playerName = event.getPlayer().getName();
-        sendPlayerEventLog("QUIT", playerName, "玩家离开服务器");
+        sendPlayerEventLog("QUIT", playerName, FrameworkText.text("玩家离开服务器"));
     }
     
     @EventHandler
     public void onServerLoad(ServerLoadEvent event) {
-        sendCustomLog("info", "服务器加载完成", "server");
+        sendCustomLog("info", FrameworkText.text("服务器加载完成"), "server");
     }
     
     /**
-     * 获取服务器ID
+     * Gets the server ID.
      */
     private String getServerId() {
         try {
@@ -454,32 +819,34 @@ public class LogStreamManager implements Listener {
             return "unknown";
         }
     }
-    
+
     /**
-     * 关闭日志流管理器
+     * Shuts down the log stream manager.
      */
     public void shutdown() {
-        subscribedClients.clear();
-        streaming.set(false);
-        
-        // 关闭日志传输器
+        // Shut down the log transmitter
         if (logTransmitter != null) {
             logTransmitter.shutdown();
         }
-        
-        // 从Bukkit的Logger中移除处理器
+
+        // Remove the console mirror and the handler from Bukkit's Logger
+        ConsoleMirror.uninstall();
         detachAllSystemLogHandlers();
-        
+
         UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager shutdown");
     }
 
     /**
-     * 摘掉 JVM root logger 上所有本框架的 {@link SystemLogHandler}。
+     * Detaches every one of this framework's {@link SystemLogHandler} instances from the JVM
+     * root logger.
      * <p>
-     * 刻意按类型扫描并全部移除，而不是只移除 {@code this.systemLogHandler}：在本方法存在之前，
-     * 每次重连成功都会往 root logger 上多挂一个，字段里只留得住最后那一个，先前泄漏的那些
-     * 没有任何引用能指到、也就永远摘不掉。按类型扫一遍才能把历史欠账一并清干净，这也是
-     * 「handler 数量恒为 1」这条验收唯一能成立的写法。见 issue #181。
+     * Deliberately scans by type and removes every instance, rather than only removing {@code
+     * this.systemLogHandler}: before this method existed, every successful reconnect attached
+     * one more to the root logger, the field could only ever hold onto the last one, and the
+     * previously-leaked ones had no reference pointing at them any more and so could never be
+     * detached. Only a type-based scan can clean up the whole historical backlog at once, and
+     * that is also the only formulation under which the acceptance criterion "handler count is
+     * always 1" can hold. See issue #181.
      */
     private void detachAllSystemLogHandlers() {
         try {

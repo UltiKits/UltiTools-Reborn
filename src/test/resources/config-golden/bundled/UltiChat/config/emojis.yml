@@ -1,0 +1,9 @@
+# UltiChat - Emoji Configuration
+
+emojis:
+  enabled: true
+  mappings:
+    ":heart:": "\u2764"
+    ":star:": "\u2605"
+    ":smile:": "\u263A"
+    ":sword:": "\u2694"

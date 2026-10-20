@@ -69,6 +69,8 @@ class BaseInventoryPageTest {
 
     @BeforeEach
     void setUp() {
+        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        org.mockbukkit.mockbukkit.MockBukkit.mock();
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         
@@ -99,6 +101,7 @@ class BaseInventoryPageTest {
         if (xVersionUtilsMock != null) {
             xVersionUtilsMock.close();
         }
+        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
     /**

@@ -2,6 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -9,8 +10,17 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +33,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
+
+import com.ultikits.testfixtures.packagescan.BreakableSuperclass;
+import com.ultikits.testfixtures.packagescan.configentity.BreakingConfigEntity;
+import com.ultikits.testfixtures.packagescan.configentity.HealthyConfigEntityOne;
+import com.ultikits.testfixtures.packagescan.configentity.HealthyConfigEntityTwo;
+import com.ultikits.ultitools.annotations.ConfigEntity;
 
 /**
  * PackageScanUtils 测试类
@@ -489,6 +505,172 @@ class PackageScanUtilsTest {
             // Set 本身就不允许重复，验证大小一致
             long distinctCount = classes.stream().distinct().count();
             assertThat(distinctCount).isEqualTo(classes.size());
+        }
+    }
+
+    @Nested
+    @DisplayName("Task 1 (07-21): per-class skip-and-continue wired to ModuleScanDiagnostics")
+    class Task1PackageScanSkipAndContinueTests {
+
+        private static final String FIXTURE_PACKAGE =
+                "com.ultikits.testfixtures.packagescan.configentity";
+
+        private final List<LogRecord> diagnosticsCaptured = new ArrayList<>();
+        private Logger diagnosticsLogger;
+        private Handler diagnosticsHandler;
+
+        @BeforeEach
+        void captureDiagnostics() {
+            diagnosticsCaptured.clear();
+            diagnosticsLogger = Logger.getLogger(ModuleScanDiagnostics.class.getName());
+            diagnosticsLogger.setLevel(Level.ALL);
+            diagnosticsHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    diagnosticsCaptured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            diagnosticsHandler.setLevel(Level.ALL);
+            diagnosticsLogger.addHandler(diagnosticsHandler);
+        }
+
+        @AfterEach
+        void releaseDiagnostics() {
+            diagnosticsLogger.removeHandler(diagnosticsHandler);
+        }
+
+        /**
+         * Package-scoped blocking loader (07-21): delegates to {@code parent} for everything
+         * outside {@code packagePrefix}, forcing every fixture class under the scanned package to
+         * be defined by this loader itself (not the parent) so its own superclass resolution is
+         * genuinely bound to this loader's block - and unconditionally refuses to resolve
+         * {@code blockedClassName}, simulating a symbol genuinely absent from the classpath.
+         * Mirrors {@code FinalContractValidatorTest.BlockingClassLoader}, generalized from one
+         * forced class name to a whole package prefix so a multi-class package scan can be
+         * exercised, following this task's own {@code read_first} guidance to reuse that
+         * technique.
+         */
+        private final class PackageScopedBlockingClassLoader extends URLClassLoader {
+            private final String packagePrefix;
+            private final String blockedClassName;
+
+            PackageScopedBlockingClassLoader(URL[] urls, ClassLoader parent, String packagePrefix,
+                    String blockedClassName) {
+                super(urls, parent);
+                this.packagePrefix = packagePrefix;
+                this.blockedClassName = blockedClassName;
+            }
+
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                if (blockedClassName.equals(name)) {
+                    throw new ClassNotFoundException(name);
+                }
+                if (!name.startsWith(packagePrefix)) {
+                    return super.loadClass(name, resolve);
+                }
+                synchronized (getClassLoadingLock(name)) {
+                    Class<?> loaded = findLoadedClass(name);
+                    if (loaded == null) {
+                        loaded = findClass(name);
+                    }
+                    if (resolve) {
+                        resolveClass(loaded);
+                    }
+                    return loaded;
+                }
+            }
+        }
+
+        private PackageScopedBlockingClassLoader newBlockingLoader() {
+            URL classesRoot =
+                    HealthyConfigEntityOne.class.getProtectionDomain().getCodeSource().getLocation();
+            return new PackageScopedBlockingClassLoader(new URL[]{classesRoot},
+                    PackageScanUtilsTest.class.getClassLoader(), FIXTURE_PACKAGE,
+                    BreakableSuperclass.class.getName());
+        }
+
+        @Test
+        @DisplayName("Sanity: the blocking loader genuinely fails to link BreakingConfigEntity")
+        void sanityBlockingLoaderReproducesLinkageError() throws Exception {
+            try (PackageScopedBlockingClassLoader loader = newBlockingLoader()) {
+                // Fixture sanity check, matching FinalContractValidatorTest's own pattern: if this
+                // does not throw, the fixture does not reproduce the hazard this test guards
+                // against, and a green result on the tests below would mean nothing.
+                // The name is a compile-time constant taken from a class literal, not input:
+                // BreakingConfigEntity.class.getName(). Loading it is the assertion.
+                assertThatThrownBy(() ->
+                        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
+                        Class.forName(BreakingConfigEntity.class.getName(), true, loader))
+                        .isInstanceOf(NoClassDefFoundError.class);
+            }
+        }
+
+        @Test
+        @DisplayName("A package with one unresolvable class still yields every other "
+                + "@ConfigEntity class in it")
+        void survivorsAreFoundRegardlessOfTheUnresolvableClass() throws Exception {
+            try (PackageScopedBlockingClassLoader loader = newBlockingLoader()) {
+                Set<Class<?>> found = PackageScanUtils.scanAnnotatedClasses(
+                        ConfigEntity.class, FIXTURE_PACKAGE, loader);
+
+                Set<String> foundNames = new HashSet<>();
+                for (Class<?> c : found) {
+                    foundNames.add(c.getName());
+                }
+
+                assertThat(foundNames)
+                        .as("both survivors must be found regardless of iteration order: %s",
+                                foundNames)
+                        .contains(HealthyConfigEntityOne.class.getName(),
+                                HealthyConfigEntityTwo.class.getName())
+                        .doesNotContain(BreakingConfigEntity.class.getName());
+            }
+        }
+
+        @Test
+        @DisplayName("The skipped class is recorded via ModuleScanDiagnostics as one named "
+                + "SEVERE summary")
+        void skippedClassIsRecordedViaModuleScanDiagnostics() throws Exception {
+            try (PackageScopedBlockingClassLoader loader = newBlockingLoader()) {
+                PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIXTURE_PACKAGE, loader);
+            }
+
+            List<LogRecord> severe = new ArrayList<>();
+            for (LogRecord record : diagnosticsCaptured) {
+                if (Level.SEVERE.equals(record.getLevel())) {
+                    severe.add(record);
+                }
+            }
+
+            assertThat(severe).hasSize(1);
+            String message = severe.get(0).getMessage();
+            assertThat(message)
+                    .contains(FIXTURE_PACKAGE)
+                    .contains(BreakingConfigEntity.class.getName())
+                    .contains("COMPATIBILITY.md");
+        }
+
+        @Test
+        @DisplayName("A scan where every class loads cleanly emits no ModuleScanDiagnostics record")
+        void healthyScanEmitsNoDiagnosticsRecord() {
+            // No blocking loader here - BreakingConfigEntity resolves normally through the real
+            // test class loader, so nothing is skipped and the emitter must never fire.
+            PackageScanUtils.scanAnnotatedClasses(
+                    ConfigEntity.class, FIXTURE_PACKAGE,
+                    PackageScanUtilsTest.class.getClassLoader());
+
+            assertThat(diagnosticsCaptured).isEmpty();
         }
     }
 }

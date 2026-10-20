@@ -22,6 +22,9 @@ public enum ErrorCode {
     CIRCULAR_DEPENDENCY(2002, "Circular dependency detected"),
     DEPENDENCY_INJECTION_FAILED(2003, "Dependency injection failed"),
     DUPLICATE_BEAN(2004, "Duplicate bean definition"),
+    MALFORMED_ANNOTATION_ALIAS(2005, "Malformed @AliasFor declaration"),
+    AMBIGUOUS_BEAN_TYPE(2006, "Ambiguous bean type resolution"),
+    UNPROXYABLE_SINGLETON(2007, "AOP annotation on a pre-constructed registerSingleton bean"),
 
     // ===== Data Access Errors (3000-3999) =====
     DATA_ACCESS_ERROR(3000, "Data access error"),
@@ -33,6 +36,8 @@ public enum ErrorCode {
     TRANSACTION_FAILED(3006, "Transaction failed"),
     DATA_ENTITY_INVALID(3007, "Data entity invalid"),
     DATA_OPERATION_FAILED(3008, "Data operation failed"),
+    TRANSACTION_ROLLBACK_ONLY(3009, "Transaction was marked rollback-only by a nested scope"),
+    ENTITY_NOT_OWNED(3010, "Entity is not owned by the requesting plugin"),
 
     // ===== Command Errors (4000-4999) =====
     COMMAND_ERROR(4000, "Command error"),
@@ -41,6 +46,10 @@ public enum ErrorCode {
     COMMAND_COOLDOWN_ACTIVE(4003, "Command on cooldown"),
     COMMAND_PARSE_ERROR(4004, "Command parse error"),
     COMMAND_EXECUTION_FAILED(4005, "Command execution failed"),
+    COMMAND_ANNOTATION_UNENFORCEABLE(4006, "Command annotation cannot be enforced by the validator chain"),
+    COMMAND_SUGGEST_KEY_UNKNOWN(4007, "@CmdParam.suggest() references an unknown completer key"),
+    COMMAND_SUGGEST_METHOD_UNINVOCABLE(4008,
+            "@CmdParam.suggest() references a method whose signature the completer cannot invoke"),
 
     // ===== Configuration Errors (5000-5999) =====
     CONFIG_ERROR(5000, "Configuration error"),
@@ -59,7 +68,10 @@ public enum ErrorCode {
     // ===== WebSocket Errors (7000-7999) =====
     WEBSOCKET_ERROR(7000, "WebSocket error"),
     WEBSOCKET_CONNECTION_FAILED(7001, "WebSocket connection failed"),
-    WEBSOCKET_MESSAGE_FAILED(7002, "WebSocket message failed");
+    WEBSOCKET_MESSAGE_FAILED(7002, "WebSocket message failed"),
+    WEBSOCKET_RESPONDER_TYPE_OWNED_BY_FRAMEWORK(7003, "Panel responder message type is owned by the framework"),
+    WEBSOCKET_RESPONDER_TYPE_ALREADY_OWNED(7004, "Panel responder message type is already owned by another module"),
+    WEBSOCKET_RESPONDER_TIMEOUT(7005, "Panel responder did not complete within its timeout");
 
     private final int code;
     private final String defaultMessage;

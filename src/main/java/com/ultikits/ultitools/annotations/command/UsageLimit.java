@@ -6,28 +6,76 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Usage limit annotation.
+ * Marks a {@code @CmdMapping} method as subject to a concurrency lock, enforced by
+ * {@code UsageLockValidator}.
  * <p>
- * 指令使用限制注解。
+ * {@link LimitType#SENDER} serialises invocations per sender: while one invocation from a given
+ * sender is in flight, a second invocation of the SAME mapping from the SAME sender is rejected;
+ * a different sender is unaffected. {@link LimitType#ALL} serialises invocations server-wide:
+ * while any one invocation is in flight, every OTHER sender's invocation of the same mapping is
+ * rejected, regardless of who is invoking it.
+ * <p>
+ * Acquisition is the gate (GEN-09 / D-02, acquire-as-you-validate): the lock is taken inside
+ * validation itself, so a failed acquisition is an ordinary validation rejection -- the mapped
+ * method is never invoked. An {@code ALL}-scope lock is released only by the sender that acquired
+ * it; no other sender's completion can free it (Pitfall 5 / T-05-03).
+ * <p>
+ * {@link #ContainConsole()} defaults to {@code true} as of 6.3.0 -- a console sender is subject
+ * to this limit unless a mapping opts out explicitly.
+ * <p>
+ * <b>Re-entry (as of 6.3.0).</b> A command body runs at dispatch on the server thread, so a body
+ * that dispatches its own command -- {@code performCommand} or {@code Bukkit.dispatchCommand} --
+ * runs the nested dispatch while its own lock is still held. The nested dispatch is refused with
+ * the ordinary lock message ({@code SENDER}: from the same sender; {@code ALL}: from any sender);
+ * acquisition never waits, so nothing blocks and nothing deadlocks. The outer body's lock is
+ * released when the outer body returns, normally or by throwing. A body that must run its own
+ * command again should schedule it with {@code runTask} instead.
+ * <p>
+ * A mapping -- or the executor class itself -- carrying this annotation with {@link LimitType#SENDER}
+ * or {@link LimitType#ALL} whose chain omits {@code UsageLockValidator} is refused at plugin load,
+ * naming the offending class and, when known, the offending mapping method (SILENT-11 / D-01,
+ * D-04); {@link LimitType#NONE} is exempt since it declares no limit to enforce. No opt-out
+ * exists for this refusal: Phase 3 D-08's module-granularity isolation is the accepted escape
+ * hatch -- the offending module alone fails to load, every other module still starts.
+ * <p>
+ * As of 6.3.0 this annotation may also be applied at the class level, and it is enforced there:
+ * {@code UsageLockValidator} resolves the annotation per {@code @CmdMapping} method as the
+ * method's own annotation, then the concrete executor class's, then the class that declared the
+ * mapping in source -- also when the executor is an AOP proxy. A class-level placement therefore
+ * locks every mapping of that class that carries no {@code @UsageLimit} of its own; a
+ * method-level annotation governs its own mapping instead.
  *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#execution-lock">@UsageLimit</a>
  */
-@Target(ElementType.METHOD)
+@Target({ElementType.METHOD, ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface UsageLimit {
     /**
-     * @return limit type <br> 限制类型
+     * @return the concurrency scope this limit enforces -- see {@link LimitType}
      */
     LimitType value();
 
     /**
-     * @return whether to contain console <br> 是否包含控制台
+     * Whether a console sender is subject to this limit, the same as a player sender.
+     * Defaults to {@code true} as of 6.3.0 -- a console sender is included unless a mapping
+     * opts out explicitly.
+     *
+     * @return whether to contain console
      */
-    boolean ContainConsole() default false;
+    boolean ContainConsole() default true;
 
     enum LimitType {
+        /**
+         * No concurrency limit is enforced.
+         */
         NONE,
+        /**
+         * Serialises invocations per sender -- see the class-level javadoc.
+         */
         SENDER,
+        /**
+         * Serialises invocations server-wide -- see the class-level javadoc.
+         */
         ALL
     }
 }

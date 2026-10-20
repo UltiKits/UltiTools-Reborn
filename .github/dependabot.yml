@@ -1,0 +1,23 @@
+# Dependabot configuration for UltiTools-API.
+#
+# Two ecosystems are tracked, both on a weekly schedule against the integration
+# branch alpha: Maven (this project's own dependencies) and GitHub Actions (the workflows
+# under .github/workflows/).
+#
+# UltiTools-API 的 Dependabot 配置。
+# 跟踪两个生态,均对集成分支 alpha 按周计划:Maven(本项目自身依赖)与
+# GitHub Actions(.github/workflows/ 下的工作流)。
+version: 2
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    target-branch: "alpha"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "alpha"
+    schedule:
+      interval: "weekly"

@@ -68,6 +68,8 @@ class BasePaginationPageTest {
 
     @BeforeEach
     void setUp() {
+        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        org.mockbukkit.mockbukkit.MockBukkit.mock();
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         
@@ -96,6 +98,7 @@ class BasePaginationPageTest {
         if (messageUtilsMock != null) {
             messageUtilsMock.close();
         }
+        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
     /**

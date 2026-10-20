@@ -3,17 +3,16 @@ package com.ultikits.ultitools.abstracts.gui.declarative.core;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * RenderObjectWidget 是描述实际渲染内容的 Widget 基类。
+ * RenderObjectWidget is the base Widget class for describing actual render content.
  * <p>
- * 与 {@link StatelessWidget} 和 {@link StatefulWidget} 不同，
- * RenderObjectWidget 直接对应一个 {@link RenderNode}，
- * 是渲染树的叶子节点。
+ * Unlike {@link StatelessWidget} and {@link StatefulWidget}, a RenderObjectWidget corresponds
+ * directly to a {@link RenderNode} and is a leaf node of the render tree.
  * <p>
- * <b>子类示例：</b>
+ * <b>Example subclasses:</b>
  * <ul>
- *   <li>{@code ItemDisplay} - 显示一个物品</li>
- *   <li>{@code TextButton} - 显示一个文本按钮</li>
- *   <li>{@code Placeholder} - 占位符</li>
+ *   <li>{@code ItemDisplay} - displays an item</li>
+ *   <li>{@code TextButton} - displays a text button</li>
+ *   <li>{@code Placeholder} - a placeholder</li>
  * </ul>
  *
  * @author UltiTools Team
@@ -23,16 +22,16 @@ import org.jetbrains.annotations.NotNull;
 public abstract class RenderObjectWidget extends Widget {
 
     /**
-     * 创建一个新的 RenderObjectWidget。
+     * Creates a new RenderObjectWidget.
      */
     protected RenderObjectWidget() {
         super();
     }
 
     /**
-     * 创建一个新的 RenderObjectWidget，指定 key。
+     * Creates a new RenderObjectWidget with the given key.
      *
-     * @param key 用于稳定标识此 Widget 的键
+     * @param key the key used to stably identify this Widget
      */
     protected RenderObjectWidget(SlotKey key) {
         super(key);

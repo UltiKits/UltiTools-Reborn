@@ -3,15 +3,26 @@ package com.ultikits.ultitools.utils;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
+
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Utility class for handling plugin dependency and package scanning operations.
  * This class helps determine which packages should be scanned for components
  * based on annotations like {@link ComponentScan} and {@link EnableAutoRegister}.
- * <br>
- * 处理插件依赖和包扫描操作的实用工具类。
- * 此类帮助根据 {@link ComponentScan} 和 {@link EnableAutoRegister} 等注解
- * 确定应该扫描哪些包以查找组件。
+ * <p>
+ * {@code @UltiToolsModule} carries both {@link ComponentScan} and {@link EnableAutoRegister} as
+ * meta-annotations, and its {@code scanBasePackages()}/{@code scanBasePackageClasses()}
+ * attributes declare {@code @AliasFor} onto {@link ComponentScan}'s {@code basePackages()}/
+ * {@code basePackageClasses()}. Resolution therefore goes through {@link
+ * MergedAnnotationResolver#find} rather than the JDK's own direct-annotation-only reflection
+ * (a bare {@code Class} lookup, which only sees an annotation declared directly on the class and
+ * misses that merge entirely) -- before {@code @since 6.3.0} a class annotated only {@code
+ * @UltiToolsModule(scanBasePackages = {...})} silently fell through to the plugin class's own
+ * package, discarding its declared value (SILENT-22).
  *
  * @author wisdomme
  * @since 6.0.0
@@ -23,36 +34,79 @@ public class DependencyUtils {
 
     /**
      * Get plugin packages.
-     * <br>
-     * 获取模块包。
+     * <p>
+     * Additive, not first-match: every declared source -- {@link ComponentScan#value()}, {@link
+     * ComponentScan#basePackages()}, {@link ComponentScan#basePackageClasses()}, and {@link
+     * EnableAutoRegister#scanPackage()} -- contributes packages, in declaration order, with
+     * duplicates collapsed to their first occurrence, mirroring {@code
+     * PluginManager.getPluginScanPackages}'s shape. Falls back to the plugin class's own package
+     * only when no source contributes anything.
      *
-     * @param plugin UltiTools plugin instance <br> UltiTools模块实例
-     * @return Plugin packages <br> 模块包
+     * @param plugin UltiTools plugin instance
+     * @return Plugin packages
      */
     public static String[] getPluginPackages(UltiToolsPlugin plugin) {
         Class<?> pluginClass = plugin.getClass();
-        String[] packages;
 
-        if (!pluginClass.isAnnotationPresent(ComponentScan.class)) {
-            if (pluginClass.isAnnotationPresent(EnableAutoRegister.class)) {
-                EnableAutoRegister enableAutoRegister = pluginClass.getAnnotation(EnableAutoRegister.class);
-                if (enableAutoRegister.scanPackage().isEmpty()) {
-                    packages = new String[]{pluginClass.getPackage().getName()};
-                } else {
-                    packages = new String[]{enableAutoRegister.scanPackage()};
+        Set<String> packages = new LinkedHashSet<>();
+
+        ComponentScan componentScan = MergedAnnotationResolver.find(pluginClass, ComponentScan.class);
+        if (componentScan != null) {
+            Collections.addAll(packages, componentScan.value());
+            Collections.addAll(packages, componentScan.basePackages());
+            for (Class<?> markerClass : componentScan.basePackageClasses()) {
+                // Class.getPackage() is null for an array type/primitive/void -- skip rather
+                // than fold a null entry into the scan set.
+                Package markerPackage = markerClass.getPackage();
+                if (markerPackage != null) {
+                    packages.add(markerPackage.getName());
                 }
-            } else {
-                packages = new String[]{pluginClass.getPackage().getName()};
             }
-        } else {
-            ComponentScan componentScan = pluginClass.getAnnotation(ComponentScan.class);
-            packages = (componentScan.value().length != 0) ? componentScan.value() :
-                    (componentScan.basePackages().length != 0) ? componentScan.basePackages() :
-                            new String[]{pluginClass.getPackage().getName()};
         }
 
-        return packages;
+        EnableAutoRegister enableAutoRegister = MergedAnnotationResolver.find(pluginClass, EnableAutoRegister.class);
+        if (enableAutoRegister != null && !enableAutoRegister.scanPackage().isEmpty()) {
+            packages.add(enableAutoRegister.scanPackage());
+        }
+
+        if (packages.isEmpty()) {
+            packages.add(pluginClass.getPackage().getName());
+        }
+
+        return dedupeNestedPackages(packages).toArray(new String[0]);
     }
 
+    /**
+     * Drops any package that is a strict, segment-wise subpackage of another package already
+     * present in {@code packages} (#362). A scanner that recurses from the parent package
+     * already reaches every {@code @ConfigEntity} class the nested entry would find again, so
+     * keeping both means {@code ConfigManager.registerAll} initialises - and validates - the
+     * same class once per matching scan package instead of once overall.
+     * <p>
+     * "Strict subpackage" is tested by segment, not by string prefix: {@code com.example.modular}
+     * is NOT a subpackage of {@code com.example.mod}, even though the raw string starts with it -
+     * the comparison always appends a trailing {@code "."} before testing
+     * {@link String#startsWith(String)}.
+     *
+     * @param packages candidate packages, in declaration order; never mutated
+     * @return a new set containing only the packages with no ancestor also present in {@code
+     *         packages}, in the same relative order. Empty in, empty out - nothing throws.
+     */
+    static Set<String> dedupeNestedPackages(Set<String> packages) {
+        Set<String> result = new LinkedHashSet<>();
+        for (String candidate : packages) {
+            boolean hasAncestorInSet = false;
+            for (String other : packages) {
+                if (!other.equals(candidate) && candidate.startsWith(other + ".")) {
+                    hasAncestorInSet = true;
+                    break;
+                }
+            }
+            if (!hasAncestorInSet) {
+                result.add(candidate);
+            }
+        }
+        return result;
+    }
 
 }

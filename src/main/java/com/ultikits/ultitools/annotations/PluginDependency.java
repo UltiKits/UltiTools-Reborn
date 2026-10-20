@@ -9,9 +9,15 @@ import java.lang.annotation.Target;
  * Declares plugin dependencies for UltiTools plugins.
  * Used to ensure plugins are loaded in the correct order.
  * <p>
- * 声明 UltiTools 插件的依赖关系。
- * 用于确保插件按正确的顺序加载。
- * 
+ * Only {@link #depends()} refuses a module for a missing target: a module is not loaded when a
+ * {@code depends} target is missing, and that refusal propagates to every module that
+ * transitively {@code depends} on it. {@link #softDepends()} and {@link #loadBefore()} only order
+ * modules that are present: a name that is not installed is ignored, and a module that names a
+ * module refused for a missing dependency there still loads. A dependency cycle is different:
+ * the cycle members and every module that must load after one of them - through any of these
+ * attributes or a {@code plugin.yml} {@code loadAfter} entry - cannot be ordered and are not
+ * loaded.
+ *
  * <pre>{@code
  * @UltiToolsModule(scanBasePackages = {"com.example.myplugin"})
  * @PluginDependency(
@@ -32,36 +38,32 @@ public @interface PluginDependency {
     
     /**
      * Required plugin dependencies.
-     * The plugin will fail to load if any of these dependencies are missing.
-     * <br>
-     * 必需的插件依赖。
-     * 如果缺少任何这些依赖，插件将加载失败。
+     * The plugin will fail to load if any of these dependencies are missing or are themselves
+     * refused, and every plugin that transitively depends on it is refused with it. This is the
+     * only attribute along which a missing-dependency refusal propagates.
      *
-     * @return array of required plugin names <br> 必需的插件名称数组
+     * @return array of required plugin names
      */
     String[] depends() default {};
-    
+
     /**
      * Optional plugin dependencies (soft dependencies).
-     * The plugin will still load even if these dependencies are missing,
-     * but it will be loaded after them if they exist.
-     * <br>
-     * 可选的插件依赖（软依赖）。
-     * 即使缺少这些依赖，插件仍会加载，
-     * 但如果它们存在，会在它们之后加载。
+     * The plugin will still load even if these dependencies are missing, or are refused for a
+     * missing dependency of their own, but it will be loaded after them if they load. Ordering
+     * only; see the type-level note on cycles.
      *
-     * @return array of optional plugin names <br> 可选的插件名称数组
+     * @return array of optional plugin names
      */
     String[] softDepends() default {};
-    
+
     /**
      * Plugins that should be loaded after this plugin.
-     * This is the inverse of depends - declares that other plugins depend on this one.
-     * <br>
-     * 应在此插件之后加载的插件。
-     * 这与 depends 相反 - 声明其他插件依赖于此插件。
+     * Ordering only: it applies to named plugins that are present, a name that is not installed
+     * is ignored, and refusing this plugin for a missing dependency does not refuse the named
+     * plugins. It does not make the named plugins depend on this one; see the type-level note on
+     * cycles.
      *
-     * @return array of plugin names that should load after <br> 应在之后加载的插件名称数组
+     * @return array of plugin names that should load after
      */
     String[] loadBefore() default {};
 }

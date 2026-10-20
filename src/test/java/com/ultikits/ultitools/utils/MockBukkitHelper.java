@@ -30,11 +30,16 @@ public final class MockBukkitHelper {
         } catch (Exception ignored) {
         }
 
-        // 2. 强制清理 MockBukkit 的内部状态
+        // 2. 兜底清理 MockBukkit 的内部单例引用
+        //    MockBukkit 4.x 只声明了一个字段：private static ServerMock mock。
+        //    正常路径上 unmock() 会经 setServerInstanceToNull() 把它置空，所以这里
+        //    只是失败路径的兜底：unmock() 的 try/catch 仅覆盖 scheduler 关闭那一段，
+        //    disablePlugins() 或 unload()/reset() 抛异常时会跳过置空，使 mock 残留为非 null，
+        //    导致下一次 MockBukkit.mock() 抛出 IllegalStateException("Already mocking")。
         try {
-            Field mockedField = MockBukkit.class.getDeclaredField("mocked");
-            mockedField.setAccessible(true);
-            mockedField.setBoolean(null, false);
+            Field mockField = MockBukkit.class.getDeclaredField("mock");
+            mockField.setAccessible(true);
+            mockField.set(null, null);
         } catch (Exception ignored) {
         }
 

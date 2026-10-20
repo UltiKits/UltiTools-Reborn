@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.widgets;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectElement;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
 import org.junit.jupiter.api.AfterEach;
@@ -19,12 +21,13 @@ public class TextButtonTest {
 
     @BeforeEach
     void setUp() {
+        MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
     }
 
     @AfterEach
     void tearDown() {
-        MockBukkit.unmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     @Test

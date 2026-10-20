@@ -9,9 +9,9 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Stack;
 
 /**
- * 导航器的状态类。
+ * The state class for Navigator.
  * <p>
- * 管理路由历史记录。
+ * Manages the route history.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -27,9 +27,9 @@ public class NavigatorState extends State<Navigator> {
     }
 
     /**
-     * 推入一个新的路由。
+     * Pushes a new route.
      *
-     * @param routeName 路由名称
+     * @param routeName the route name
      */
     public void push(@NotNull String routeName) {
         if (!getWidget().getRoutes().containsKey(routeName)) {
@@ -39,8 +39,8 @@ public class NavigatorState extends State<Navigator> {
     }
 
     /**
-     * 弹出当前路由。
-     * 如果只有一个路由，则不做任何操作。
+     * Pops the current route.
+     * Does nothing if only one route remains.
      */
     public void pop() {
         if (history.size() > 1) {
@@ -49,9 +49,9 @@ public class NavigatorState extends State<Navigator> {
     }
 
     /**
-     * 替换当前路由。
+     * Replaces the current route.
      *
-     * @param routeName 新的路由名称
+     * @param routeName the new route name
      */
     public void pushReplacement(@NotNull String routeName) {
         if (!getWidget().getRoutes().containsKey(routeName)) {
@@ -66,9 +66,9 @@ public class NavigatorState extends State<Navigator> {
     }
 
     /**
-     * 检查是否可以弹出路由。
+     * Checks whether a route can be popped.
      *
-     * @return 如果历史记录大于 1 则返回 true
+     * @return true if the history has more than one entry
      */
     public boolean canPop() {
         return history.size() > 1;

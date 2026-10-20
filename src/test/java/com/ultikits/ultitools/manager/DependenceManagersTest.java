@@ -2,27 +2,39 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.logging.Logger;
 
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.services.EmailService;
+import com.ultikits.ultitools.services.NotificationService;
+import com.ultikits.ultitools.services.TeleportService;
+import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import java.util.Comparator;
-
-import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 
 /**
  * DependenceManagers 测试
@@ -110,34 +122,6 @@ class DependenceManagersTest {
     }
 
     @Nested
-    @DisplayName("closeAdventure 测试")
-    class CloseAdventureTests {
-
-        @Test
-        @DisplayName("adventure 为 null 时不应抛出异常")
-        void shouldNotThrowWhenAdventureIsNull() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            setField(managers, "adventure", null);
-
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> managers.closeAdventure());
-        }
-
-        @Test
-        @DisplayName("关闭 adventure 应该正常执行")
-        void shouldNotThrowOnClose() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> managers.closeAdventure());
-        }
-    }
-
-    @Nested
     @DisplayName("closeContext 测试")
     class CloseContextTests {
 
@@ -200,26 +184,6 @@ class DependenceManagersTest {
     }
 
     @Nested
-    @DisplayName("getAdventure 测试")
-    class GetAdventureTests {
-
-        @Test
-        @DisplayName("应该返回设置的 adventure")
-        void shouldReturnAdventure() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act
-            BukkitAudiences result = managers.getAdventure();
-
-            // Assert
-            assertThat(result).isEqualTo(mockAdventure);
-        }
-    }
-
-    @Nested
     @DisplayName("静态字段测试")
     class StaticFieldTests {
 
@@ -253,33 +217,11 @@ class DependenceManagersTest {
             });
         }
 
-        @Test
-        @DisplayName("多次关闭 adventure 不应抛出异常")
-        void multipleCloseAdventureShouldNotThrow() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act & Assert - 多次调用不应该抛出异常
-            assertDoesNotThrow(() -> {
-                managers.closeAdventure();
-                managers.closeAdventure();
-                managers.closeAdventure();
-            });
-        }
     }
 
     @Nested
     @DisplayName("字段初始化测试")
     class FieldInitializationTests {
-
-        @Test
-        @DisplayName("adventure 字段应该存在")
-        void adventureFieldShouldExist() throws Exception {
-            Field field = DependenceManagers.class.getDeclaredField("adventure");
-            assertThat(field).isNotNull();
-        }
 
         @Test
         @DisplayName("context 字段应该存在")
@@ -292,13 +234,6 @@ class DependenceManagersTest {
     @Nested
     @DisplayName("Getter 注解测试")
     class GetterAnnotationTests {
-
-        @Test
-        @DisplayName("getAdventure 方法应该存在")
-        void getAdventureMethodShouldExist() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("getAdventure");
-            assertThat(method).isNotNull();
-        }
 
         @Test
         @DisplayName("getContext 方法应该存在")
@@ -345,42 +280,7 @@ class DependenceManagersTest {
             managers.closeContext();
 
             // Assert
-            org.mockito.Mockito.verify(mockContext).close();
-        }
-    }
-
-    @Nested
-    @DisplayName("BukkitAudiences 测试")
-    class BukkitAudiencesTests {
-
-        @Test
-        @DisplayName("closeAdventure 应该调用 adventure.close()")
-        void closeAdventureShouldCallClose() throws Exception { // NOPMD - uses Mockito verify()
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act
-            managers.closeAdventure();
-
-            // Assert
-            org.mockito.Mockito.verify(mockAdventure).close();
-        }
-
-        @Test
-        @DisplayName("getAdventure 返回正确的实例")
-        void getAdventureReturnsCorrectInstance() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act
-            BukkitAudiences result = managers.getAdventure();
-
-            // Assert
-            assertThat(result).isSameAs(mockAdventure);
+            verify(mockContext).close();
         }
     }
 
@@ -435,23 +335,9 @@ class DependenceManagersTest {
     class MethodAccessibilityTests {
 
         @Test
-        @DisplayName("initAdventure 是公开方法")
-        void initAdventureIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("initAdventure", com.ultikits.ultitools.UltiTools.class);
-            assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
-        }
-
-        @Test
         @DisplayName("initInventoryAPI 是公开方法")
         void initInventoryAPIIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("initInventoryAPI", com.ultikits.ultitools.UltiTools.class);
-            assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("closeAdventure 是公开方法")
-        void closeAdventureIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("closeAdventure");
+            java.lang.reflect.Method method = DependenceManagers.class.getMethod("initInventoryAPI", UltiTools.class);
             assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
         }
 
@@ -466,13 +352,6 @@ class DependenceManagersTest {
     @Nested
     @DisplayName("字段修饰符测试")
     class FieldModifierTests {
-
-        @Test
-        @DisplayName("adventure 是私有字段")
-        void adventureIsPrivate() throws Exception {
-            Field field = DependenceManagers.class.getDeclaredField("adventure");
-            assertThat(java.lang.reflect.Modifier.isPrivate(field.getModifiers())).isTrue();
-        }
 
         @Test
         @DisplayName("context 是私有字段")
@@ -521,6 +400,119 @@ class DependenceManagersTest {
             // Act & Assert
             int result = comparator.compare("1.0.0-SNAPSHOT", "1.0.0");
             assertThat(result).isNotEqualTo(0);
+        }
+    }
+
+    @Nested
+    @DisplayName("initCoreServices real registration shape (regression: PR #352 UAT)")
+    class InitCoreServicesRegistrationTests {
+
+        /**
+         * Drives the ACTUAL {@code initCoreServices(UltiTools)} private method -- not a
+         * reproduction of lines 70-81 -- so this test fails the moment the real registration shape in
+         * {@code DependenceManagers} changes, not just when a copy of it drifts out of sync.
+         *
+         * <p>Before the identity-dedup fix in {@code SimpleContainer#getOrderedBeansOfType},
+         * each of these three {@code getBean(Interface.class)} calls threw
+         * {@code ContainerException.ambiguousBeanType}, because the same singleton instance is
+         * deliberately registered under two names each ({@code :70-81}) so both a short internal
+         * name and the interface FQN resolve it. A test covering only {@code NotificationService}
+         * would leave {@code TeleportService} and {@code EmailService} unproven -- all three are
+         * broken by the same defect.
+         */
+        @Test
+        @DisplayName("TeleportService, NotificationService and EmailService all resolve by type without a false ambiguity")
+        void allThreeAliasedCoreServicesResolveByType() throws Exception {
+            // Arrange: a real DependenceManagers instance (constructor bypassed via Unsafe, same
+            // as every other test in this file) with a real, un-mocked SimpleContainer -- the
+            // ambiguity adjudication under test lives in SimpleContainer, so it must be real.
+            DependenceManagers managers = createManagersWithMockedFields();
+            SimpleContainer context = new SimpleContainer();
+            setField(managers, "context", context);
+
+            // initCoreServices(UltiTools) now schedules the deferred economy start-up report via
+            // Bukkit.getScheduler().runTask(...) (Codex P2, PR #463) -- this test only cares about
+            // the three aliased core-service registrations above it, so the scheduler is mocked to
+            // accept and discard the task rather than actually running it (no live Bukkit server
+            // exists in this test class at all).
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
+                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+
+                // Act: invoke the real private initCoreServices(UltiTools) method -- the exact
+                // code path DependenceManagers' own constructor runs, not a hand-copied
+                // reproduction of it.
+                java.lang.reflect.Method initCoreServices =
+                        DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                initCoreServices.setAccessible(true); // NOPMD
+                initCoreServices.invoke(managers, mock(UltiTools.class));
+
+                // Assert: each interface-typed lookup resolves without throwing.
+                TeleportService teleportService = assertDoesNotThrow(
+                        () -> context.getBean(TeleportService.class),
+                        "TeleportService is aliased under two names (:70-71) -- must not be seen as "
+                                + "two ambiguous candidates");
+                assertThat(teleportService).isNotNull();
+
+                NotificationService notificationService = assertDoesNotThrow(
+                        () -> context.getBean(NotificationService.class),
+                        "NotificationService is aliased under two names (:75-76) -- must not be seen "
+                                + "as two ambiguous candidates");
+                assertThat(notificationService).isNotNull();
+
+                EmailService emailService = assertDoesNotThrow(
+                        () -> context.getBean(EmailService.class),
+                        "EmailService is aliased under two names (:80-81) -- must not be seen as two "
+                                + "ambiguous candidates");
+                assertThat(emailService).isNotNull();
+            }
+        }
+
+        /**
+         * Codex P2, PR #463: {@code plugin.yml} only softdepends on {@code Vault} itself, not on
+         * any economy-providing plugin (e.g. EssentialsX) -- Vault is guaranteed to enable before
+         * UltiTools, but an economy plugin has no declared ordering relative to UltiTools at all,
+         * and commonly enables after it. Logging {@code EconomyUtils#logStartupState()}'s one-time
+         * start-up line synchronously, inside this constructor (itself called early from
+         * {@code UltiTools#onEnable()}), would permanently report {@code NO_PROVIDER_REGISTERED}
+         * for that ordinary case, even though a provider registers moments later in the same
+         * server start-up.
+         * <p>
+         * Asserts the OBSERVABLE fix directly: the report must be handed to
+         * {@link Bukkit#getScheduler()} as a deferred task, and must NOT have already logged
+         * anything by the time {@code initCoreServices(UltiTools)} returns (the mock scheduler
+         * never actually runs the captured task, so any log call caught here can only have
+         * happened synchronously, during {@code initCoreServices(UltiTools)} itself).
+         */
+        @Test
+        @DisplayName("logStartupState() is deferred via the Bukkit scheduler, not called synchronously (Codex P2, PR #463)")
+        void logStartupStateIsDeferredViaScheduler_notCalledSynchronously() throws Exception {
+            DependenceManagers managers = createManagersWithMockedFields();
+            SimpleContainer context = new SimpleContainer();
+            setField(managers, "context", context);
+
+            Logger mockUltiToolsLogger = mock(Logger.class);
+            UltiTools mockUltiTools = TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getLogger()).thenReturn(mockUltiToolsLogger));
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
+                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+
+                java.lang.reflect.Method initCoreServices =
+                        DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                initCoreServices.setAccessible(true); // NOPMD
+                initCoreServices.invoke(managers, mockUltiTools);
+
+                // The economy start-up report must be handed to the scheduler as a deferred task,
+                // not run inline.
+                verify(mockScheduler).runTask(eq(mockUltiTools), any(Runnable.class));
+                // logStartupState() must not have already logged anything synchronously -- the
+                // mock scheduler never runs the captured task, so any call caught here proves it
+                // ran too early.
+                verify(mockUltiToolsLogger, never()).info(anyString());
+                verify(mockUltiToolsLogger, never()).warning(anyString());
+            }
         }
     }
 

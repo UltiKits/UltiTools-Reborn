@@ -18,9 +18,6 @@ import static com.ultikits.ultitools.utils.MessageUtils.warning;
 /**
  * Base class for paginated inventory pages.
  * Provides automatic pagination with next/previous buttons.
- * <p>
- * 分页背包页面的基类。
- * 提供带有下一页/上一页按钮的自动分页。
  *
  * @author wisdomme
  * @version 2.0.0
@@ -66,8 +63,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Initializes the pagination manager.
-     * <p>
-     * 初始化分页管理器。
      */
     private void initPagination() {
         paginationManager.registerPageSlotsBetween(0, getLastSlot() - 9);
@@ -80,8 +75,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Updates the paginated content.
-     * <p>
-     * 更新分页内容。
      */
     protected void updatePaginatedContent() {
         // Clear existing items
@@ -102,8 +95,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Sets up the navigation buttons.
-     * <p>
-     * 设置导航按钮。
      */
     protected void setupNavigationButtons() {
         // Previous button
@@ -118,9 +109,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     /**
      * Creates the "previous page" button.
      * Override to customize.
-     * <p>
-     * 创建"上一页"按钮。
-     * 重写以自定义。
      *
      * @return the previous button icon
      */
@@ -144,9 +132,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     /**
      * Creates the "next page" button.
      * Override to customize.
-     * <p>
-     * 创建"下一页"按钮。
-     * 重写以自定义。
      *
      * @return the next button icon
      */
@@ -170,9 +155,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     /**
      * Provides the items for pagination.
      * Override this method to provide the items to display.
-     * <p>
-     * 提供分页的项目。
-     * 重写此方法以提供要显示的项目。
      *
      * @return list of icons to paginate
      */
@@ -180,8 +162,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Gets the pagination manager.
-     * <p>
-     * 获取分页管理器。
      *
      * @return the pagination manager
      */
@@ -191,8 +171,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Gets the current page number (1-based).
-     * <p>
-     * 获取当前页码（从 1 开始）。
      *
      * @return the current page number
      */
@@ -202,8 +180,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Gets the total number of pages.
-     * <p>
-     * 获取总页数。
      *
      * @return the total page count
      */
@@ -213,8 +189,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Checks if there are more pages after the current one.
-     * <p>
-     * 检查当前页之后是否还有更多页。
      *
      * @return true if not on the last page
      */
@@ -224,8 +198,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Checks if there are pages before the current one.
-     * <p>
-     * 检查当前页之前是否还有页。
      *
      * @return true if not on the first page
      */
@@ -235,8 +207,6 @@ public abstract class BasePaginationPage extends BaseInventoryPage {
     
     /**
      * Goes to a specific page.
-     * <p>
-     * 跳转到指定页。
      *
      * @param page the page number (1-based)
      */

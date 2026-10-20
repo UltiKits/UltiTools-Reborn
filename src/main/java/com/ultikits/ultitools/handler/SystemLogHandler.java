@@ -4,6 +4,8 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.manager.UltiPanelLogTransmitter;
+import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -14,118 +16,234 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
 /**
- * 系统日志处理器
- * 捕获所有系统日志并发送到UltiPanel后端
- * 
+ * System log handler.
+ * Captures all system log records and forwards them to the UltiPanel backend.
+ * <p>
+ * Attached to the {@code java.util.logging} root logger, it receives every plugin's lines
+ * directly. Paper's own console output (Log4j) reaches it through {@link ConsoleMirror}, converted
+ * into records, so the same filters apply to both (as of 6.3.0).
+ *
  * @author UltiKits
  * @version 1.0.0
  */
 public class SystemLogHandler extends Handler {
-    
+
+    /**
+     * Reentrancy guard for {@link #publish(LogRecord)} (Gate-2 finding, round 9). Loop-prevention
+     * in this class was, until now, done entirely by matching the RECORD's own {@code loggerName}
+     * against a small set of known class-name substrings ({@link #shouldProcessRecord} below) --
+     * but every diagnostic this framework logs through the SHARED plugin logger
+     * ({@code UltiTools.getInstance().getLogger()}) carries that shared logger's own name, not the
+     * calling class's, so the substring check can never catch any of them. Round 6/7 found and
+     * removed two individual instances of this (a transmitter diagnostic, then a WebSocket-send
+     * diagnostic); round 9 found a THIRD, in an exception handler that cannot simply be deleted
+     * (reporting a genuine send failure has real value). Rather than keep chasing individual call
+     * sites the review keeps finding new instances of, this ThreadLocal closes the whole class at
+     * its root: if {@code publish} is entered while ALREADY running on the SAME thread (which is
+     * exactly what happens when delivering/draining record N synchronously produces record N+1 on
+     * the same call stack -- every reachable recursion in this subsystem is same-thread, since
+     * none of the delivery/drain paths hand off to a different thread before logging), the
+     * re-entrant call is dropped instead of recursing. A single dropped self-referential diagnostic
+     * is an acceptable cost for eliminating an entire StackOverflowError defect class.
+     */
+    private static final ThreadLocal<Boolean> PUBLISHING = ThreadLocal.withInitial(() -> false);
+
     private final UltiPanelLogTransmitter logTransmitter;
-    
-    // 日志级别过滤配置
-    @Getter @Setter
-    private Set<String> enabledLevels;
-    
-    // 排除的记录器配置
+
+    // Log-level filter configuration
+    // volatile: main-thread event handlers read the set a panel config request replaces on the WebSocket thread.
+    @Getter
+    private volatile Set<String> enabledLevels;
+
+    // Excluded-logger configuration
     @Getter @Setter
     private Set<String> excludedLoggers;
-    
-    // 最小日志级别
+
+    // Minimum log level
     @Getter @Setter
     private Level minimumLevel = Level.INFO;
-    
+
     /**
-     * 构造函数
-     * 
-     * @param logTransmitter 日志传输器
+     * Constructor.
+     *
+     * @param logTransmitter the log transmitter
      */
     public SystemLogHandler(UltiPanelLogTransmitter logTransmitter) {
         this.logTransmitter = logTransmitter;
-        
-        // 初始化默认配置
+
+        // Initialize the default configuration
         initializeDefaultConfiguration();
     }
-    
+
     /**
-     * 初始化默认配置
+     * Initializes the default configuration.
      */
     private void initializeDefaultConfiguration() {
-        // 默认启用的日志级别
+        // Log levels enabled by default
         enabledLevels = new HashSet<>();
         enabledLevels.add("info");
         enabledLevels.add("warning");
         enabledLevels.add("error");
-        // enabledLevels.add("debug"); // 调试日志默认禁用
-        
-        // 默认排除的记录器（避免传输过多日志）
-        excludedLoggers = new HashSet<>();
-        excludedLoggers.add("com.mojang.authlib");
-        excludedLoggers.add("net.minecraft.network");
-        excludedLoggers.add("org.apache.http");
-        excludedLoggers.add("com.zaxxer.hikari");
-        excludedLoggers.add("org.eclipse.jetty");
-        excludedLoggers.add("ErrorReportCollector");
+        // enabledLevels.add("debug"); // debug logging is disabled by default
 
-        // 设置最小级别
+        // No logger is excluded by default (#485). An entry matches a record whose logger name
+        // starts with it. JUL records carry "Minecraft" (Bukkit's server logger, i.e. everything
+        // logged through Bukkit.getLogger(), including the framework's own "[UltiTools-API] ..."
+        // lines), each plugin's own logger, or a com.ultikits.ultitools.* class logger. The six
+        // entries shipped before 6.3.0 -- com.mojang.authlib, net.minecraft.network,
+        // org.apache.http, com.zaxxer.hikari, org.eclipse.jetty, ErrorReportCollector -- could match
+        // none of those: those libraries log through Log4j or SLF4J, and ErrorReportCollector never
+        // logs through JUL at all. Later in 6.3.0 the console mirror (ConsoleMirror) also feeds
+        // Log4j records here, under their Log4j logger names, so the stream mirrors the whole
+        // console; the default stays empty so nothing the console shows is hidden. Loop prevention
+        // does not depend on this list: the PUBLISHING guard above drops any record produced while
+        // one is being delivered.
+        excludedLoggers = new HashSet<>();
+
+        // Apply the minimum level
         setLevel(minimumLevel);
     }
-    
+
     /**
-     * 从配置文件加载配置
+     * Sets the panel-facing set of enabled log levels, and re-synchronises this handler's own
+     * {@code java.util.logging} level floor to match ({@link #syncHandlerLevelWithEnabledLevels()}).
+     *
+     * @param enabledLevels the new enabled-level set
+     */
+    public void setEnabledLevels(Set<String> enabledLevels) {
+        this.enabledLevels = enabledLevels;
+        syncHandlerLevelWithEnabledLevels();
+    }
+
+    /**
+     * Gate-2 finding: {@link #shouldProcessRecord(LogRecord)} calls {@link #isLoggable(LogRecord)}
+     * -- the base {@code Handler}'s own check against {@link #getLevel()} -- BEFORE this class's
+     * own {@link #enabledLevels} filter ever runs. {@link #getLevel()} defaults to
+     * {@link Level#INFO} ({@link #minimumLevel}), which rejects JUL {@code FINE}/{@code FINER}/
+     * {@code FINEST} records outright -- the levels {@link #mapLogLevel(Level)} maps to
+     * {@code "debug"}. So a panel request enabling {@code "debug"} in {@link #enabledLevels} used
+     * to have no effect: no debug-shaped record could ever reach the mapping step that would have
+     * recognised it. Called after every mutation of {@link #enabledLevels} (the setter above,
+     * {@link #addEnabledLevel(String)}, {@link #removeEnabledLevel(String)}, and
+     * {@link #loadConfiguration()}'s own direct mutation) so the handler's own floor tracks
+     * whether {@code "debug"} is currently enabled.
+     */
+    private void syncHandlerLevelWithEnabledLevels() {
+        if (enabledLevels != null && enabledLevels.contains("debug")) {
+            setLevel(Level.FINEST);
+        } else {
+            setLevel(minimumLevel);
+        }
+    }
+
+    /**
+     * Loads configuration from the config file.
      */
     public void loadConfiguration() {
         try {
-            // 加载日志级别配置
+            // Load the log-level configuration
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.levels")) {
                 enabledLevels.clear();
                 for (String level : UltiTools.getInstance().getConfig().getStringList("ultipanel.logging.levels")) {
                     enabledLevels.add(level.toLowerCase());
                 }
+                syncHandlerLevelWithEnabledLevels();
             }
-            
-            // 加载排除的记录器配置
+
+            // Load the excluded-logger configuration
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.excluded-loggers")) {
                 excludedLoggers.clear();
                 excludedLoggers.addAll(UltiTools.getInstance().getConfig().getStringList("ultipanel.logging.excluded-loggers"));
-                // Always preserve internal loggers to prevent circular logging
-                excludedLoggers.add("ErrorReportCollector");
             }
             
-            UltiTools.getInstance().getLogger().info("[UltiPanel] 系统日志处理器配置已加载");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 系统日志处理器配置已加载"));
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 加载日志配置失败，使用默认配置: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 加载日志配置失败，使用默认配置: %s", e.getMessage()));
         }
     }
     
     @Override
     public void publish(LogRecord record) {
-        // 检查是否应该处理此日志记录
+        publish(record, false);
+    }
+
+    /**
+     * The handler the early capture replays its start-up records into when the stream starts
+     * ({@code EarlyLogCapture#drainInto}, #487). It applies exactly the filters and mapping of
+     * {@link #publish(LogRecord)}, but hands each record to
+     * {@link UltiPanelLogTransmitter#replayLog} instead of {@link UltiPanelLogTransmitter#sendLog},
+     * so the replay is delivered in chunked messages even when live batching is off (as of 6.3.0). It is
+     * never attached to a logger.
+     *
+     * @return a handler that replays into this handler's transmitter
+     */
+    public Handler replayHandler() {
+        return new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                SystemLogHandler.this.publish(record, true);
+            }
+
+            @Override
+            public void flush() {
+                // Nothing buffered here; the transmitter holds the replayed records.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+    }
+
+    private void publish(LogRecord record, boolean replayed) {
+        // Gate-2 finding (round 9): reentrancy guard -- see PUBLISHING's own javadoc. Checked
+        // before shouldProcessRecord() so a re-entrant call is dropped as cheaply as possible.
+        if (Boolean.TRUE.equals(PUBLISHING.get())) {
+            return;
+        }
+
+        // Check whether this log record should be processed
         if (!shouldProcessRecord(record)) {
             return;
         }
-        
-        try {
-            // 映射日志级别
-            String level = mapLogLevel(record.getLevel());
-            
-            // 检查级别是否启用
-            if (!enabledLevels.contains(level)) {
-                return;
-            }
-            
-            // 格式化消息
-            String message = formatLogMessage(record);
-            
-            // 确定日志源
-            String source = determineLogSource(record);
-            
-            // 发送日志
-            logTransmitter.sendLog(level, message, source, record.getThrown());
 
-            // Report error-level logs with exceptions to ErrorReportCollector
+        PUBLISHING.set(true);
+        try {
+            // Map the log level
+            String level = mapLogLevel(record.getLevel());
+
+            // Determine the log source -- computed unconditionally: it feeds BOTH the panel
+            // delivery below (gated by enabledLevels) AND the ErrorReportCollector report
+            // (deliberately NOT gated by enabledLevels -- see the comment there, CR-02).
+            String source = determineLogSource(record);
+
+            // Check whether the level is enabled for panel delivery. A line about the panel
+            // connection itself is never sent back to the panel (as of 6.3.0): the panel's error
+            // reply to a rejected message, logged and streamed, is rejected again and replied to
+            // again -- a feedback loop measured at 42,066 lines in one run. See PanelConnectionLog
+            // for why a mark on the record, not the logger-name filter, catches it. The error
+            // report below still runs for such a record: a SEVERE line with an exception (a
+            // failure while handling a panel message) is a framework fault worth collecting, and
+            // the panel's own error replies carry no exception, so they cannot loop through it.
+            if (enabledLevels.contains(level) && !PanelConnectionLog.isPanelConnectionRecord(record)) {
+                // Format the message and send the log
+                String message = formatLogMessage(record);
+                if (replayed) {
+                    logTransmitter.replayLog(level, message, source, record.getThrown(), record.getMillis());
+                } else {
+                    logTransmitter.sendLog(level, message, source, record.getThrown());
+                }
+            }
+
+            // Report error-level logs with exceptions to ErrorReportCollector, regardless of
+            // whether the panel's own live log-view level filter currently excludes "error"
+            // (CR-02): the log stream (what the panel view shows) and the error-reporting
+            // pipeline (UltiPanel's automatic exception collection) are two independent
+            // declared surfaces. Before #433 made the levels filter genuinely effective, this
+            // coupling existed in code but was unreachable over the network; making one control
+            // real must not silently disable the other.
             if ("error".equals(level) && record.getThrown() != null) {
                 try {
                     UltiTools instance = UltiTools.getInstance();
@@ -143,21 +261,43 @@ public class SystemLogHandler extends Handler {
             }
 
         } catch (Exception e) {
-            // 避免日志循环，使用System.err
-            System.err.println("[UltiPanel] SystemLogHandler处理日志记录失败: " + e.getMessage());
+            reportPublishFailure(e);
+        } finally {
+            PUBLISHING.set(false);
         }
     }
-    
+
     /**
-     * 检查是否应该处理此日志记录
+     * Reports a failure to handle a record (#584). It used to be printed to {@code System.err} to
+     * avoid a logging loop, but on Paper standard error is not a way around the logger:
+     * {@code SysoutCatcher} re-logs the line through the plugin logger, unmarked, back into this
+     * handler. It is logged as a panel-connection line instead, which the stream never carries;
+     * it is called while {@link #PUBLISHING} is still set, so the copy that reaches this handler is
+     * dropped by the re-entry guard as well, and the console shows the line. A failure of the
+     * logger itself is ignored: a log line must never break the logging call that produced it.
+     */
+    // PMD.AvoidCatchingGenericException: any handler of the plugin logger may throw, and JUL does
+    // not catch what a handler throws.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static void reportPublishFailure(Exception failure) {
+        try {
+            PanelConnectionLog.log(Level.WARNING,
+                    FrameworkText.format("[UltiPanel] SystemLogHandler处理日志记录失败: %s", failure.getMessage()));
+        } catch (RuntimeException ignored) {
+            // Nowhere left to report it.
+        }
+    }
+
+    /**
+     * Checks whether this log record should be processed.
      */
     private boolean shouldProcessRecord(LogRecord record) {
-        // 检查日志级别
+        // Check the log level
         if (!isLoggable(record)) {
             return false;
         }
-        
-        // 检查记录器是否被排除
+
+        // Check whether the logger is excluded
         String loggerName = record.getLoggerName();
         if (loggerName != null) {
             for (String excluded : excludedLoggers) {
@@ -166,12 +306,16 @@ public class SystemLogHandler extends Handler {
                 }
             }
         }
-        
-        // 避免处理UltiPanel自身的日志传输相关日志，防止循环
+
+        // Avoid processing UltiPanel's own log-transmission logs, to prevent a loop. The WebSocket
+        // library the panel connection runs on logs through SLF4J, which reaches this handler only
+        // through the console mirror (ConsoleMirror, as of 6.3.0); its lines are about the panel
+        // connection itself and are never sent back over it.
         if (loggerName != null && (
             loggerName.contains("UltiPanelLogTransmitter") ||
             loggerName.contains("SystemLogHandler") ||
-            loggerName.contains("WebSocketClient")
+            loggerName.contains("WebSocketClient") ||
+            loggerName.startsWith("org.java_websocket")
         )) {
             return false;
         }
@@ -180,7 +324,7 @@ public class SystemLogHandler extends Handler {
     }
     
     /**
-     * 映射Java日志级别到UltiPanel级别
+     * Maps a Java log level to the UltiPanel level vocabulary.
      */
     private String mapLogLevel(Level level) {
         if (level.intValue() >= Level.SEVERE.intValue()) {
@@ -195,28 +339,28 @@ public class SystemLogHandler extends Handler {
     }
     
     /**
-     * 格式化日志消息
+     * Formats a log message.
      */
     private String formatLogMessage(LogRecord record) {
         String message = record.getMessage();
-        
+
         if (message == null) {
             message = "";
         }
-        
-        // 如果有参数，则格式化消息
+
+        // If parameters are present, format the message with them
         if (record.getParameters() != null && record.getParameters().length > 0) {
             try {
                 message = String.format(message, record.getParameters());
             } catch (Exception e) {
-                // 格式化失败时，尝试使用原始消息加参数信息
+                // Formatting failed - fall back to the raw message plus the parameter values
                 StringBuilder sb = new StringBuilder(message);
-                sb.append(" [参数: ");
+                sb.append(FrameworkText.text(" [参数: "));
                 for (Object param : record.getParameters()) {
                     sb.append(param).append(", ");
                 }
                 if (sb.length() > 2) {
-                    sb.setLength(sb.length() - 2); // 移除最后的 ", "
+                    sb.setLength(sb.length() - 2); // Remove the trailing ", "
                 }
                 sb.append("]");
                 message = sb.toString();
@@ -227,27 +371,29 @@ public class SystemLogHandler extends Handler {
     }
     
     /**
-     * 确定日志源标识
+     * Determines the log-source identifier.
      */
     private String determineLogSource(LogRecord record) {
         String loggerName = record.getLoggerName();
-        
-        if (loggerName == null) {
+
+        // The root logger -- in Log4j, the one Paper's console sender writes every message it is
+        // sent to (ConsoleMirror) -- is the server console itself.
+        if (loggerName == null || loggerName.isEmpty()) {
             return "server";
         }
-        
-        // 判断是否为UltiTools相关日志
+
+        // UltiTools-related log
         if (loggerName.startsWith("com.ultikits.ultitools")) {
             return "plugin:UltiTools";
         }
-        
-        // 判断是否为插件日志
+
+        // Plugin log
         if (loggerName.contains("plugin") || loggerName.startsWith("org.bukkit.plugin")) {
             String pluginName = extractPluginName(loggerName);
             return "plugin:" + pluginName;
         }
-        
-        // 判断是否为服务器核心日志
+
+        // Server-core log
         if (loggerName.startsWith("net.minecraft") || 
             loggerName.startsWith("org.bukkit") ||
             loggerName.startsWith("org.spigotmc") ||
@@ -255,8 +401,8 @@ public class SystemLogHandler extends Handler {
             loggerName.equals("Minecraft")) {
             return "server";
         }
-        
-        // 判断是否为数据库相关日志
+
+        // Database-related log
         if (loggerName.startsWith("com.zaxxer.hikari") ||
             loggerName.startsWith("org.hibernate") ||
             loggerName.contains("database") ||
@@ -264,45 +410,45 @@ public class SystemLogHandler extends Handler {
             loggerName.contains("sqlite")) {
             return "database";
         }
-        
-        // 判断是否为网络相关日志
+
+        // Network-related log
         if (loggerName.contains("network") ||
             loggerName.contains("netty") ||
             loggerName.contains("http")) {
             return "network";
         }
-        
-        // 其他情况
+
+        // Everything else
         return "system";
     }
-    
+
     /**
-     * 从日志记录器名称中提取插件名称
+     * Extracts a plugin name from a logger name.
      */
     private String extractPluginName(String loggerName) {
         if (loggerName == null) {
             return "unknown";
         }
-        
-        // 尝试从logger名称中提取插件名
+
+        // Try to extract the plugin name from the logger name
         String[] parts = loggerName.split("\\.");
-        
+
         for (String part : parts) {
-            // 跳过常见的包名前缀
+            // Skip common package-name prefixes
             if (!part.equals("org") && !part.equals("bukkit") && !part.equals("plugin") 
                 && !part.equals("com") && !part.equals("github") && !part.equals("net")
                 && !part.equals("java") && !part.equals("javax")) {
-                
-                // 如果找到非标准包名，很可能是插件名
+
+                // A non-standard package name found here is likely the plugin name
                 return capitalizeFirst(part);
             }
         }
-        
+
         return "unknown";
     }
-    
+
     /**
-     * 首字母大写
+     * Capitalizes the first letter.
      */
     private String capitalizeFirst(String str) {
         if (str == null || str.isEmpty()) {
@@ -364,65 +510,67 @@ public class SystemLogHandler extends Handler {
     }
 
     /**
-     * 添加启用的日志级别
+     * Adds an enabled log level.
      */
     public void addEnabledLevel(String level) {
         if (level != null) {
             enabledLevels.add(level.toLowerCase());
+            syncHandlerLevelWithEnabledLevels();
         }
     }
-    
+
     /**
-     * 移除启用的日志级别
+     * Removes an enabled log level.
      */
     public void removeEnabledLevel(String level) {
         if (level != null) {
             enabledLevels.remove(level.toLowerCase());
+            syncHandlerLevelWithEnabledLevels();
         }
     }
-    
+
     /**
-     * 添加排除的记录器
+     * Adds an excluded logger.
      */
     public void addExcludedLogger(String loggerName) {
         if (loggerName != null) {
             excludedLoggers.add(loggerName);
         }
     }
-    
+
     /**
-     * 移除排除的记录器
+     * Removes an excluded logger.
      */
     public void removeExcludedLogger(String loggerName) {
         if (loggerName != null) {
             excludedLoggers.remove(loggerName);
         }
     }
-    
+
     @Override
     public void flush() {
-        // 刷新日志传输器
+        // Flush the log transmitter
         if (logTransmitter != null) {
             logTransmitter.flushLogs();
         }
     }
-    
+
     @Override
     public void close() throws SecurityException {
-        // 关闭时刷新剩余日志
+        // Flush any remaining logs on close
         flush();
     }
-    
+
     /**
-     * 获取配置信息字符串
+     * Gets a configuration-info string.
      */
     public String getConfigurationInfo() {
         StringBuilder sb = new StringBuilder();
-        sb.append("SystemLogHandler配置信息:\n");
-        sb.append("- 最小日志级别: ").append(minimumLevel).append("\n");
-        sb.append("- 启用的级别: ").append(enabledLevels).append("\n");
-        sb.append("- 排除的记录器数量: ").append(excludedLoggers.size()).append("\n");
-        sb.append("- 日志传输器状态: ").append(logTransmitter != null ? "已连接" : "未连接");
+        sb.append(FrameworkText.text("SystemLogHandler配置信息:")).append("\n");
+        sb.append(FrameworkText.text("- 最小日志级别: ")).append(minimumLevel).append("\n");
+        sb.append(FrameworkText.text("- 启用的级别: ")).append(enabledLevels).append("\n");
+        sb.append(FrameworkText.text("- 排除的记录器数量: ")).append(excludedLoggers.size()).append("\n");
+        sb.append(FrameworkText.text("- 日志传输器状态: ")).append(logTransmitter != null ? FrameworkText.text("已连接") : FrameworkText.text("未连接"));
         return sb.toString();
     }
 }

@@ -1,0 +1,327 @@
+package com.ultikits.ultitools.utils;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.net.JarURLConnection;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.security.CodeSource;
+import java.util.Collections;
+import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import org.bukkit.configuration.InvalidConfigurationException;
+import org.bukkit.configuration.file.YamlConfiguration;
+
+/**
+ * Reads a module's own {@code plugin.yml} straight from its class's code source, given only a
+ * bare {@code Class<?>} - before any {@code UltiToolsPlugin} instance exists (D-12). This is the
+ * third place in the codebase that would otherwise open a JAR to read {@code plugin.yml};
+ * extracting it once here is the point.
+ * <p>
+ * Every failure path - null code source, a directory code source with no {@code plugin.yml}
+ * (the common case for test/dev classpaths), a missing JAR entry, an unreadable archive, or
+ * malformed YAML - returns {@link PluginYmlInfo#EMPTY} rather than throwing, logging at most one
+ * WARNING. This class runs once per plugin class during dependency-graph construction, and a
+ * single bad archive must not take the whole graph down (T-04-20).
+ *
+ * @author wisdomme
+ * @since 6.3.0
+ */
+public final class PluginYmlReader {
+
+    private static final Logger LOGGER = Logger.getLogger(PluginYmlReader.class.getName());
+    private static final String PLUGIN_YML_ENTRY = "plugin.yml";
+
+    private PluginYmlReader() {
+        // Utility class - not instantiable.
+    }
+
+    /**
+     * Reads {@code plugin.yml} for the given class's own code source.
+     *
+     * @param pluginClass the class whose containing JAR (or classes directory) should be read;
+     *                    may be {@code null}
+     * @return the module's declared name and {@code loadAfter} list, or {@link PluginYmlInfo#EMPTY}
+     *         on any failure path
+     * @since 6.3.0
+     */
+    public static PluginYmlInfo read(Class<?> pluginClass) {
+        if (pluginClass == null) {
+            return PluginYmlInfo.EMPTY;
+        }
+        try {
+            CodeSource src = pluginClass.getProtectionDomain().getCodeSource();
+            if (src == null || src.getLocation() == null) {
+                return PluginYmlInfo.EMPTY;
+            }
+            URL location = src.getLocation();
+            File locationFile = toFile(location);
+            if (locationFile != null && locationFile.isDirectory()) {
+                return readFromDirectory(locationFile);
+            }
+            return readFromJar(location);
+        } catch (Exception e) {
+            // Best-effort only: never let a bad code source take the caller down.
+            LOGGER.log(Level.WARNING, "[UltiTools-API] Failed to read plugin.yml for "
+                + pluginClass.getName() + ": " + e.getMessage());
+            return PluginYmlInfo.EMPTY;
+        }
+    }
+
+    /**
+     * Reads {@code plugin.yml} directly from a module's own jar {@code File}, without loading any
+     * class from it first.
+     * <p>
+     * {@link #read(Class)} above needs an already-loaded {@code Class}'s {@code ProtectionDomain}
+     * to find the jar -- which is exactly what is not yet available when a module's main class is
+     * still being *discovered*. {@code PluginManager}'s main-class discovery used to load every
+     * class entry in the jar, in entry order, until one happened to be assignable to
+     * {@code UltiToolsPlugin} -- which meant a class that exists only for an optional
+     * soft-dependency plugin (e.g. a PlaceholderAPI expansion) was linked, and failed to link, on
+     * every server where that optional plugin is absent, well before the real main class was ever
+     * reached. Reading the {@code main:} key directly out of {@code plugin.yml} and loading only
+     * that one declared class removes the rest of the jar from the discovery path entirely -- the
+     * same shape Bukkit/Paper's own {@code PluginDescriptionFile} uses to find a plugin's main
+     * class from its {@code main:} key, never by scanning the jar for a matching type.
+     *
+     * @param jarFile the module's own jar file; may be {@code null} or not a real file
+     * @return the module's declared {@code name}, {@code main} and {@code loadAfter}, or
+     *         {@link PluginYmlInfo#EMPTY} on any failure path (missing file, no {@code plugin.yml}
+     *         entry, unreadable archive, malformed YAML)
+     * @since 6.3.0
+     */
+    public static PluginYmlInfo readFromJarFile(File jarFile) {
+        if (jarFile == null || !jarFile.isFile()) {
+            return PluginYmlInfo.EMPTY;
+        }
+        try (JarFile jar = new JarFile(jarFile)) {
+            JarEntry entry = jar.getJarEntry(PLUGIN_YML_ENTRY);
+            if (entry == null) {
+                // The common case for a jar that is not an UltiTools module jar at all -- inert,
+                // not a failure worth a WARNING (the caller decides whether a missing plugin.yml
+                // is refusal-worthy for its own purpose).
+                return PluginYmlInfo.EMPTY;
+            }
+            try (InputStream inputStream = jar.getInputStream(entry)) {
+                return parse(inputStream);
+            }
+        } catch (Exception e) {
+            // Codex review, PR #549 round 2 (P2): a SIGNED module jar with a stale or tampered
+            // digest for plugin.yml makes JarFile's own verifier throw SecurityException while
+            // this entry's InputStream is read -- not an IOException, so a narrower catch here
+            // let it escape uncaught into loadPluginMainClass, which calls this method BEFORE its
+            // own guarded try, and from there into init()'s per-jar loop, aborting every
+            // subsequent jar's load instead of refusing only this one malformed jar. Matches
+            // read(Class)'s own catch-all posture above for the identical reason stated in this
+            // class's own javadoc: a single bad archive must never take the whole graph down.
+            LOGGER.log(Level.WARNING, "[UltiTools-API] Unreadable plugin.yml in "
+                + jarFile.getName() + ": " + e.getMessage());
+            return PluginYmlInfo.EMPTY;
+        }
+    }
+
+    private static File toFile(URL location) {
+        try {
+            return new File(location.toURI());
+        } catch (URISyntaxException | IllegalArgumentException e) {
+            return new File(location.getPath());
+        }
+    }
+
+    private static PluginYmlInfo readFromDirectory(File directory) {
+        File ymlFile = new File(directory, PLUGIN_YML_ENTRY);
+        if (!ymlFile.isFile()) {
+            // The common case for test/dev classes directories - silently inert, not a failure.
+            return PluginYmlInfo.EMPTY;
+        }
+        try (InputStream inputStream = Files.newInputStream(ymlFile.toPath())) {
+            return parse(inputStream);
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "[UltiTools-API] Unreadable plugin.yml at "
+                + ymlFile.getAbsolutePath() + ": " + e.getMessage());
+            return PluginYmlInfo.EMPTY;
+        }
+    }
+
+    private static PluginYmlInfo readFromJar(URL jarLocation) {
+        String path = jarLocation.getPath().startsWith("/")
+            ? jarLocation.getPath() : "/" + jarLocation.getPath();
+        try {
+            URL entryUrl = new java.net.URI("jar:file:" + path + "!/" + PLUGIN_YML_ENTRY).toURL();
+            JarURLConnection jarConnection = (JarURLConnection) entryUrl.openConnection();
+            try (InputStream inputStream = jarConnection.getInputStream()) {
+                return parse(inputStream);
+            }
+        } catch (Exception e) {
+            // Missing entry, unreadable archive, or any other JAR-level failure - inert, not
+            // fatal. Paper itself treats a module with no plugin.yml the same way here would.
+            LOGGER.log(Level.WARNING, "[UltiTools-API] No readable plugin.yml in "
+                + jarLocation + ": " + e.getMessage());
+            return PluginYmlInfo.EMPTY;
+        }
+    }
+
+    private static PluginYmlInfo parse(InputStream inputStream) {
+        YamlConfiguration config = new YamlConfiguration();
+        try (Reader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8)) {
+            // Deliberately the instance method, not the static YamlConfiguration.loadConfiguration
+            // factory - that swallows IOException/InvalidConfigurationException internally via
+            // Bukkit.getLogger(), which requires a live Bukkit server. load(Reader) throws them
+            // directly to this catch instead, so malformed input is deterministic to detect
+            // regardless of whether a Bukkit server happens to be mocked in the calling test.
+            config.load(reader);
+        } catch (IOException | InvalidConfigurationException e) {
+            LOGGER.log(Level.WARNING, "[UltiTools-API] Malformed plugin.yml: " + e.getMessage());
+            return PluginYmlInfo.EMPTY;
+        }
+        String name = config.getString("name");
+        String main = config.getString("main");
+        List<String> loadAfter = config.getStringList("loadAfter");
+        // Bukkit's own plugin.yml keys are lowercase, no separator -- "softdepend"/"depend", not
+        // "soft-depend"/"soft_depend". getStringList returns an empty list (never null) when the
+        // key is absent, matching loadAfter's own established contract.
+        List<String> softDepend = config.getStringList("softdepend");
+        List<String> depend = config.getStringList("depend");
+        // getString renders a non-string scalar with toString(), so "api-version: 620" reads as "620".
+        // An unquoted "version: 1.10" is a YAML float and therefore reads as "1.1" -- the same as
+        // UltiToolsPlugin's own getString("version"); released modules quote it ('${project.version}').
+        String version = config.getString("version");
+        String apiVersion = config.getString("api-version");
+        return new PluginYmlInfo(name, main, loadAfter, softDepend, depend, version, apiVersion);
+    }
+
+    /**
+     * The subset of a module's {@code plugin.yml} this framework needs: its declared
+     * {@code name:} and {@code main:} (both nullable - absent when the archive has none or
+     * reading failed), its {@code loadAfter:} list, and its Bukkit-level {@code softdepend:} /
+     * {@code depend:} lists (all three never null; empty when absent or reading failed), and its
+     * declared {@code version:} and {@code api-version:} as text (both nullable, like name and
+     * main), which the load-failure refusal quotes to identify the module.
+     * <p>
+     * {@code softDepend} was added for UltiEconomy#20's optional-dependency log-level decision: a class
+     * that fails to load only because it references a type belonging to a plugin the module's own
+     * {@code plugin.yml} lists under {@code softdepend:}, and that plugin is not currently
+     * installed/enabled, is not a defect in the module -- Bukkit's own {@code softdepend:}
+     * contract is precisely "this plugin may be absent; the module must tolerate that". {@code
+     * depend} is carried alongside it for the same reason -- a module cannot actually be running
+     * at all if a hard {@code depend:} were genuinely missing, but the list is threaded through
+     * regardless so a diagnostic message can name it if that ever changes.
+     *
+     * @since 6.3.0
+     */
+    public static final class PluginYmlInfo {
+
+        /** The empty result every failure path returns. */
+        public static final PluginYmlInfo EMPTY = new PluginYmlInfo(
+            null, null, Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), null, null);
+
+        private final String name;
+        private final String main;
+        private final List<String> loadAfter;
+        private final List<String> softDepend;
+        private final List<String> depend;
+        private final String version;
+        private final String apiVersion;
+
+        PluginYmlInfo(String name, String main, List<String> loadAfter, List<String> softDepend,
+                List<String> depend) {
+            this(name, main, loadAfter, softDepend, depend, null, null);
+        }
+
+        PluginYmlInfo(String name, String main, List<String> loadAfter, List<String> softDepend,
+                List<String> depend, String version, String apiVersion) {
+            this.name = name;
+            this.main = main;
+            this.version = version;
+            this.apiVersion = apiVersion;
+            this.loadAfter = Collections.unmodifiableList(
+                loadAfter == null ? Collections.emptyList() : loadAfter);
+            this.softDepend = Collections.unmodifiableList(
+                softDepend == null ? Collections.emptyList() : softDepend);
+            this.depend = Collections.unmodifiableList(
+                depend == null ? Collections.emptyList() : depend);
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code name:} value.
+         *
+         * @return the declared name, or {@code null} if absent or unreadable
+         * @since 6.3.0
+         */
+        public String getName() {
+            return name;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code main:} value.
+         *
+         * @return the declared main class name, or {@code null} if absent or unreadable
+         * @since 6.3.0
+         */
+        public String getMain() {
+            return main;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code loadAfter:} list.
+         *
+         * @return the loadAfter list, never {@code null}; empty if absent or unreadable
+         * @since 6.3.0
+         */
+        public List<String> getLoadAfter() {
+            return loadAfter;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code softdepend:} list -- plugin names this
+         * module integrates with optionally.
+         *
+         * @return the softdepend list, never {@code null}; empty if absent or unreadable
+         * @since 6.3.0
+         */
+        public List<String> getSoftDepend() {
+            return softDepend;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code depend:} list -- plugin names this
+         * module requires to be present.
+         *
+         * @return the depend list, never {@code null}; empty if absent or unreadable
+         * @since 6.3.0
+         */
+        public List<String> getDepend() {
+            return depend;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code version:} value, as text.
+         *
+         * @return the declared version, or {@code null} if absent or unreadable
+         * @since 6.3.0
+         */
+        public String getVersion() {
+            return version;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code api-version:} value -- the UltiTools API
+         * level the module was written for -- as text.
+         *
+         * @return the declared api-version, or {@code null} if absent or unreadable
+         * @since 6.3.0
+         */
+        public String getApiVersion() {
+            return apiVersion;
+        }
+    }
+}

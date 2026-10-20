@@ -26,12 +26,16 @@ class ParserTest {
 
         @Test
         @DisplayName("Should be an interface")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void shouldBeInterface() {
             assertThat(Parser.class.isInterface()).isTrue();
         }
 
         @Test
         @DisplayName("Should have generic type parameter T")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void shouldHaveGenericTypeParameter() {
             TypeVariable<?>[] typeParams = Parser.class.getTypeParameters();
             assertThat(typeParams).hasSize(1);
@@ -40,6 +44,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Should have parse method")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void shouldHaveParseMethod() throws NoSuchMethodException {
             Method parseMethod = Parser.class.getMethod("parse", Object.class);
             assertThat(parseMethod).isNotNull();
@@ -49,6 +55,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Should have serialize method")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void shouldHaveSerializeMethod() throws NoSuchMethodException {
             Method serializeMethod = Parser.class.getMethod("serialize", Object.class);
             assertThat(serializeMethod).isNotNull();
@@ -58,6 +66,8 @@ class ParserTest {
 
         @Test
         @DisplayName("parse method should return generic type T")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void parseMethodShouldReturnGenericType() throws NoSuchMethodException {
             Method parseMethod = Parser.class.getMethod("parse", Object.class);
             Type returnType = parseMethod.getGenericReturnType();
@@ -67,6 +77,8 @@ class ParserTest {
 
         @Test
         @DisplayName("serialize method should accept generic type T")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializeMethodShouldAcceptGenericType() throws NoSuchMethodException {
             Method serializeMethod = Parser.class.getMethod("serialize", Object.class);
             Type[] paramTypes = serializeMethod.getGenericParameterTypes();
@@ -77,6 +89,8 @@ class ParserTest {
 
         @Test
         @DisplayName("serialize method should return Object")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializeMethodShouldReturnObject() throws NoSuchMethodException {
             Method serializeMethod = Parser.class.getMethod("serialize", Object.class);
             assertThat(serializeMethod.getReturnType()).isEqualTo(Object.class);
@@ -89,6 +103,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Simple String parser implementation should work")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void simpleStringParserShouldWork() {
             Parser<String> stringParser = new Parser<String>() {
                 @Override
@@ -109,6 +125,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Integer parser implementation should work")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void integerParserShouldWork() {
             Parser<Integer> intParser = new Parser<Integer>() {
                 @Override
@@ -133,6 +151,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Map parser implementation should work")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void mapParserShouldWork() {
             Parser<Map<String, Object>> mapParser = new Parser<Map<String, Object>>() {
                 @Override
@@ -165,6 +185,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Parse null should be handled by implementation")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void parseNullShouldBeHandledByImplementation() {
             Parser<String> nullSafeParser = new Parser<String>() {
                 @Override
@@ -183,6 +205,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Custom object parser should work")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void customObjectParserShouldWork() {
             // Test with a simple data class
             class Point {
@@ -240,6 +264,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Parse and serialize should be reversible for String")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void parseAndSerializeShouldBeReversibleForString() {
             Parser<String> parser = new Parser<String>() {
                 @Override
@@ -261,6 +287,8 @@ class ParserTest {
 
         @Test
         @DisplayName("Parse and serialize should be reversible for Integer")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void parseAndSerializeShouldBeReversibleForInteger() {
             Parser<Integer> parser = new Parser<Integer>() {
                 @Override

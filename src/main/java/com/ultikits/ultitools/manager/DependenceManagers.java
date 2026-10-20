@@ -2,28 +2,29 @@ package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.services.EconomyProvider;
 import com.ultikits.ultitools.services.EmailService;
 import com.ultikits.ultitools.services.NotificationService;
 import com.ultikits.ultitools.services.TeleportService;
+import com.ultikits.ultitools.services.GameMailService;
 import com.ultikits.ultitools.services.impl.DefaultEmailService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.impl.InMemoryNotificationService;
+import com.ultikits.ultitools.services.impl.NoOpGameMailService;
+import com.ultikits.ultitools.services.impl.VaultEconomyProvider;
+import com.ultikits.ultitools.utils.EconomyUtils;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
-import net.kyori.adventure.platform.bukkit.BukkitAudiences;
+import org.bukkit.Bukkit;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Dependence managers.
- * <br>
- * 依赖管理器。
  */
 @ApiStatus.Internal
 public class DependenceManagers {
-    @Getter
-    private BukkitAudiences adventure;
     @Getter
     private SimpleContainer context;
 
@@ -32,28 +33,14 @@ public class DependenceManagers {
         this.context.setClassLoader(classLoader);
         // Register the main plugin so modules can resolve Plugin/JavaPlugin dependencies
         context.registerSingleton("ultiTools", plugin);
-        initAdventure(plugin);
         initInventoryAPI(plugin);
-        initCoreServices();
-    }
-
-    /**
-     * Initialize adventure.
-     * <br>
-     * 初始化adventure。
-     *
-     * @param plugin plugin instance <br> 插件实例
-     */
-    public void initAdventure(UltiTools plugin) {
-        adventure = BukkitAudiences.create(plugin);
+        initCoreServices(plugin);
     }
 
     /**
      * Initialize inventory API.
-     * <br>
-     * 初始化inventoryAPI。
      *
-     * @param plugin plugin instance <br> 插件实例
+     * @param plugin plugin instance
      */
     public void initInventoryAPI(UltiTools plugin) {
         new InventoryAPI(plugin).init();
@@ -61,10 +48,11 @@ public class DependenceManagers {
 
     /**
      * Initialize core services provided by UltiTools-API.
-     * <br>
-     * 初始化UltiTools-API提供的核心服务。
+     *
+     * @param plugin the main plugin instance, needed to schedule the deferred economy start-up
+     *               report (Codex P2, PR #463) via the Bukkit scheduler
      */
-    private void initCoreServices() {
+    private void initCoreServices(UltiTools plugin) {
         // Register TeleportService
         InMemeryTeleportService teleportService = new InMemeryTeleportService();
         context.registerSingleton("inMemeryTeleportService", teleportService);
@@ -79,34 +67,50 @@ public class DependenceManagers {
         DefaultEmailService emailService = new DefaultEmailService();
         context.registerSingleton("defaultEmailService", emailService);
         context.registerSingleton(EmailService.class.getName(), emailService);
+
+        // Register GameMailService's no-op fallback (#393). It was the one pluggable service of
+        // the four that never reached a container, so `@Autowired GameMailService` had nothing to
+        // resolve against -- a module could not even reach the isAvailable() check the fallback
+        // exists to answer. Registered here rather than left to @Service: framework-owned classes
+        // are not component-scanned, which is exactly why the annotation alone was inert.
+        NoOpGameMailService gameMailService = new NoOpGameMailService();
+        context.registerSingleton("noOpGameMailService", gameMailService);
+        context.registerSingleton(GameMailService.class.getName(), gameMailService);
+
+        // Register EconomyProvider (D-08/D-09, #451): the internal, @ApiStatus.Internal seam
+        // EconomyUtils delegates to, following the same bean-name-plus-interface-name shape as
+        // every service above. EconomyUtils.setProvider shares this exact instance so the
+        // framework's façade and any future container-resolved EconomyProvider consumer see the
+        // same state.
+        VaultEconomyProvider economyProvider = new VaultEconomyProvider();
+        context.registerSingleton("vaultEconomyProvider", economyProvider);
+        context.registerSingleton(EconomyProvider.class.getName(), economyProvider);
+        EconomyUtils.setProvider(economyProvider);
+        // [Rule 1 fix, Codex P2, PR #463]: plugin.yml only softdepends on Vault itself, not on any
+        // economy-providing plugin (e.g. EssentialsX) -- Vault is guaranteed to enable before
+        // UltiTools, but an economy plugin has no declared ordering relative to UltiTools at all,
+        // and commonly enables after it. Logging the one-time start-up line synchronously here,
+        // inside this constructor (itself called early from UltiTools#onEnable()), would
+        // permanently report NO_PROVIDER_REGISTERED for that ordinary case, even though a
+        // provider registers moments later in the same server start-up. Bukkit runs every
+        // plugin's entire onEnable() to completion before the first server tick, so deferring by
+        // one tick -- the scheduler-based pattern UltiTools#scheduleStartupMessages() already
+        // uses for its own one-time start-up lines -- guarantees every plugin that will enable
+        // during this start-up already has, before this runs.
+        Bukkit.getScheduler().runTask(plugin, EconomyUtils::logStartupState);
     }
 
     /**
      * Get version comparator.
-     * <br>
-     * 获取版本比较器。
      *
-     * @return version comparator / 版本比较器
+     * @return version comparator
      */
     public java.util.Comparator<String> getVersionComparator() {
         return VersionComparatorUtil.COMPARATOR;
     }
 
     /**
-     * Close adventure.
-     * <br>
-     * 关闭adventure。
-     */
-    public void closeAdventure() {
-        if (adventure != null) {
-            adventure.close();
-        }
-    }
-
-    /**
      * Close context.
-     * <br>
-     * 关闭容器上下文。
      */
     public void closeContext() {
         if (context != null) {

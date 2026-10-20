@@ -202,6 +202,7 @@ class VersionComparatorUtilTest {
 
         @Test
         @DisplayName("私有构造函数应该抛出 UnsupportedOperationException")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void privateConstructorShouldThrowException() throws Exception {
             Constructor<VersionComparatorUtil> constructor = VersionComparatorUtil.class.getDeclaredConstructor();
             constructor.setAccessible(true);

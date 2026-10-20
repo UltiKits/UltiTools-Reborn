@@ -1,0 +1,8 @@
+emojis:
+  # Emoji shortcuts
+  mappings:
+    o:
+      O: x
+    g:
+      m: y
+    ':heart:': ❤

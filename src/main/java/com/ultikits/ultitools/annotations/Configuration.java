@@ -7,8 +7,6 @@ import java.lang.annotation.Target;
 
 /**
  * Configuration annotation to replace Spring's @Configuration.
- * <br>
- * 配置注解，用于替换Spring的@Configuration。
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -16,10 +14,8 @@ import java.lang.annotation.Target;
 public @interface Configuration {
     /**
      * Configuration name.
-     * <br>
-     * 配置名称。
      *
-     * @return configuration name <br> 配置名称
+     * @return configuration name
      */
     String value() default "";
 }

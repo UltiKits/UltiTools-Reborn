@@ -1,0 +1,6 @@
+# Enable kit system / 启用礼包系统
+enabled: true
+# GUI click debounce in milliseconds / GUI点击防抖毫秒数
+click_cooldown_ms: 200
+# Number of kits per page in browser GUI / 浏览界面每页显示的礼包数量
+kits_per_page: 28

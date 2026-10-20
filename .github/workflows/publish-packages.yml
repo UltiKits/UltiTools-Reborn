@@ -13,21 +13,23 @@ jobs:
 
     steps:
     - name: 🏷️ Extract and validate version from tag
-      # 两个发布 job 都从这里取版本号，不再各自解析一次 GITHUB_REF_NAME。
-      # 少一份重复就少一处漂移——往 Maven Central 推出去的坐标不可撤销
-      # （Central 不允许覆盖或删除已发布的坐标），两个 job 用的必须是同一个
-      # 且已经校验过的字符串。
+      # Both publish jobs get the version from here now, instead of each parsing GITHUB_REF_NAME
+      # separately. One fewer duplication means one fewer place to drift — coordinates pushed to
+      # Maven Central are irrevocable (Central does not allow overwriting or deleting a published
+      # coordinate), so both jobs must use the same, already-validated string.
       #
-      # 这一层挡的是绕过 .github/scripts/release.sh 的路径：直接在 GitHub 网页上
-      # 建 release，或者手工推一个 tag。入口脚本能在打 tag 之前拒绝，但只在有人
-      # 走它的时候生效；这里挡不住 tag 被创建，挡得住坏版本号被发出去。
+      # This layer guards the path that bypasses .github/scripts/release.sh: creating a release
+      # directly on the GitHub web UI, or manually pushing a tag. The entry-point script can
+      # refuse before a tag is even created, but only when someone actually runs it; this layer
+      # cannot stop a tag from being created, but it can stop a bad version number from being
+      # published.
       id: version
       run: |
         set -euo pipefail
         VERSION="${GITHUB_REF_NAME#v}"
         if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          echo "::error::tag ${GITHUB_REF_NAME} 解析出的版本号不符合 MAJOR.MINOR.PATCH，发布已中止。"
-          echo "::error::解析结果为 [${VERSION}]。请删除该 release 与 tag，用正确的版本号重新发布。"
+          echo "::error::the version parsed from tag ${GITHUB_REF_NAME} does not match MAJOR.MINOR.PATCH; the release has been aborted."
+          echo "::error::parsed result was [${VERSION}]. Delete this release and tag, then re-publish with the correct version number."
           exit 1
         fi
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -38,12 +40,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: validate
     permissions:
-      # contents: write —— 往 release 挂 JAR 附件需要。
-      contents: write
+      # contents: read -- the job only downloads the retained assets of the published release.
+      contents: read
       packages: write
 
     steps:
     - name: 📥 Checkout code
+      # The tag's commit; release_artifacts.py checks the retained files against it.
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4 (v4.3.1)
 
     - name: ☕ Set up JDK 21
@@ -51,80 +54,84 @@ jobs:
       with:
         java-version: '21'
         distribution: 'temurin'
-        cache: maven
 
-    - name: 🔧 Set version from release tag
+    - name: 📥 Download and verify the retained release files
+      # Publication consumes the bytes that were accepted, never a new build. release.sh --prepare built
+      # one candidate and retained its primary JAR, flattened POM, sources and javadoc JARs and the GitHub
+      # Packages POM derived from the flattened POM, with a SHA-256 manifest;
+      # UAT and the maintainer accepted exactly those bytes, and release.sh --publish-approved attached
+      # them to this release. A rebuild here would differ at least in ZIP timestamps, so its hash would
+      # no longer be the one UAT holds. This step downloads the six assets and checks the manifest, every
+      # size and raw SHA-256, the source commit, tree and pom.xml bytes, and that the tag names the
+      # accepted commit. Any missing or changed asset stops the job before anything is published.
+      id: retained
       env:
         VERSION: ${{ needs.validate.outputs.version }}
-      run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
-
-    - name: 🔨 Build package
-      # GitHub Packages 不要求签名，因此不激活 release profile。
-      run: mvn -B clean package -Dmaven.test.skip=true
-
-    - name: 📎 Attach JAR to the release
-      # 兜底，不是主路径。发布入口 .github/scripts/release.sh 建 release 时就会带上 JAR，
-      # 但那条路依赖维护者记得用它。直接在 GitHub 网页上建 release 一样会走到这里。
-      #
-      # v6.2.1--v6.2.4 四个 release 全是零附件，正是因为当时只有「记得手动传」这一条路；
-      # 仓库里曾经有一个更完整的 release.yml，但一次都没被跑过，也没能挡住
-      # （已随 #231 删除）。所以这一层要放在不依赖记性的地方。
-      #
-      # 幂等的做法是「已存在就跳过」，不是 --clobber 覆盖。release.sh 走的是「本地
-      # clean build → 校验 JAR 内容 → 打印 sha256 → 连附件一起 create」这条路，它
-      # 打印的 sha256 会被拿去送真机 UAT。本步骤跑在 release:published 上重新构建，
-      # 语义相同但 ZIP 时间戳不同，hash 必然对不上——覆盖等于让 UAT 手里的 sha256
-      # 失效，且分发出去的构件不再是本地校验通过的那一个。
-      env:
-        VERSION: ${{ needs.validate.outputs.version }}
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        # 必须写全文件名。target/ 下 mvn package 会留下四个 jar：主 JAR、
-        # original-（shade 之前的原始包）、-sources、-javadoc。用通配符的话
-        # 字典序会先命中 original-，那是个没经过 shade 的包，看起来正常但缺少
-        # 被重定位的依赖。
-        JAR="target/UltiTools-API-${VERSION}.jar"
-        if [ ! -f "$JAR" ]; then
-          echo "::error::构建完成但找不到 ${JAR}。"
-          exit 1
-        fi
-        ASSET="$(basename "$JAR")"
-        # 管道在 if 条件里，errexit/pipefail 不会让脚本直接退出；gh 查不到就当作
-        # 附件不存在，落到 else 去补传，这个降级方向是安全的。
-        if gh release view "${GITHUB_REF_NAME}" --json assets \
-             --jq '.assets[].name' | grep -qxF "$ASSET"; then
-          echo "✅ ${ASSET} 已是 release 附件，保留不动。"
-          echo "   它来自 release.sh 的本地构建，其 sha256 已用于真机 UAT。"
-        else
-          echo "▶ release 上没有 ${ASSET}，补传本次 CI 构建的产物。"
-          gh release upload "${GITHUB_REF_NAME}" "$JAR"
-        fi
-
-    - name: 📦 Publish to GitHub Packages
+        INPUTS="$RUNNER_TEMP/retained-inputs"
+        BASE="UltiTools-API-${VERSION}"
+        mkdir "$INPUTS"
+        gh release download "$GITHUB_REF_NAME" --dir "$INPUTS" \
+          --pattern "${BASE}.jar" --pattern "${BASE}.pom" --pattern "${BASE}-sources.jar" \
+          --pattern "${BASE}-javadoc.jar" --pattern "${BASE}-github-packages.pom" \
+          --pattern "${BASE}-release-manifest.json"
+        python3 -I .github/scripts/release_artifacts.py validate \
+          --manifest "$INPUTS/${BASE}-release-manifest.json" --source-checkout "$GITHUB_WORKSPACE" \
+          --expected-source-head "$GITHUB_SHA" --tag "$GITHUB_REF_NAME"
+        echo "inputs=$INPUTS" >> "$GITHUB_OUTPUT"
+    - name: 📦 Publish the retained JAR and POM to GitHub Packages
+      # deploy:deploy-file uploads the retained JAR and the retained GitHub Packages POM byte for byte
+      # (-DpomFile with -DgeneratePom=false): no POM is generated or rewritten here. The coordinate keeps the
+      # lower-case artifactId ultitools-api this package has always used, and that retained POM is the
+      # flattened POM with only its project artifactId lower-cased to match it (Gradle refuses a POM whose
+      # artifactId differs from its coordinate); release_artifacts.py checks that derivation byte for byte.
+      # The repository is read before and after: absent -> deploy, identical -> nothing to do, anything
+      # else (different bytes, a partial coordinate, an unreadable answer) fails the job and never
+      # overwrites. A failed deploy is a failure, not
+      # "probably already there"; only the read-back of identical bytes counts as published.
       id: publish-ghp
       env:
         VERSION: ${{ needs.validate.outputs.version }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        INPUTS: ${{ steps.retained.outputs.inputs }}
       run: |
-        printf '<settings><servers><server><id>github</id><username>${env.GITHUB_ACTOR}</username><password>${env.GITHUB_TOKEN}</password></server></servers></settings>' > /tmp/gh-settings.xml
-        JAR_PATH="$(pwd)/target/UltiTools-API-${VERSION}.jar"
-        cd /tmp
-        if mvn deploy:deploy-file \
-          -s /tmp/gh-settings.xml \
-          -DgroupId=com.ultikits \
-          -DartifactId=ultitools-api \
-          -Dversion="${VERSION}" \
-          -Dpackaging=jar \
-          -Dfile="${JAR_PATH}" \
-          -DgeneratePom=true \
-          -DrepositoryId=github \
-          -Durl=https://maven.pkg.github.com/UltiKits/UltiTools-Reborn; then
-          echo "result=published" >> $GITHUB_OUTPUT
+        set -euo pipefail
+        BASE="UltiTools-API-${VERSION}"
+        MANIFEST="$INPUTS/${BASE}-release-manifest.json"
+        REPOSITORY="https://maven.pkg.github.com/UltiKits/UltiTools-Reborn"
+        state() {
+          python3 -I .github/scripts/release_artifacts.py repository-state --manifest "$MANIFEST" \
+            --base-url "$REPOSITORY" --artifact-id ultitools-api --token-env GITHUB_TOKEN
+        }
+        BEFORE="$(state)"
+        if [ "$BEFORE" = "STATE=absent" ]; then
+          SETTINGS="$RUNNER_TEMP/github-packages-settings.xml"
+          ( umask 077 && printf '<settings><servers><server><id>github</id><username>${env.GITHUB_ACTOR}</username><password>${env.GITHUB_TOKEN}</password></server></servers></settings>' > "$SETTINGS" )
+          (
+            # Outside the checkout, so no project POM is read.
+            cd "$RUNNER_TEMP"
+            mvn -B deploy:deploy-file -s "$SETTINGS" \
+              -DgroupId=com.ultikits -DartifactId=ultitools-api -Dversion="$VERSION" -Dpackaging=jar \
+              -Dfile="$INPUTS/${BASE}.jar" -DpomFile="$INPUTS/${BASE}-github-packages.pom" -DgeneratePom=false \
+              -DrepositoryId=github -Durl="$REPOSITORY"
+          )
+          echo "result=published" >> "$GITHUB_OUTPUT"
+        elif [ "$BEFORE" = "STATE=identical" ]; then
+          echo "GitHub Packages already serves these exact bytes; nothing is deployed."
+          echo "result=already-identical" >> "$GITHUB_OUTPUT"
         else
-          echo "::warning::Version ${VERSION} may already exist in GitHub Packages (409 Conflict is expected on re-runs)"
-          echo "result=already-exists" >> $GITHUB_OUTPUT
+          echo "::error::unexpected GitHub Packages state [${BEFORE}]"
+          exit 1
         fi
+        AFTER="$(state)"
+        if [ "$AFTER" != "STATE=identical" ]; then
+          echo "::error::GitHub Packages does not serve the retained bytes after the deploy [${AFTER}]."
+          exit 1
+        fi
+        # The retained files themselves are unchanged after the upload.
+        python3 -I .github/scripts/release_artifacts.py validate --manifest "$MANIFEST"
 
     - name: 📝 Publish Summary
       env:
@@ -143,41 +150,8 @@ jobs:
         echo "> **Note**: GitHub Packages requires lowercase artifact IDs." >> $GITHUB_STEP_SUMMARY
         echo "> For Maven Central, use \`UltiTools-API\` (original case)." >> $GITHUB_STEP_SUMMARY
 
-    - name: 📖 Open documentation sync issue
-      # 从 release.yml 搬过来（#231）。那个 workflow 一次都没跑过，所以这段逻辑
-      # 此前从未真正执行；放到这里之后它才开始工作。
-      #
-      # 位置在 job 末尾：先把包发出去，再提醒同步文档。
-      # continue-on-error —— 文档同步是发布之后的事，token 失效不该把一次
-      # 已经成功的发布标成失败。
-      env:
-        GH_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
-        VERSION: ${{ needs.validate.outputs.version }}
-      continue-on-error: true
-      run: |
-        # 空 token 在脚本里判，不用 step 级的 `if: env.GH_TOKEN != ''`。
-        # step 自己 env 块里的变量能否被同一个 step 的 if 读到，文档上并不明确；
-        # 万一读不到，条件恒假，这一步会永远静默跳过，外观和「因为没配 token
-        # 而正常跳过」完全一样——正是 release.yml 那种「写得对但从不执行」的形状。
-        # 挪进 bash 就没有这层不确定性，而且跳过时留得下一条可见的 warning。
-        if [ -z "${GH_TOKEN:-}" ]; then
-          echo "::warning::DOCS_REPO_TOKEN 未配置，跳过文档同步 issue。"
-          exit 0
-        fi
-        gh issue create \
-          --repo UltiKits/UltiTools-Dev-Doc \
-          --title "docs: sync v${VERSION}" \
-          --body "$(cat <<EOF
-        UltiTools-API v${VERSION} 已发布，文档需要同步。
-
-        - [ ] \`examples/pom.xml\` 的 \`<ultitools.version>\` 更新为 ${VERSION}
-        - [ ] \`.vitepress/config.mts\` 的 \`versionsConfig.current\` 更新为 v${VERSION}，并把 \`docs/src/\` 快照进 \`docs/archive/\`
-        - [ ] \`mvn -f examples/pom.xml compile\` 通过（编译失败的示例即需要改的页面）
-        - [ ] 跑 \`./scripts/report-doc-coverage.sh 6.2.4 ${VERSION}\`（第一个参数替换为上一个正式发布版本号，示例中的 6.2.4 仅供参考）并处理报告中的两段清单
-
-        关闭本 issue 即代表本次同步完成。
-        EOF
-        )"
+    # Documentation sync for this release is tracked by the existing UltiTools-Dev-Doc issues (#100,
+    # #132), so this workflow no longer opens a duplicate "docs: sync" issue.
 
   publish-central:
     name: 📤 Maven Central
@@ -189,6 +163,7 @@ jobs:
 
     steps:
     - name: 📥 Checkout code
+      # The tag's commit; release_artifacts.py checks the retained files against it.
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4 (v4.3.1)
 
     - name: ☕ Set up JDK 21 with Sonatype credentials
@@ -203,6 +178,9 @@ jobs:
         gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
         gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
+    - name: Set up pinned Maven for Central staging
+      run: bash .github/scripts/setup-pinned-maven.sh
+
     - name: 🔐 Configure GPG agent for CI
       run: |
         echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
@@ -210,27 +188,147 @@ jobs:
         gpg-connect-agent reloadagent /bye || true
 
     - name: 🔑 Check GPG key expiry
-      # 放在导入密钥之后、mvn deploy 之前。密钥此时已在 runner 的钥匙串里，
-      # 不需要额外 secret 也不需要联网。
+      # Placed after the key is imported and before anything is signed. The key is already in the
+      # runner's keyring by this point, so this needs no extra secret and no network access.
       #
-      # 已过期就在这里失败，并明说是过期而不是密钥丢失——GPG 挑默认密钥时会跳过
-      # 已过期的，所以 gpg:sign 报的是 "no default secret key"，很容易被误判成
-      # 密钥没导入成功而去重新生成，正确处置是延长有效期。
+      # If it has expired, fail here and say plainly that it is expiry, not a missing key -- GPG
+      # skips an expired key when choosing its default, so signing reports "no default secret
+      # key", which is easily misread as the key having failed to import, prompting a needless
+      # re-generation; the correct fix is to extend the key's validity.
       #
-      # 剩余不足 30 天只告警、不拦发版：用一把还有三周有效期的密钥签名完全合法，
-      # 签名在密钥过期之后依然可验证。这里没有传 --fail-on-warn 就是这个意思。
+      # Fewer than 30 days remaining only warns, it does not block the release: signing with a
+      # key that still has three weeks of validity is entirely legitimate, and the signature
+      # remains verifiable after the key expires. Not passing --fail-on-warn here is exactly
+      # what that means.
       run: .github/scripts/check-gpg-expiry.sh --mode secret --warn-days 30
 
-    - name: 🔧 Set version from release tag
+    - name: 📥 Download and verify the retained release files
+      # Publication consumes the bytes that were accepted, never a new build. release.sh --prepare built
+      # one candidate and retained its primary JAR, flattened POM, sources and javadoc JARs and the GitHub
+      # Packages POM derived from the flattened POM, with a SHA-256 manifest;
+      # UAT and the maintainer accepted exactly those bytes, and release.sh --publish-approved attached
+      # them to this release. A rebuild here would differ at least in ZIP timestamps, so its hash would
+      # no longer be the one UAT holds. This step downloads the six assets and checks the manifest, every
+      # size and raw SHA-256, the source commit, tree and pom.xml bytes, and that the tag names the
+      # accepted commit. Any missing or changed asset stops the job before anything is published.
+      id: retained
       env:
         VERSION: ${{ needs.validate.outputs.version }}
-      run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        INPUTS="$RUNNER_TEMP/retained-inputs"
+        BASE="UltiTools-API-${VERSION}"
+        mkdir "$INPUTS"
+        gh release download "$GITHUB_REF_NAME" --dir "$INPUTS" \
+          --pattern "${BASE}.jar" --pattern "${BASE}.pom" --pattern "${BASE}-sources.jar" \
+          --pattern "${BASE}-javadoc.jar" --pattern "${BASE}-github-packages.pom" \
+          --pattern "${BASE}-release-manifest.json"
+        python3 -I .github/scripts/release_artifacts.py validate \
+          --manifest "$INPUTS/${BASE}-release-manifest.json" --source-checkout "$GITHUB_WORKSPACE" \
+          --expected-source-head "$GITHUB_SHA" --tag "$GITHUB_REF_NAME"
+        echo "inputs=$INPUTS" >> "$GITHUB_OUTPUT"
+    - name: 🔍 Check Maven Central for this coordinate
+      # Coordinates on Maven Central are immutable. Absent -> publish; the same bytes already served ->
+      # a successful no-op (a re-run after an interrupted job); different bytes, a partial coordinate or
+      # an unreadable answer -> fail, never publish over it.
+      id: central-state
+      env:
+        VERSION: ${{ needs.validate.outputs.version }}
+        INPUTS: ${{ steps.retained.outputs.inputs }}
+      run: |
+        set -euo pipefail
+        STATE="$(python3 -I .github/scripts/release_artifacts.py repository-state \
+          --manifest "$INPUTS/UltiTools-API-${VERSION}-release-manifest.json" \
+          --base-url https://repo1.maven.org/maven2 --artifact-id UltiTools-API)"
+        case "$STATE" in
+          STATE=absent)
+            echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+          STATE=identical)
+            echo "::notice::Maven Central already serves these exact bytes; nothing is published."
+            echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+          *)
+            echo "::error::unexpected Maven Central state [${STATE}]"
+            exit 1 ;;
+        esac
 
-    - name: 📤 Publish to Maven Central
+    - name: ✍️ Sign the retained files
+      # Detached signatures beside the retained files; the files themselves are never modified. Central
+      # requires a signature for the POM and for each JAR.
+      if: steps.central-state.outputs.publish == 'true'
+      env:
+        VERSION: ${{ needs.validate.outputs.version }}
+        INPUTS: ${{ steps.retained.outputs.inputs }}
+        MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+      run: |
+        set -euo pipefail
+        BASE="UltiTools-API-${VERSION}"
+        for FILE in "${BASE}.pom" "${BASE}.jar" "${BASE}-sources.jar" "${BASE}-javadoc.jar"; do
+          gpg --batch --pinentry-mode loopback --passphrase-fd 0 --armor --detach-sign \
+            --output "$INPUTS/${FILE}.asc" "$INPUTS/${FILE}" <<< "$MAVEN_GPG_PASSPHRASE"
+        done
+
+    - name: 🧩 Prepare the retained-artifact registrar
+      # release_artifacts.py central-inputs re-checks the retained files, verifies the four signatures,
+      # writes a private list of the exact files (GAV, path, size, SHA-256, type, classifier), a private copy of
+      # the verified source pom.xml as the project model, and compiles
+      # only .github/scripts/maven/RetainedArtifactsParticipant.java against this Maven distribution into
+      # an ephemeral helper JAR. No product source, POM or lifecycle is built. The helper directory and the
+      # publisher's scratch directory are new and disjoint from the retained inputs.
+      id: registrar
+      if: steps.central-state.outputs.publish == 'true'
+      env:
+        VERSION: ${{ needs.validate.outputs.version }}
+        INPUTS: ${{ steps.retained.outputs.inputs }}
+      run: |
+        set -euo pipefail
+        MAVEN_HOME="$(mvn -B -v | sed -n 's/^Maven home: //p')"
+        python3 -I .github/scripts/release_artifacts.py central-inputs \
+          --manifest "$INPUTS/UltiTools-API-${VERSION}-release-manifest.json" \
+          --source-checkout "$GITHUB_WORKSPACE" --expected-source-head "$GITHUB_SHA" --tag "$GITHUB_REF_NAME" \
+          --maven-home "$MAVEN_HOME" --work-dir "$RUNNER_TEMP/central-helper" \
+          --scratch-dir "$RUNNER_TEMP/central-scratch" --shell > "$RUNNER_TEMP/central-inputs.env"
+        while IFS='=' read -r KEY VALUE; do
+          echo "$(printf '%s' "$KEY" | tr 'A-Z' 'a-z')=${VALUE}" >> "$GITHUB_OUTPUT"
+        done < "$RUNNER_TEMP/central-inputs.env"
+
+    - name: 📤 Publish the retained files to Maven Central
+      # The existing central-publishing-maven-plugin is the only transport, invoked as a single goal on the
+      # project model, a private copy (written by central-inputs outside the checkout) of the verified source
+      # pom.xml; no clean/package/verify/deploy phase runs. The plugin clears its scratch directories only for
+      # the first project whose build declares it, so the model is the source POM, whose build always does, and
+      # the registrar refuses a model that does not. The registrar, loaded as a core extension, then makes the
+      # retained flattened POM the project file,
+      # so that POM is what is staged and uploaded, unchanged; it assigns the retained primary JAR and attaches
+      # the sources and javadoc JARs and the four signatures. The scratch directories are cleared, which is why
+      # the retained inputs live elsewhere. The source POM's publisher configuration (server id, autoPublish,
+      # waitUntil) equals the command-line values below.
+      if: steps.central-state.outputs.publish == 'true'
       env:
         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
         SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-        MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
-      # -P release：GPG 签名只在这个 profile 里，唯独 Maven Central 需要签名产物。
-      # 漏掉它不会静默发出未签名产物，Central 的校验会直接拒绝。
-      run: mvn -B deploy -P release -Dmaven.test.skip=true -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
+        PROJECT_POM: ${{ steps.registrar.outputs.project_pom }}
+        HELPER_JAR: ${{ steps.registrar.outputs.helper_jar }}
+        PROPERTIES: ${{ steps.registrar.outputs.properties }}
+        STAGING_DIR: ${{ steps.registrar.outputs.staging_dir }}
+        DEFERRED_DIR: ${{ steps.registrar.outputs.deferred_dir }}
+        OUTPUT_DIR: ${{ steps.registrar.outputs.output_dir }}
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP"
+        mvn -B -f "$PROJECT_POM" \
+          -Dmaven.ext.class.path="$HELPER_JAR" -DretainedArtifacts.properties="$PROPERTIES" \
+          -DstagingDirectory="$STAGING_DIR" -DdeferredDirectory="$DEFERRED_DIR" -DoutputDirectory="$OUTPUT_DIR" \
+          org.sonatype.central:central-publishing-maven-plugin:0.9.0:publish \
+          -DpublishingServerId=ultikits-sonatype -DautoPublish=true -DwaitUntil=published -Dchecksums=all
+
+    - name: 🔁 Re-check the retained files after publication
+      if: steps.central-state.outputs.publish == 'true'
+      env:
+        VERSION: ${{ needs.validate.outputs.version }}
+        INPUTS: ${{ steps.retained.outputs.inputs }}
+        PROPERTIES: ${{ steps.registrar.outputs.properties }}
+      run: |
+        set -euo pipefail
+        python3 -I .github/scripts/release_artifacts.py central-recheck \
+          --manifest "$INPUTS/UltiTools-API-${VERSION}-release-manifest.json" --properties "$PROPERTIES"

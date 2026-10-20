@@ -1,0 +1,28 @@
+# Server configuration
+# edited by the operator
+
+# Chat settings
+chat:
+  # The chat format
+  format: "&7{player}: {message}" # inline after a double-quoted value
+  enabled: yes # YAML 1.1 boolean
+  rate: 1.50
+  # Worlds where chat is enabled
+  worlds:
+    - world # the overworld
+    - world_nether
+  # end of the list (written at the key's indentation: see MANIFEST)
+  flow: [a, b, "c d"] # flow list
+  # last key of the section
+  last: true
+  # comment after the last key of chat
+
+# Economy settings
+economy:
+  start: 100
+  currency: '$'
+  nested:
+    depth: 2
+    # comment after the last key of nested
+  # comment after nested, at economy's indentation
+# end of file comment

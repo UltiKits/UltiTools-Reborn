@@ -10,7 +10,7 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * TextButton 对应的 RenderObjectElement。
+ * The RenderObjectElement counterpart of TextButton.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -26,8 +26,8 @@ public class TextButtonElement extends RenderObjectElement {
     @NotNull
     protected RenderNode createRenderNode() {
         TextButton widget = (TextButton) getWidget();
-        
-        // 创建玻璃板按钮
+
+        // Create the glass-pane button
         ItemStack glass = createGlassPane(widget.getColor());
         Icon icon = new Icon(glass);
         icon.setName(widget.getText());
@@ -35,7 +35,7 @@ public class TextButtonElement extends RenderObjectElement {
             icon.setLore(widget.getLore());
         }
 
-        // 创建 RenderNode
+        // Create the RenderNode
         RenderNode node = new RenderNode(widget.getKey(), widget.getSlot(), icon);
         if (widget.getClickHandler() != null) {
             node.setClickHandler(widget.getClickHandler());
@@ -48,10 +48,10 @@ public class TextButtonElement extends RenderObjectElement {
     protected void updateRenderNode(@NotNull RenderNode renderNode) {
         TextButton widget = (TextButton) getWidget();
 
-        // 更新位置
+        // Update the position
         renderNode.setSlotIndex(widget.getSlot());
 
-        // 更新 Icon
+        // Update the Icon
         ItemStack glass = createGlassPane(widget.getColor());
         Icon icon = new Icon(glass);
         icon.setName(widget.getText());
@@ -60,7 +60,7 @@ public class TextButtonElement extends RenderObjectElement {
         }
         renderNode.setIcon(icon);
 
-        // 更新点击处理器
+        // Update the click handler
         if (widget.getClickHandler() != null) {
             renderNode.setClickHandler(widget.getClickHandler());
         }
@@ -68,14 +68,14 @@ public class TextButtonElement extends RenderObjectElement {
 
     @NotNull
     private ItemStack createGlassPane(@NotNull String color) {
-        // 使用 XSeries 获取彩色玻璃板
+        // Use XSeries to obtain a colored glass pane
         try {
-            // 尝试获取彩色玻璃板
+            // Try to obtain the colored glass pane
             return XVersionUtils.getColoredPlaneGlass(
                     Colors.valueOf(color.toUpperCase())
             );
         } catch (Exception e) {
-            // 回退到普通玻璃板
+            // Fall back to a plain glass pane
             return new ItemStack(Material.GLASS_PANE);
         }
     }

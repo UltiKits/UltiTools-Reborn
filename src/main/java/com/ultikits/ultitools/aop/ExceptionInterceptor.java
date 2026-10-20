@@ -16,7 +16,7 @@ import java.util.logging.Logger;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
-import com.ultikits.ultitools.context.ContextHolder;
+import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
 
@@ -34,31 +34,90 @@ public class ExceptionInterceptor implements MethodInterceptor {
     private static final Logger LOGGER = Logger.getLogger(ExceptionInterceptor.class.getName());
 
     private final List<ExceptionHandler> globalHandlers;
+    /** Instance-scoped on purpose - see AnnotationLookupCache's class javadoc. */
+    private final AnnotationLookupCache<ExceptionCatch> lookupCache;
 
     /**
-     * Creates an exception interceptor with no global handlers.
+     * Container used to resolve {@code @ExceptionCatch(handler = "...")} beans.
+     * <p>
+     * Injected per plugin rather than read from a global static holder: each plugin has
+     * its own container, and a single static holder would make the last plugin to initialise win,
+     * sending every earlier plugin's handler lookup to the wrong container. See issue #190.
+     */
+    private final SimpleContainer context;
+
+    /**
+     * Creates an exception interceptor with no global handlers and no container.
      */
     public ExceptionInterceptor() {
-        this(Collections.emptyList());
+        this(Collections.emptyList(), null);
     }
 
     /**
-     * Creates an exception interceptor with the given global handlers.
+     * Creates an exception interceptor with the given global handlers and no container.
      *
      * @param globalHandlers handlers to try for any exception
      */
     public ExceptionInterceptor(List<ExceptionHandler> globalHandlers) {
+        this(globalHandlers, null);
+    }
+
+    /**
+     * Creates an exception interceptor bound to a plugin's container, with its own unshared
+     * {@link AnnotationLookupCache}.
+     * <p>
+     * A caller that also builds an {@code AopAdvisor} for {@code @ExceptionCatch} should use
+     * {@link #ExceptionInterceptor(List, SimpleContainer, AnnotationLookupCache)} instead and
+     * inject one shared instance into both (D-38). {@code PluginManager.wireAop} is that caller;
+     * this constructor exists for standalone construction and for exercising this interceptor in
+     * isolation.
+     *
+     * @param globalHandlers handlers to try for any exception
+     * @param context        the container used to resolve named handlers, may be null
+     */
+    public ExceptionInterceptor(List<ExceptionHandler> globalHandlers, SimpleContainer context) {
+        this(globalHandlers, context, AnnotationLookupCache.standalone(ExceptionCatch.class));
+    }
+
+    /**
+     * Creates an exception interceptor bound to a plugin's container, using a caller-supplied
+     * {@link AnnotationLookupCache} instead of building its own.
+     * <p>
+     * Sharing the cache does not change what this interceptor asks it: {@link #invoke} still
+     * resolves own-method, then class-level, then inherited-method, with class-level ranking
+     * between the other two - only the memoized answers are shared with whichever advisor was
+     * given the same instance (D-38).
+     *
+     * @param globalHandlers handlers to try for any exception
+     * @param context        the container used to resolve named handlers, may be null
+     * @param lookupCache    the cache to use instead of constructing a new one
+     */
+    public ExceptionInterceptor(List<ExceptionHandler> globalHandlers, SimpleContainer context,
+                                 AnnotationLookupCache<ExceptionCatch> lookupCache) {
         this.globalHandlers = globalHandlers != null ? new ArrayList<>(globalHandlers) : new ArrayList<>();
+        this.context = context;
+        this.lookupCache = lookupCache;
     }
 
     @Override
     public Object invoke(MethodInvocation invocation) throws Throwable {
         Method method = invocation.getMethod();
 
-        // Get annotation from method or class
-        ExceptionCatch annotation = method.getAnnotation(ExceptionCatch.class);
+        // Method level first, then class level through the shared lookup. Resolving the class
+        // level here independently is what previously let the advisor decide a method was covered
+        // while this interceptor found no annotation and quietly re-threw - proxied, annotated and
+        // inert. AopAdvisor.findClassLevelAnnotation is the single definition of which class-level
+        // annotation governs a method, so the two cannot disagree. See issue #309.
+        // Spring's precedence: the method itself, then the target class, then the
+        // declaration this method overrides. A subclass writing its own class-level
+        // annotation outranks a method-level one it inherited - the subclass author is
+        // closer to the bean than whoever wrote the superclass method.
+        ExceptionCatch annotation = lookupCache.ownMethod(method);
         if (annotation == null) {
-            annotation = method.getDeclaringClass().getAnnotation(ExceptionCatch.class);
+            annotation = lookupCache.classLevel(method);
+        }
+        if (annotation == null) {
+            annotation = lookupCache.inheritedMethod(method);
         }
 
         try {
@@ -94,17 +153,49 @@ public class ExceptionInterceptor implements MethodInterceptor {
     }
 
     /**
+     * The class the bean actually is, with any proxy layers unwrapped.
+     * <p>
+     * Used for <b>attribution only</b>. Which class-level annotation governs a method is decided
+     * by {@link AopAdvisor#findClassLevelAnnotation(Method, Class)}, which anchors on the declaring
+     * class and never consults the target. Attribution wants the opposite: for an inherited method
+     * the declaring class is often a framework base, which tells an operator nothing about which
+     * concrete bean failed and makes ErrorReportCollector's fingerprint dedup collapse two
+     * different beans into one report. The declaring class remains the fallback for a null target -
+     * that branch is not proxy identity and is out of scope for this method's unwrap. See issue
+     * #309.
+     * <p>
+     * Unwrapping itself delegates to {@link ProxyFactory#unwrap(Class)}: a proxy of a proxy already
+     * names the original target, so no hierarchy walk is needed here either.
+     *
+     * @param invocation the invocation in progress
+     * @param method     the method being intercepted
+     * @return the bean class, never null
+     */
+    private static Class<?> beanClassOf(MethodInvocation invocation, Method method) {
+        Object target = invocation.getTarget();
+        if (target == null) {
+            return method.getDeclaringClass();
+        }
+        return ProxyFactory.unwrap(target.getClass());
+    }
+
+    /**
      * Handles a caught exception according to the annotation configuration.
      */
     private Object handleCaughtException(Throwable e, MethodInvocation invocation, ExceptionCatch annotation)
             throws Throwable {
 
         Method method = invocation.getMethod();
+        // The bean, not the declaring class. For an inherited method the declaring class is a
+        // superclass - often a framework base - which tells an operator nothing about which of the
+        // several concrete beans failed, and makes two different beans that inherit one method
+        // collapse into a single deduplicated error report.
+        String beanName = beanClassOf(invocation, method).getSimpleName();
 
         // Log unless silent
         if (!annotation.silent()) {
-            LOGGER.log(Level.WARNING, "Exception caught in " + method.getDeclaringClass().getSimpleName() +
-                    "." + method.getName() + "(): " + e.getMessage(), e);
+            LOGGER.log(Level.WARNING, "Exception caught in " + beanName
+                    + "." + method.getName() + "(): " + e.getMessage(), e);
         }
 
         // Report to error collector
@@ -113,9 +204,8 @@ public class ExceptionInterceptor implements MethodInterceptor {
             if (instance != null) {
                 ErrorReportCollector erc = instance.getErrorReportCollector();
                 if (erc != null) {
-                    erc.reportError(e, method.getDeclaringClass().getSimpleName(),
-                            TriggerContext.aop(method.getDeclaringClass().getSimpleName(),
-                                    method.getName()));
+                    erc.reportError(e, beanName,
+                            TriggerContext.aop(beanName, method.getName()));
                 }
             }
         } catch (Exception ignored) {
@@ -124,14 +214,44 @@ public class ExceptionInterceptor implements MethodInterceptor {
 
         // Try custom handler first
         if (!annotation.handler().isEmpty()) {
-            try {
-                Object handlerBean = ContextHolder.getContext().getBean(annotation.handler());
+            if (context == null) {
+                // The author named a handler explicitly; saying nothing here would make a
+                // configuration mistake indistinguishable from a handler that ran and returned
+                // the default value.
+                LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
+                        + beanClassOf(invocation, method).getName() + "#" + method.getName()
+                        + " cannot be resolved: this interceptor has no container. "
+                        + "Falling back to the default value.");
+            } else {
+                // Bean resolution is the only thing this catch covers - a lookup failure is a
+                // configuration mistake and still falls back gracefully. What handleException()
+                // itself throws (below, outside this try) must not be caught here: a handler that
+                // deliberately re-throws is indistinguishable from one that failed unless its
+                // throw is allowed to reach the caller (D-06/D-07).
+                Object handlerBean;
+                try {
+                    handlerBean = context.getBean(annotation.handler());
+                } catch (Exception resolutionFailure) {
+                    LOGGER.log(Level.WARNING, "@ExceptionCatch(handler = \"" + annotation.handler()
+                            + "\") on " + beanClassOf(invocation, method).getName() + "#"
+                            + method.getName() + " failed to resolve. Falling back to the "
+                            + "default value.", resolutionFailure);
+                    handlerBean = null;
+                }
                 if (handlerBean instanceof ExceptionHandler) {
+                    // No catch here: whatever this throws - including a checked Throwable the
+                    // intercepted method's own throws clause does not declare - must propagate to
+                    // the caller unconditionally. See SneakyThrows for why a checked type still
+                    // compiles through this call site's uncaught path when it needs to.
                     return ((ExceptionHandler) handlerBean).handleException(
                             e, invocation.getTarget(), method, invocation.getArguments());
                 }
-            } catch (Exception handlerException) {
-                LOGGER.log(Level.WARNING, "Custom exception handler failed", handlerException);
+                LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
+                        + beanClassOf(invocation, method).getName() + "#" + method.getName()
+                        + " resolved to a bean of type "
+                        + (handlerBean == null ? "null" : handlerBean.getClass().getName())
+                        + ", which does not implement ExceptionHandler. "
+                        + "Falling back to the default value.");
             }
         }
 

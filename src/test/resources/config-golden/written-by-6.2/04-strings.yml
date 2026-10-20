@@ -1,0 +1,27 @@
+chat:
+  # Chat format
+  format: '&7{player}&f: {message}'
+  'yes': 'yes'
+  colon: 'a: b'
+  placeholder: '%player_name%'
+  token: '{prefix} hello'
+  empty: ''
+  hash: '#not-a-comment'
+  tilde: '~'
+  null-word: 'null'
+  number-text: '123'
+  decimal-text: '1.50'
+  date-text: '2020-01-01'
+  at: '@everyone'
+  star: '*star'
+  dash: '- not a list'
+  quote: it's 'quoted'
+  double-quote: say "hi"
+  tab: "tab\there"
+  long: '&eWelcome to the server, {player}! Please read the rules at /rules before
+    you start building anything here.'
+  multi-line: |-
+    line one
+    line two
+    line three
+  trailing-space: 'trailing '

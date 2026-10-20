@@ -5,32 +5,29 @@ import com.ultikits.ultitools.abstracts.command.CommandContext;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Manages a chain of validators that are executed in order.
  * Thread-safe implementation supporting dynamic validator registration.
- * <p>
- * 管理按顺序执行的验证器链。
- * 支持动态验证器注册的线程安全实现。
  *
  * @author wisdomme
  * @version 2.0.0
  * @since 6.2.0
  */
 public final class ValidatorChain {
-    
+
     private final List<CommandValidator> validators = new CopyOnWriteArrayList<>();
     private volatile boolean sorted = true;
-    
+
     /**
      * Creates an empty validator chain.
-     * 创建一个空的验证器链。
      */
     public ValidatorChain() {
     }
-    
+
     /**
      * Creates a validator chain with the specified validators.
-     * 使用指定的验证器创建验证器链。
      *
      * @param validators the validators to add
      */
@@ -38,10 +35,9 @@ public final class ValidatorChain {
         this.validators.addAll(validators);
         sort();
     }
-    
+
     /**
      * Adds a validator to the chain.
-     * 向链中添加验证器。
      *
      * @param validator the validator to add
      * @return this chain for fluent chaining
@@ -52,10 +48,9 @@ public final class ValidatorChain {
         sorted = false;
         return this;
     }
-    
+
     /**
      * Removes a validator from the chain.
-     * 从链中移除验证器。
      *
      * @param validator the validator to remove
      * @return this chain for fluent chaining
@@ -64,10 +59,9 @@ public final class ValidatorChain {
         validators.remove(validator);
         return this;
     }
-    
+
     /**
      * Removes all validators of the specified type.
-     * 移除所有指定类型的验证器。
      *
      * @param validatorClass the validator class to remove
      * @return this chain for fluent chaining
@@ -76,10 +70,9 @@ public final class ValidatorChain {
         validators.removeIf(v -> validatorClass.isInstance(v));
         return this;
     }
-    
+
     /**
      * Clears all validators from the chain.
-     * 清除链中的所有验证器。
      *
      * @return this chain for fluent chaining
      */
@@ -87,95 +80,192 @@ public final class ValidatorChain {
         validators.clear();
         return this;
     }
-    
+
+    /**
+     * The single applicability check every caller must use before asking a validator to {@link
+     * CommandValidator#validate}. {@link #validate} and {@link #validateAll} both call this
+     * (rather than {@code validator.shouldValidate(context)} directly) so there is exactly one
+     * place this decision lives; a caller OUTSIDE this class that needs the same decision --
+     * {@code BaseCommandExecutor}'s gated help path, which invokes select validators directly
+     * without running the full chain -- calls this too, instead of re-declaring the same one-line
+     * condition a second time (WR-02, #413).
+     *
+     * This method is framework-internal and is not a supported extension point for module authors.
+     *
+     * @param validator the validator to check
+     * @param context   the command context
+     * @return {@code true} iff {@code validator} should be asked to validate this context
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static boolean isApplicable(CommandValidator validator, CommandContext context) {
+        return validator.shouldValidate(context);
+    }
+
     /**
      * Validates the context through all validators in the chain.
      * Stops at the first failure.
-     * 通过链中的所有验证器验证上下文。
-     * 在第一个失败时停止。
+     *
+     * <p>A runtime exception thrown from a validator's {@link CommandValidator#shouldValidate} or
+     * {@link CommandValidator#validate} refuses the dispatch: every validator that already passed
+     * receives {@link CommandValidator#onRefused} once, in chain order, and then the original
+     * exception propagates unchanged, with any exception a refusal hook threw attached to it as
+     * suppressed. The throwing validator itself, and every validator after it, receives nothing
+     * (#568 for {@code validate}; case 49 for {@code shouldValidate}).
      *
      * @param context the command context to validate
      * @return the result of the validation
      */
     public ChainValidationResult validate(CommandContext context) {
         ensureSorted();
-        
+
         List<CommandValidator.ValidationResult> results = new ArrayList<>();
-        
+        List<CommandValidator> passedValidators = new ArrayList<>();
+
         for (CommandValidator validator : validators) {
-            if (!validator.shouldValidate(context)) {
-                continue;
+            CommandValidator.ValidationResult result;
+            try {
+                if (!isApplicable(validator, context)) {
+                    continue;
+                }
+                result = validator.validate(context);
+            } catch (RuntimeException e) {
+                // #568: a validator that throws refuses the dispatch as surely as one that returns a
+                // failure, so the validators that already passed -- a UsageLockValidator that took
+                // its lock -- must hear of it before the exception leaves the chain. The applicability
+                // check sits inside the same boundary: an exception from shouldValidate leaks the
+                // lock just the same (case 49).
+                notifyRefused(context, passedValidators, e);
+                throw e;
             }
-            
-            CommandValidator.ValidationResult result = validator.validate(context);
             results.add(result);
-            
+
             if (!result.isValid()) {
-                return ChainValidationResult.failure(validator, result, results);
+                return ChainValidationResult.failure(validator, result, results, passedValidators);
+            }
+
+            passedValidators.add(validator);
+        }
+
+        return ChainValidationResult.success(results, passedValidators);
+    }
+
+    /**
+     * Calls {@link CommandValidator#onRefused(CommandContext)} on each of {@code passedValidators},
+     * in order, for a dispatch refused after they passed and before the mapped method ran (#568).
+     * Every hook runs even when an earlier one throws, so one validator's failing hook cannot keep a
+     * later validator -- a {@code UsageLockValidator} -- from releasing what it holds; the first
+     * exception a hook threw is rethrown afterwards, with any later ones suppressed on it.
+     *
+     * @param context          the command context
+     * @param passedValidators the validators that passed for this dispatch, in chain order; may be
+     *                         {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static void notifyRefused(CommandContext context, List<CommandValidator> passedValidators) {
+        RuntimeException failure = notifyRefused(context, passedValidators, null);
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * Runs every refusal hook; returns the first exception a hook threw, or attaches it to
+     * {@code pending} (an exception already on its way out) and returns {@code null}.
+     */
+    private static RuntimeException notifyRefused(CommandContext context, List<CommandValidator> passedValidators,
+                                                  RuntimeException pending) {
+        if (passedValidators == null) {
+            return null;
+        }
+        RuntimeException first = null;
+        for (CommandValidator passed : passedValidators) {
+            try {
+                passed.onRefused(context);
+            } catch (RuntimeException e) {
+                if (pending != null) {
+                    pending.addSuppressed(e);
+                } else if (first == null) {
+                    first = e;
+                } else {
+                    first.addSuppressed(e);
+                }
             }
         }
-        
-        return ChainValidationResult.success(results);
+        return first;
     }
-    
+
     /**
      * Validates the context through all validators, collecting all failures.
      * Does not stop at the first failure.
-     * 通过所有验证器验证上下文，收集所有失败。
-     * 不会在第一个失败时停止。
+     *
+     * <p>A returned result, valid or not, calls no refusal hook: the caller owns refusal for it.
+     * A runtime exception thrown from a validator's {@link CommandValidator#shouldValidate} or
+     * {@link CommandValidator#validate} is handled as in {@link #validate}: every validator that
+     * already passed receives {@link CommandValidator#onRefused} once, in chain order, and then the
+     * original exception propagates unchanged, with any exception a refusal hook threw attached to
+     * it as suppressed (case 49).
      *
      * @param context the command context to validate
      * @return the result containing all validation results
      */
     public ChainValidationResult validateAll(CommandContext context) {
         ensureSorted();
-        
+
         List<CommandValidator.ValidationResult> results = new ArrayList<>();
         List<CommandValidator> failedValidators = new ArrayList<>();
-        
+        List<CommandValidator> passedValidators = new ArrayList<>();
+
         for (CommandValidator validator : validators) {
-            if (!validator.shouldValidate(context)) {
-                continue;
+            CommandValidator.ValidationResult result;
+            try {
+                if (!isApplicable(validator, context)) {
+                    continue;
+                }
+                result = validator.validate(context);
+            } catch (RuntimeException e) {
+                // Same boundary as validate(): a validator that took something (a lock) must hear
+                // of the refusal before the exception leaves the chain (case 49).
+                notifyRefused(context, passedValidators, e);
+                throw e;
             }
-            
-            CommandValidator.ValidationResult result = validator.validate(context);
             results.add(result);
-            
+
             if (!result.isValid()) {
                 failedValidators.add(validator);
+            } else {
+                passedValidators.add(validator);
             }
         }
-        
+
         if (failedValidators.isEmpty()) {
-            return ChainValidationResult.success(results);
+            return ChainValidationResult.success(results, passedValidators);
         } else {
-            return ChainValidationResult.multipleFailures(failedValidators, results);
+            return ChainValidationResult.multipleFailures(failedValidators, results, passedValidators);
         }
     }
-    
+
     /**
      * Gets the number of validators in the chain.
-     * 获取链中验证器的数量。
      *
      * @return the number of validators
      */
     public int size() {
         return validators.size();
     }
-    
+
     /**
      * Checks if the chain is empty.
-     * 检查链是否为空。
      *
      * @return true if empty
      */
     public boolean isEmpty() {
         return validators.isEmpty();
     }
-    
+
     /**
      * Gets an unmodifiable view of the validators.
-     * 获取验证器的不可修改视图。
      *
      * @return unmodifiable list of validators
      */
@@ -183,21 +273,20 @@ public final class ValidatorChain {
         ensureSorted();
         return Collections.unmodifiableList(validators);
     }
-    
+
     private void ensureSorted() {
         if (!sorted) {
             sort();
         }
     }
-    
+
     private void sort() {
         validators.sort(Comparator.comparingInt(CommandValidator::getOrder));
         sorted = true;
     }
-    
+
     /**
      * Result of chain validation.
-     * 链验证的结果。
      */
     public static final class ChainValidationResult {
         private final boolean valid;
@@ -205,93 +294,110 @@ public final class ValidatorChain {
         private final List<CommandValidator> allFailedValidators;
         private final CommandValidator.ValidationResult failedResult;
         private final List<CommandValidator.ValidationResult> allResults;
-        
+        private final List<CommandValidator> passedValidators;
+
         private ChainValidationResult(boolean valid,
                                       CommandValidator failedValidator,
                                       List<CommandValidator> allFailedValidators,
                                       CommandValidator.ValidationResult failedResult,
-                                      List<CommandValidator.ValidationResult> allResults) {
+                                      List<CommandValidator.ValidationResult> allResults,
+                                      List<CommandValidator> passedValidators) {
             this.valid = valid;
             this.failedValidator = failedValidator;
-            this.allFailedValidators = allFailedValidators != null ? 
+            this.allFailedValidators = allFailedValidators != null ?
                     Collections.unmodifiableList(allFailedValidators) : Collections.emptyList();
             this.failedResult = failedResult;
             this.allResults = Collections.unmodifiableList(allResults);
+            this.passedValidators = passedValidators != null
+                    ? Collections.unmodifiableList(new ArrayList<>(passedValidators))
+                    : Collections.emptyList();
         }
-        
-        static ChainValidationResult success(List<CommandValidator.ValidationResult> allResults) {
-            return new ChainValidationResult(true, null, null, null, allResults);
+
+        static ChainValidationResult success(List<CommandValidator.ValidationResult> allResults,
+                                              List<CommandValidator> passedValidators) {
+            return new ChainValidationResult(true, null, null, null, allResults, passedValidators);
         }
-        
+
         static ChainValidationResult failure(CommandValidator failedValidator,
                                              CommandValidator.ValidationResult failedResult,
-                                             List<CommandValidator.ValidationResult> allResults) {
-            return new ChainValidationResult(false, failedValidator, 
-                    Collections.singletonList(failedValidator), failedResult, allResults);
+                                             List<CommandValidator.ValidationResult> allResults,
+                                             List<CommandValidator> passedValidators) {
+            return new ChainValidationResult(false, failedValidator,
+                    Collections.singletonList(failedValidator), failedResult, allResults, passedValidators);
         }
-        
+
         static ChainValidationResult multipleFailures(List<CommandValidator> failedValidators,
-                                                      List<CommandValidator.ValidationResult> allResults) {
-            return new ChainValidationResult(false, 
+                                                      List<CommandValidator.ValidationResult> allResults,
+                                                      List<CommandValidator> passedValidators) {
+            return new ChainValidationResult(false,
                     failedValidators.isEmpty() ? null : failedValidators.get(0),
-                    failedValidators, 
-                    null, 
-                    allResults);
+                    failedValidators,
+                    null,
+                    allResults,
+                    passedValidators);
         }
-        
+
         /**
          * Checks if all validations passed.
-         * 检查是否所有验证都通过。
          *
          * @return true if valid
          */
         public boolean isValid() {
             return valid;
         }
-        
+
         /**
          * Gets the first failed validator.
-         * 获取第一个失败的验证器。
          *
          * @return the failed validator, or null if valid
          */
         public CommandValidator getFailedValidator() {
             return failedValidator;
         }
-        
+
         /**
          * Gets all failed validators.
-         * 获取所有失败的验证器。
          *
          * @return list of failed validators
          */
         public List<CommandValidator> getAllFailedValidators() {
             return allFailedValidators;
         }
-        
+
         /**
          * Gets the first failed result.
-         * 获取第一个失败的结果。
          *
          * @return the failed result, or null if valid
          */
         public CommandValidator.ValidationResult getFailedResult() {
             return failedResult;
         }
-        
+
         /**
          * Gets all validation results.
-         * 获取所有验证结果。
          *
          * @return list of all results
          */
         public List<CommandValidator.ValidationResult> getAllResults() {
             return allResults;
         }
-        
+
+        /**
+         * Gets the ordered list of validators whose {@link CommandValidator#validate(CommandContext)}
+         * succeeded during this chain run. This is the single source of truth {@code executeCommand}
+         * drives {@link CommandValidator#onComplete(CommandContext, boolean)} from -- a validator
+         * absent from this list receives no post-action call, whether because it was skipped, never
+         * reached, or failed.
+         *
+         * @return unmodifiable, ordered list of validators that passed during this chain run
+         * @since 6.3.0
+         */
+        public List<CommandValidator> getPassedValidators() {
+            return passedValidators;
+        }
+
         /**
          * Gets the error message from the first failure.
-         * 获取第一个失败的错误消息。
          *
          * @return the error message, or null if valid
          */
@@ -307,17 +413,15 @@ public final class ValidatorChain {
             return null;
         }
     }
-    
+
     /**
      * Builder for creating validator chains.
-     * 用于创建验证器链的构建器。
      */
     public static final class Builder {
         private final List<CommandValidator> validators = new ArrayList<>();
-        
+
         /**
          * Adds a validator to the chain.
-         * 向链中添加验证器。
          *
          * @param validator the validator to add
          * @return this builder
@@ -326,10 +430,9 @@ public final class ValidatorChain {
             validators.add(Objects.requireNonNull(validator));
             return this;
         }
-        
+
         /**
          * Adds all validators to the chain.
-         * 将所有验证器添加到链中。
          *
          * @param validators the validators to add
          * @return this builder
@@ -338,10 +441,9 @@ public final class ValidatorChain {
             this.validators.addAll(validators);
             return this;
         }
-        
+
         /**
          * Builds the validator chain.
-         * 构建验证器链。
          *
          * @return the built chain
          */
@@ -349,10 +451,9 @@ public final class ValidatorChain {
             return new ValidatorChain(validators);
         }
     }
-    
+
     /**
      * Creates a new builder for validator chains.
-     * 创建验证器链的新构建器。
      *
      * @return a new builder
      */

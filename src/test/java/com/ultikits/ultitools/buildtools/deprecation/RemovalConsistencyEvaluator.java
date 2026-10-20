@@ -1,0 +1,271 @@
+package com.ultikits.ultitools.buildtools.deprecation;
+
+import com.ultikits.ultitools.utils.VersionComparatorUtil;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+
+/**
+ * The D-01 / D-21 / D-22 decision logic: a japicmp {@code <exclude>} entry whose key has no
+ * corresponding registry entry and no admissible allowlist justification turns the build red.
+ *
+ * <p>Pure logic over three already-parsed inputs - the pom's {@code <exclude>} key list, the
+ * parsed japicmp report ({@link JapicmpReportReader.Report}), and the registry ledger
+ * ({@link RegistryLedger}) - so every behaviour below is unit-testable without a Maven run.
+ *
+ * <p><strong>Structural scope, load-bearing for the checks below (see
+ * {@link JapicmpReportReader}'s own javadoc for the underlying mechanism):</strong> once a symbol
+ * is named in {@code <excludes>}, japicmp filters it out of its own report entirely - a
+ * currently-excluded entry can therefore never be re-confirmed against a fresh report run with
+ * that same exclude list still in place. Two consequences follow directly, both deliberate:
+ * <ul>
+ *   <li>The {@link Finding.Kind#STALE_EXCLUSION} check never fires for a whole-class exclude
+ *       (its class element is entirely absent from the report by japicmp's own class-filter
+ *       mechanism, with zero recoverable signal); it applies only to member-level entries, using
+ *       the member's <em>enclosing class</em> still being a real, comparison-visible class as the
+ *       corroborating signal that the exclude key refers to something real rather than a typo.</li>
+ *   <li>The {@link Finding.Kind#INADMISSIBLE_ALLOWLIST} check can only re-verify a member's
+ *       old-side modifier when that exact member is <em>still</em> visible in the report - i.e.
+ *       for a symbol not (yet) excluded, or a new candidate exclude being evaluated before its
+ *       {@code <exclude>} line is added. An already-excluded allowlist entry's original
+ *       admissibility was established once, by hand, at authoring time (see
+ *       {@code 07-JAPICMP-BASELINE.md}) - this evaluator cannot and does not re-derive it from a
+ *       report that no longer shows the member at all.</li>
+ * </ul>
+ */
+public final class RemovalConsistencyEvaluator {
+
+    /** The framework's declared comparison scope (D-06): public + protected. */
+    public static final String EXPECTED_SCOPE = "PROTECTED";
+
+    private RemovalConsistencyEvaluator() {
+    }
+
+    /**
+     * D-21's entire admissibility test: a bytecode fact from the report's own
+     * {@code <modifier oldValue>}, nothing else. No override parameter exists anywhere in this
+     * evaluator's public API that could suppress a rejection.
+     */
+    public static boolean isAdmissibleAllowlistEntry(JapicmpReportReader.Entry entry) {
+        String modifier = entry.getOldAccessModifier();
+        return "PRIVATE".equals(modifier) || "PACKAGE_PROTECTED".equals(modifier);
+    }
+
+    /**
+     * D-06: an exclude is required only when a REMOVED entry's removal is strictly newer than the
+     * configured japicmp baseline - once the baseline advances past {@code removedIn}, the symbol
+     * is absent from both sides of the japicmp comparison and can never be re-flagged against it.
+     * A {@code null} or blank {@code removedIn} is fail-closed: absence of data is not evidence of
+     * safety, so an exclude is still required regardless of the baseline.
+     */
+    private static boolean stillRequiresExclusion(String removedIn, String baselineVersion) {
+        if (removedIn == null || removedIn.trim().isEmpty()) {
+            return true;
+        }
+        return VersionComparatorUtil.isGreaterThan(removedIn, baselineVersion);
+    }
+
+    // PMD.NPathComplexity: each `if` in this method is one named D-01/D-21/D-22 consistency
+    // rule, applied independently to every key. Read top to bottom, the method IS the rule
+    // list -- which is what makes a build gate auditable. Splitting it into per-rule helpers
+    // would lower the number while removing the property that the rules can be read in order.
+    @SuppressWarnings("PMD.NPathComplexity")
+    public static List<Finding> evaluate(Set<RegistryKey> excludeKeys, JapicmpReportReader.Report report,
+            RegistryLedger registry, String baselineVersion) {
+        List<Finding> findings = new ArrayList<>();
+
+        // D-22 scope equality: a report narrower than the framework's declared scope can never
+        // confirm a removal in that scope - nothing else here is trustworthy if it disagrees.
+        String reportScope = report.accessModifier();
+        if (reportScope != null && !EXPECTED_SCOPE.equalsIgnoreCase(reportScope)) {
+            findings.add(Finding.scopeMismatch(reportScope));
+            return findings;
+        }
+
+        Map<String, DeprecationEntry> registryByKey = indexByKeyString(registry);
+
+        // Deterministic iteration order (RegistryKey's own total order) so two runs over the
+        // same inputs produce identical build-failure text, regardless of the caller's Set
+        // implementation or insertion order.
+        Set<RegistryKey> sortedExcludeKeys = new TreeSet<>(excludeKeys);
+
+        // #461/WR-03: an EMPTY report unconditionally means "no comparison ran" - a real japicmp
+        // run against this codebase reports tens of thousands of entries (UNCHANGED classes
+        // included, not merely changed ones - measured: 331 <class> elements alone in a real
+        // report against this repository), so an empty report.entries() can only mean the report is
+        // missing or unreadable (e.g. target/japicmp/japicmp.xml absent, or two `mvn clean verify`
+        // invocations racing in the same tree), never a legitimately clean comparison with nothing
+        // to say. Reported once here, unconditionally - regardless of what excludeKeys or registry
+        // happen to contain - rather than only when at least one member-level exclude would
+        // otherwise have depended on the report: "no comparison ran" is itself worth surfacing even
+        // when nothing this particular call was given happens to need it (a widening from the
+        // narrower, registry-coverage-gated version of this guard - see the review this fixes).
+        boolean reportIsEmpty = report.entries().isEmpty();
+        if (reportIsEmpty) {
+            findings.add(Finding.reportMissingOrEmpty());
+        }
+
+        // D-01 staleness: a member-level exclude key with no registry entry AND no visible trace
+        // in the report - neither the exact key nor its enclosing class - protects nothing
+        // discoverable. Whole-class excludes are exempt (see class javadoc). Skipped entirely when
+        // the report is empty - the single REPORT_MISSING_OR_EMPTY finding above already covers
+        // that state; running this loop too would turn one infrastructure problem into N additional
+        // false compatibility findings on top of it, exactly the original #461 defect.
+        for (RegistryKey key : sortedExcludeKeys) {
+            if (key.isClassLevel() || reportIsEmpty) {
+                continue;
+            }
+            boolean inRegistry = registryByKey.containsKey(key.toString());
+            boolean keyVisible = report.entries().containsKey(key);
+            boolean enclosingClassVisible = report.entries().containsKey(RegistryKey.forClass(key.getClassName()));
+            if (!inRegistry && !keyVisible && !enclosingClassVisible) {
+                findings.add(Finding.staleExclusion(key));
+            }
+        }
+
+        // D-01 coverage: a report REMOVED key with no exclude entry and no registry entry is an
+        // unrecorded removal.
+        for (Map.Entry<RegistryKey, JapicmpReportReader.Entry> e : report.entries().entrySet()) {
+            if (!"REMOVED".equals(e.getValue().getChangeStatus())) {
+                continue;
+            }
+            RegistryKey key = e.getKey();
+            if (!excludeKeys.contains(key) && !registryByKey.containsKey(key.toString())) {
+                findings.add(Finding.unrecordedRemoval(key));
+            }
+        }
+
+        // D-21 admissibility: an exclude key that is still visible in the report (see class
+        // javadoc for when that is possible) and NOT tracked by the deprecation lifecycle must
+        // clear the mechanical PRIVATE/PACKAGE_PROTECTED old-side test.
+        for (RegistryKey key : sortedExcludeKeys) {
+            JapicmpReportReader.Entry entry = report.entries().get(key);
+            if (entry == null || registryByKey.containsKey(key.toString())) {
+                continue;
+            }
+            if (!isAdmissibleAllowlistEntry(entry)) {
+                findings.add(Finding.inadmissibleAllowlist(key, entry.getOldAccessModifier()));
+            }
+        }
+
+        // D-22 pom-sync, D-06 baseline-aware: a REMOVED registry entry needs a matching pom
+        // exclude only while its removal is still newer than the configured baseline - once the
+        // baseline advances past removedIn, japicmp can never re-flag it against that baseline,
+        // so no exclude is required to protect against a re-flag that cannot happen.
+        for (DeprecationEntry entry : registry.entries()) {
+            if (entry.getStatus() != DeprecationEntry.Status.REMOVED) {
+                continue;
+            }
+            if (excludeKeys.contains(entry.getKey())) {
+                continue;
+            }
+            if (stillRequiresExclusion(entry.getRemovedIn(), baselineVersion)) {
+                findings.add(Finding.missingExclusionForRemoved(entry.getKey()));
+            }
+        }
+
+        return findings;
+    }
+
+    private static Map<String, DeprecationEntry> indexByKeyString(RegistryLedger registry) {
+        Map<String, DeprecationEntry> byKey = new HashMap<>();
+        for (DeprecationEntry entry : registry.entries()) {
+            byKey.put(entry.getKey().toString(), entry);
+        }
+        return byKey;
+    }
+
+    /** One consistency violation found by {@link #evaluate}. */
+    public static final class Finding {
+
+        /** What kind of consistency violation this finding represents. */
+        public enum Kind {
+            SCOPE_MISMATCH, REPORT_MISSING_OR_EMPTY, STALE_EXCLUSION, UNRECORDED_REMOVAL,
+            INADMISSIBLE_ALLOWLIST, MISSING_EXCLUSION_FOR_REMOVED
+        }
+
+        private final Kind kind;
+        private final RegistryKey key;
+        private final String message;
+
+        private Finding(Kind kind, RegistryKey key, String message) {
+            this.kind = kind;
+            this.key = key;
+            this.message = message;
+        }
+
+        static Finding scopeMismatch(String actualScope) {
+            return new Finding(Kind.SCOPE_MISMATCH, null,
+                    "japicmp report scope '" + actualScope + "' is narrower than the framework's "
+                            + "declared scope '" + EXPECTED_SCOPE + "' (D-06) - a removal in that "
+                            + "scope could never be confirmed against this report");
+        }
+
+        static Finding staleExclusion(RegistryKey key) {
+            return new Finding(Kind.STALE_EXCLUSION, key,
+                    "pom <exclude> entry '" + key + "' has no registry entry and no trace in the "
+                            + "japicmp report - it may be stale, or a typo that never matched "
+                            + "anything real");
+        }
+
+        /**
+         * #461: the japicmp report is missing or empty - no comparison ran, so nothing can be
+         * confirmed either stale or current. One finding for the whole evaluation, not one per
+         * unregistered member-level exclude key - reporting N false STALE_EXCLUSION findings for
+         * what is actually an infrastructure problem (a missing/empty {@code
+         * target/japicmp/japicmp.xml}, e.g. a partial {@code -DskipTests} build, or two {@code mvn
+         * clean verify} invocations racing in the same working tree) is exactly the defect this
+         * finding replaces.
+         */
+        static Finding reportMissingOrEmpty() {
+            return new Finding(Kind.REPORT_MISSING_OR_EMPTY, null,
+                    "the japicmp report is missing or empty - no comparison ran; nothing was "
+                            + "evaluated. This is an infrastructure state (check that "
+                            + "target/japicmp/japicmp.xml exists and is non-empty before the "
+                            + "generate-deprecation-registry execution runs), not a compatibility "
+                            + "finding about any individual pom <exclude> entry");
+        }
+
+        static Finding unrecordedRemoval(RegistryKey key) {
+            return new Finding(Kind.UNRECORDED_REMOVAL, key,
+                    "japicmp reports '" + key + "' REMOVED, but it has no pom <exclude> entry and "
+                            + "no registry entry - an unrecorded removal");
+        }
+
+        static Finding inadmissibleAllowlist(RegistryKey key, String oldModifier) {
+            return new Finding(Kind.INADMISSIBLE_ALLOWLIST, key,
+                    "pom <exclude> entry '" + key + "' is not tracked by the deprecation registry "
+                            + "and its japicmp old-side access modifier is '" + oldModifier + "', "
+                            + "not PRIVATE or PACKAGE_PROTECTED - D-21 rejects it unconditionally");
+        }
+
+        static Finding missingExclusionForRemoved(RegistryKey key) {
+            return new Finding(Kind.MISSING_EXCLUSION_FOR_REMOVED, key,
+                    "registry entry '" + key + "' has status REMOVED but no matching pom "
+                            + "<exclude> entry - japicmp will re-flag it against the old baseline "
+                            + "with no accepted record");
+        }
+
+        public Kind getKind() {
+            return kind;
+        }
+
+        public RegistryKey getKey() {
+            return key;
+        }
+
+        public String describe() {
+            return message;
+        }
+
+        @Override
+        public String toString() {
+            return "[" + kind + "] " + message;
+        }
+    }
+}

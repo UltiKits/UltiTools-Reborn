@@ -6,12 +6,17 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a Map&lt;UUID, ?&gt; field for automatic cleanup when a player quits.
+ * Marks a field for automatic cleanup when a player quits.
  * <p>
- * When a player disconnects, the framework automatically calls remove(uuid)
- * on all annotated maps across all registered service beans.
- * <p>
- * 标记一个 Map&lt;UUID, ?&gt; 字段，当玩家退出时自动清理。
+ * Three field shapes are accepted, and {@link com.ultikits.ultitools.manager.PlayerCacheManager}
+ * refuses (throws at registration) any other shape rather than silently ignoring it:
+ * <ul>
+ *   <li>{@code Map<UUID, ?>} -- the whole entry (key and value, including a nested value such as
+ *       {@code Map<UUID, Map<String, Long>>}) is removed via {@code remove(uuid)}.</li>
+ *   <li>{@code Set<UUID>} -- the UUID itself is removed via {@code remove(uuid)}.</li>
+ *   <li>{@code Map<?, UUID>} -- every entry whose VALUE equals the quitting player's UUID is
+ *       removed; entries belonging to other players are left intact.</li>
+ * </ul>
  *
  * @since 6.2.0
  */
@@ -22,6 +27,13 @@ public @interface PlayerCache {
     /**
      * If true, the framework will call the bean's {@code savePlayerData(UUID)}
      * method (if it implements {@link PlayerCacheSaver}) before removing the entry.
+     * <p>
+     * This orders the save before the removal; it does not make the removal conditional on the
+     * save. If {@code savePlayerData} throws, the failure is logged as a WARNING naming the bean
+     * class, the field and the player, the entry is removed anyway, and the cleanup of every other
+     * {@code @PlayerCache} field continues (as of 6.3.0, #643; maintainer decision, 2026-10-08).
+     * The framework does not retry the save; a module that must not lose the data retries or
+     * persists it itself, inside {@code savePlayerData}.
      *
      * @return whether to save before removing
      */

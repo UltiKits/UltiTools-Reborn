@@ -435,4 +435,55 @@ class TransactionDataOperatorTest {
             assertThat(operator.getById("1").getScore()).isEqualTo(100);
         }
     }
+
+    // ===== Per-statement query timeout (D-10, 02-09 Task 2) =====
+
+    @Nested
+    @DisplayName("Per-statement query timeout end-to-end")
+    class PerStatementTimeoutTests {
+
+        private DataSourceTransactionManager txManager;
+
+        @BeforeEach
+        void setUpTxManager() {
+            txManager = new DataSourceTransactionManager(dataSource);
+            operator.setTransactionManager(txManager);
+        }
+
+        /**
+         * Reads {@code getQueryTimeout()} off the statement {@link #operator}'s own {@code
+         * queryRunner} field builds -- {@code queryRunner} is {@code protected} on {@link
+         * AbstractRelationalDataOperator}, accessible here since this test class shares its
+         * package. Proves the wiring end-to-end: {@link DataSourceTransactionManager#setTimeout}
+         * -&gt; {@link DataSourceTransactionManager#getTimeoutDeadlineNanos()} -&gt; {@link
+         * TimeoutAwareQueryRunner}'s deadline supplier -&gt; the actual prepared statement.
+         * <p>
+         * Deliberately parameterized ({@code WHERE id = ?}), even though no row need match:
+         * {@code QueryRunner.query(sql, handler)}'s zero-params overload takes a {@code
+         * conn.createStatement()} path that never reaches {@code prepareStatement(Connection,
+         * String)} at all -- the exact method {@link TimeoutAwareQueryRunner} overrides. Only the
+         * parameterized overload routes through a real {@code PreparedStatement}.
+         */
+        private int capturedQueryTimeout() throws Exception {
+            java.util.concurrent.atomic.AtomicReference<Integer> timeout = new java.util.concurrent.atomic.AtomicReference<>();
+            operator.queryRunner.query("SELECT * FROM tx_test WHERE id = ?", rs -> {
+                timeout.set(rs.getStatement().getQueryTimeout());
+                return null;
+            }, "nonexistent-id");
+            return timeout.get();
+        }
+
+        @Test
+        @DisplayName("a statement issued during a timed transaction carries the remaining budget")
+        void statementCarriesRemainingBudgetDuringTimedTransaction() throws Exception {
+            txManager.begin();
+            txManager.setTimeout(10);
+
+            int timeout = capturedQueryTimeout();
+
+            assertThat(timeout).isBetween(9, 10);
+
+            txManager.commit();
+        }
+    }
 }

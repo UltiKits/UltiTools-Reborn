@@ -297,12 +297,23 @@ class SenderTypeValidatorTest {
         void methodWithoutAnnotationShouldUseClassLevel() throws Exception {
             SenderTypeValidator validator = new SenderTypeValidator(CmdTarget.CmdTargetType.PLAYER);
             Method method = getClass().getEnclosingClass().getDeclaredMethod("methodWithoutCmdTarget");
-            
+
             CommandContext playerContext = createPlayerContext(method);
             CommandContext consoleContext = createConsoleContext(method);
 
             assertTrue(validator.validate(playerContext).isValid());
             assertFalse(validator.validate(consoleContext).isValid());
+        }
+
+        @Test
+        @DisplayName("Identical class-level and method-level CONSOLE is the SAME case and stays legal")
+        void identicalClassAndMethodLevelStaysLegal() throws Exception {
+            SenderTypeValidator validator = new SenderTypeValidator(CmdTarget.CmdTargetType.CONSOLE);
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("methodForConsoleOnly");
+
+            CommandContext consoleContext = createConsoleContext(method);
+
+            assertTrue(validator.validate(consoleContext).isValid());
         }
     }
 

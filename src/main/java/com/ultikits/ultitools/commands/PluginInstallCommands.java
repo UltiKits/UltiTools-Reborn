@@ -1,7 +1,14 @@
 package com.ultikits.ultitools.commands;
 
 import java.io.IOException;
+import java.nio.file.FileSystemException;
+import java.nio.file.NoSuchFileException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
@@ -9,8 +16,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -19,8 +26,10 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
+import com.ultikits.ultitools.manager.ModuleApiLevels;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
+import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 
 import net.kyori.adventure.text.Component;
@@ -30,7 +39,14 @@ import net.kyori.adventure.text.format.TextColor;
 
 @CmdExecutor(description = "UltiTools Plugin Management Commands", alias = "upm", requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
-public class PluginInstallCommands extends AbstractCommandExecutor {
+public class PluginInstallCommands extends BaseCommandExecutor {
+
+    /**
+     * The literal Bukkit {@code name:} prefix {@link #isSameModule} strips before comparing a
+     * loaded module's runtime name against the catalogue's display name (#439).
+     */
+    private static final String VENDOR_PREFIX = "UltiTools-";
+
     @CmdMapping(format = "list <page>")
     @RunAsync
     public void listPlugins(@CmdSender CommandSender sender, @CmdParam("page") String page) {
@@ -38,7 +54,14 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
         if (page != null && !page.isEmpty()) {
             try {
                 pageInt = Integer.parseInt(page);
-            } catch (NumberFormatException ignored) {
+            } catch (NumberFormatException e) {
+                // #380: this used to swallow the exception and serve page 1, so
+                // `/upm list not-a-number` looked like it had worked. Report it in the same words
+                // TypeParserRegistry uses for every other command's numeric argument, so the two
+                // paths do not disagree about what a bad number looks like.
+                sender.sendMessage(ChatColor.RED
+                        + "Failed to parse '" + page + "' as Integer");
+                return;
             }
         }
         List<UltiToolsPlugin> installedPlugins = UltiTools.getInstance().getPluginManager().getPluginList();
@@ -50,13 +73,8 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
             for (PluginEntity plugin : plugins) {
                 text = text.append(Component.text(i + UltiTools.getInstance().i18n(".  名字：") + plugin.getName() + "\n").color(TextColor.color(0x00ffff)));
                 text = text.append(Component.text(UltiTools.getInstance().i18n("    安装状态：")).color(TextColor.color(127, 127, 127)));
-                boolean installed = false;
-                for (UltiToolsPlugin installedPlugin : installedPlugins) {
-                    if (installedPlugin.getPluginName().equals(plugin.getName())) {
-                        installed = true;
-                        break;
-                    }
-                }
+                String matchedRuntimeName = resolveInstalledRuntimeName(installedPlugins, plugin);
+                boolean installed = matchedRuntimeName != null;
                 if (installed) {
                     text = text.append(Component.text(UltiTools.getInstance().i18n(" 已安装") + "\n").color(TextColor.color(0x00ff00)));
                     text = text.append(
@@ -64,7 +82,10 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
                                     .text(UltiTools.getInstance().i18n("     | 卸载 |     ") + "\n")
                                     .color(TextColor.color(255, 0, 0))
                                     .hoverEvent(Component.text(UltiTools.getInstance().i18n("点击卸载模块")))
-                                    .clickEvent(ClickEvent.runCommand("/upm uninstall " + plugin.getName()))
+                                    // #439 gate-2 Codex round 1: the LOADED module's own runtime
+                                    // name, not the catalogue's display name -- uninstallPlugin
+                                    // matches only the former.
+                                    .clickEvent(ClickEvent.runCommand("/upm uninstall " + matchedRuntimeName))
                     );
                 } else {
                     text = text.append(Component.text(UltiTools.getInstance().i18n(" 未安装") + "\n").color(TextColor.color(0xff0000)));
@@ -152,17 +173,24 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
 
     @CmdMapping(format = "install <plugin> <version>")
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin, @CmdParam("version") String version) {
-        if (PluginInstallUtils.installPlugin(plugin, version)) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
-        } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
-        }
+        sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, version));
     }
 
     @CmdMapping(format = "install <plugin>")
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
-        if (PluginInstallUtils.installLatestPlugin(plugin)) {
+        sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, null));
+    }
+
+    /**
+     * Tells the operator what an install did: the success line, the reason when the module's API
+     * level was why it was not installed (plan 18-40), or the bare failure line otherwise.
+     */
+    private static void sendInstallResult(CommandSender sender, PluginInstallUtils.InstallResult result) {
+        if (result.isInstalled()) {
             sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
+        } else if (result.getReasonKey() != null) {
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(result.getReasonKey()),
+                    result.getReasonArgs()));
         } else {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
         }
@@ -173,6 +201,15 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
         List<String> pluginVersions = PluginInstallUtils.getPluginVersions(plugin);
         if (pluginVersions == null) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("获取版本列表失败！"));
+            return;
+        }
+        if (pluginVersions.isEmpty()) {
+            // The catalogue lists only the versions this framework installs (plan 18-40): an empty
+            // list means none, which an empty table would not say.
+            int level = ModuleApiLevels.frameworkLevel();
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                    "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。"),
+                    plugin, level, ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, level));
             return;
         }
         StringBuilder stringBuilder = new StringBuilder();
@@ -195,18 +232,287 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
         sender.sendMessage(stringBuilder.toString());
     }
 
+    // Deliberately not @RunAsync, though it opens one archive per entry of the modules folder:
+    // PluginManager#unregister must run on the main thread, and the synchronous path is what carries
+    // the entries that could not be identified out of every exit, including the failing ones. With
+    // a handful of modules the scan costs a fraction of a tick (gate 1, IN-12).
     @CmdMapping(format = "uninstall <plugin>")
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
+        // The uninstall itself cancels any update of the module still waiting for the next start, on
+        // every outcome but a refusal, matched on the identity it resolved (#505, round-10 review);
+        // this collects the versions so the reply can say so.
+        List<String> cancelledUpdates = new ArrayList<>();
         try {
-            if (PluginInstallUtils.uninstallPlugin(plugin)) {
-                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！请手动删除本地文件，否则重启之后还会启用！"));
-                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+            PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin,
+                    cancelledUpdates);
+            if (report.jarsDeleted()) {
+                // uninstallPlugin returns true only after every JAR identified as the module's is
+                // deleted (#501), so there is nothing left for the operator to remove by hand. The
+                // files are named: every other outcome names paths, and a success that named none
+                // is what made a deletion outside the operator's request invisible (gate 1, IN-12).
+                sender.sendMessage(ChatColor.GREEN + String.format(
+                        UltiTools.getInstance().i18n("卸载完成：已删除识别为该模块的 JAR 文件：%s"),
+                        report.deletedFiles().isEmpty()
+                                ? UltiTools.getInstance().i18n("（没有需要删除的文件）")
+                                : String.join(", ", report.deletedFiles())));
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
+            sendUndeterminedEntries(sender, report);
+        } catch (java.nio.file.AccessDeniedException e) {
+            sendUnlistableFolder(sender, e.getFile());
+        } catch (PluginInstallUtils.UninstallRefusedException e) {
+            // The uninstall refused because its outcome would be undefined - two possible targets,
+            // or a JAR another running module shares. It changed nothing, and says which.
+            sender.sendMessage(ChatColor.RED + e.getMessage());
+        } catch (PluginInstallUtils.ModuleUnloadFailedException e) {
+            // The module's own unload threw. It has still been removed from the loaded modules and
+            // its jars still deleted where possible: report both, so the operator knows whether it
+            // will come back on restart.
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。"));
+            sendJarOutcomeAfterUnloadError(sender, e);
+        } catch (NoSuchFileException e) {
+            // The module was found by this exact name and unloaded, but no jar carries it -- a
+            // spelling hint would be false here (#501).
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), e.getFile()));
+            sendUnreadableEntriesOf(sender, e);
+        } catch (PluginInstallUtils.RemovalDeferredException e) {
+            // The JARs could not be deleted now and were recorded for the next start (#518).
+            sendDeferredRemoval(sender, e);
+            sendUnreadableEntriesOf(sender, e);
+        } catch (FileSystemException e) {
+            sendUndeletedJars(sender, e);
+            sendUnreadableEntriesOf(sender, e);
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
-            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
+        } finally {
+            // In a finally, like the cancellation itself: an unexpected exception from the uninstall
+            // leaves with the update already cancelled, and the operator is still told (gate 1, I-04).
+            for (String version : cancelledUpdates) {
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                        "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
+            }
+        }
+    }
+
+    /**
+     * The JARs the uninstall could not delete now -- held open by the running server, as Windows
+     * does with every loaded module JAR, or in a folder that is not writable -- and has recorded for
+     * the next start, which deletes them before any module loads (#518). Not "delete them by hand":
+     * on Windows the running server prevents exactly that.
+     */
+    private static void sendDeferredRemoval(CommandSender sender, PluginInstallUtils.RemovalDeferredException deferred) {
+        sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                "以下模块 JAR 暂时无法删除（被占用或不可写：%s），已记录：下次启动会在加载模块之前删除它们，仍无法删除时会在启动日志中报告：%s"),
+                deferred.getReason(), String.join(", ", deferred.deferredFiles())));
+    }
+
+    /** The modules folder, as the uninstall replies name it -- the one the loader reads (#517). */
+    private static String modulesFolderPath() {
+        return ModuleFileTransactions.modulesFolder(UltiTools.getInstance().getDataFolder()).getAbsolutePath();
+    }
+
+    /**
+     * The modules folder is there and its contents are unknown, so nothing may be claimed about
+     * what it still holds -- including whether a JAR of this module is among it.
+     */
+    private static void sendUnlistableFolder(CommandSender sender, String folder) {
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。"), folder));
+    }
+
+    /**
+     * Names the entries a no-JAR-found failure carries with it: state C survives that answer, and
+     * one of those entries may be the module's own JAR.
+     */
+    private static void sendUnreadableEntriesOf(CommandSender sender, Throwable failure) {
+        List<String> files = new ArrayList<>();
+        collectUndetermined(failure, files);
+        if (files.isEmpty()) {
+            return;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法确认身份，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
+                files.size(), String.join(", ", files)));
+    }
+
+    /**
+     * Says what the uninstall could not determine: entries it could not read at all. They are not
+     * called copies of the module, because nothing established that they are -- what the operator
+     * needs is the count and what follows from it if one of them turns out to be one.
+     */
+    private static void sendUndeterminedEntries(CommandSender sender, PluginInstallUtils.UninstallReport report) {
+        if (report.undeterminedEntries().isEmpty()) {
+            return;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法确认身份，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
+                report.undeterminedEntries().size(), String.join(", ", report.undeterminedEntries())));
+    }
+
+    /**
+     * Reports the jar outcome {@link PluginInstallUtils#uninstallPlugin} attached to its
+     * unload-error exception: none attached means every matching jar was deleted.
+     */
+    private static void sendJarOutcomeAfterUnloadError(CommandSender sender,
+                                                       PluginInstallUtils.ModuleUnloadFailedException unloadError) {
+        sendUnreadableEntriesOf(sender, unloadError);
+        for (Throwable jarFailure : unloadError.getSuppressed()) {
+            if (jarFailure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+                // Already reported above, and it is not a JAR outcome.
+                continue;
+            }
+            if (jarFailure instanceof java.nio.file.AccessDeniedException) {
+                // State D reached through a failed unload: a directory is not a JAR, and saying it
+                // will load the module again would be nonsense.
+                sendUnlistableFolder(sender, ((FileSystemException) jarFailure).getFile());
+                return;
+            }
+            if (jarFailure instanceof NoSuchFileException) {
+                // The undetermined entries this failure carries were reported once above, by the
+                // walk over the whole chain.
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
+                return;
+            }
+            if (jarFailure instanceof PluginInstallUtils.RemovalDeferredException) {
+                sendDeferredRemoval(sender, (PluginInstallUtils.RemovalDeferredException) jarFailure);
+                return;
+            }
+            if (jarFailure instanceof FileSystemException) {
+                sendUndeletedJars(sender, (FileSystemException) jarFailure);
+                return;
+            }
+            if (jarFailure instanceof IOException) {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
+                return;
+            }
+        }
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("识别为该模块的 JAR 文件均已删除。"));
+    }
+
+    /** The undetermined entries a failure carries. */
+    private static List<String> undeterminedOf(Throwable failure) {
+        List<String> files = new ArrayList<>();
+        collectUndetermined(failure, files);
+        return files;
+    }
+
+    /** Collects the undetermined entries a failure carries, wherever in its suppressed chain they sit. */
+    private static void collectUndetermined(Throwable failure, List<String> files) {
+        collectUndetermined(failure, files, Collections.newSetFromMap(new IdentityHashMap<>()));
+    }
+
+    /**
+     * {@link #collectUndetermined(Throwable, List)}, remembering what it has already walked.
+     *
+     * <p>`addSuppressed` refuses a throwable suppressing itself but not a longer loop, and a walk
+     * that meets one never returns. Nothing here builds such a chain today; the uninstall's replies
+     * are not the place to find out that something else did.
+     *
+     * @param failure the failure to walk
+     * @param files   the paths collected so far
+     * @param seen    the throwables already visited, by identity
+     */
+    private static void collectUndetermined(Throwable failure, List<String> files, Set<Throwable> seen) {
+        if (!seen.add(failure)) {
+            return;
+        }
+        if (failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+            files.addAll(((PluginInstallUtils.UndeterminedEntriesException) failure).entries());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            collectUndetermined(suppressed, files, seen);
+        }
+    }
+
+    /**
+     * Names every jar the uninstall could not delete. Each one loads the module again at the next
+     * start, so an instruction that names only the first is one the operator cannot act on (#501).
+     *
+     * <p>When the deletion could not be recorded for the next start either, that is said on a line of
+     * its own, with its reason and no instruction to delete anything: the record failure travels as a
+     * {@link PluginInstallUtils.RemovalNotRecordedException}, not a {@code FileSystemException}, so
+     * the file it names -- a transaction record or temporary file under the server root's
+     * {@code .ultikits} folder -- is never listed among the module JARs to delete.
+     */
+    private static void sendUndeletedJars(CommandSender sender, FileSystemException failure) {
+        List<String> files = new ArrayList<>();
+        collectNamedFiles(failure, files);
+        // The undetermined entries travel on the same failure and are reported separately: they
+        // are not JARs this uninstall failed to delete.
+        files.removeAll(undeterminedOf(failure));
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"),
+                files.isEmpty()
+                        ? modulesFolderPath()
+                        : String.join(", ", files)));
+        PluginInstallUtils.RemovalNotRecordedException notRecorded = notRecordedIn(failure,
+                Collections.newSetFromMap(new IdentityHashMap<>()));
+        if (notRecorded != null) {
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                    "这次删除也未能记录到下次启动（%s），因此下次启动不会删除它们。"), notRecorded.getReason()));
+        }
+    }
+
+    /**
+     * The record failure a failure carries, wherever in its suppressed chain it sits; {@code null}
+     * when there is none. Remembers what it has walked, for the same reason
+     * {@link #collectUndetermined(Throwable, List, Set)} does.
+     *
+     * @param failure the failure to walk
+     * @param seen    the throwables already visited, by identity
+     * @return the carrier, or {@code null}
+     */
+    private static PluginInstallUtils.RemovalNotRecordedException notRecordedIn(Throwable failure,
+                                                                              Set<Throwable> seen) {
+        if (!seen.add(failure)) {
+            return null;
+        }
+        if (failure instanceof PluginInstallUtils.RemovalNotRecordedException) {
+            return (PluginInstallUtils.RemovalNotRecordedException) failure;
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            PluginInstallUtils.RemovalNotRecordedException found = notRecordedIn(suppressed, seen);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Collects the file named by {@code failure} and by every {@code FileSystemException} attached
+     * to it, at any depth -- a file the operator is not told about is one they leave behind. A
+     * record failure is not one of them: it travels as a
+     * {@link PluginInstallUtils.RemovalNotRecordedException}, which this walk skips by type.
+     *
+     * @param failure the failure to walk
+     * @param files   the names collected so far, in the order they were found
+     */
+    private static void collectNamedFiles(FileSystemException failure, List<String> files) {
+        collectNamedFiles(failure, files, Collections.newSetFromMap(new IdentityHashMap<>()));
+    }
+
+    /**
+     * {@link #collectNamedFiles(FileSystemException, List)}, remembering what it has already walked,
+     * for the same reason {@link #collectUndetermined(Throwable, List, Set)} does.
+     *
+     * @param failure the failure to walk
+     * @param files   the paths collected so far
+     * @param seen    the throwables already visited, by identity
+     */
+    private static void collectNamedFiles(FileSystemException failure, List<String> files,
+                                          Set<Throwable> seen) {
+        if (!seen.add(failure) || failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+            return;
+        }
+        if (failure.getFile() != null && !files.contains(failure.getFile())) {
+            files.add(failure.getFile());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed instanceof FileSystemException) {
+                collectNamedFiles((FileSystemException) suppressed, files, seen);
+            }
         }
     }
 
@@ -214,7 +520,9 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
     public void checkUpdates(@CmdSender CommandSender sender) {
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
         if (updateManager == null || !updateManager.hasAnyUpdates()) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            if (!sendIncompleteIfAny(sender, unconfirmed(updateManager))) {
+                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            }
             return;
         }
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("可用更新列表："));
@@ -230,6 +538,38 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
             sender.sendMessage(ChatColor.YELLOW + String.format("  %s %s → %s",
                 info.getPluginName(), info.getCurrentVersion(), info.getLatestVersion()));
         }
+        sendIncompleteIfAny(sender, unconfirmed(updateManager));
+    }
+
+    /**
+     * What the start-up check could not confirm (D19-032), or an empty list when there is no
+     * update manager yet.
+     */
+    private static List<String> unconfirmed(UpdateManager updateManager) {
+        return updateManager == null ? Collections.<String>emptyList() : updateManager.getUnconfirmed();
+    }
+
+    /**
+     * Phase 19 D19-032: when a lookup of the start-up check failed, "No updates available." is not
+     * known to be true for what it could not confirm; this says so instead, naming it, with the same
+     * line the console shows at start-up.
+     *
+     * @return whether a line was sent
+     */
+    private static boolean sendIncompleteIfAny(CommandSender sender, List<String> names) {
+        if (names.isEmpty()) {
+            return false;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+            UltiTools.getInstance().i18n("更新检查未完成：无法确认 %s 的最新版本。"), String.join(", ", names)));
+        return true;
+    }
+
+    /** {@link #unconfirmed(UpdateManager)} without the framework: {@code /upm update all} updates modules only. */
+    private static List<String> unconfirmedModules(UpdateManager updateManager) {
+        List<String> modules = new ArrayList<>(unconfirmed(updateManager));
+        modules.remove(UpdateManager.FRAMEWORK_NAME);
+        return modules;
     }
 
     @CmdMapping(format = "update <plugin>")
@@ -246,38 +586,230 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
         }
         UpdateInfo info = updateManager.getModuleUpdates().get(pluginName);
         if (info == null) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
+            if (updateManager.getUnconfirmed().contains(pluginName)) {
+                sendIncompleteIfAny(sender, Collections.singletonList(pluginName));
+            } else {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
+            }
             return;
         }
         sender.sendMessage(ChatColor.YELLOW + String.format(
             UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
-        if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("更新成功！请重启服务器以应用更新。"));
-        } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+        sendStageResult(sender, pluginName, PluginInstallUtils.stageUpdate(info.getIdentifyString()));
+    }
+
+    /**
+     * Tells the operator what staging an update did (#505): staged to take effect at the next start
+     * -- never "updated", which is decided only by what that start observes -- or why nothing was
+     * staged.
+     *
+     * @param sender     who asked
+     * @param pluginName the module, as the operator named it
+     * @param result     what staging did
+     * @return whether the update was staged
+     */
+    private static boolean sendStageResult(CommandSender sender, String pluginName,
+                                           ModuleFileTransactions.StageResult result) {
+        if (result.getPreviousFailure() != null) {
+            // A start could not apply the previous update of this module; the operator hears about
+            // it here as well as in that start's log, before anything else.
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                    "上一次 %s 的更新没有应用：%s"), pluginName, result.getPreviousFailure()));
         }
+        switch (result.getOutcome()) {
+            case STAGED:
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n(
+                        "已暂存 %s 的更新（%s → %s）。更新将在下次启动时生效：只有新版本确实加载后才会保留，否则恢复为 %s。"),
+                        pluginName, result.getOldVersion(), result.getNewVersion(), result.getOldVersion()));
+                return true;
+            case ALREADY_STAGED:
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                        "%s 已有一个暂存的更新（版本 %s），将在下次启动时生效；没有做任何改动。"),
+                        pluginName, result.getNewVersion()));
+                return false;
+            case BUSY:
+                if (result.getNewVersion() == null) {
+                    // Another /upm command is downloading an update of this module right now.
+                    sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                            "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。"), pluginName));
+                } else {
+                    sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                            "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。"),
+                            pluginName, result.getNewVersion()));
+                }
+                return false;
+            default:
+                break;
+        }
+        String reason = String.format(UltiTools.getInstance().i18n(result.getReasonKey()), result.getReasonArgs());
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                "%s 的更新未能暂存：%s。没有做任何改动。"), pluginName, reason));
+        return false;
     }
 
     private void updateAllPlugins(CommandSender sender) {
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
         if (updateManager == null || updateManager.getModuleUpdates().isEmpty()) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            if (!sendIncompleteIfAny(sender, unconfirmedModules(updateManager))) {
+                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            }
             return;
         }
-        int success = 0;
-        int failed = 0;
+        int staged = 0;
+        int notStaged = 0;
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
             sender.sendMessage(ChatColor.YELLOW + String.format(
                 UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
-            if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-                success++;
+            if (sendStageResult(sender, info.getPluginName(), PluginInstallUtils.stageUpdate(info.getIdentifyString()))) {
+                staged++;
             } else {
-                failed++;
+                notStaged++;
             }
         }
         sender.sendMessage(ChatColor.GREEN + String.format(
-            UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请重启服务器。"),
-            success, failed));
+            UltiTools.getInstance().i18n("全部处理完成：%d 个已暂存，%d 个未能暂存。已暂存的更新将在下次启动时生效。"),
+            staged, notStaged));
+        sendIncompleteIfAny(sender, unconfirmedModules(updateManager));
+    }
+
+    /**
+     * Decides whether {@code installedPlugin} (a currently loaded module) and {@code
+     * catalogueEntry} (a directory entry from the UltiCloud catalogue) refer to the SAME module
+     * (#439). The prior check compared {@code installedPlugin.getPluginName()} (the module's
+     * Bukkit {@code plugin.yml} {@code name:}) against {@code catalogueEntry.getName()} (the
+     * catalogue's own display name) with plain string equality -- correct only when the two
+     * strings genuinely agree, which they do not for every module.
+     * <p>
+     * <b>Preferred key, but inert today: {@code identifyString}.</b> This is the field {@link
+     * PluginInstallUtils} and {@link com.ultikits.ultitools.manager.UpdateManager} already treat
+     * as this framework's stable module identity for install/update/version lookups, and the one
+     * field {@link PluginEntity} and {@link UltiToolsPlugin} both carry under the same name.
+     * Compared only when BOTH sides carry a non-blank value -- two identify-string-less entries
+     * are never treated as a match on that basis alone, or every such module would appear
+     * installed against every such catalogue entry, which is worse than the bug being fixed.
+     * <b>Measured as of 6.3.0 (WR-01, `16-REVIEW-command.md`): zero of the seventeen module
+     * directories under {@code Modules/} declare {@code identify-string:} in {@code plugin.yml}</b>
+     * (verified: {@code grep -rl "identify-string:" Modules/*&#47;src/main/resources/plugin.yml}
+     * returns nothing), so {@code installedPlugin.getIdentifyString()} is {@code null} for every
+     * module that exists today, including both modules #439 names, and this branch does not fire
+     * for any of them. It exists so a module that DOES declare one -- and any future migration
+     * toward {@code identify-string:}-based identity -- is matched correctly without this method
+     * needing to change again; today it is aspirational, not load-bearing.
+     * <p>
+     * <b>What actually fires today: exact name equality, plus one fixed, deterministic prefix
+     * strip.</b> Measured (WR-01): only 4 of the 15 active modules declare a Bukkit {@code
+     * name:} carrying the literal {@code "UltiTools-"} prefix -- {@code UltiTools-Chat}
+     * ({@code Modules/UltiChat/src/main/resources/plugin.yml:1}), {@code UltiTools-Economy}
+     * ({@code Modules/UltiEconomy/.../plugin.yml:1}), {@code UltiTools-Kits}
+     * ({@code Modules/UltiKits/.../plugin.yml:1}), and {@code UltiTools-Menu}
+     * ({@code Modules/UltiMenu/.../plugin.yml:1}) -- the last two ARE #439's own two named
+     * modules. The other 11 modules declare their bare folder name with no prefix at all (e.g.
+     * {@code UltiLogin}, {@code UltiWorlds}). This is NOT a declared or tool-enforced convention: {@code
+     * Tooling/ultikits-cli/src/lib/templates.ts:152} templates {@code name:} directly from the
+     * author-supplied module name with no prefix logic, and {@code
+     * Tooling/UltiTools-Maven-Archetype} ships no {@code plugin.yml} template at all -- it is
+     * simply each of these 4 authors' own historical choice. Stripping that one fixed prefix
+     * before comparing is a single deterministic transform, not a similarity/fuzzy heuristic: it
+     * accepts precisely the pairs that differ by nothing, or by exactly that one literal prefix,
+     * and rejects every other pair -- including one that merely shares a prefix or substring (a
+     * catalogue name that only resembles a loaded module's, such as one ending in {@code "Pro"},
+     * is rejected, not matched).
+     * <p>
+     * <b>Two present identifiers are authoritative, even on a mismatch (gate-2 Codex round 1).</b>
+     * When BOTH sides carry a non-blank {@code identifyString}, that comparison alone decides the
+     * outcome -- a match returns {@code true} immediately, and a MISMATCH returns {@code false}
+     * immediately, without ever falling through to the name/prefix heuristic below. Two present,
+     * different stable identifiers prove the modules are different; the name heuristic must not
+     * override that proof (a loaded {@code UltiTools-Foo} with id {@code author-a.foo} must not be
+     * reported as the catalogue's unrelated {@code Foo} with id {@code author-b.foo}, even though
+     * the name/prefix rule alone would match them). The comparison is normalised (trimmed,
+     * lower-cased) via the same convention {@code PluginInstallUtils}'s own (private) {@code
+     * normalizeIdentifyString} already applies before every install/update/lookup comparison
+     * elsewhere in this package, so a module and a catalogue entry that agree except for case are
+     * still recognised as the same.
+     * <p>
+     * <b>Residual collision risk (WR-01), disclosed rather than papered over:</b> the risk above
+     * is closed whenever BOTH sides carry an identifier. It remains open only when at least one
+     * side's {@code identifyString} is blank -- true for every module today (0/17) -- in which
+     * case a THIRD-PARTY module that names itself {@code UltiTools-Foo} in its own {@code
+     * plugin.yml} would still be reported installed against a different, unrelated author's
+     * unaffiliated catalogue entry literally named {@code Foo}, since neither {@code
+     * UltiToolsPlugin} nor {@code PluginEntity} exposes anything else (a developer/author ID) this
+     * method could cross-check in that case. Still strictly better than the defect being fixed:
+     * today, EVERY module whose name doesn't already match its catalogue display name
+     * byte-for-byte is unconditionally reported not installed, a guaranteed false negative for
+     * real, correctly-loaded modules. Closing the remaining gap needs a stable identifier
+     * populated on both sides (#474), not a looser name heuristic.
+     *
+     * @param installedPlugin a currently loaded module
+     * @param catalogueEntry  a directory entry from the catalogue
+     * @return {@code true} iff the two are judged to refer to the same module
+     */
+    static boolean isSameModule(UltiToolsPlugin installedPlugin, PluginEntity catalogueEntry) {
+        String moduleIdentify = normalizeIdentifyString(installedPlugin.getIdentifyString());
+        String catalogueIdentify = normalizeIdentifyString(catalogueEntry.getIdentifyString());
+        if (moduleIdentify != null && catalogueIdentify != null) {
+            // Both sides carry a stable identifier -- AUTHORITATIVE. Never fall through to the
+            // name/prefix heuristic below, even when the two identifiers disagree (gate-2 Codex
+            // round 1): a present mismatch proves these are different modules.
+            return moduleIdentify.equals(catalogueIdentify);
+        }
+
+        String runtimeName = installedPlugin.getPluginName();
+        String catalogueName = catalogueEntry.getName();
+        if (runtimeName == null || catalogueName == null) {
+            return false;
+        }
+        if (runtimeName.equals(catalogueName)) {
+            return true;
+        }
+        return stripVendorPrefix(runtimeName).equals(catalogueName);
+    }
+
+    /**
+     * Resolves the runtime name to use for the {@code /upm uninstall} click command in {@link
+     * #listPlugins(CommandSender, String)}'s player branch: the LOADED module's own {@code
+     * getPluginName()}, not the catalogue entry's display name (gate-2 Codex round 1). {@link
+     * PluginInstallUtils#uninstallPlugin} matches only against the runtime name -- for exactly
+     * the display-name-mismatch case {@link #isSameModule} exists to recognise as installed,
+     * using the catalogue's display name here would build an uninstall command that silently
+     * fails (no unregister, no file delete, a generic failure message).
+     *
+     * @param installedPlugins every currently-loaded module
+     * @param catalogueEntry   the catalogue entry being rendered
+     * @return the matched module's own runtime name, or {@code null} if none matches
+     */
+    static String resolveInstalledRuntimeName(List<UltiToolsPlugin> installedPlugins, PluginEntity catalogueEntry) {
+        for (UltiToolsPlugin installedPlugin : installedPlugins) {
+            if (isSameModule(installedPlugin, catalogueEntry)) {
+                return installedPlugin.getPluginName();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Trims and lower-cases an identify string, the same normalisation {@code
+     * PluginInstallUtils}'s own (private) {@code normalizeIdentifyString} applies before every
+     * install/update/lookup comparison elsewhere in this package (gate-2 Codex round 1) -- kept as
+     * a small local copy rather than widening that method's visibility, since the transform
+     * itself is a one-line, well-established convention, not shared mutable state.
+     *
+     * @param value the raw identify string, possibly {@code null} or blank
+     * @return the normalised value, or {@code null} if the input was {@code null} or blank
+     */
+    private static String normalizeIdentifyString(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private static String stripVendorPrefix(String runtimeName) {
+        return runtimeName.startsWith(VENDOR_PREFIX)
+                ? runtimeName.substring(VENDOR_PREFIX.length())
+                : runtimeName;
     }
 
     @Override

@@ -5,17 +5,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -27,9 +33,12 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.config.Range;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 
@@ -165,6 +174,221 @@ class ConfigManagerTest {
             // Assert
             AbstractConfigEntity result = configManager.getConfigEntity(mockPlugin, EmptyPathConfigEntity.class);
             assertThat(result).isNull();
+        }
+    }
+
+    /**
+     * D-03: the two-step constructor fallback {@code registerAll} already had - {@code (String)}
+     * first, then no-arg - stays exactly as-is. Only the silent {@code ignored} catch that used to
+     * follow it changes: a class matching neither idiom is now refused by name instead of vanishing.
+     */
+    @Nested
+    @DisplayName("registerAll(plugin, packageName, classLoader) 测试")
+    class RegisterAllTests {
+
+        @BeforeEach
+        void stubConfigFile() {
+            ConfigFileStubs.stubConfigFolder(mockPlugin, tempDir);
+        }
+
+        @Test
+        @DisplayName("既无 (String) 也无无参构造函数的类应按名字被拒绝 (D-03)")
+        void shouldThrowNamingClassWhenNeitherConstructorResolves() {
+            assertThatThrownBy(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configunconstructable", getClass().getClassLoader()))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining(
+                            "com.ultikits.testfixtures.configunconstructable.UnconstructableConfigEntity");
+        }
+
+        @Test
+        @DisplayName("只有无参构造函数的写法仍然能成功注册 (D-03 不破坏受支持写法)")
+        void shouldRegisterNoArgOnlyConfigEntity() {
+            assertDoesNotThrow(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.confignoarg", getClass().getClassLoader()));
+
+            Map<String, AbstractConfigEntity> configs = configManager.getAllConfigEntities(mockPlugin);
+            assertThat(configs).isNotNull().containsKey("config/noarg.yml");
+        }
+
+        @Test
+        @DisplayName("空包应该正常返回")
+        void shouldReturnNormallyForEmptyPackage() {
+            assertDoesNotThrow(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configempty", getClass().getClassLoader()));
+        }
+    }
+
+    /**
+     * #358 Part 1: a refused module's second {@code @ConfigEntity} class must not leave an
+     * earlier, already-registered sibling stranded in {@code pluginConfigMap}. Fixtures live
+     * under {@code com.ultikits.testfixtures.configstranded} - see that package's javadoc.
+     */
+    @Nested
+    @DisplayName("多个 @ConfigEntity 类中一个校验失败时的注册表清理 (#358 Part 1)")
+    class StrandedEntityTests {
+
+        @BeforeEach
+        void stubConfigFile() {
+            ConfigFileStubs.stubConfigFolder(mockPlugin, tempDir);
+        }
+
+        @Test
+        @DisplayName("两个都合法的类应该都注册成功")
+        void bothValidClassesRegisterBoth() {
+            assertDoesNotThrow(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configstranded.ok", getClass().getClassLoader()));
+
+            Map<String, AbstractConfigEntity> configs = configManager.getAllConfigEntities(mockPlugin);
+            assertThat(configs).isNotNull()
+                    .containsOnlyKeys("config/stranded-first.yml", "config/stranded-second.yml");
+        }
+
+        @Test
+        @DisplayName("唯一一个校验失败的类不应该留下任何条目，也不应该写文件")
+        void soleFailingClassLeavesNoEntryAndNoWrite() throws Exception {
+            File badFile = new File(tempDir, "config/stranded-bad.yml");
+            Files.createDirectories(badFile.getParentFile().toPath());
+            Files.write(badFile.toPath(), "count: 999\n".getBytes(StandardCharsets.UTF_8));
+            byte[] beforeBytes = Files.readAllBytes(badFile.toPath());
+
+            assertThatThrownBy(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configstranded.bad", getClass().getClassLoader()))
+                    .isInstanceOf(ConfigurationException.class);
+
+            Map<String, AbstractConfigEntity> configs = configManager.getAllConfigEntities(mockPlugin);
+            assertThat(configs == null || configs.isEmpty())
+                    .as("the single failing class must leave no entry")
+                    .isTrue();
+            assertThat(Files.readAllBytes(badFile.toPath()))
+                    .as("validation must not write the operator's file")
+                    .isEqualTo(beforeBytes);
+        }
+
+        @Test
+        @DisplayName("一个模块里第二个类校验失败时，先注册成功的类不应该遗留在注册表里")
+        void secondFailingClassStrandsNoEarlierEntry() throws Exception {
+            File badFile = new File(tempDir, "config/stranded-bad.yml");
+            Files.createDirectories(badFile.getParentFile().toPath());
+            Files.write(badFile.toPath(), "count: 999\n".getBytes(StandardCharsets.UTF_8));
+
+            assertThatThrownBy(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configstranded", getClass().getClassLoader()))
+                    .isInstanceOf(ConfigurationException.class);
+
+            Map<String, AbstractConfigEntity> configs = configManager.getAllConfigEntities(mockPlugin);
+            assertThat(configs == null || configs.isEmpty())
+                    .as("no entry from any class in this scan should survive a refusal, "
+                            + "regardless of which class failed or scan order")
+                    .isTrue();
+        }
+    }
+
+    /**
+     * 测试用配置实体 - 参与批次原子性测试的第一个文件，字段没有约束，始终能通过校验。
+     */
+    @ConfigEntity("config/batch-ok.yml")
+    public static class BatchConfigEntityA extends AbstractConfigEntity {
+        @ConfigEntry(path = "value", comment = "A value with no constraint")
+        private String value = "default";
+
+        public BatchConfigEntityA(String configFilePath) {
+            super(configFilePath);
+        }
+
+        public String getValue() {
+            return value;
+        }
+    }
+
+    /**
+     * 测试用配置实体 - 参与批次原子性测试的第二个文件，字段约束在 [1, 10]，用来在批次里
+     * 制造一次必然的拒绝。
+     */
+    @ConfigEntity("config/batch-bad.yml")
+    public static class BatchConfigEntityB extends AbstractConfigEntity {
+        @ConfigEntry(path = "count", comment = "A count constrained to [1, 10]")
+        @Range(min = 1, max = 10)
+        private int count = 5;
+
+        public BatchConfigEntityB(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /**
+     * gate-1 CR-02 (#358 Part 2): {@code loadFromJson(String)}'s multi-file batch must validate
+     * every touched entity before persisting any of them.
+     */
+    @Nested
+    @DisplayName("loadFromJson(全量) 批次原子性测试 (gate-1 CR-02, #358 Part 2)")
+    class LoadFromJsonBatchAtomicityTests {
+
+        @BeforeEach
+        void stubConfigFile() {
+            ConfigFileStubs.stubConfigFolder(mockPlugin, tempDir);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap() throws Exception {
+            Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
+            mapField.setAccessible(true);
+            return (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
+        }
+
+        @Test
+        @DisplayName("批次里第二个文件的更新违反约束时，第一个文件不应该被写入磁盘或改变内存值")
+        void secondFileRefusalLeavesFirstFileUntouched() throws Exception {
+            BatchConfigEntityA entityA = new BatchConfigEntityA("config/batch-ok.yml");
+            entityA.init(mockPlugin);
+            BatchConfigEntityB entityB = new BatchConfigEntityB("config/batch-bad.yml");
+            entityB.init(mockPlugin);
+
+            Map<String, AbstractConfigEntity> configMap = new HashMap<>();
+            configMap.put("config/batch-ok.yml", entityA);
+            configMap.put("config/batch-bad.yml", entityB);
+            pluginConfigMap().put(mockPlugin, configMap);
+
+            File fileA = new File(tempDir, "config/batch-ok.yml");
+            byte[] beforeBytes = Files.readAllBytes(fileA.toPath());
+
+            // configEntityMap.keySet() (a plain HashMap) iterates in an unspecified order, so
+            // this batch does not rely on which file is scanned first - the point of the fix is
+            // that NEITHER file is persisted until BOTH have validated, so order cannot matter.
+            String json = "{\"TestPlugin\":{\"config/batch-ok.yml\":{\"value\":\"updated\"},"
+                    + "\"config/batch-bad.yml\":{\"count\":999}}}";
+
+            assertThatThrownBy(() -> configManager.loadFromJson(json))
+                    .isInstanceOf(ConfigurationException.class);
+
+            assertThat(Files.readAllBytes(fileA.toPath()))
+                    .as("entity A's file must be byte-identical - the batch must not persist ANY "
+                            + "entity until every entity in it has validated")
+                    .isEqualTo(beforeBytes);
+            assertThat(entityA.getValue())
+                    .as("entity A's in-memory field must also be unchanged, not just its file")
+                    .isEqualTo("default");
+        }
+
+        @Test
+        @DisplayName("批次里所有文件都合法时，两个都应该被应用并写入磁盘")
+        void bothFilesValidAppliesBoth() throws Exception {
+            BatchConfigEntityA entityA = new BatchConfigEntityA("config/batch-ok.yml");
+            entityA.init(mockPlugin);
+            BatchConfigEntityB entityB = new BatchConfigEntityB("config/batch-bad.yml");
+            entityB.init(mockPlugin);
+
+            Map<String, AbstractConfigEntity> configMap = new HashMap<>();
+            configMap.put("config/batch-ok.yml", entityA);
+            configMap.put("config/batch-bad.yml", entityB);
+            pluginConfigMap().put(mockPlugin, configMap);
+
+            String json = "{\"TestPlugin\":{\"config/batch-ok.yml\":{\"value\":\"updated\"},"
+                    + "\"config/batch-bad.yml\":{\"count\":7}}}";
+
+            assertDoesNotThrow(() -> configManager.loadFromJson(json));
+
+            assertThat(entityA.getValue()).isEqualTo("updated");
         }
     }
 
@@ -389,18 +613,24 @@ class ConfigManagerTest {
             }
         }
 
+        // GATE-06 (issue #345): the previous body caught NullPointerException with an empty block
+        // and no assertion, so it passed identically whether register(null, config) threw or
+        // silently accepted the null plugin -- it could not tell "rejected as expected" from
+        // "silently accepted", exactly the failure this issue named. TestConfigEntity carries a
+        // non-empty @ConfigEntity value (see its declaration above), so register() always reaches
+        // ultiToolsPlugin.getResourceFolderPath() (ConfigManager.java:44) before doing anything
+        // else -- a null plugin throws NullPointerException deterministically on this path, so the
+        // exception is asserted directly rather than merely tolerated.
         @Test
         @DisplayName("null 插件不应该崩溃")
-        void nullPluginShouldNotCrash() throws IOException {
+        void nullPluginShouldNotCrash() {
             // Arrange
             TestConfigEntity config = new TestConfigEntity("test.yml");
 
             // Act & Assert
-            try {
-                configManager.register(null, config);
-            } catch (NullPointerException e) {
-                // 预期的异常
-            }
+            assertThatThrownBy(() -> configManager.register(null, config))
+                    .as("registering with a null plugin must fail fast with NPE, not silently accept it")
+                    .isInstanceOf(NullPointerException.class);
         }
     }
 
@@ -549,8 +779,8 @@ class ConfigManagerTest {
     class ReloadConfigsDetailedTests {
 
         @Test
-        @DisplayName("应该为所有配置调用 init")
-        void shouldCallInitForAllConfigs() throws Exception {
+        @DisplayName("Reload every registered config without reinitializing it")
+        void shouldReloadAllRegisteredConfigsWithoutInit() throws Exception {
             // Arrange
             Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
             mapField.setAccessible(true);
@@ -572,9 +802,11 @@ class ConfigManagerTest {
             // Act
             configManager.reloadConfigs(mockPlugin);
 
-            // Assert - 验证 init 被调用
-            verify(mockConfig1).init(mockPlugin);
-            verify(mockConfig2).init(mockPlugin);
+            // Plan 17-58: normal reload uses the entity's missing-key/no-write contract, not init.
+            verify(mockConfig1).reload();
+            verify(mockConfig2).reload();
+            verify(mockConfig1, never()).init(mockPlugin);
+            verify(mockConfig2, never()).init(mockPlugin);
             assertThat(configMap).as("Config map should contain both configs").hasSize(2);
         }
     }
@@ -584,8 +816,8 @@ class ConfigManagerTest {
     class SaveAllDetailedTests {
 
         @Test
-        @DisplayName("应该为所有非目录配置调用 save")
-        void shouldCallSaveForAllNonDirectoryConfigs() throws Exception {
+        @DisplayName("A changed config is named at stop and never saved (17-65)")
+        void shouldNameAndNeverSaveAChangedConfig() throws Exception {
             // Arrange
             Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
             mapField.setAccessible(true);
@@ -595,7 +827,11 @@ class ConfigManagerTest {
 
             // 创建 mock 配置
             AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
-            when(mockConfig.getConfigFilePath()).thenReturn(new File(tempDir, "test.yml").getAbsolutePath());
+            when(mockConfig.getConfigFilePath()).thenReturn("test.yml");
+            when(mockConfig.getUltiToolsPlugin()).thenReturn(mockPlugin);
+            // #510 and 17-65: only an entity changed since its snapshot is named; none is written.
+            when(mockConfig.isModifiedSinceSnapshot()).thenReturn(true);
+            when(mockConfig.unsavedEntryPaths()).thenReturn(java.util.Collections.singletonList("testValue"));
 
             Map<String, AbstractConfigEntity> configMap = new HashMap<>();
             configMap.put("test.yml", mockConfig);
@@ -605,12 +841,36 @@ class ConfigManagerTest {
             configManager.saveAll();
 
             // Assert
-            verify(mockConfig).save();
+            verify(mockConfig, never()).save();
+            verify(mockLogger).log(eq(Level.WARNING), org.mockito.ArgumentMatchers.contains("'testValue'"));
         }
 
         @Test
-        @DisplayName("目录配置应该被跳过")
-        void directoryShouldBeSkipped() throws Exception {
+        @DisplayName("An entity unchanged since its snapshot is not saved (#510)")
+        void unchangedConfigShouldNotBeSaved() throws Exception {
+            Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
+            mapField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap =
+                (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
+
+            AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
+            when(mockConfig.getConfigFilePath()).thenReturn("config/test.yml");
+            when(mockConfig.isModifiedSinceSnapshot()).thenReturn(false);
+
+            Map<String, AbstractConfigEntity> configMap = new HashMap<>();
+            configMap.put("config/test.yml", mockConfig);
+            pluginConfigMap.put(mockPlugin, configMap);
+
+            configManager.saveAll();
+
+            verify(mockConfig).isModifiedSinceSnapshot();
+            verify(mockConfig, never()).save();
+        }
+
+        @Test
+        @DisplayName("A changed entity whose path is a directory is named at stop, never saved (#510, 17-65)")
+        void directoryPathIsNamedAndNeverSaved() throws Exception {
             // Arrange
             Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
             mapField.setAccessible(true);
@@ -623,7 +883,12 @@ class ConfigManagerTest {
             configDir.mkdirs();
 
             AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
-            when(mockConfig.getConfigFilePath()).thenReturn(configDir.getAbsolutePath());
+            // Module-relative, as registered: resolved against the plugin's config folder (#510).
+            when(mockConfig.getConfigFilePath()).thenReturn("configdir");
+            when(mockConfig.getUltiToolsPlugin()).thenReturn(mockPlugin);
+            // Changed in memory; the stop report has no directory check and writes nothing (#510, 17-65).
+            when(mockConfig.isModifiedSinceSnapshot()).thenReturn(true);
+            doThrow(new IOException("Is a directory")).when(mockConfig).save();
 
             Map<String, AbstractConfigEntity> configMap = new HashMap<>();
             configMap.put("configdir", mockConfig);
@@ -632,9 +897,40 @@ class ConfigManagerTest {
             // Act
             configManager.saveAll();
 
-            // Assert - save 不应该被调用，因为是目录
-            org.mockito.Mockito.verify(mockConfig, org.mockito.Mockito.never()).save();
+            verify(mockConfig, never()).save();
+            verify(mockLogger).log(eq(Level.WARNING), org.mockito.ArgumentMatchers.contains("never saved"));
             assertThat(configDir.isDirectory()).as("Config dir should exist").isTrue();
+        }
+
+        @Test
+        @DisplayName("An unchecked exception from one entity is logged and does not stop the others being named (#510, 17-65)")
+        void runtimeExceptionFromOneEntityDoesNotAbortTheRest() throws Exception {
+            Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
+            mapField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap =
+                (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
+
+            AbstractConfigEntity failing = mock(AbstractConfigEntity.class);
+            when(failing.getConfigFilePath()).thenReturn("config/failing.yml");
+            when(failing.isModifiedSinceSnapshot()).thenThrow(new IllegalStateException("parser blew up"));
+            AbstractConfigEntity healthy = mock(AbstractConfigEntity.class);
+            when(healthy.getConfigFilePath()).thenReturn("config/healthy.yml");
+            when(healthy.getUltiToolsPlugin()).thenReturn(mockPlugin);
+            when(healthy.isModifiedSinceSnapshot()).thenReturn(true);
+
+            Map<String, AbstractConfigEntity> configMap = new java.util.LinkedHashMap<>();
+            configMap.put("config/failing.yml", failing);
+            configMap.put("config/healthy.yml", healthy);
+            pluginConfigMap.put(mockPlugin, configMap);
+
+            configManager.saveAll();
+
+            verify(healthy, never()).save();
+            verify(mockLogger).log(eq(Level.WARNING), org.mockito.ArgumentMatchers.contains("healthy.yml"));
+            verify(mockLogger).log(eq(Level.WARNING),
+                eq("Cannot report unsaved configuration changes: config/failing.yml"),
+                any(IllegalStateException.class));
         }
     }
 
@@ -725,7 +1021,8 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - verify is an assertion
-            org.mockito.Mockito.verify(mockConfig).updateProperties(any(com.google.gson.JsonObject.class));
+            verify(mockConfig).preparePanelWrite(any(com.google.gson.JsonObject.class));
+            verify(mockConfig, never()).updateProperties(any(com.google.gson.JsonObject.class));
             assertThat(json).as("JSON should be valid").isNotEmpty();
         }
 
@@ -751,7 +1048,8 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - updateProperties 不应该被调用
-            org.mockito.Mockito.verify(mockConfig, org.mockito.Mockito.never()).updateProperties(any(com.google.gson.JsonObject.class));
+            verify(mockConfig, never()).preparePanelWrite(any(com.google.gson.JsonObject.class));
+            verify(mockConfig, never()).updateProperties(any(com.google.gson.JsonObject.class));
             assertThat(json).as("JSON should contain non-matching path").contains("other.yml");
         }
     }
@@ -922,7 +1220,7 @@ class ConfigManagerTest {
             assertThatThrownBy(() -> configManager.loadFromJson("config/lang.yml", "not json"))
                     .isInstanceOf(IOException.class);
 
-            verify(entity, org.mockito.Mockito.never()).updateProperties(any());
+            verify(entity, never()).updateProperties(any());
         }
     }
 }

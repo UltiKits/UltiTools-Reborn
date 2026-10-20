@@ -1,0 +1,559 @@
+package com.ultikits.ultitools.buildtools.deprecation;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import java.io.IOException;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Build-time entry point (bound to the {@code verify} phase, after japicmp - see {@code pom.xml})
+ * that regenerates {@code compatibility/deprecations.json} and {@code compatibility/DEPRECATIONS.md}
+ * from source plus the japicmp report (D-08, D-17, D-22), then runs three independent checks over
+ * the merged registry: {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) over the pom's own
+ * {@code <exclude>} list, the japicmp report, and the merged registry; {@link ReleaseBoundaryInvariant}
+ * (Phase 21 D-12) over the project version, the japicmp baseline version, and the same exclude list; and
+ * {@link RemovalDeadlineEvaluator} (D-07) over the project version, the merged registry, and the
+ * fresh source scan's key set.
+ *
+ * <p>Reads the prior ledger (if any), scans {@code src/main/java} with
+ * {@link JavadocDeprecationScanner}, reads {@code target/japicmp/japicmp.xml} for the set of keys
+ * japicmp reports {@code changeStatus="REMOVED"}, merges via {@link RegistryLedger#merge}, writes
+ * both output files, then evaluates all three checks above. A merge disagreement
+ * ({@link LedgerMergeConflictException}) fails immediately; otherwise every violation from all
+ * three checks is collected and reported in a single {@link IllegalStateException} - a build that
+ * fails three times in a row for three related reasons is worse feedback than one failure listing
+ * all of them. The ledger is written before this final check, so a failing build still leaves a
+ * current {@code compatibility/deprecations.json} for the reader to inspect.
+ */
+public final class DeprecationRegistryGenerator {
+
+    private static final Path SRC_ROOT = Paths.get("src/main/java");
+    private static final Path JAPICMP_REPORT = Paths.get("target/japicmp/japicmp.xml");
+    private static final Path POM_XML = Paths.get("pom.xml");
+    private static final Path LEDGER_JSON = Paths.get("compatibility/deprecations.json");
+    private static final Path LEDGER_MARKDOWN = Paths.get("compatibility/DEPRECATIONS.md");
+    private static final Pattern MEMBER_KEY = Pattern.compile("^(.+)#([^(]+)\\((.*)\\)$");
+
+    private DeprecationRegistryGenerator() {
+    }
+
+    public static void main(String[] args) {
+        try {
+            run(resolveBaseDir(args));
+        } catch (LedgerMergeConflictException e) {
+            System.err.println(e.getMessage());
+            System.exit(1);
+        } catch (Exception e) {
+            System.err.println("DeprecationRegistryGenerator failed: " + e.getMessage());
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Resolves the base directory every relative path in this generator is read/written against.
+     * exec-maven-plugin's {@code java} goal runs in-process, in the Maven JVM's own working
+     * directory - NOT {@code ${project.basedir}} (#461). An invocation launched as {@code mvn -f
+     * &lt;worktree&gt;/pom.xml} from a different shell cwd therefore reads/writes the WRONG tree
+     * silently: the primary checkout's sources and pom, and a japicmp report that does not exist
+     * there, producing 15 false {@code STALE_EXCLUSION} findings that look like a real compatibility
+     * problem. The pom's {@code generate-deprecation-registry} execution passes {@code
+     * ${project.basedir}} as {@code args[0]}; a caller with no argument falls back to the JVM's
+     * actual working directory, preserving prior behaviour for that case (and for every existing
+     * test, which calls the package-private readers below directly, never through {@code main}).
+     */
+    static Path resolveBaseDir(String[] args) {
+        if (args != null && args.length > 0 && args[0] != null && !args[0].trim().isEmpty()) {
+            return Paths.get(args[0]);
+        }
+        return Paths.get("").toAbsolutePath();
+    }
+
+    /**
+     * Package-private (not {@code private}) so a test can exercise the full write-side pipeline -
+     * {@link #loadPriorLedger}, {@link JavadocDeprecationScanner#scan}, {@link #readJapicmpReport},
+     * and both {@link Files#write} calls - directly against an isolated {@code baseDir}, without
+     * going through {@link #main(String[])}'s {@code System.exit} on failure (WR-01). Do not narrow
+     * this back to {@code private}.
+     */
+    static void run(Path baseDir) throws IOException, ReflectiveOperationException {
+        // Read the pom FIRST (#377, WR-05, 16-REVIEW-cloud.md): the current project version is now
+        // an input to the merge itself, not just to the checks that run after it. Resolved against
+        // baseDir (#461) so this agrees with every other path this generator reads or writes.
+        Document pomDocument = readPomDocument(baseDir);
+        String currentVersion = stripSnapshotSuffix(readProjectVersion(pomDocument));
+
+        Path ledgerJson = baseDir.resolve(LEDGER_JSON);
+        Path ledgerMarkdown = baseDir.resolve(LEDGER_MARKDOWN);
+        RegistryLedger prior = loadPriorLedger(ledgerJson);
+
+        JavadocDeprecationScanner scanner = new JavadocDeprecationScanner(
+                Thread.currentThread().getContextClassLoader());
+        List<DeprecationEntry> freshScan = scanner.scan(baseDir.resolve(SRC_ROOT));
+
+        JapicmpReportReader.Report report = readJapicmpReport(baseDir.resolve(JAPICMP_REPORT));
+        Set<RegistryKey> japicmpRemoved = removedKeys(report);
+        japicmpRemoved.addAll(impliedRemovedByPrivateVisibility(prior, freshScan, report));
+
+        // Codex P2, PR #480: pass the report's own emptiness through explicitly so the merge
+        // can tell "japicmp ran and stayed silent on this key" (a real D-22 disagreement) apart
+        // from "japicmp did not run at all" (an infrastructure state the REPORT_MISSING_OR_EMPTY
+        // finding below already exists to explain, not a merge conflict).
+        RegistryLedger merged = RegistryLedger.merge(
+                prior, freshScan, japicmpRemoved, currentVersion, report.entries().isEmpty());
+
+        Files.createDirectories(ledgerJson.getParent());
+        Files.write(ledgerJson, merged.toJson().getBytes(StandardCharsets.UTF_8));
+        Files.write(ledgerMarkdown, merged.toMarkdown().getBytes(StandardCharsets.UTF_8));
+
+        System.out.println("DeprecationRegistryGenerator: wrote " + merged.size() + " entries to "
+                + ledgerJson + " and " + ledgerMarkdown);
+
+        List<String> violations = new ArrayList<>();
+        violations.addAll(collectRemovalConsistencyViolations(pomDocument, report, merged));
+        violations.addAll(collectReleaseBoundaryViolations(pomDocument));
+        violations.addAll(collectRemovalDeadlineViolations(pomDocument, merged, freshScan));
+        failOnViolations(violations);
+    }
+
+    /**
+     * Strips a trailing {@code -SNAPSHOT} (case-insensitive), if present, so a newly-{@code REMOVED}
+     * entry's {@code removedIn} reads {@code "6.3.0"} rather than {@code "6.3.0-SNAPSHOT"} --
+     * matching the convention every pre-existing removed entry's hand-written {@code @removeIn}
+     * javadoc tag already used (WR-05, 16-REVIEW-cloud.md).
+     *
+     * @param version {@code ${project.version}} as read from {@code pom.xml}, or {@code null}
+     * @return {@code version} with any trailing {@code -SNAPSHOT} removed, or {@code null} unchanged
+     */
+    private static String stripSnapshotSuffix(String version) {
+        if (version == null) {
+            return null;
+        }
+        return version.replaceFirst("(?i)-SNAPSHOT$", "");
+    }
+
+    /**
+     * Runs {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) and returns one message per
+     * finding - the japicmp {@code <exclude>} staleness check japicmp itself cannot produce (its
+     * {@code ConfigParameters} has no such field). Collected rather than thrown directly, so the
+     * caller can report every violation from every check in a single build failure.
+     */
+    private static List<String> collectRemovalConsistencyViolations(
+            Document pomDocument, JapicmpReportReader.Report report, RegistryLedger merged) {
+        Set<RegistryKey> excludeKeys = readPomExcludeKeys(pomDocument);
+        String baselineVersion = readJapicmpBaselineVersion(pomDocument);
+        List<RemovalConsistencyEvaluator.Finding> findings =
+                RemovalConsistencyEvaluator.evaluate(excludeKeys, report, merged, baselineVersion);
+        List<String> messages = new ArrayList<>();
+        for (RemovalConsistencyEvaluator.Finding finding : findings) {
+            messages.add("[RemovalConsistencyEvaluator] " + finding);
+        }
+        return messages;
+    }
+
+    /**
+     * Runs {@link ReleaseBoundaryInvariant} (Phase 21 D-12) and returns one message per violation -
+     * fires when {@code ${project.version}} carries no {@code -SNAPSHOT} and
+     * {@code japicmp.baseline.version} is not a released version strictly less than the project
+     * version. A populated {@code <excludes>} list is legal at the release boundary; its entries are
+     * held to the removal ledger by {@link #collectRemovalConsistencyViolations}. Dormant on every
+     * {@code -SNAPSHOT} build.
+     */
+    private static List<String> collectReleaseBoundaryViolations(Document pomDocument) {
+        String projectVersion = readProjectVersion(pomDocument);
+        String baselineVersion = readJapicmpBaselineVersion(pomDocument);
+        Set<RegistryKey> excludeKeys = readPomExcludeKeys(pomDocument);
+        List<String> violations = ReleaseBoundaryInvariant.evaluate(projectVersion, baselineVersion, excludeKeys);
+        List<String> messages = new ArrayList<>();
+        for (String violation : violations) {
+            messages.add("[ReleaseBoundaryInvariant] " + violation);
+        }
+        return messages;
+    }
+
+    /**
+     * Runs {@link RemovalDeadlineEvaluator} (D-07) and returns one message per violation - an
+     * {@code ANNOUNCED} registry entry whose {@code removeIn} the project version has reached,
+     * while the member is still present in the fresh {@link JavadocDeprecationScanner} scan. Green
+     * today: no {@code ANNOUNCED} entry carries {@code removeIn 6.3.0}.
+     */
+    private static List<String> collectRemovalDeadlineViolations(
+            Document pomDocument, RegistryLedger merged, List<DeprecationEntry> freshScan) {
+        String projectVersion = readProjectVersion(pomDocument);
+        Set<RegistryKey> presentInSource = freshScanKeys(freshScan);
+        List<String> violations = RemovalDeadlineEvaluator.evaluate(projectVersion, merged, presentInSource);
+        List<String> messages = new ArrayList<>();
+        for (String violation : violations) {
+            messages.add("[RemovalDeadlineEvaluator] " + violation);
+        }
+        return messages;
+    }
+
+    private static Set<RegistryKey> freshScanKeys(List<DeprecationEntry> freshScan) {
+        Set<RegistryKey> keys = new LinkedHashSet<>();
+        for (DeprecationEntry entry : freshScan) {
+            keys.add(entry.getKey());
+        }
+        return keys;
+    }
+
+    /**
+     * Fails the build once, naming every violation from every check - a build that fails three
+     * times in a row for three related reasons is worse feedback than one failure listing all of
+     * them.
+     */
+    private static void failOnViolations(List<String> violations) {
+        if (violations.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder("DeprecationRegistryGenerator found ")
+                .append(violations.size()).append(" violation(s):\n");
+        for (String violation : violations) {
+            sb.append("  - ").append(violation).append('\n');
+        }
+        throw new IllegalStateException(sb.toString());
+    }
+
+    private static RegistryLedger loadPriorLedger(Path ledgerJson) throws IOException {
+        if (!Files.exists(ledgerJson)) {
+            return RegistryLedger.empty();
+        }
+        String json = new String(Files.readAllBytes(ledgerJson), StandardCharsets.UTF_8);
+        if (json.trim().isEmpty()) {
+            return RegistryLedger.empty();
+        }
+        JsonArray array = JsonParser.parseString(json).getAsJsonArray();
+        List<DeprecationEntry> entries = new ArrayList<>();
+        for (JsonElement element : array) {
+            entries.add(entryFromJson(element.getAsJsonObject()));
+        }
+        return RegistryLedger.of(entries);
+    }
+
+    private static DeprecationEntry entryFromJson(JsonObject obj) {
+        String className = obj.get("className").getAsString();
+        JsonElement memberNameElement = obj.get("memberName");
+        String kindText = obj.get("kind").getAsString();
+        DeprecationEntry.Kind kind = DeprecationEntry.Kind.valueOf(kindText);
+
+        RegistryKey key;
+        if (kind == DeprecationEntry.Kind.CLASS) {
+            key = RegistryKey.forClass(className);
+        } else if (kind == DeprecationEntry.Kind.FIELD) {
+            key = RegistryKey.forField(className, memberNameElement.getAsString());
+        } else {
+            key = parseMemberKeyWithParams(obj.get("key").getAsString());
+        }
+
+        return DeprecationEntry.builder()
+                .key(key)
+                .kind(kind)
+                .since(nullableString(obj, "since"))
+                .forRemoval(obj.get("forRemoval").getAsBoolean())
+                .removeIn(nullableString(obj, "removeIn"))
+                .replacement(nullableString(obj, "replacement"))
+                .status(DeprecationEntry.Status.valueOf(obj.get("status").getAsString()))
+                .removedIn(nullableString(obj, "removedIn"))
+                .build();
+    }
+
+    private static String nullableString(JsonObject obj, String field) {
+        JsonElement el = obj.get(field);
+        return el == null || el.isJsonNull() ? null : el.getAsString();
+    }
+
+
+    private static RegistryKey parseMemberKeyWithParams(String keyString) {
+        Matcher m = MEMBER_KEY.matcher(keyString);
+        if (!m.matches()) {
+            throw new IllegalStateException("Cannot parse persisted registry key: " + keyString);
+        }
+        String className = m.group(1);
+        String memberName = m.group(2);
+        String paramsText = m.group(3);
+        List<String> params = paramsText.isEmpty()
+                ? java.util.Collections.emptyList()
+                : java.util.Arrays.asList(paramsText.split(","));
+        return RegistryKey.forMember(className, memberName, params);
+    }
+
+    /**
+     * Reads {@code target/japicmp/japicmp.xml} via {@link JapicmpReportReader} - the full-fidelity
+     * parse {@link RemovalConsistencyEvaluator} needs (changeStatus, old-side access modifier,
+     * and root scope for every element, not just the REMOVED subset).
+     */
+    private static JapicmpReportReader.Report readJapicmpReport(Path japicmpReport) throws IOException {
+        // Codex P2, PR #480: a zero-byte file (e.g. after an interrupted or racing report write)
+        // passes Files.exists just like a genuine report, but has nothing for
+        // JapicmpReportReader.read's XML parser to work with - it would throw a generic parse
+        // failure instead of the friendly infrastructure finding below. Treat "exists but is
+        // empty" the same as "does not exist": both mean no comparison ran.
+        if (!Files.exists(japicmpReport) || isEmptyFile(japicmpReport)) {
+            // No japicmp report (e.g. `-DskipTests` ran before `verify`'s cmp goal on a partial
+            // build, or #461's basedir mismatch). Nothing can be confirmed REMOVED without it - an
+            // empty report is the safe, conservative default AT THIS LAYER ONLY: this generator
+            // itself must not crash on a missing report. D-22 requires agreement, and silence from
+            // japicmp never authorizes a REMOVED transition on its own. The layer above turns
+            // "quiet" into "loud": RemovalConsistencyEvaluator#evaluate unconditionally reports this
+            // exact state as a single Finding.Kind.REPORT_MISSING_OR_EMPTY (WR-03) - so "safe
+            // default" here means "does not crash," never "the build passes silently" (#461).
+            return JapicmpReportReader.Report.empty();
+        }
+        return JapicmpReportReader.read(japicmpReport);
+    }
+
+    /**
+     * {@code true} for a zero-byte file. {@link Files#size} is used rather than reading the file
+     * and checking {@code String#isEmpty()} - this is purely a size probe, so it need not pull
+     * the whole file into memory only to discard it immediately afterward.
+     */
+    private static boolean isEmptyFile(Path file) throws IOException {
+        return Files.size(file) == 0L;
+    }
+
+    /**
+     * The japicmp-side half of D-22's dual-source cross-check: every key the report shows
+     * {@code changeStatus="REMOVED"} - reconstructed from the report's own attributes so both
+     * sides of the check share the exact same string form (D-01).
+     */
+    private static Set<RegistryKey> removedKeys(JapicmpReportReader.Report report) {
+        Set<RegistryKey> removed = new LinkedHashSet<>();
+        for (java.util.Map.Entry<RegistryKey, JapicmpReportReader.Entry> e : report.entries().entrySet()) {
+            if ("REMOVED".equals(e.getValue().getChangeStatus())) {
+                removed.add(e.getKey());
+            }
+        }
+        return removed;
+    }
+
+    /**
+     * The other half of D-22's dual-source rule cannot fire for a {@code private} member: japicmp
+     * scans at {@code accessModifier=protected} (pom.xml), so a private field never appears in its
+     * report at any {@code changeStatus} - not "unchanged", not "REMOVED", simply absent (confirmed
+     * empirically, 07-13-PLAN.md GEN-04: {@code UltiTools#versionWrapper} was a real, deleted,
+     * {@code @Deprecated(forRemoval = true)} private field with zero mentions anywhere in
+     * {@code target/japicmp/japicmp.xml}). Requiring japicmp's corroboration for such a key would
+     * make its {@code REMOVED} transition permanently unreachable through the normal path, even
+     * though a private member can, by construction, hold no downstream binary reference - the
+     * exact zero-risk criterion {@link RemovalConsistencyEvaluator}'s D-21 already applies to pom
+     * {@code <exclude>} entries. This extends that same, already-established principle to the
+     * ledger merge itself for prior entries the report has literally never heard of, rather than
+     * inventing a new one.
+     *
+     * <p>Scoped narrowly: only entries the source scan no longer finds (candidates for this run's
+     * merge) and that {@code japicmpRemoved} does not already cover, and only where the report has
+     * zero record of the key under any {@code changeStatus} - a public/protected member missing
+     * from source with no REMOVED report entry is still a hard conflict (D-22's core guarantee is
+     * unweakened for anything japicmp could have seen).
+     */
+    private static Set<RegistryKey> impliedRemovedByPrivateVisibility(
+            RegistryLedger prior, List<DeprecationEntry> freshScan, JapicmpReportReader.Report report) {
+        Set<String> freshKeyStrings = new java.util.HashSet<>();
+        for (DeprecationEntry entry : freshScan) {
+            freshKeyStrings.add(entry.getKey().toString());
+        }
+        Set<RegistryKey> implied = new LinkedHashSet<>();
+        // 07-fix: an EMPTY report means japicmp had nothing to compare against, not that every
+        // absent key was private. pom.xml sets <ignoreMissingOldVersion>true</ignoreMissingOldVersion>,
+        // so a baseline that fails to resolve produces an empty report and the build continues --
+        // at which point "absent from the report" is true of every key, and this method would imply
+        // a REMOVED transition for the entire prior ledger on source evidence alone. D-22's rule is
+        // dual-source; with no old side there is no second source, so imply nothing here. When
+        // the report is empty, RegistryLedger.merge's own reportIsEmpty branch (Codex P2, PR
+        // #480) now carries such an entry forward unchanged rather than treating its absence
+        // from source as a conflict -- REPORT_MISSING_OR_EMPTY explains the infrastructure state
+        // to the reader instead.
+        //
+        // Note this guard is NOT about japicmp's <excludes>: an excluded symbol still appears in
+        // target/japicmp/japicmp.xml (measured -- CglibProxyFactory, AopProxyBeanPostProcessor,
+        // Propagation#NESTED and CommandExecutionManager#isCommandAllowed are all present in the
+        // report, same as unexcluded removals). <excludes> gates breakBuildOn*, not report content.
+        if (report.entries().isEmpty()) {
+            return implied;
+        }
+        for (DeprecationEntry priorEntry : prior.entries()) {
+            if (priorEntry.getStatus() == DeprecationEntry.Status.REMOVED) {
+                continue; // already history; RegistryLedger.merge carries it forward unconditionally
+            }
+            if (freshKeyStrings.contains(priorEntry.getKey().toString())) {
+                continue; // still declared in source
+            }
+            if (!report.find(priorEntry.getKey()).isPresent()) {
+                implied.add(priorEntry.getKey());
+            }
+        }
+        return implied;
+    }
+
+    /**
+     * Reads and parses {@code pom.xml} once. {@link #readPomExcludeKeys(Document)} and
+     * {@link #readJapicmpBaselineVersion(Document)} both operate on the same parsed
+     * {@link Document} rather than each opening their own XML reader.
+     *
+     * <p>Package-private (not {@code private}) so {@code OverBroadExclusionInvariantTest} can read
+     * the real {@code pom.xml} through the same parser this generator uses, instead of duplicating
+     * the XML-reading logic. Do not narrow this back to {@code private}.
+     */
+    static Document readPomDocument() throws IOException {
+        return readPomDocument(Paths.get("").toAbsolutePath());
+    }
+
+    /**
+     * Same read as {@link #readPomDocument()}, against an explicit base directory (#461) - so
+     * {@code main()}'s {@code ${project.basedir}}-carrying invocation, and a test exercising that
+     * resolution against a temporary tree, never depend on the JVM's actual working directory.
+     */
+    static Document readPomDocument(Path baseDir) throws IOException {
+        String xml = new String(Files.readAllBytes(baseDir.resolve(POM_XML)), StandardCharsets.UTF_8);
+        return parsePomXml(xml);
+    }
+
+    /**
+     * Reads {@code pom.xml}'s japicmp {@code <plugin>} block and returns every
+     * {@code <exclude>} entry as a {@link RegistryKey} - the pom-side input
+     * {@link RemovalConsistencyEvaluator} cross-checks against the report and the registry.
+     *
+     * <p>Package-private (not {@code private}) so {@code OverBroadExclusionInvariantTest} can read
+     * the real exclude-key set through the same parser this generator uses, instead of duplicating
+     * the XML-reading logic. Do not narrow this back to {@code private}.
+     */
+    static Set<RegistryKey> readPomExcludeKeys(Document doc) {
+        Element japicmpPlugin = findJapicmpPlugin(doc);
+        Set<RegistryKey> keys = new LinkedHashSet<>();
+        if (japicmpPlugin == null) {
+            return keys;
+        }
+        NodeList excludeNodes = japicmpPlugin.getElementsByTagName("exclude");
+        for (int i = 0; i < excludeNodes.getLength(); i++) {
+            String text = excludeNodes.item(i).getTextContent().trim();
+            if (!text.isEmpty()) {
+                keys.add(parseExcludeKey(text));
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * Reads the {@code japicmp.baseline.version} property out of {@code pom.xml}'s
+     * {@code <properties>} element (D-06) - the baseline {@link RemovalConsistencyEvaluator}
+     * compares each REMOVED entry's {@code removedIn} against. Reuses the same parsed
+     * {@link Document} {@link #readPomExcludeKeys(Document)} reads, rather than opening a
+     * second XML reader.
+     */
+    private static String readJapicmpBaselineVersion(Document doc) {
+        NodeList propertiesNodes = doc.getElementsByTagName("properties");
+        if (propertiesNodes.getLength() == 0) {
+            return null;
+        }
+        Element properties = (Element) propertiesNodes.item(0);
+        NodeList baselineNodes = properties.getElementsByTagName("japicmp.baseline.version");
+        if (baselineNodes.getLength() == 0) {
+            return null;
+        }
+        String text = baselineNodes.item(0).getTextContent();
+        return text == null ? null : text.trim();
+    }
+
+    /**
+     * Reads {@code ${project.version}} out of {@code pom.xml} - the first direct {@code <version>}
+     * child of the document element, not {@link Document#getElementsByTagName}, since that would
+     * also match every {@code <version>} nested inside a {@code <dependency>} or {@code <plugin>}
+     * block (D-03). Reuses the same parsed {@link Document} the other pom readers share.
+     */
+    private static String readProjectVersion(Document doc) {
+        NodeList children = doc.getDocumentElement().getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node node = children.item(i);
+            if (node.getNodeType() == Node.ELEMENT_NODE && "version".equals(node.getNodeName())) {
+                String text = node.getTextContent();
+                return text == null ? null : text.trim();
+            }
+        }
+        return null;
+    }
+
+    private static Element findJapicmpPlugin(Document doc) {
+        NodeList plugins = doc.getElementsByTagName("plugin");
+        for (int i = 0; i < plugins.getLength(); i++) {
+            Element plugin = (Element) plugins.item(i);
+            NodeList artifactIds = plugin.getElementsByTagName("artifactId");
+            for (int j = 0; j < artifactIds.getLength(); j++) {
+                if ("japicmp-maven-plugin".equals(artifactIds.item(j).getTextContent().trim())) {
+                    return plugin;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Parses one japicmp {@code <exclude>} entry's text back into a {@link RegistryKey}, using
+     * the same {@code Class#member(paramTypes)} / {@code Class#field} / bare-class syntax japicmp
+     * itself requires (confirmed via decompilation, 07-RESEARCH.md "Priority 1").
+     */
+    private static RegistryKey parseExcludeKey(String text) {
+        int hashIndex = text.indexOf('#');
+        if (hashIndex < 0) {
+            return RegistryKey.forClass(text);
+        }
+        String className = text.substring(0, hashIndex);
+        String rest = text.substring(hashIndex + 1);
+        int parenIndex = rest.indexOf('(');
+        if (parenIndex < 0) {
+            return RegistryKey.forField(className, rest);
+        }
+        String memberName = rest.substring(0, parenIndex);
+        String paramsText = rest.substring(parenIndex + 1, rest.length() - 1).trim();
+        List<String> params = paramsText.isEmpty()
+                ? java.util.Collections.emptyList()
+                : splitParams(paramsText);
+        return RegistryKey.forMember(className, memberName, params);
+    }
+
+    private static List<String> splitParams(String paramsText) {
+        List<String> params = new ArrayList<>();
+        for (String part : paramsText.split(",")) {
+            params.add(part.trim());
+        }
+        return params;
+    }
+
+    private static Document parsePomXml(String xml) throws IOException {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            // Same XXE hardening as JapicmpReportReader (T-07-03-04).
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            return builder.parse(new InputSource(new StringReader(xml)));
+        } catch (ParserConfigurationException | SAXException e) {
+            throw new IOException("Failed to parse " + POM_XML + ": " + e.getMessage(), e);
+        }
+    }
+}

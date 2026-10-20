@@ -6,19 +6,23 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.Type;
-import java.net.JarURLConnection;
-import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.io.UnsupportedEncodingException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Map;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -29,21 +33,52 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.manager.ModuleApiLevels;
+import com.ultikits.ultitools.manager.ModuleJarIndex;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
 /**
  * Utility class for plugin installation and management operations.
  * Provides methods to download, install, and uninstall UltiTools plugins
  * from the remote plugin repository.
- * <br>
- * 插件安装和管理操作的实用工具类。
- * 提供从远程插件仓库下载、安装和卸载UltiTools插件的方法。
  *
  * @author wisdomme
  * @since 6.0.0
  */
 public class PluginInstallUtils {
     private static final Logger LOGGER = Logger.getLogger(PluginInstallUtils.class.getName());
+
+    /** How the uninstall asks a loaded module which JAR it came from; a test passes its own. */
+    static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
+            module -> codeSourceLocationOf(module.getClass());
+
+    /**
+     * The UltiCloud catalogue, as the update transaction asks it. A 409 from the level-filtered
+     * {@code latest} -- versions exist, none this framework installs -- is thrown as
+     * {@link ModuleFileTransactions.NoCompatibleVersionException} (plan 18-40).
+     */
+    static final ModuleFileTransactions.Catalogue CATALOGUE = new ModuleFileTransactions.Catalogue() {
+        @Override
+        public String latestVersion(String identifyString) {
+            int level = ModuleApiLevels.frameworkLevel();
+            PluginEntity plugin = getPlugin(identifyString, level);
+            if (plugin == null) {
+                return null;
+            }
+            CatalogueAnswer latest = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", level));
+            if (latest.noCompatibleVersion()) {
+                throw new ModuleFileTransactions.NoCompatibleVersionException(level);
+            }
+            return latest.data;
+        }
+
+        @Override
+        public String downloadLink(String identifyString, String version) {
+            return getPluginVersionDownloadLink(identifyString, version);
+        }
+    };
+
     private static final Gson GSON = new GsonBuilder()
             .setDateFormat("yyyy-MM-dd HH:mm:ss")
             .create();
@@ -53,13 +88,22 @@ public class PluginInstallUtils {
     
     // Custom base URL for testing purposes
     private static String customBaseUrl;
+
+    /** The HTTP status with which the catalogue answers that nothing this framework installs is offered. */
+    private static final int HTTP_CONFLICT = 409;
+
+    /**
+     * The HTTP status with which the catalogue answers that it does not know a module, or knows it
+     * but has no finalized version of it.
+     */
+    private static final int HTTP_NOT_FOUND = 404;
+
+    /** The suffix of a download not yet checked; the module loader reads only {@code *.jar}. */
+    static final String PART_SUFFIX = ".part";
     
     /**
      * Get the base URL for API calls.
      * Uses lazy initialization to avoid requiring UltiTools at class loading time.
-     * <br>
-     * 获取API调用的基础URL。
-     * 使用延迟初始化以避免在类加载时需要UltiTools。
      *
      * @return the base URL
      */
@@ -80,8 +124,6 @@ public class PluginInstallUtils {
     /**
      * Set a custom base URL for testing purposes.
      * This should only be used in unit tests.
-     * <br>
-     * 设置自定义的基础URL，仅用于测试目的。
      *
      * @param url the custom base URL, or null to reset to default
      */
@@ -92,15 +134,13 @@ public class PluginInstallUtils {
     /**
      * Reset the base URL to force re-initialization.
      * This should only be used in unit tests.
-     * <br>
-     * 重置基础URL以强制重新初始化，仅用于测试目的。
      */
     static void resetBaseUrl() {
         baseUrl = null;
         customBaseUrl = null;
     }
 
-    private static String normalizeIdentifyString(String idString) {
+    static String normalizeIdentifyString(String idString) {
         if (idString == null) {
             return null;
         }
@@ -120,6 +160,58 @@ public class PluginInstallUtils {
         return encodeQueryValue(value).replace("+", "%20");
     }
 
+    /**
+     * The URL of a catalogue request: {@code path}, with its own query if it has one, under the base
+     * URL, followed by {@code apiLevel} (this framework's level) and {@code minApiLevel}
+     * ({@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL}). Every catalogue request {@code /upm} makes
+     * is built here, so none can omit them; the catalogue filters {@code latest}, {@code versions}
+     * and the download routes by them and ignores them elsewhere (plan 18-40).
+     *
+     * @param path           the route, starting with {@code /}, optionally with a query
+     * @param frameworkLevel this framework's API level
+     * @return the full URL
+     */
+    static String catalogueUrl(String path, int frameworkLevel) {
+        return getBaseUrl() + path + (path.indexOf('?') < 0 ? "?" : "&")
+                + "apiLevel=" + encodeQueryValue(String.valueOf(frameworkLevel))
+                + "&minApiLevel=" + encodeQueryValue(String.valueOf(ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
+    }
+
+    private static String catalogueUrl(String path) {
+        return catalogueUrl(path, ModuleApiLevels.frameworkLevel());
+    }
+
+    /** A catalogue answer whose {@code data} is a string, with its HTTP status kept. */
+    private static final class CatalogueAnswer {
+        private final int status;
+        private final String data;
+        /** For a non-2xx answer, {@link VersionLookup#describe(int, String)} of it; otherwise {@code null}. */
+        private final String failure;
+
+        private CatalogueAnswer(int status, String data, String failure) {
+            this.status = status;
+            this.data = data;
+            this.failure = failure;
+        }
+
+        /**
+         * HTTP 409: the module or version exists but nothing this framework installs is offered.
+         * Read from the status, never from the message text, which the catalogue may reword.
+         */
+        private boolean noCompatibleVersion() {
+            return status == HTTP_CONFLICT;
+        }
+    }
+
+    private static CatalogueAnswer catalogueString(String url) {
+        try (Response httpResponse = SimpleHttpClient.get(url)) {
+            boolean ok = httpResponse.isOk();
+            return new CatalogueAnswer(httpResponse.getStatus(),
+                    ok ? unwrapStringData(httpResponse.body()) : null,
+                    ok ? null : VersionLookup.describe(httpResponse.getStatus(), httpResponse.body()));
+        }
+    }
+
     static String installedJarName(String idString, String version) {
         String normalized = normalizeIdentifyString(idString);
         if (normalized == null || version == null) {
@@ -137,8 +229,6 @@ public class PluginInstallUtils {
     /**
      * Extract the "data" field from a backend API envelope response.
      * The backend wraps responses as {"code":"200","msg":"Success","data":...}.
-     * <br>
-     * 从后端API信封响应中提取"data"字段。
      *
      * @param body the raw JSON response body
      * @param clazz the class to deserialize the data field into
@@ -164,8 +254,6 @@ public class PluginInstallUtils {
 
     /**
      * Extract the "data" field from a backend API envelope response (generic type version).
-     * <br>
-     * 从后端API信封响应中提取"data"字段（泛型版本）。
      *
      * @param body the raw JSON response body
      * @param type the Type to deserialize the data field into
@@ -192,8 +280,6 @@ public class PluginInstallUtils {
     /**
      * Extract a String value from the "data" field of a backend API envelope response.
      * Handles both quoted JSON strings and primitive values.
-     * <br>
-     * 从后端API信封响应的"data"字段中提取字符串值。
      *
      * @param body the raw JSON response body
      * @return the data as a String, or null if absent or response indicates error
@@ -220,16 +306,14 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin list online.
-     * <br>
-     * 在线获取插件列表。
      *
-     * @param page     页数
-     * @param pageSize 每页数量
-     * @return 插件列表
+     * @param page     the page number
+     * @param pageSize the number of items per page
+     * @return the plugin list
      */
     public static List<PluginEntity> getPluginList(int page, int pageSize) {
         List<PluginEntity> pluginEntities = new ArrayList<>();
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/list?page=" + page + "&pageSize=" + pageSize)) {
+        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/list?page=" + page + "&pageSize=" + pageSize))) {
             if (!httpResponse.isOk()) {
                 return pluginEntities;
             }
@@ -264,12 +348,10 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin download link.
-     * <br>
-     * 获取插件下载链接。
      *
-     * @param idString 插件ID
-     * @param version  版本
-     * @return 插件下载链接
+     * @param idString the plugin ID
+     * @param version  the version
+     * @return the plugin download link
      */
     public static String getPluginVersionDownloadLink(String idString, String version) {
         PluginEntity plugin = getPlugin(idString);
@@ -279,28 +361,22 @@ public class PluginInstallUtils {
         if (version == null || version.trim().isEmpty()) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/" + encodePathSegment(version.trim()) + "/download")) {
-            if (!httpResponse.isOk()) {
-                return null;
-            }
-            return unwrapStringData(httpResponse.body());
-        }
+        return catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/" + encodePathSegment(version.trim())
+                + "/download")).data;
     }
 
     /**
      * Get plugin versions.
-     * <br>
-     * 获取插件版本列表。
      *
-     * @param idString 插件ID
-     * @return 插件版本列表
+     * @param idString the plugin ID
+     * @return the plugin version list
      */
     public static List<String> getPluginVersions(String idString) {
         PluginEntity plugin = getPlugin(idString);
         if (plugin == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/versions")) {
+        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/" + plugin.getId() + "/versions"))) {
             if (!httpResponse.isOk()) {
                 return null;
             }
@@ -311,60 +387,121 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin latest version.
-     * <br>
-     * 获取插件最新版本。
      *
-     * @param idString 插件ID
-     * @return 插件最新版本
+     * <p>Returns {@code null} for a blank id, a module the catalogue does not know, no version this
+     * framework can install, and every failure (an error status, an unreadable body, an unreachable
+     * catalogue); this contract is unchanged as of 6.3.0. The start-up update check uses
+     * {@link #lookUpPluginLatestVersion(String)} instead, which tells those apart.
+     *
+     * @param idString the plugin ID
+     * @return the plugin's latest version, or {@code null}
      */
     public static String getPluginLatestVersion(String idString) {
-        PluginEntity plugin = getPlugin(idString);
-        if (plugin == null) {
-            return null;
+        return lookUpPluginLatestVersion(idString).getVersion();
+    }
+
+    /**
+     * Looks up a module's latest version for this framework's API level and says whether the
+     * lookup established anything (Phase 19, D19-032). {@link VersionLookup.Outcome#FOUND} carries
+     * the version exactly as {@link #getPluginLatestVersion(String)} returns it.
+     * {@link VersionLookup.Outcome#NONE} is a confirmed "nothing to offer": a blank id, the
+     * catalogue not knowing the module ({@code plugin/get} answers 404), or knowing it with no
+     * version this framework can install or no finalized version ({@code latest} answers 409 or
+     * 404). Every other answer -- another non-2xx status, an error envelope, a missing
+     * {@code data}, an unreadable body, an unreachable catalogue -- is
+     * {@link VersionLookup.Outcome#FAILED}.
+     * <p>
+     * An exception thrown while asking propagates, exactly as it does from
+     * {@link #getPluginLatestVersion(String)}.
+     *
+     * @param idString the module's identify string
+     * @return the lookup's outcome, never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static VersionLookup lookUpPluginLatestVersion(String idString) {
+        return lookUpPluginLatestVersion(idString, () -> false);
+    }
+
+    /**
+     * {@link #lookUpPluginLatestVersion(String)}, with a stop signal read between its two requests
+     * (Phase 19, D19-032): when {@code stopped} is true once the module is found, the
+     * {@code latest} request is not sent and the lookup is {@link VersionLookup.Outcome#FAILED}
+     * with the failure {@code "stopped"}. The start-up update check passes its own stop flag, so a
+     * check stopped by the plugin's disable sends no further request.
+     *
+     * @param idString the module's identify string
+     * @param stopped  read once, after the first request answers
+     * @return the lookup's outcome, never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static VersionLookup lookUpPluginLatestVersion(String idString, java.util.function.BooleanSupplier stopped) {
+        String normalized = normalizeIdentifyString(idString);
+        if (normalized == null) {
+            return VersionLookup.none();
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/latest")) {
-            if (!httpResponse.isOk()) {
-                return null;
+        int frameworkLevel = ModuleApiLevels.frameworkLevel();
+        PluginEntity plugin;
+        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/get?identifyString="
+                + encodeQueryValue(normalized), frameworkLevel))) {
+            if (httpResponse.getStatus() == HTTP_NOT_FOUND) {
+                return VersionLookup.none();
             }
-            return unwrapStringData(httpResponse.body());
+            if (!httpResponse.isOk()) {
+                return VersionLookup.failed(VersionLookup.describe(httpResponse.getStatus(), httpResponse.body()));
+            }
+            plugin = unwrapData(httpResponse.body(), PluginEntity.class);
         }
+        if (plugin == null) {
+            return VersionLookup.failed(VersionLookup.UNREADABLE);
+        }
+        return stopped.getAsBoolean() ? VersionLookup.failed("stopped") : lookUpLatestOf(plugin, frameworkLevel);
+    }
+
+    /** The {@code latest} half of {@link #lookUpPluginLatestVersion(String)}, for a module the catalogue knows. */
+    private static VersionLookup lookUpLatestOf(PluginEntity plugin, int frameworkLevel) {
+        CatalogueAnswer answer = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", frameworkLevel));
+        if (answer.data != null) {
+            return VersionLookup.found(answer.data);
+        }
+        if (answer.noCompatibleVersion() || answer.status == HTTP_NOT_FOUND) {
+            return VersionLookup.none();
+        }
+        return VersionLookup.failed(answer.failure != null ? answer.failure : VersionLookup.UNREADABLE);
     }
 
     /**
      * Get plugin latest version download link.
-     * <br>
-     * 获取插件最新版本下载链接。
      *
-     * @param idString Plugin identify string <br> 插件ID
-     * @return Download link for latest version <br> 插件最新版本下载链接
+     * @param idString Plugin identify string
+     * @return Download link for latest version
      */
     public static String getPluginLatestDownloadLink(String idString) {
         PluginEntity plugin = getPlugin(idString);
         if (plugin == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/latest/download")) {
-            if (!httpResponse.isOk()) {
-                return null;
-            }
-            return unwrapStringData(httpResponse.body());
-        }
+        return catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest/download")).data;
     }
 
     /**
      * Get plugin information by identify string.
-     * <br>
-     * 通过标识字符串获取插件信息。
      *
-     * @param idString Plugin identify string <br> 插件ID
-     * @return Plugin entity or null if not found <br> 插件信息，未找到返回null
+     * @param idString Plugin identify string
+     * @return Plugin entity or null if not found
      */
     public static PluginEntity getPlugin(String idString) {
+        return getPlugin(idString, ModuleApiLevels.frameworkLevel());
+    }
+
+    private static PluginEntity getPlugin(String idString, int frameworkLevel) {
         String normalized = normalizeIdentifyString(idString);
         if (normalized == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/get?identifyString=" + encodeQueryValue(normalized))) {
+        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/get?identifyString="
+                + encodeQueryValue(normalized), frameworkLevel))) {
             if (!httpResponse.isOk()) {
                 return null;
             }
@@ -374,67 +511,264 @@ public class PluginInstallUtils {
 
     /**
      * Install latest plugin.
-     * <br>
-     * 安装最新插件。
      *
-     * @param idString 插件ID
-     * @return 是否安装成功
+     * <p>As of 6.3.0 only a module whose {@code plugin.yml} declares an {@code api-version} from
+     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} up to this framework's level is installed;
+     * for any other this returns {@code false} and writes nothing to the modules folder. See
+     * {@link #installReporting(String, String)}.
+     *
+     * @param idString the plugin ID
+     * @return whether the install succeeded
      */
     public static boolean installLatestPlugin(String idString) {
-        String latestVersion = getPluginLatestVersion(idString);
-        String pluginVersionDownloadLink = getPluginVersionDownloadLink(idString, latestVersion);
-        String fileName = installedJarName(idString, latestVersion);
-        if (pluginVersionDownloadLink == null || fileName == null) {
-            return false;
-        }
-
-        try {
-            HttpDownloadUtils.download(pluginVersionDownloadLink,
-                    fileName,
-                    UltiTools.getInstance().getDataFolder() + "/plugins");
-            return true;
-        } catch (IOException e) {
-            UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
-            return false;
-        }
+        return installReporting(idString, null).isInstalled();
     }
 
     /**
      * Install plugin.
-     * <br>
-     * 安装插件。
      *
-     * @param idString 插件ID
-     * @param version  版本
-     * @return 是否安装成功
+     * <p>As of 6.3.0 only a module whose {@code plugin.yml} declares an {@code api-version} from
+     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} up to this framework's level is installed;
+     * for any other this returns {@code false} and writes nothing to the modules folder. See
+     * {@link #installReporting(String, String)}.
+     *
+     * @param idString the plugin ID
+     * @param version  the version
+     * @return whether the install succeeded
      */
     public static boolean installPlugin(String idString, String version) {
-        PluginEntity plugin = getPlugin(idString);
-        if (plugin == null) {
-            return false;
-        }
-        String pluginVersionDownloadLink = getPluginVersionDownloadLink(idString, version);
-        String fileName = installedJarName(idString, version);
-        if (pluginVersionDownloadLink == null || fileName == null) {
-            return false;
-        }
+        return installReporting(idString, version == null ? "" : version).isInstalled();
+    }
 
+    /**
+     * Installs a module from the catalogue and says why when it does not (plan 18-40).
+     *
+     * <p>Every catalogue request carries this framework's API level ({@link #catalogueUrl}). The
+     * JAR is downloaded into the modules folder as {@code <final name>.part}, a name the module
+     * loader never lists or puts on the class path (it reads only {@code *.jar}), on the same file
+     * system so that accepting it is one atomic rename. Its {@code plugin.yml} is then read again,
+     * and the module is refused -- the download deleted, the modules folder as it was -- unless its
+     * {@code api-version} is an integer from {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} to
+     * this framework's level. That check is the backstop for a catalogue that does not filter (one
+     * deployed before the filter, a self-hosted {@code api-url}) or a version recorded wrongly. An
+     * accepted JAR replaces a file of the same final name, as the download always did.
+     *
+     * @param idString      the module's identify-string
+     * @param versionOrNull the version, or {@code null} for the latest version the catalogue offers
+     *                      this framework
+     * @return the outcome, carrying an i18n reason key and its arguments when the API level is the
+     *         reason; a failure without a key is reported as before
+     */
+    @ApiStatus.Internal
+    public static InstallResult installReporting(String idString, String versionOrNull) {
+        int level = ModuleApiLevels.frameworkLevel();
+        int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
+        String requested = idString == null ? null : idString.trim();
+        PluginEntity plugin = getPlugin(idString, level);
+        if (plugin == null) {
+            return InstallResult.failed();
+        }
+        String version = versionOrNull;
+        if (version == null) {
+            CatalogueAnswer latest = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", level));
+            if (latest.noCompatibleVersion()) {
+                return InstallResult.refused(InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, requested, level, floor, level);
+            }
+            version = latest.data;
+        }
+        if (version == null || version.trim().isEmpty()) {
+            return InstallResult.failed();
+        }
+        return installVersion(plugin, idString, requested, version.trim(), level);
+    }
+
+    /** The second half of {@link #installReporting}: the version is known; fetch its link and install it. */
+    private static InstallResult installVersion(PluginEntity plugin, String idString, String requested, String version,
+                                                int level) {
+        CatalogueAnswer link = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/"
+                + encodePathSegment(version) + "/download", level));
+        if (link.noCompatibleVersion()) {
+            return InstallResult.refused(InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, requested, version, level,
+                    ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, level);
+        }
+        String fileName = installedJarName(idString, version);
+        if (link.data == null || fileName == null) {
+            return InstallResult.failed();
+        }
+        return downloadAndAdmit(link.data, fileName, requested, version, level);
+    }
+
+    /**
+     * Downloads to {@code <fileName>.part}, checks it, and either renames it to {@code fileName} or
+     * deletes it. The {@code .part} file never survives this method, whatever happens.
+     */
+    private static InstallResult downloadAndAdmit(String link, String fileName, String requested, String version,
+                                                  int level) {
+        File folder = modulesFolder();
+        File part = new File(folder, fileName + PART_SUFFIX);
+        boolean admitted = false;
         try {
-            HttpDownloadUtils.download(pluginVersionDownloadLink,
-                    fileName,
-                    UltiTools.getInstance().getDataFolder() + "/plugins");
-            return true;
+            Files.deleteIfExists(part.toPath());
+            HttpDownloadUtils.download(link, part.getName(), folder.getPath());
+            InstallResult refusal = refusalOf(part, requested, version, level);
+            if (refusal != null) {
+                return refusal;
+            }
+            moveIntoPlace(part, new File(folder, fileName));
+            admitted = true;
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
+            return InstallResult.failed();
+        } finally {
+            if (!admitted) {
+                deleteQuietly(part);
+            }
+        }
+        forgetDeferredRemoval(fileName);
+        return InstallResult.installed(fileName);
+    }
+
+    /**
+     * Why a downloaded JAR is not installed, or {@code null} to install it: the archive guard the
+     * module loader applies ({@link SecurityPolicy#isSafeFileStructure}; the {@code .jar} suffix
+     * check of {@link SecurityPolicy#isValidModuleJar} does not apply to the {@code .part} name), then
+     * the declared {@code api-version}.
+     */
+    private static InstallResult refusalOf(File part, String requested, String version, int level) {
+        int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
+        if (!isSafeArchive(part)) {
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_INVALID, requested, version);
+        }
+        String declared = PluginYmlReader.readFromJarFile(part).getApiVersion();
+        if (declared == null || declared.trim().isEmpty()) {
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_NO_LEVEL, requested, version, level, floor, level);
+        }
+        Integer moduleLevel = ModuleApiLevels.parse(declared);
+        if (moduleLevel == null || !ModuleApiLevels.isInstallable(moduleLevel, floor, level)) {
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_LEVEL_REFUSED, requested, version, declared.trim(),
+                    level, floor, level);
+        }
+        return null;
+    }
+
+    private static boolean isSafeArchive(File file) {
+        try (java.util.jar.JarFile jar = new java.util.jar.JarFile(file)) {
+            return SecurityPolicy.isSafeFileStructure(file.length(), jar.size());
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file.getName(), e);
             return false;
+        }
+    }
+
+    /** Renames the checked download to its final name in one step, replacing a file of that name. */
+    private static void moveIntoPlace(File part, File target) throws IOException {
+        try {
+            Files.move(part.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static void deleteQuietly(File file) {
+        try {
+            Files.deleteIfExists(file.toPath());
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.WARNING, "Could not delete the unchecked download " + file.getAbsolutePath(), e);
+        }
+    }
+
+    /**
+     * What {@link #installReporting(String, String)} did. The reason strings are i18n keys
+     * (Chinese, with their English values in {@code lang/en.json}), formatted with
+     * {@link #getReasonArgs()}.
+     */
+    @ApiStatus.Internal
+    public static final class InstallResult {
+
+        private final boolean installed;
+        private final String fileName;
+        private final String reasonKey;
+        private final Object[] reasonArgs;
+
+        private InstallResult(boolean installed, String fileName, String reasonKey, Object[] reasonArgs) {
+            this.installed = installed;
+            this.fileName = fileName;
+            this.reasonKey = reasonKey;
+            this.reasonArgs = reasonArgs;
+        }
+
+        /**
+         * @param fileName the file written into the modules folder
+         * @return an install that succeeded
+         */
+        public static InstallResult installed(String fileName) {
+            return new InstallResult(true, fileName, null, new Object[0]);
+        }
+
+        /** @return a failure with no reason to report beyond "install failed" */
+        public static InstallResult failed() {
+            return new InstallResult(false, null, null, new Object[0]);
+        }
+
+        /**
+         * @param reasonKey  one of the {@link Keys} reasons
+         * @param reasonArgs its arguments
+         * @return a refusal with its reason
+         */
+        public static InstallResult refused(String reasonKey, Object... reasonArgs) {
+            return new InstallResult(false, null, reasonKey, reasonArgs.clone());
+        }
+
+        /** @return whether the module was installed */
+        public boolean isInstalled() {
+            return installed;
+        }
+
+        /** @return the file written into the modules folder, or {@code null} */
+        public String getFileName() {
+            return fileName;
+        }
+
+        /** @return the reason's i18n key, or {@code null} */
+        public String getReasonKey() {
+            return reasonKey;
+        }
+
+        /** @return the reason's arguments, empty when there is no reason */
+        public Object[] getReasonArgs() {
+            return reasonArgs.clone();
+        }
+
+        /**
+         * The reasons, as catalogue keys (Chinese, with their English values in
+         * {@code lang/en.json}); a nested {@code Keys} holder like {@link ModuleFileTransactions.Keys}.
+         */
+        public static final class Keys {
+            /** Args: module, framework level, floor, framework level. */
+            public static final String REASON_NO_COMPATIBLE_VERSION =
+                    "无法安装 %s：云端没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
+            /** Args: module, version, framework level, floor, framework level. */
+            public static final String REASON_VERSION_INCOMPATIBLE =
+                    "无法安装 %s %s：该版本不能安装在本服务器上。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
+            /** Args: module, version, declared api-version as written, framework level, floor, framework level. */
+            public static final String REASON_JAR_LEVEL_REFUSED =
+                    "已拒绝安装 %s %s：下载的 JAR 声明 api-version %s。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
+            /** Args: module, version, framework level, floor, framework level. */
+            public static final String REASON_JAR_NO_LEVEL =
+                    "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
+            /** Args: module, version. */
+            public static final String REASON_JAR_INVALID =
+                    "已拒绝安装 %s %s：下载的文件不是有效的模块 JAR。下载的文件已删除，模块目录没有任何改动。";
+
+            private Keys() {
+            }
         }
     }
 
     /**
      * Find the JAR file for a plugin by its identify-string.
      * Scans all JARs in the given directory, reads plugin.yml from each.
-     * <br>
-     * 通过identify-string查找插件的JAR文件。
      *
      * @param pluginsFolder the folder to scan
      * @param identifyString the identify-string to match
@@ -445,7 +779,9 @@ public class PluginInstallUtils {
         if (pluginsFolder == null || !pluginsFolder.isDirectory() || normalizedIdentifyString == null) {
             return null;
         }
-        File[] jars = pluginsFolder.listFiles((f) -> f.getName().endsWith(".jar"));
+        // The loader's own listing, in its file-name order (#476), so the JAR found first is the
+        // same on every file system.
+        File[] jars = ModuleFileTransactions.moduleJars(pluginsFolder);
         if (jars == null) {
             return null;
         }
@@ -471,75 +807,1563 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Update a plugin module: download latest version and delete old JAR.
-     * <br>
-     * 更新插件模块：下载最新版本并删除旧JAR。
+     * Stages an update of a loaded module to its latest version (#505).
      *
-     * @param identifyString the plugin identify string
-     * @return true if update succeeded
+     * <p>Nothing in the modules folder changes: the new JAR is downloaded into the transaction
+     * folder beside it and recorded. At the next start the files are swapped before any module
+     * loads, and the update is kept only if the module is then seen loaded from the new JAR at the
+     * new version; otherwise the old JAR is restored. See {@link ModuleFileTransactions}.
+     *
+     * @param identifyString the module's identify-string
+     * @return what was staged, or why nothing was
      */
-    public static boolean updatePlugin(String identifyString) {
-        String latestVersion = getPluginLatestVersion(identifyString);
-        String downloadLink = getPluginVersionDownloadLink(identifyString, latestVersion);
-        String fileName = installedJarName(identifyString, latestVersion);
-        if (downloadLink == null || fileName == null) {
-            return false;
-        }
-
-        String pluginsPath = UltiTools.getInstance().getDataFolder() + "/plugins";
-        File pluginsFolder = new File(pluginsPath);
-        File oldJar = findPluginJar(pluginsFolder, identifyString);
-
-        try {
-            HttpDownloadUtils.download(downloadLink, fileName, pluginsPath);
-        } catch (IOException e) {
-            UltiTools.getInstance().getLogger().severe("Failed to download update: " + e.getMessage());
-            return false;
-        }
-
-        // Delete old JAR if it's a different file than the new download
-        if (oldJar != null && !oldJar.getName().equals(fileName)) {
-            oldJar.delete();
-        }
-
-        return true;
+    @ApiStatus.Internal
+    public static ModuleFileTransactions.StageResult stageUpdate(String identifyString) {
+        UltiTools ultiTools = UltiTools.getInstance();
+        PluginManager pluginManager = ultiTools.getPluginManager();
+        // The loaded modules are read by staging under its lock, not snapshotted here: an uninstall
+        // completing between a snapshot and the lock would be missed (Codex round 16).
+        return new ModuleFileTransactions(ultiTools.getDataFolder()).stageUpdate(identifyString,
+                () -> new ArrayList<>(pluginManager.getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
+                CATALOGUE, (link, fileName, folder) -> HttpDownloadUtils.download(link, fileName,
+                        folder.getAbsolutePath()), recordedMainClass(pluginManager.getModuleJarIndex()));
     }
 
     /**
-     * Uninstall plugin.
-     * <br>
-     * 卸载插件。
+     * The main class the module loader recorded for a loaded module, read from its start-up index
+     * (#516): what staging checks other copies of the module against (maintainer follow-up 19).
+     * {@code null} for a module the index has no record of, so that staging falls back to the old
+     * JAR's own {@code plugin.yml} {@code main:} rather than to a runtime class name no JAR declares.
      *
-     * @param name 插件名称
-     * @return 是否卸载成功
-     * @throws IOException if an I/O error occurs
+     * @param index the loader's index, or {@code null}
+     * @return the resolver
+     */
+    static java.util.function.Function<UltiToolsPlugin, String> recordedMainClass(ModuleJarIndex index) {
+        if (index == null) {
+            return module -> null;
+        }
+        return module -> {
+            String mainClass = index.mainClassOf(module);
+            return index.jarsDeclaring(mainClass).isEmpty() ? null : mainClass;
+        };
+    }
+
+    /**
+     * After an install wrote {@code fileName} into the modules folder, forgets a deletion an earlier
+     * uninstall recorded for that name, so the next start does not delete the new install (#518).
+     * A failure is logged: the install itself succeeded.
+     */
+    private static void forgetDeferredRemoval(String fileName) {
+        try {
+            new ModuleFileTransactions(UltiTools.getInstance().getDataFolder()).forgetDeferredRemoval(fileName);
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Installed " + fileName + ", but a deletion recorded for that name by an"
+                    + " earlier uninstall could not be cancelled; the next start may delete it", e);
+        }
+    }
+
+    /**
+     * Stages an update of a loaded module; see {@link #stageUpdate(String)}.
+     *
+     * <p>As of 6.3.0 this no longer replaces the JAR in place and no longer means "updated": it
+     * returns {@code true} when the update was staged, to take effect at the next start and to be
+     * kept only if the module then loads.
+     *
+     * @param identifyString the plugin identify string
+     * @return {@code true} if the update was staged
+     */
+    public static boolean updatePlugin(String identifyString) {
+        return stageUpdate(identifyString).getOutcome() == ModuleFileTransactions.StageResult.Outcome.STAGED;
+    }
+
+    /**
+     * What a filesystem probe answered, keeping "unknown" out of "no".
+     *
+     * <p>{@code File}'s predicates return {@code false} both when the answer is no and when the
+     * answer could not be obtained -- an ancestor that cannot be searched, a policy that refuses.
+     * Every yes/no question this uninstall asks the filesystem goes through {@link #probe(File)}
+     * so the two cannot be confused; the sweep table in the pull request lists them.
+     */
+    private enum Presence {
+        /** It is there, and it is a regular file. */
+        REGULAR_FILE,
+        /** It is there, and it is a directory. */
+        DIRECTORY,
+        /** It is there and is neither -- a link to nowhere, a device, a socket. */
+        OTHER,
+        /** It is definitively not there. */
+        ABSENT,
+        /** The question could not be answered. */
+        UNKNOWN
+    }
+
+    /**
+     * What is at {@code file}, without following links, distinguishing "not there" from "could not
+     * be determined".
+     *
+     * @param file the path to probe
+     * @return what is there
+     */
+    private static Presence probe(File file) {
+        return probe(file, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+    }
+
+    /**
+     * What is at {@code file} with links followed: the question "is this one of the files the
+     * module loader would open?", which is a different question from "is anything at this path?".
+     *
+     * <p>{@code PluginManager#init} opens each entry through {@code new JarFile(file)}, which
+     * follows links, so a link to a real JAR is a file it loads from. The access question keeps
+     * {@code NOFOLLOW_LINKS}, because that is what separates absence from a denial; this one must
+     * match the loader.
+     *
+     * @param file the path to probe
+     * @return what is at the end of it
+     */
+    private static Presence probeFollowingLinks(File file) {
+        return probe(file, new java.nio.file.LinkOption[0]);
+    }
+
+    /**
+     * {@link #probe(File)} with the link options to use.
+     *
+     * @param file    the path to probe
+     * @param options how to treat a symbolic link
+     * @return what is there
+     */
+    private static Presence probe(File file, java.nio.file.LinkOption... options) {
+        try {
+            java.nio.file.attribute.BasicFileAttributes attributes = java.nio.file.Files.readAttributes(
+                    file.toPath(), java.nio.file.attribute.BasicFileAttributes.class, options);
+            if (attributes.isDirectory()) {
+                return Presence.DIRECTORY;
+            }
+            return attributes.isRegularFile() ? Presence.REGULAR_FILE : Presence.OTHER;
+        } catch (java.nio.file.NoSuchFileException absent) {
+            return Presence.ABSENT;
+        } catch (IOException | SecurityException | java.nio.file.InvalidPathException e) {
+            LOGGER.log(Level.FINE, "Could not determine what is at " + file, e);
+            return Presence.UNKNOWN;
+        }
+    }
+
+    /**
+     * The JAR a module class was loaded from, or {@code null} when it was not loaded from one.
+     *
+     * <p>The loaded instance is the authority on which file it came from, whatever that file's
+     * {@code plugin.yml} says now: the file may have been replaced or edited since the start, and a
+     * module registered from code has no {@code plugin.yml} entry the loader read at all. So the
+     * framework asks the instance, exactly as {@code UltiToolsPlugin} itself does when it reads its
+     * own embedded resources.
+     *
+     * <p>A code source that is a directory is a development checkout rather than an installed JAR
+     * and answers nothing about which file to delete. One that cannot be probed is still named:
+     * the module was loaded from it, and a probe that cannot answer is not an answer of "no".
+     *
+     * @param moduleClass the loaded module's class
+     * @return the JAR, or {@code null} when there is none to name
+     */
+    static File codeSourceJarOf(Class<?> moduleClass) {
+        try {
+            java.security.CodeSource source = moduleClass.getProtectionDomain().getCodeSource();
+            if (source == null || source.getLocation() == null) {
+                return null;
+            }
+            File location = resolveCodeSourceFile(source.getLocation());
+            return probeFollowingLinks(location) == Presence.DIRECTORY ? null : location;
+        } catch (SecurityException | IllegalArgumentException e) {
+            LOGGER.log(Level.FINE, "Could not read the code source of " + moduleClass, e);
+            return null;
+        }
+    }
+
+    /**
+     * Whether which JAR a module was loaded from could be determined at all.
+     *
+     * <p>Three answers through one value, because the difference matters: a file is the JAR the
+     * module came from; a directory is an exploded development checkout, which is no JAR at all and
+     * says so; and {@code null} is "could not be determined" -- a code source a policy refuses to
+     * reveal, or a class that has none. Unknown is not "none": while it holds, any entry matched
+     * only by a name might be that running module's own JAR.
+     *
+     * @param moduleClass the loaded module's class
+     * @return the code source's location, or {@code null} when it could not be determined
+     */
+    static File codeSourceLocationOf(Class<?> moduleClass) {
+        try {
+            java.security.CodeSource source = moduleClass.getProtectionDomain().getCodeSource();
+            if (source == null || source.getLocation() == null) {
+                return null;
+            }
+            return resolveCodeSourceFile(source.getLocation());
+        } catch (SecurityException | IllegalArgumentException e) {
+            LOGGER.log(Level.FINE, "Could not read the code source of " + moduleClass, e);
+            return null;
+        }
+    }
+
+    /** A code source URL as a file, whatever escaping it carries. */
+    private static File resolveCodeSourceFile(URL location) {
+        try {
+            return new File(location.toURI());
+        } catch (java.net.URISyntaxException e) {
+            String rawPath = location.getPath();
+            return new File(rawPath.startsWith("/") ? rawPath : rawPath.substring(1));
+        }
+    }
+
+    /**
+     * What one archive says about which module it holds -- the single reader both identity
+     * resolution and entry classification use, so the two cannot drift apart.
+     */
+    private static final class ArchiveIdentity {
+        private final EntryState state;
+        private final String declaredName;
+        /** The {@code main:} its {@code plugin.yml} declares: the one entry the module loader reads (#516). */
+        private final String declaredMain;
+
+        private ArchiveIdentity(EntryState state, String declaredName) {
+            this(state, declaredName, null);
+        }
+
+        private ArchiveIdentity(EntryState state, String declaredName, String declaredMain) {
+            this.state = state;
+            this.declaredName = declaredName;
+            this.declaredMain = declaredMain;
+        }
+
+        /** Whether the archive was read and declares a module name. */
+        private boolean declaresAName() {
+            return declaredName != null;
+        }
+    }
+
+    /**
+     * Reads what an archive declares about itself.
+     *
+     * <p>The one place a {@code plugin.yml} is opened. Four outcomes, each a positive answer:
+     * it declares a name; it opened and declares none (no {@code plugin.yml}, or one without a
+     * {@code name:} key -- which say the same thing, since a module needs no metadata at all);
+     * it could not be opened or parsed; or the entry is one the module loader itself would never
+     * load.
+     *
+     * @param file the entry
+     * @return what it says about itself
+     */
+    private static ArchiveIdentity readArchive(File file) {
+        // The same `.jar` test the start-up scan applies to this folder (ModuleFileTransactions#moduleJars):
+        // an entry it would never load can hold no module, whatever it contains. This is the one
+        // decision taken from the file's own name, and it is taken to stay in step with the loader
+        // rather than to identify anything -- if that filter ever changes, this must change with it.
+        if (!file.getName().endsWith(".jar")) {
+            return new ArchiveIdentity(EntryState.NOT_THIS_MODULES, null);
+        }
+        // Links followed: this asks what the loader would open, and `new JarFile(file)` follows
+        // them. A link to a real JAR is a file the module loads from, so calling it unidentifiable
+        // would leave a JAR that loads the module again; only a link that resolves to nothing, or
+        // that cannot be resolved at all, identifies nothing.
+        Presence presence = probeFollowingLinks(file);
+        if (presence == Presence.DIRECTORY) {
+            return new ArchiveIdentity(EntryState.NOT_THIS_MODULES, null);
+        }
+        if (presence != Presence.REGULAR_FILE) {
+            return new ArchiveIdentity(EntryState.UNDETERMINED, null);
+        }
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
+            java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
+            if (entry == null) {
+                // Reported as undetermined rather than passed over. This dates from before #548,
+                // when a module needed no plugin.yml at all; since #548 the start-up scan refuses a
+                // JAR whose plugin.yml has no main:, so such a JAR cannot load a module by itself.
+                // It is still named, without being called a copy, which is the conservative side:
+                // whether to stop naming it changes what the operator is told, never what is
+                // deleted, and deciding it from the archive's classes is the approach this work
+                // removed. (#516 identifies a copy by its plugin.yml main:, which this lacks.)
+                return new ArchiveIdentity(EntryState.UNDETERMINED, null);
+            }
+            return readDeclaredName(jarFile, entry, file);
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Could not read " + file, e);
+            return new ArchiveIdentity(EntryState.UNDETERMINED, null);
+        }
+    }
+
+    /**
+     * The {@code name} a {@code plugin.yml} declares, if it declares one.
+     *
+     * @param jarFile the archive
+     * @param entry   its {@code plugin.yml}
+     * @param file    the archive's path, for the log line
+     * @return what it says about itself
+     * @throws IOException when the entry cannot be read
+     */
+    private static ArchiveIdentity readDeclaredName(java.util.jar.JarFile jarFile, java.util.jar.JarEntry entry,
+                                                    File file) throws IOException {
+        try (InputStream is = jarFile.getInputStream(entry);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
+            YamlConfiguration config = new YamlConfiguration();
+            // load(Reader), not loadConfiguration(Reader): the latter swallows a parse error and
+            // hands back an empty configuration, which reads as "declares no name" -- turning a
+            // file that says nothing into one that says no.
+            config.load(reader);
+            String declared = config.getString("name");
+            // The main: entry is read with the name, from the same parse: it is what the module loader
+            // loads (#548/#549), so it identifies the module whatever the name says (#516).
+            String main = config.getString("main");
+            String declaredMain = main == null || main.trim().isEmpty() ? null : main;
+            if (declared == null || declared.trim().isEmpty()) {
+                // A plugin.yml with no name: key -- or one whose name is blank -- carries exactly as
+                // much about which module this is by name as no plugin.yml at all, which is nothing
+                // (gate 1, WR-01, and its completion). A blank name must never become a key either:
+                // every other blank-named archive would then match it. Its main:, if any, still
+                // counts (#516).
+                return new ArchiveIdentity(EntryState.UNDETERMINED, null, declaredMain);
+            }
+            return new ArchiveIdentity(EntryState.NOT_THIS_MODULES, declared, declaredMain);
+        } catch (org.bukkit.configuration.InvalidConfigurationException malformed) {
+            LOGGER.log(Level.FINE, "plugin.yml is not valid YAML in " + file, malformed);
+            return new ArchiveIdentity(EntryState.UNDETERMINED, null);
+        }
+    }
+
+    /** {@code file}'s canonical path, or its absolute path when it cannot be canonicalised. */
+    private static String canonicalPathOf(File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Could not canonicalise " + file, e);
+            return file.getAbsolutePath();
+        }
+    }
+
+    /**
+     * What one entry of the modules folder is, relative to the module being uninstalled. Every
+     * entry is exactly one of these, and each is decided by a positive test on the archive -- with
+     * one exception, stated where it is taken: an entry the module loader itself would never load,
+     * judged by the same {@code .jar} test {@code PluginManager#init} applies to this folder, is
+     * state B without being opened.
+     */
+    private enum EntryState {
+        /**
+         * It is a loaded instance's own code-source JAR, or the archive opened and its
+         * {@code plugin.yml} declares this module.
+         */
+        THIS_MODULES,
+        /**
+         * The archive opened and its {@code plugin.yml} declares another module, or the entry is
+         * one the module loader would never load at all.
+         */
+        NOT_THIS_MODULES,
+        /**
+         * Nothing about it identifies a module: the archive would not open, the entry could not be
+         * read, the {@code plugin.yml} is not valid YAML, it carries no {@code plugin.yml}, or that
+         * file declares no {@code name:}. Unknown is not "no".
+         */
+        UNDETERMINED
+    }
+
+    /**
+     * Raised when the uninstall refuses to act because its outcome would be undefined: two possible
+     * targets, or a target whose JAR another running module shares. A type the command owns, so the
+     * refusal is reported as itself rather than escaping as a command error.
+     */
+    @ApiStatus.Internal
+    public static class UninstallRefusedException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        private UninstallRefusedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Raised when the name the operator typed could be more than one loaded module's, so the
+     * uninstall changed nothing.
+     */
+    @ApiStatus.Internal
+    public static final class AmbiguousModuleNameException extends UninstallRefusedException {
+        private static final long serialVersionUID = 1L;
+
+        private AmbiguousModuleNameException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Raised when a module's own unload threw. The module is still removed from the loaded modules
+     * and its JARs are still deleted; the JAR outcome is attached as suppressed.
+     *
+     * <p>A type of its own rather than a bare {@code IllegalStateException}, so the reply that says
+     * "its own unload threw" is structurally true rather than true of whatever else might raise one
+     * (gate 1, IN-06). It extends {@code IllegalStateException} because that is what the method's
+     * javadoc has documented since this branch began.
+     */
+    @ApiStatus.Internal
+    public static final class ModuleUnloadFailedException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        private ModuleUnloadFailedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+
+        /**
+         * @param message what to tell the caller
+         * @param cause   what the module's unload threw
+         * @return the failure
+         */
+        public static ModuleUnloadFailedException of(String message, Throwable cause) {
+            return new ModuleUnloadFailedException(message, cause);
+        }
+    }
+
+    /**
+     * The entries an uninstall could not identify, carried on whatever failure leaves the method.
+     *
+     * <p>State C outlives every other outcome: a module whose unload threw, a JAR that could not
+     * be deleted and "nothing here could be identified as this module's" are all still true beside
+     * "these entries said nothing", and one of those entries may be the module's own JAR. An
+     * explicit type is what lets a caller tell this apart from the failures it travels with,
+     * rather than guessing from the shape of a {@code FileSystemException}.
+     */
+    @ApiStatus.Internal
+    public static final class UndeterminedEntriesException extends java.nio.file.FileSystemException {
+        private static final long serialVersionUID = 1L;
+
+        private final List<String> entries;
+
+        private UndeterminedEntriesException(List<String> entries) {
+            super(entries.isEmpty() ? null : entries.get(0), null,
+                    "could not be identified, so whether any of them is a JAR of this module is unknown");
+            this.entries = Collections.unmodifiableList(new ArrayList<>(entries));
+        }
+
+        /**
+         * @param entries the absolute paths of the entries whose identity could not be determined
+         * @return the carrier for them
+         */
+        public static UndeterminedEntriesException of(List<String> entries) {
+            return new UndeterminedEntriesException(entries);
+        }
+
+        /** @return the absolute paths of the entries whose identity could not be determined */
+        public List<String> entries() {
+            return entries;
+        }
+    }
+
+    /**
+     * The uninstall could not delete these JARs now -- the running server holds them open, or the
+     * folder is not writable -- and has recorded them, so the next start deletes them before any
+     * module loads (#518). A failure type of its own, so a caller tells the operator exactly that
+     * rather than asking them to delete a file they cannot delete while the server runs.
+     */
+    @ApiStatus.Internal
+    public static final class RemovalDeferredException extends java.nio.file.FileSystemException {
+        private static final long serialVersionUID = 1L;
+
+        private final List<String> deferredFiles;
+        private final String reason;
+
+        private RemovalDeferredException(List<String> deferredFiles, String reason) {
+            super(deferredFiles.isEmpty() ? null : deferredFiles.get(0), null,
+                    "could not be deleted now (" + reason + "); deleted at the next start, before modules load");
+            this.deferredFiles = Collections.unmodifiableList(new ArrayList<>(deferredFiles));
+            this.reason = reason;
+            // The uninstall's failure contract (#501): getFile() names the first JAR and one
+            // suppressed FileSystemException names each further one, so a caller walking the chain
+            // is told every file.
+            for (int i = 1; i < deferredFiles.size(); i++) {
+                addSuppressed(new java.nio.file.FileSystemException(deferredFiles.get(i), null, getReason()));
+            }
+        }
+
+        /**
+         * @param deferredFiles the absolute paths of the JARs recorded for deletion at the next start
+         * @param reason        why they could not be deleted now
+         * @return the failure
+         */
+        public static RemovalDeferredException of(List<String> deferredFiles, String reason) {
+            return new RemovalDeferredException(deferredFiles, reason);
+        }
+
+        /** @return the absolute paths of the JARs recorded for deletion at the next start */
+        public List<String> deferredFiles() {
+            return deferredFiles;
+        }
+
+        /** @return why they could not be deleted now */
+        public String getReason() {
+            return reason;
+        }
+    }
+
+    /**
+     * The uninstall could not delete these JARs now and could not record their deletion for the next
+     * start either (#518). Attached, suppressed, to the {@code FileSystemException} that names the
+     * JARs still on disk, with the record failure as its cause.
+     *
+     * <p>Deliberately not a {@code FileSystemException}: every {@code FileSystemException} in an
+     * uninstall's failure names a module JAR still on disk, which is what lets a caller walking the
+     * chain tell the operator which files to delete by hand. The record failure names a transaction
+     * record, its folder or a temporary file under the server root's {@code .ultikits} folder,
+     * beside the credential store -- none of them a module JAR, and none for the operator to delete.
+     * An explicit type, like {@link UndeterminedEntriesException}, is what keeps it apart.
+     */
+    @ApiStatus.Internal
+    public static final class RemovalNotRecordedException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        private final String reason;
+
+        private RemovalNotRecordedException(Throwable recordFailure, String reason) {
+            super("the deletion could not be recorded for the next start either (" + reason + ")", recordFailure);
+            this.reason = reason;
+        }
+
+        /**
+         * @param recordFailure what writing the record threw; kept as the cause
+         * @return the carrier for it
+         */
+        public static RemovalNotRecordedException of(Throwable recordFailure) {
+            java.util.Objects.requireNonNull(recordFailure, "recordFailure");
+            String message = recordFailure.getMessage();
+            String reason = recordFailure.getClass().getSimpleName() + (message == null ? "" : ": " + message);
+            return new RemovalNotRecordedException(recordFailure, reason);
+        }
+
+        /** @return why the deletion could not be recorded: the record failure's type and message */
+        public String getReason() {
+            return reason;
+        }
+    }
+
+    /**
+     * Attaches the undetermined entries to a failure on its way out, when there are any.
+     *
+     * @param failure the failure leaving the uninstall
+     * @param entries the absolute paths of the entries nothing could identify
+     * @param <T>     the failure's type
+     * @return {@code failure}
+     */
+    private static <T extends Throwable> T carrying(T failure, List<String> entries) {
+        if (!entries.isEmpty()) {
+            failure.addSuppressed(new UndeterminedEntriesException(entries));
+        }
+        return failure;
+    }
+
+    /**
+     * What an uninstall did, and what it could not determine.
+     *
+     * <p>The entries it could not classify are not failures -- an entry nothing can be read from
+     * must never stop an uninstall -- but they are not nothing either: if one of them is a copy of
+     * this module, it loads again at the next start. Reporting them is what lets the operator
+     * decide, which is not the same as guessing on their behalf.
+     */
+    @ApiStatus.Internal
+    public static final class UninstallReport {
+        private final boolean jarsDeleted;
+        private final List<String> undetermined;
+        private final List<String> deleted;
+
+        private UninstallReport(boolean jarsDeleted, List<String> undetermined, List<String> deleted) {
+            this.jarsDeleted = jarsDeleted;
+            this.undetermined = Collections.unmodifiableList(new ArrayList<>(undetermined));
+            this.deleted = Collections.unmodifiableList(new ArrayList<>(deleted));
+        }
+
+        /**
+         * @param jarsDeleted  whether every entry identified as this module's was deleted
+         * @param undetermined the absolute paths of the entries nothing could identify
+         * @return the report, with no files named as deleted
+         */
+        public static UninstallReport of(boolean jarsDeleted, List<String> undetermined) {
+            return new UninstallReport(jarsDeleted, undetermined, Collections.<String>emptyList());
+        }
+
+        /**
+         * @param jarsDeleted  whether every entry identified as this module's was deleted
+         * @param undetermined the absolute paths of the entries nothing could identify
+         * @param deleted      the absolute paths of the entries that were deleted
+         * @return the report
+         */
+        public static UninstallReport of(boolean jarsDeleted, List<String> undetermined, List<String> deleted) {
+            return new UninstallReport(jarsDeleted, undetermined, deleted);
+        }
+
+        /** @return whether every entry identified as this module's was deleted */
+        public boolean jarsDeleted() {
+            return jarsDeleted;
+        }
+
+        /** @return the absolute paths of the entries whose identity could not be determined */
+        public List<String> undeterminedEntries() {
+            return undetermined;
+        }
+
+        /**
+         * The files this uninstall deleted, by absolute path.
+         *
+         * <p>Named so the operator can see what was removed: every other outcome names paths, and
+         * a success that named none is what made a deletion outside the operator's request
+         * invisible (gate 1, IN-12 and BL-02).
+         *
+         * @return the deleted paths
+         */
+        public List<String> deletedFiles() {
+            return deleted;
+        }
+    }
+
+    /**
+     * Uninstalls a module: unloads every loaded instance of it and deletes its JARs.
+     *
+     * <p>Unloading goes through {@link PluginManager#unregister(UltiToolsPlugin)}, the framework's
+     * one full unload path (#503). Calling {@code plugin.unregisterSelf()} directly, as this method
+     * used to, skipped everything {@code unregister} does first -- cancelling the module's
+     * {@code @Scheduled} tasks, releasing its {@code @PlayerCache} beans, its tab-completion
+     * completers, its EventBus handlers and its conditional-bean records, then closing its context.
+     * A module "uninstalled" that way kept running its repeating tasks until the next restart.
+     *
+     * <p>What it reports is what happened on disk (#501). The old implementation ignored
+     * {@link File#delete()}'s result and returned {@code true} whether or not the JAR was removed,
+     * and it stopped at the first matching JAR, so a second JAR of the same module loaded it again
+     * on restart. Now every entry the modules folder holds is placed in exactly one
+     * {@link EntryState}, and what the method returns or throws says which of those it met.
+     *
+     * <p>As of 6.3.0 an entry is this module's also when its {@code plugin.yml} {@code main:} names
+     * the module's main class, the entry the module loader loads by (#516), and an uninstall that
+     * goes ahead also cancels any update of the module waiting for the next start
+     * ({@link #uninstallPluginReporting(String, List)}).
+     *
+     * @param name the module's runtime name -- which need not be what its JAR's {@code plugin.yml}
+     *     declares, since {@code UltiToolsPlugin(String pluginName, ...)} takes it as an argument
+     *     and reads no metadata
+     * @return {@code true} when every entry identified as this module's was deleted; {@code false}
+     *     when none was and no loaded module of that name was unloaded either -- the "check the
+     *     spelling" case
+     * @throws java.nio.file.AccessDeniedException when the modules folder exists but could not be
+     *     listed, so nothing can be concluded about what it holds
+     * @throws java.nio.file.FileSystemException when an entry identified as this module's could not
+     *     be deleted, naming every one still on disk: every {@code FileSystemException} in the failure,
+     *     including those attached as suppressed, names a module JAR still on disk. When the deletion
+     *     could not be recorded for the next start either, that failure travels attached as a
+     *     {@link RemovalNotRecordedException}, which is not a {@code FileSystemException}
+     * @throws java.nio.file.NoSuchFileException when a loaded module was unloaded but nothing in
+     *     the folder could be identified as its JAR, which is not a spelling mistake
+     * @throws IllegalStateException when the module's own unload threw. The module is still removed
+     *     from the loaded modules and its JARs are still deleted: {@code unregister} has closed its
+     *     context by then, and keeping the JAR would bring back on restart a module the operator
+     *     asked to remove. A JAR failure is attached as suppressed.
+     * @throws IOException if the modules folder cannot be read
      */
     public static boolean uninstallPlugin(String name) throws IOException {
-        AtomicReference<UltiToolsPlugin> ultiToolsPluginAtomicReference = new AtomicReference<>();
-        UltiTools.getInstance().getPluginManager().getPluginList().stream().filter(plugin -> plugin.getPluginName().equals(name)).forEach(plugin -> {
-            ultiToolsPluginAtomicReference.set(plugin);
-            plugin.unregisterSelf();
-        });
-        UltiTools.getInstance().getPluginManager().getPluginList().remove(ultiToolsPluginAtomicReference.get());
-        File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
-        File[] listFiles = folder.listFiles();
-        if (listFiles == null) {
-            return false;
+        return uninstallPluginReporting(name).jarsDeleted();
+    }
+
+    /**
+     * {@link #uninstallPlugin(String)}, also reporting the entries whose identity could not be
+     * determined -- the ones a caller has to tell the operator about, because one of them may be a
+     * copy of this module that loads again at the next start.
+     *
+     * @param name the module's runtime name
+     * @return what the uninstall did and what it could not determine
+     * @throws IOException exactly as {@link #uninstallPlugin(String)} documents
+     */
+    @ApiStatus.Internal
+    public static UninstallReport uninstallPluginReporting(String name) throws IOException {
+        return uninstallPluginReporting(name, new ArrayList<>());
+    }
+
+    /**
+     * {@link #uninstallPluginReporting(String)}, also collecting the versions of the module's
+     * updates it cancelled.
+     *
+     * <p>An uninstall that goes ahead -- whatever happens to its JARs afterwards, including a modules
+     * folder that cannot be listed -- cancels every update of the module still waiting for the next
+     * start and any download of one still running, so the next start does not install the module
+     * again (#505). It matches them on the identity it resolved before touching the folder: the
+     * identify-strings and runtime names of the instances it unloaded and their JARs, never only the
+     * name it was given (round-10 review). A refused uninstall changed nothing and cancels nothing.
+     *
+     * @param name             the module's runtime name, or a name a JAR of it declares
+     * @param cancelledUpdates collects the version of each staged update cancelled; filled on every
+     *                         outcome, including a thrown one, except a refusal
+     * @return what the uninstall did and what it could not determine
+     * @throws IOException exactly as {@link #uninstallPlugin(String)} documents
+     */
+    @ApiStatus.Internal
+    public static UninstallReport uninstallPluginReporting(String name, List<String> cancelledUpdates)
+            throws IOException {
+        return uninstallPluginReporting(name, DEFAULT_MODULE_CODE_SOURCE, cancelledUpdates);
+    }
+
+    /**
+     * {@link #uninstallPluginReporting(String)} with the code-source resolver to ask, which is how
+     * a test substitutes one without production code carrying a writable field (gate 1, IN-02).
+     *
+     * @param name       the module's runtime name, or a name a JAR of it declares
+     * @param codeSource how to ask a loaded module which JAR it came from
+     * @return what the uninstall did and what it could not determine
+     * @throws IOException exactly as {@link #uninstallPlugin(String)} documents
+     */
+    @ApiStatus.Internal
+    static UninstallReport uninstallPluginReporting(String name,
+                                                    java.util.function.Function<UltiToolsPlugin, File> codeSource)
+            throws IOException {
+        return uninstallPluginReporting(name, codeSource, new ArrayList<>());
+    }
+
+    /**
+     * {@link #uninstallPluginReporting(String, List)} with the code-source resolver to ask.
+     *
+     * @param name             the module's runtime name, or a name a JAR of it declares
+     * @param codeSource       how to ask a loaded module which JAR it came from
+     * @param cancelledUpdates collects the version of each staged update cancelled
+     * @return what the uninstall did and what it could not determine
+     * @throws IOException exactly as {@link #uninstallPlugin(String)} documents
+     */
+    static UninstallReport uninstallPluginReporting(String name,
+                                                    java.util.function.Function<UltiToolsPlugin, File> codeSource,
+                                                    List<String> cancelledUpdates) throws IOException {
+        if (name == null || name.trim().isEmpty()) {
+            throw new IllegalArgumentException("A module name is required to uninstall one");
         }
-        for (File file : listFiles) {
-            URL url = URI.create("jar:file:" + file.getAbsolutePath() + "!/plugin.yml").toURL();
-            JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-            InputStream inputStream = jarConnection.getInputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-            YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
-            String pluginName = pluginConfig.getString("name");
-            if (name.equals(pluginName)) {
-                inputStream.close();
-                reader.close();
-                file.delete();
+        PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
+        ModuleIdentity identity = resolveIdentity(name, pluginManager, codeSource);
+        refuseIfAnotherModuleSharesTheJar(identity);
+        refuseIfAnUpdateIsHeldForTheOperator(identity);
+        Throwable unloadFailure = unloadEvery(identity, pluginManager);
+        boolean refused = false;
+        try {
+            return removeJarsAndReport(name, identity, unloadFailure);
+        } catch (UninstallRefusedException refusal) {
+            // The invariant at the delete fired: nothing was deleted, so nothing is cancelled either.
+            refused = true;
+            throw refusal;
+        } finally {
+            if (!refused) {
+                // Every other outcome, thrown or returned: the module is unloaded, and an update of it
+                // must not bring it back at the next start (round-10 review).
+                cancelUpdatesOf(identity, cancelledUpdates);
+            }
+        }
+    }
+
+    /**
+     * The JAR half of the uninstall and its report, after the modules were unloaded.
+     *
+     * @param name          the operator's argument
+     * @param identity      the resolved identity
+     * @param unloadFailure what unloading threw, or {@code null}
+     * @return the report
+     * @throws IOException as documented on {@link #uninstallPlugin(String)}
+     */
+    private static UninstallReport removeJarsAndReport(String name, ModuleIdentity identity, Throwable unloadFailure)
+            throws IOException {
+        UninstallReport report;
+        try {
+            report = deleteModuleJars(identity);
+        } catch (IOException jarFailure) {
+            // The JAR failure already carries the undetermined entries; see deleteModuleJars.
+            if (unloadFailure != null) {
+                throw unloadFailed(name, unloadFailure, jarFailure);
+            }
+            throw jarFailure;
+        }
+        if (unloadFailure != null) {
+            throw carrying(unloadFailed(name, unloadFailure, null), report.undeterminedEntries());
+        }
+        return report;
+    }
+
+    /**
+     * Cancels the uninstalled module's staged updates and running update downloads, matched on the
+     * identity this uninstall resolved (round-10 review). Never throws: it runs on every exit of
+     * the uninstall, and a failure here must not replace the outcome being reported.
+     *
+     * @param identity         the resolved identity
+     * @param cancelledUpdates collects the versions cancelled
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // must not replace the uninstall's own outcome
+    private static void cancelUpdatesOf(ModuleIdentity identity, List<String> cancelledUpdates) {
+        try {
+            cancelledUpdates.addAll(new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
+                    .cancelStagedUpdates(identity.removedModule()));
+        } catch (RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Uninstalling module " + identity.requested
+                    + ": an update of it waiting for the next start could not be cancelled", e);
+        }
+    }
+
+    /**
+     * Moves the instances the argument names from {@code others} into {@code loaded}.
+     *
+     * <p>The two namespaces are asked in order, never together. A runtime-name match answers the
+     * question outright: if any loaded module answers to the name that was typed, that is the
+     * answer and no declared-name lookup runs beside it -- asking both at once made one module's
+     * runtime name and another's declared name equally good, and unloaded both.
+     *
+     * <p>Only when nothing answers by runtime name is the other namespace consulted, because
+     * naming a module by what its JAR declares must still work (gate 1, BL-01). If more than one
+     * module answers that way, the uninstall refuses and names the candidates rather than choosing:
+     * this deletes files, and a destructive command with two possible targets must stop.
+     *
+     * @param requested the operator's argument
+     * @param loaded    collects the instances it names
+     * @param others    every loaded instance; the chosen ones are moved out of it
+     * @param declared  what each instance's JAR declares
+     */
+    private static void chooseTargets(String requested, List<UltiToolsPlugin> loaded,
+                                      List<UltiToolsPlugin> others, Map<UltiToolsPlugin, String> declared) {
+        List<UltiToolsPlugin> byRuntimeName = new ArrayList<>();
+        List<UltiToolsPlugin> byDeclaredName = new ArrayList<>();
+        for (UltiToolsPlugin plugin : others) {
+            if (requested.equals(plugin.getPluginName())) {
+                byRuntimeName.add(plugin);
+            } else if (requested.equals(declared.get(plugin))) {
+                byDeclaredName.add(plugin);
+            }
+        }
+        List<UltiToolsPlugin> chosen = byRuntimeName.isEmpty() ? byDeclaredName : byRuntimeName;
+        if (byRuntimeName.isEmpty()) {
+            refuseIfAmbiguous(requested, byDeclaredName);
+        }
+        loaded.addAll(chosen);
+        others.removeAll(chosen);
+    }
+
+    /**
+     * Refuses when more than one module answers to a declared name.
+     *
+     * @param requested the operator's argument
+     * @param candidates the loaded modules whose JARs declare it
+     */
+    private static void refuseIfAmbiguous(String requested, List<UltiToolsPlugin> candidates) {
+        Set<String> names = new java.util.LinkedHashSet<>();
+        for (UltiToolsPlugin candidate : candidates) {
+            names.add(candidate.getPluginName());
+        }
+        if (names.size() > 1) {
+            throw new AmbiguousModuleNameException("Refusing to uninstall " + requested
+                    + ": it is not the runtime name of any loaded module, and the JARs of "
+                    + String.join(", ", names) + " all declare it. Name one of those instead;"
+                    + " nothing was changed.");
+        }
+    }
+
+    /**
+     * Everything later decisions need about which module this is, resolved once.
+     *
+     * <p>Two identity namespaces meet here and are reconciled in this one place: a module's runtime
+     * name ({@code getPluginName()}, which {@code UltiToolsPlugin(String pluginName, ...)} takes as
+     * an argument) and the name a JAR's {@code plugin.yml} declares. Gate 1's two blockers were
+     * both a comparison of a name from one space against a name from the other; after this
+     * resolution no code path compares across them -- entries are matched against {@link #keys},
+     * and loaded instances were already found by both.
+     */
+    private static final class ModuleIdentity {
+        private final String requested;
+        private final List<UltiToolsPlugin> loaded;
+        private final Set<String> ownJars;
+        private final Set<String> keys;
+        private final Set<String> bystanderJars;
+        private final Map<String, String> bystanderOf;
+        private final boolean resolvedFromLoadedModule;
+        private final boolean someCodeSourceUnknown;
+        /** What the module loader and the loaded instances recorded about the targets (#516, round 10). */
+        private final Recorded recorded;
+        /**
+         * The file names of the entries the folder scan identified as this module's, collected as
+         * {@link #deleteModuleJars} finds them -- deleted, recorded for deletion, or not deletable.
+         */
+        private final List<String> removedJarNames = new ArrayList<>();
+
+        @SuppressWarnings("PMD.ExcessiveParameterList") // one resolution's result, built in one place
+        private ModuleIdentity(String requested, List<UltiToolsPlugin> loaded, Set<String> ownJars,
+                               Set<String> keys, Recorded recorded, Set<String> bystanderJars,
+                               Map<String, String> bystanderOf, boolean resolvedFromLoadedModule,
+                               boolean someCodeSourceUnknown) {
+            this.requested = requested;
+            this.recorded = recorded;
+            this.loaded = loaded;
+            this.ownJars = ownJars;
+            this.keys = keys;
+            this.bystanderJars = bystanderJars;
+            this.bystanderOf = bystanderOf;
+            this.resolvedFromLoadedModule = resolvedFromLoadedModule;
+            this.someCodeSourceUnknown = someCodeSourceUnknown;
+        }
+
+        /**
+         * Notes the entries the folder scan identified as this module's, before anything is deleted.
+         *
+         * @param jars the entries
+         */
+        private void noteRemoved(List<File> jars) {
+            for (File jar : jars) {
+                removedJarNames.add(jar.getName());
+            }
+        }
+
+        /**
+         * The uninstalled module in every form an update transaction can name it by, for the
+         * cancellation (round-10 review): the unloaded instances' identify-strings and runtime
+         * names, the name keys, the JARs they were loaded from, the JARs the start-up scan recorded
+         * as declaring their main class, and the entries the folder scan identified. Everything
+         * except the last is known before the folder is touched, so it holds whatever the folder
+         * then does.
+         *
+         * @return the removed module
+         */
+        private ModuleFileTransactions.RemovedModule removedModule() {
+            List<String> names = new ArrayList<>(keys);
+            names.addAll(recorded.runtimeNames);
+            List<String> jarNames = new ArrayList<>(recorded.jarNames);
+            jarNames.addAll(removedJarNames);
+            return new ModuleFileTransactions.RemovedModule(recorded.identifyStrings, names, jarNames);
+        }
+    }
+
+    /**
+     * What the module loader and the loaded instances say about an uninstall's targets, read before
+     * anything is unloaded.
+     */
+    private static final class Recorded {
+        /**
+         * The targets' main classes as the loader recorded them, less any another loaded module also
+         * has: an entry whose {@code plugin.yml} declares one of them is a JAR the loader would load
+         * this module from again (#516).
+         */
+        private final Set<String> mainClasses;
+        /** The file names of the targets' code-source JARs and of every JAR recorded as declaring their main class. */
+        private final Set<String> jarNames;
+        /** The targets' identify-strings, normalised, less any another loaded module also reports. */
+        private final List<String> identifyStrings;
+        /** The targets' runtime names, less any another loaded module also answers to. */
+        private final Set<String> runtimeNames;
+
+        private Recorded(Set<String> mainClasses, Set<String> jarNames, List<String> identifyStrings,
+                         Set<String> runtimeNames) {
+            this.mainClasses = mainClasses;
+            this.jarNames = jarNames;
+            this.identifyStrings = identifyStrings;
+            this.runtimeNames = runtimeNames;
+        }
+    }
+
+    /**
+     * Resolves the operator's argument into the one identity every later decision reads.
+     *
+     * <p>Argument to loaded instances: an instance matches when its runtime name is the argument,
+     * <em>or</em> when the JAR it was loaded from declares that name -- the second half is gate 1's
+     * BL-01, where naming a module by what its JAR declares deleted the JAR of a module that was
+     * left running.
+     *
+     * <p>Instances to keys: what their own JARs declare, plus the argument. A key another loaded
+     * module owns -- its runtime name, or what its own JAR declares -- is dropped, which is gate
+     * 1's BL-02: a name lifted off one module's JAR is not safe as a global key. Those modules'
+     * JARs are also remembered, because no decision may end in deleting one of them.
+     *
+     * <p>With nothing loaded, the argument is the only key there is, and that is recorded.
+     *
+     * @param requested     the operator's argument
+     * @param pluginManager the manager that owns the plugin list
+     * @param codeSource    how to ask a loaded module which JAR it came from
+     * @return the resolved identity
+     */
+    private static ModuleIdentity resolveIdentity(String requested, PluginManager pluginManager,
+                                                  java.util.function.Function<UltiToolsPlugin, File> codeSource) {
+        List<UltiToolsPlugin> loaded = new ArrayList<>();
+        List<UltiToolsPlugin> others = new ArrayList<>();
+        Map<UltiToolsPlugin, File> jars = new java.util.LinkedHashMap<>();
+        Map<UltiToolsPlugin, String> declared = new java.util.LinkedHashMap<>();
+        java.util.concurrent.atomic.AtomicBoolean unknown = new java.util.concurrent.atomic.AtomicBoolean();
+        readLoadedModules(pluginManager, codeSource, others, jars, declared, unknown);
+        chooseTargets(requested, loaded, others, declared);
+        Set<String> ownJars = new java.util.HashSet<>();
+        Set<String> keys = new java.util.LinkedHashSet<>();
+        keys.add(requested);
+        for (UltiToolsPlugin plugin : loaded) {
+            File jar = jars.get(plugin);
+            if (jar != null) {
+                ownJars.add(canonicalPathOf(jar));
+            }
+            if (declared.get(plugin) != null) {
+                keys.add(declared.get(plugin));
+            }
+        }
+        Set<String> bystanderJars = new java.util.HashSet<>();
+        Map<String, String> bystanderOf = new java.util.HashMap<>();
+        for (UltiToolsPlugin plugin : others) {
+            File jar = jars.get(plugin);
+            if (jar != null) {
+                String path = canonicalPathOf(jar);
+                bystanderJars.add(path);
+                bystanderOf.put(path, plugin.getPluginName());
+            }
+            // A key another loaded module owns is not this module's to match on (gate 1, BL-02).
+            keys.remove(plugin.getPluginName());
+            keys.remove(declared.get(plugin));
+        }
+        // No re-adding what the loop above dropped: a key another loaded module owns stays dropped
+        // even when it was the argument itself. The target's own JAR is still found through its
+        // code source, and matching other entries on a name a running module answers to would take
+        // that module's JAR (gate 1, BL-02).
+        return new ModuleIdentity(requested, loaded, ownJars, keys, recordedOf(pluginManager, loaded, others, ownJars),
+                bystanderJars, bystanderOf, !loaded.isEmpty(), unknown.get());
+    }
+
+    /**
+     * What the loader recorded about the targets (#516) and what they report about themselves, read
+     * before they are unloaded.
+     *
+     * @param pluginManager the manager whose start-up scan recorded them
+     * @param targets       the loaded instances this uninstall targets
+     * @param others        every other loaded instance
+     * @param ownJars       the canonical paths of the targets' code-source JARs
+     * @return the record
+     */
+    private static Recorded recordedOf(PluginManager pluginManager, List<UltiToolsPlugin> targets,
+                                       List<UltiToolsPlugin> others, Set<String> ownJars) {
+        Set<String> mainClasses = mainClassesOf(pluginManager, targets, others);
+        Set<String> jarNames = new java.util.HashSet<>();
+        String modulesFolderPath = canonicalPathOf(modulesFolder());
+        for (String path : ownJars) {
+            // Only a JAR directly in the modules folder can be an update's old JAR, and a cancellation
+            // matches JARs by file name: an external code source's name could be an unrelated module
+            // JAR's in the modules folder (Codex round 16).
+            File jar = new File(path);
+            if (jar.getParentFile() != null && modulesFolderPath.equals(jar.getParentFile().getPath())) {
+                jarNames.add(jar.getName());
+            }
+        }
+        ModuleJarIndex index = pluginManager.getModuleJarIndex();
+        if (index != null) {
+            for (String mainClass : mainClasses) {
+                for (File jar : index.jarsDeclaring(mainClass)) {
+                    jarNames.add(jar.getName());
+                }
+            }
+        }
+        // An identify-string or runtime name another loaded module also has is not this module's to
+        // match on -- the exclusion the name keys and main classes get (gate 1, BL-02). Every form a
+        // RemovedModule carries is excluded this way: keys and main classes where they are built,
+        // identify-strings and runtime names here; JAR names need none, since a JAR another loaded
+        // module came from is refused before anything is unloaded (17-44 gate 1, reviewer A).
+        Set<String> identifyStrings = new java.util.LinkedHashSet<>();
+        Set<String> runtimeNames = new java.util.LinkedHashSet<>();
+        for (UltiToolsPlugin plugin : targets) {
+            addNormalized(identifyStrings, plugin.getIdentifyString());
+            runtimeNames.add(plugin.getPluginName());
+        }
+        for (UltiToolsPlugin plugin : others) {
+            identifyStrings.remove(normalizeIdentifyString(plugin.getIdentifyString()));
+            runtimeNames.remove(plugin.getPluginName());
+        }
+        return new Recorded(mainClasses, jarNames, new ArrayList<>(identifyStrings), runtimeNames);
+    }
+
+    /** Adds {@code identifyString}, normalised, unless it is absent or blank. */
+    private static void addNormalized(Set<String> into, String identifyString) {
+        String key = normalizeIdentifyString(identifyString);
+        if (key != null) {
+            into.add(key);
+        }
+    }
+
+    /**
+     * The main classes the module loader recorded for the targets, less every one another loaded
+     * module also has (#516) -- the same exclusion the name keys get (gate 1, BL-02).
+     *
+     * @param pluginManager the manager whose start-up scan recorded them
+     * @param targets       the loaded instances this uninstall targets
+     * @param others        every other loaded instance
+     * @return the main classes an entry is matched on
+     */
+    private static Set<String> mainClassesOf(PluginManager pluginManager, List<UltiToolsPlugin> targets,
+                                             List<UltiToolsPlugin> others) {
+        ModuleJarIndex index = pluginManager.getModuleJarIndex();
+        Set<String> mainClasses = new java.util.HashSet<>();
+        if (index == null) {
+            return mainClasses;
+        }
+        for (UltiToolsPlugin plugin : targets) {
+            mainClasses.add(index.mainClassOf(plugin));
+        }
+        for (UltiToolsPlugin plugin : others) {
+            mainClasses.remove(index.mainClassOf(plugin));
+        }
+        return mainClasses;
+    }
+
+    /**
+     * Reads every loaded module once: which JAR it came from, and what that JAR declares.
+     *
+     * <p>Read before anything is unloaded: afterwards the instance and its class loader may be
+     * gone, and with them the only authoritative answer to "which JAR is this module's". Which of
+     * them the argument names is decided afterwards, by {@link #chooseTargets}.
+     *
+     * @param pluginManager the manager that owns the plugin list
+     * @param codeSource    how to ask a loaded module which JAR it came from
+     * @param others        collects every loaded instance, before any is chosen as a target
+     * @param jars          collects each instance's code-source JAR
+     * @param declared      collects what each instance's JAR declares
+     * @param someUnknown   set when some instance's code source could not be determined at all
+     */
+    private static void readLoadedModules(PluginManager pluginManager,
+                                          java.util.function.Function<UltiToolsPlugin, File> codeSource,
+                                          List<UltiToolsPlugin> others, Map<UltiToolsPlugin, File> jars,
+                                          Map<UltiToolsPlugin, String> declared,
+                                          java.util.concurrent.atomic.AtomicBoolean someUnknown) {
+        for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
+            File location = codeSource.apply(plugin);
+            if (location == null) {
+                // Not "it has no JAR": the question could not be answered, and while that holds any
+                // entry matched only by a name might be this running module's own JAR.
+                someUnknown.set(true);
+            }
+            // A directory is an exploded checkout: no JAR of this module is in the folder, which is
+            // an answer rather than an absence of one.
+            File jar = location == null || probeFollowingLinks(location) == Presence.DIRECTORY ? null : location;
+            jars.put(plugin, jar);
+            String name = jar == null ? null : readArchive(jar).declaredName;
+            declared.put(plugin, name);
+            others.add(plugin);
+        }
+    }
+
+    /**
+     * Unloads every matching module through the framework's full unload path, which also delists it.
+     *
+     * <p>A module that throws while unloading is collected rather than propagated: it is already
+     * unloaded and its context already closed, so the rest of the uninstall goes ahead and the
+     * failure is reported together with the JAR outcome. It leaves the plugin list either way,
+     * because a listed module whose context is closed would be reported as still loaded.
+     *
+     * @param identity      the resolved identity, whose loaded instances are unloaded
+     * @param pluginManager the manager that owns the plugin list
+     * @return the first unload failure with any later one attached, or {@code null}
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // one module's failure must not stop the uninstall
+    private static Throwable unloadEvery(ModuleIdentity identity, PluginManager pluginManager) {
+        Throwable unloadFailure = null;
+        for (UltiToolsPlugin plugin : identity.loaded) {
+            try {
+                pluginManager.unregister(plugin);
+            } catch (VirtualMachineError fatal) {
+                // Its own clause, before the one below: collecting an OutOfMemoryError and going on
+                // to delete files is not a recovery, so it leaves untouched.
+                throw fatal;
+            } catch (Exception | Error e) {
+                // ThreadDeath is collected here too, deliberately, though its historical contract
+                // asks a catcher to rethrow it. Measured on the JDK this builds against (21.0.12):
+                // Thread.stop() throws UnsupportedOperationException, so the platform cannot deliver
+                // a ThreadDeath at all and "this thread is terminating" would be false. The stronger
+                // reason is the guarantee this command exists to make: if it were rethrown, a module
+                // could abort its own uninstall by throwing ThreadDeath from its unload hook, and a
+                // module must not be able to refuse its own removal.
+                // Everything else a module's unload throws is that module's failure, which this
+                // uninstall reports and carries on from -- unregisterSelf() collects and rethrows
+                // whatever its steps throw, a NoClassDefFoundError from half-loaded classes and an
+                // AssertionError from a module's own check alike (gate 1, IN-07 and its correction).
+                LOGGER.log(Level.SEVERE, "Module " + identity.requested + " threw while unloading for uninstall; "
+                        + "it has been removed from the loaded modules", e);
+                unloadFailure = firstOf(unloadFailure, e);
+            }
+            // No delisting here: unregister() removes the module from the plugin list in its own
+            // finally block (#507), whether or not the unload threw, and getPluginList() is an
+            // unmodifiable snapshot that no caller can remove from.
+        }
+        return unloadFailure;
+    }
+
+    /**
+     * The first failure, with any later one attached to it.
+     *
+     * <p>Combining two failures has more ways to fail than it looks. {@code addSuppressed} rejects
+     * a throwable suppressing itself, which a module reusing a static sentinel produces from two
+     * instances -- and that {@code IllegalArgumentException} would escape past every handler,
+     * abandoning the uninstall with the modules delisted and their JARs still on disk. It also
+     * rejects {@code null}. Attaching the same object twice is not an error but says nothing, so it
+     * is skipped too.
+     *
+     * @param first the failure collected so far, or {@code null}
+     * @param next  the failure to attach
+     * @return the failure to carry on with
+     */
+    // Reference comparison is the point, not a mistake: addSuppressed rejects the same object,
+    // and two distinct failures that happen to be equal must both be attached, so equals() here
+    // would discard the second one.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private static Throwable firstOf(Throwable first, Throwable next) {
+        if (next == null) {
+            return first;
+        }
+        if (first == null) {
+            return next;
+        }
+        if (first == next || alreadyAttached(first, next)) {
+            return first;
+        }
+        first.addSuppressed(next);
+        return first;
+    }
+
+    /** Whether {@code candidate} is already among {@code failure}'s suppressed throwables. */
+    // Reference comparison for the same reason as in firstOf: the question is whether this very
+    // object is already attached, not whether an equal one is.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private static boolean alreadyAttached(Throwable failure, Throwable candidate) {
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed == candidate) {
                 return true;
             }
         }
         return false;
     }
+
+    /**
+     * The JAR half of {@link #uninstallPlugin(String)}: deletes every entry identified as this
+     * module's -- not only the first one listed, since a second JAR loads the module again on
+     * restart -- and reports the entries nothing could be read from.
+     *
+     * @param identity the resolved identity: which instances were loaded, which JARs they came
+     *                 from, which keys other entries are matched against, and which JARs belong to
+     *                 other loaded modules
+     * @return what was deleted and what could not be identified
+     * @throws IOException as documented on {@link #uninstallPlugin(String)}
+     */
+    private static UninstallReport deleteModuleJars(ModuleIdentity identity) throws IOException {
+        File folder = modulesFolder();
+        File[] listFiles;
+        try {
+            // In file-name order (#476), so the report names the entries in the same order every time.
+            listFiles = ModuleFileTransactions.sortedByName(folder.listFiles());
+        } catch (SecurityException denied) {
+            // A policy that denies reading the folder throws rather than answering null, and the
+            // module has already been unloaded by now: this is state D, not an abort.
+            LOGGER.log(Level.SEVERE, "Uninstalling module " + identity.requested + ": the modules folder "
+                    + folder.getAbsolutePath() + " could not be listed", denied);
+            java.nio.file.AccessDeniedException failure = modulesFolderUnlistable(folder);
+            failure.initCause(denied);
+            throw failure;
+        }
+        if (listFiles == null) {
+            if (probe(folder) != Presence.ABSENT) {
+                // State D. Something is there, or the question could not be answered -- either way
+                // "no JAR of this module is here" is a claim nothing supports, and the module's JAR
+                // may be sitting in it ready to load again.
+                LOGGER.severe("Uninstalling module " + identity.requested + ": the modules folder "
+                        + folder.getAbsolutePath() + " could not be listed");
+                throw modulesFolderUnlistable(folder);
+            }
+            return new UninstallReport(noJarFound(folder, identity, Collections.<String>emptyList()),
+                    Collections.<String>emptyList(), Collections.<String>emptyList());
+        }
+        List<File> matchingJars = new ArrayList<>();
+        List<File> undetermined = new ArrayList<>();
+        for (File file : listFiles) {
+            EntryState state = classify(file, identity);
+            if (state == EntryState.THIS_MODULES) {
+                matchingJars.add(file);
+            } else if (state == EntryState.UNDETERMINED) {
+                undetermined.add(file);
+            }
+        }
+        List<String> undeterminedPaths = absolutePathsOf(undetermined);
+        if (!undetermined.isEmpty()) {
+            LOGGER.warning("Uninstalling module " + identity.requested + ": " + undetermined.size() + " entr(ies) in "
+                    + folder.getAbsolutePath() + " could not be identified, so whether any of them is a copy of"
+                    + " this module is unknown: " + String.join(", ", undeterminedPaths));
+        }
+        if (matchingJars.isEmpty()) {
+            // State C outlives this answer: "nothing here could be identified as this module's" is
+            // true, and so is "these entries said nothing", and one of them may be the module's own
+            // JAR. Both facts travel together rather than the first discarding the second.
+            return new UninstallReport(noJarFound(folder, identity, undeterminedPaths),
+                    undeterminedPaths, Collections.<String>emptyList());
+        }
+        refuseToTouchAnotherModulesJar(identity, matchingJars);
+        identity.noteRemoved(matchingJars);
+        List<String> deleted = absolutePathsOf(matchingJars);
+        try {
+            deleteAllOrThrow(matchingJars);
+        } catch (java.nio.file.FileSystemException deleteFailure) {
+            throw carrying(deferOrFail(identity, matchingJars, deleteFailure), undeterminedPaths);
+        }
+        return new UninstallReport(true, undeterminedPaths, deleted);
+    }
+
+    /**
+     * A JAR that could not be deleted now is recorded so the next start deletes it before any
+     * module loads (#518). On Windows the shared module class loader keeps every module JAR open
+     * while the server runs, so "delete it by hand" is an instruction the operator cannot follow;
+     * the record is what makes the uninstall complete. Only when the record itself cannot be
+     * written does the original failure leave as it was, with the record failure attached inside a
+     * {@link RemovalNotRecordedException}: every {@code FileSystemException} in the failure still
+     * names a module JAR still on disk, never a record or temporary file under {@code .ultikits}.
+     *
+     * @param identity      the resolved identity
+     * @param jars          the JARs the uninstall tried to delete
+     * @param deleteFailure what the deletion threw
+     * @return the failure to report: {@link RemovalDeferredException} when the deletion was recorded;
+     *     otherwise {@code deleteFailure}, with a {@link RemovalNotRecordedException} attached when
+     *     the record could not be written
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // a record that cannot be written leaves the original failure
+    private static java.nio.file.FileSystemException deferOrFail(ModuleIdentity identity, List<File> jars,
+                                                                 java.nio.file.FileSystemException deleteFailure) {
+        List<File> remaining = new ArrayList<>();
+        for (File jar : jars) {
+            if (probe(jar) != Presence.ABSENT) {
+                remaining.add(jar);
+            }
+        }
+        if (remaining.isEmpty()) {
+            return deleteFailure;
+        }
+        Throwable cause = deleteFailure.getCause() == null ? deleteFailure : deleteFailure.getCause();
+        String reason = cause.getClass().getSimpleName()
+                + (cause.getMessage() == null ? "" : ": " + cause.getMessage());
+        try {
+            new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
+                    .recordDeferredRemoval(identity.requested, remaining);
+        } catch (IOException | RuntimeException recordFailure) {
+            LOGGER.log(Level.WARNING, "Uninstalling module " + identity.requested
+                    + ": the deletion could not be recorded for the next start either", recordFailure);
+            deleteFailure.addSuppressed(RemovalNotRecordedException.of(recordFailure));
+            return deleteFailure;
+        }
+        LOGGER.warning("Uninstalling module " + identity.requested + ": " + absolutePathsOf(remaining)
+                + " could not be deleted now (" + reason + "); recorded, and deleted at the next start"
+                + " before modules load");
+        RemovalDeferredException deferred = RemovalDeferredException.of(absolutePathsOf(remaining), reason);
+        deferred.initCause(deleteFailure);
+        return deferred;
+    }
+
+    /**
+     * Refuses before anything is unloaded when a JAR this uninstall would act on is also the JAR
+     * another running module was loaded from.
+     *
+     * <p>Two module classes can be packaged in one archive and registered separately, so one
+     * physical JAR can be two loaded modules' code source. Deleting it would take a module the
+     * operator did not name, and unloading the target first would change the loaded state for an
+     * uninstall whose outcome is already known to be undefined -- so nothing happens at all. The
+     * invariant at the delete stays as well, for whatever future path reaches one by another route.
+     *
+     * @param identity the resolved identity
+     */
+    /**
+     * Refuses, before anything is unloaded, while an update of the module is held for the operator:
+     * its record names a file the transaction could not identify, and the uninstall's cancellation
+     * would otherwise have to delete that record's folder, files included (foreign-file rule).
+     */
+    private static void refuseIfAnUpdateIsHeldForTheOperator(ModuleIdentity identity) {
+        List<String> held = new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
+                .heldForOperator(identity.removedModule());
+        if (!held.isEmpty()) {
+            throw new UninstallRefusedException("Refusing to uninstall " + identity.requested
+                    + ": an update of it is on hold for the operator (" + String.join(", ", held)
+                    + "); resolve it as the start-up log says, then delete that record and the folder of the"
+                    + " same name. Nothing was unloaded or deleted");
+        }
+    }
+
+    private static void refuseIfAnotherModuleSharesTheJar(ModuleIdentity identity) {
+        for (String jar : identity.ownJars) {
+            if (identity.bystanderJars.contains(jar)) {
+                throw new UninstallRefusedException("Refusing to uninstall " + identity.requested + ": "
+                        + jar + " is also the JAR module " + identity.bystanderOf.get(jar)
+                        + " is loaded from, so nothing was unloaded or deleted");
+            }
+        }
+    }
+
+    /**
+     * The invariant, checked immediately before anything is deleted: no JAR another loaded module
+     * was loaded from may be removed, whatever decided to get here.
+     *
+     * <p>Gate 1's BL-02 was a bystander module losing its JAR because a name lifted off the
+     * target's JAR became the match key. Resolution no longer produces such a key, and this is the
+     * guard at the point of destruction for every other way it could happen. It fires before the
+     * first delete, so nothing is half-done when it does.
+     *
+     * @param identity the resolved identity, carrying the other loaded modules' JARs
+     * @param toDelete the entries about to be deleted
+     */
+    private static void refuseToTouchAnotherModulesJar(ModuleIdentity identity, List<File> toDelete) {
+        for (File file : toDelete) {
+            String path = canonicalPathOf(file);
+            if (identity.bystanderJars.contains(path)) {
+                throw new UninstallRefusedException("Refusing to uninstall " + identity.requested + ": "
+                        + file.getAbsolutePath() + " is the JAR module " + identity.bystanderOf.get(path)
+                        + " is loaded from, and nothing was deleted");
+            }
+        }
+    }
+
+    /**
+     * The modules folder install and uninstall act on: the one {@code PluginManager#init} scans and
+     * the module class loader reads, from the one method that computes it (#517). Before 6.3.0 the
+     * scan read {@code System.getProperty("user.dir")} + {@code /plugins/UltiTools/plugins} while
+     * this read the data folder, and the two diverged on a server started from another directory.
+     *
+     * @return the modules folder
+     */
+    private static File modulesFolder() {
+        return ModuleFileTransactions.modulesFolder(UltiTools.getInstance().getDataFolder());
+    }
+
+    /** The state-D failure: the folder is there, and what it holds is unknown. */
+    private static java.nio.file.AccessDeniedException modulesFolderUnlistable(File folder) {
+        return new java.nio.file.AccessDeniedException(folder.getAbsolutePath(), null,
+                "the modules folder exists but could not be listed, so nothing can be concluded"
+                        + " about the JARs it holds");
+    }
+
+    /**
+     * Which {@link EntryState} an entry of the modules folder is in.
+     *
+     * <p>The loaded instance's own code-source JAR is state A whatever it declares -- the module
+     * itself said where it came from. Otherwise the archive is read once ({@link #readArchive}):
+     * an entry the module loader would never load, and one declaring a module that is not this
+     * one, are state B; one that declares a key this identity owns is state A; and one that says
+     * nothing about itself -- would not open, cannot be parsed, carries no {@code plugin.yml} or
+     * no {@code name:} -- is state C.
+     *
+     * @param file     the entry
+     * @param identity the resolved identity, whose keys and own JARs decide this
+     * @return the state it is in
+     */
+    private static EntryState classify(File file, ModuleIdentity identity) {
+        try {
+            if (identity.ownJars.contains(canonicalPathOf(file))) {
+                // The module itself said this is where it came from. Nothing a file declares, or
+                // fails to declare, outranks that.
+                return EntryState.THIS_MODULES;
+            }
+            ArchiveIdentity archive = readArchive(file);
+            if (archive.declaredMain != null && identity.recorded.mainClasses.contains(archive.declaredMain)) {
+                return byDeclaredMainClass(identity);
+            }
+            if (!archive.declaresAName()) {
+                return archive.state;
+            }
+            if (!identity.keys.contains(archive.declaredName)) {
+                return EntryState.NOT_THIS_MODULES;
+            }
+            if (identity.someCodeSourceUnknown) {
+                // A loaded module's own JAR could not be determined, so this entry may be that
+                // module's rather than the target's. Deleting it on a name alone would take a
+                // running module's JAR; it is reported as what it is instead.
+                return EntryState.UNDETERMINED;
+            }
+            return EntryState.THIS_MODULES;
+        } catch (SecurityException denied) {
+            // Even a type probe can be refused by a policy. A refusal answers nothing about what
+            // the entry is, which is state C.
+            LOGGER.log(Level.FINE, "Could not examine " + file + " while uninstalling "
+                    + identity.requested, denied);
+            return EntryState.UNDETERMINED;
+        }
+    }
+
+    /**
+     * An entry whose {@code plugin.yml} declares one of the targets' main classes: the module loader
+     * loads exactly the class {@code main:} names (#548/#549), so after a restart this file loads the
+     * module the operator removed (#516). The same caution as a name match applies: while some loaded
+     * module's own JAR could not be determined, the entry may be that module's, and is reported.
+     *
+     * @param identity the resolved identity
+     * @return the entry's state
+     */
+    private static EntryState byDeclaredMainClass(ModuleIdentity identity) {
+        return identity.someCodeSourceUnknown ? EntryState.UNDETERMINED : EntryState.THIS_MODULES;
+    }
+
+    /** The absolute paths of {@code files}, in the order given. */
+    private static List<String> absolutePathsOf(List<File> files) {
+        List<String> paths = new ArrayList<>();
+        for (File file : files) {
+            paths.add(file.getAbsolutePath());
+        }
+        return paths;
+    }
+
+    /**
+     * Deletes every file, and reports the ones that are still there.
+     *
+     * @param files the JARs to delete
+     * @throws java.nio.file.FileSystemException naming the first JAR that survived, with any other
+     *     attached as suppressed -- each one of them loads the module again on restart
+     */
+    private static void deleteAllOrThrow(List<File> files) throws java.nio.file.FileSystemException {
+        java.nio.file.FileSystemException failure = null;
+        for (File file : files) {
+            try {
+                // A file already gone is the outcome asked for, not a failure: reporting it would
+                // name a JAR that is no longer on disk.
+                java.nio.file.Files.deleteIfExists(file.toPath());
+            } catch (IOException | SecurityException e) {
+                // SecurityException too: a policy that allows reading a module JAR and denies
+                // deleting it throws an unchecked exception, which would otherwise escape past the
+                // rest of this loop and leave the operator with no report of the JAR still there.
+                java.nio.file.FileSystemException fileFailure =
+                        new java.nio.file.FileSystemException(file.getAbsolutePath(), null, e.getMessage());
+                fileFailure.initCause(e);
+                if (failure == null) {
+                    failure = fileFailure;
+                } else {
+                    failure.addSuppressed(fileFailure);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * What "nothing here could be identified as this module's" means, which depends on whether one
+     * was loaded.
+     *
+     * @param folder       the modules folder
+     * @param identity     the resolved identity
+     * @param undetermined the entries nothing could identify, attached to the failure
+     * @return {@code false}, the "no such module" answer, when nothing was unloaded either
+     * @throws java.nio.file.NoSuchFileException when a module was unloaded and its JAR is missing,
+     *     with one suppressed entry per undetermined file
+     */
+    private static boolean noJarFound(File folder, ModuleIdentity identity, List<String> undetermined)
+            throws java.nio.file.NoSuchFileException {
+        if (identity.resolvedFromLoadedModule) {
+            // The module was loaded from somewhere, so "check the spelling" is the wrong answer:
+            // the operator needs to know the module is unloaded and no JAR of it was identified.
+            throw carrying(new java.nio.file.NoSuchFileException(folder.getAbsolutePath(), null,
+                    "no module JAR identified as " + identity.requested), undetermined);
+        }
+        return false;
+    }
+
+    /**
+     * The failure raised when a module's own unload threw, after the uninstall went ahead anyway.
+     *
+     * @param name          the module's runtime name
+     * @param unloadFailure what its unload threw
+     * @param jarFailure    the JAR outcome to attach, or {@code null} when the JARs were deleted
+     * @return the exception to throw
+     */
+    private static ModuleUnloadFailedException unloadFailed(String name, Throwable unloadFailure,
+                                                           IOException jarFailure) {
+        ModuleUnloadFailedException failure = new ModuleUnloadFailedException(
+                "Module " + name + " was removed from the loaded modules, but its unload threw", unloadFailure);
+        if (jarFailure != null) {
+            failure.addSuppressed(jarFailure);
+        }
+        return failure;
+    }
+
+
 }

@@ -1,18 +1,33 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.FileWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,10 +35,15 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.abstracts.data.DataEntityTest;
+import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator.LikeType;
 
 class SimpleJsonDataOperatorTest {
@@ -40,6 +60,8 @@ class SimpleJsonDataOperatorTest {
             Server mockServer = mock(Server.class);
             Logger mockLogger = mock(Logger.class);
             when(mockServer.getLogger()).thenReturn(mockLogger);
+            org.mockito.Mockito.lenient().when(mockServer.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
+            org.mockito.Mockito.lenient().when(mockServer.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
             Bukkit.setServer(mockServer);
         }
     }
@@ -364,10 +386,14 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("1", "test", 10));
             
             Object nonSerializable = new Object();
+            // GATE-05 group two (08-21): tightened from RuntimeException to the typed
+            // DataAccessException this site now throws, plus its carried ErrorCode.
             assertThatThrownBy(() -> operator.getAll(
                 WhereCondition.builder().column("name").value(nonSerializable).build()
-            )).isInstanceOf(RuntimeException.class)
-              .hasMessageContaining("not serializable");
+            )).isInstanceOf(DataAccessException.class)
+              .hasMessageContaining("not serializable")
+              .extracting(t -> ((DataAccessException) t).getErrorCode())
+              .isEqualTo(ErrorCode.DATA_QUERY_FAILED);
         }
     }
 
@@ -523,9 +549,14 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("1", "test", 10));
             Object nonSerializable = new Object();
             
+            // GATE-05 group two (08-21): tightened to the typed DataAccessException, and to
+            // DATA_PERSISTENCE_FAILED rather than getAll/del's DATA_QUERY_FAILED -- this
+            // validates the value being written, not a WhereCondition.
             assertThatThrownBy(() -> operator.update("name", nonSerializable, "1"))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("not serializable");
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("not serializable")
+                .extracting(t -> ((DataAccessException) t).getErrorCode())
+                .isEqualTo(ErrorCode.DATA_PERSISTENCE_FAILED);
         }
     }
 
@@ -580,10 +611,14 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("1", "test", 10));
             Object nonSerializable = new Object();
             
+            // GATE-05 group two (08-21): tightened to the typed DataAccessException, same
+            // DATA_QUERY_FAILED code as getAll's identical WhereCondition-validation check.
             assertThatThrownBy(() -> operator.del(
                 WhereCondition.builder().column("name").value(nonSerializable).build()
-            )).isInstanceOf(RuntimeException.class)
-              .hasMessageContaining("not serializable");
+            )).isInstanceOf(DataAccessException.class)
+              .hasMessageContaining("not serializable")
+              .extracting(t -> ((DataAccessException) t).getErrorCode())
+              .isEqualTo(ErrorCode.DATA_QUERY_FAILED);
         }
         
         @Test
@@ -591,10 +626,66 @@ class SimpleJsonDataOperatorTest {
         void testDelSkipNullPath() {
             operator.insert(new TestData("1", "test", 10));
             int sizeBefore = operator.getAll().size();
-            
+
             operator.del(WhereCondition.builder().column("nonexistent").value("value").build());
-            
+
             assertThat(operator.getAll()).hasSize(sizeBefore);
+        }
+
+        /**
+         * CR-02 (02-REVIEW.md, 02-13): {@link com.ultikits.ultitools.interfaces.DataOperator#del}'s
+         * interface javadoc, added in this same phase, promises a {@code null} or zero-length
+         * {@code whereConditions} is rejected with a {@code DataAccessException} -- the guarantee
+         * {@code AbstractRelationalDataOperator.del()} already enforces. Before 02-13,
+         * {@code SimpleJsonDataOperator.del()} did not: a zero-length array made the {@code for}
+         * loop body never run, so the call returned normally having deleted nothing, in direct
+         * contradiction of the promise; a {@code null} array threw a raw {@code
+         * NullPointerException} instead of the promised exception type.
+         */
+        @Test
+        @DisplayName("del() with a zero-length array should throw DataAccessException, not silently delete nothing (CR-02, 02-13)")
+        void testDelZeroLengthArrayShouldThrow() {
+            operator.insert(new TestData("1", "test", 10));
+
+            assertThatThrownBy(() -> operator.del())
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
+
+            // A refused call must not have deleted anything as a side effect.
+            assertThat(operator.getById("1")).isNotNull();
+        }
+
+        @Test
+        @DisplayName("del(null) should throw DataAccessException, not a raw NullPointerException (CR-02, 02-13)")
+        void testDelNullArrayShouldThrowDataAccessException() {
+            operator.insert(new TestData("1", "test", 10));
+
+            assertThatThrownBy(() -> operator.del((WhereCondition[]) null))
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
+
+            assertThat(operator.getById("1")).isNotNull();
+        }
+
+        @Test
+        @DisplayName("a refused del() inside a transaction stages nothing and writes nothing (CR-02, 02-13)")
+        void refusedDelInsideATransactionStagesAndWritesNothing() throws Exception {
+            // Data inserted before the transaction; del() with no condition is the only write
+            // attempted inside it, so any staged write or committed change would come from it.
+            operator.insert(new TestData("1", "test", 10));
+
+            operator.transaction(() -> {
+                assertThatThrownBy(() -> operator.del()).isInstanceOf(DataAccessException.class);
+                assertThat(operator.transactionManager().currentTransaction().hasStagedWrites(operator))
+                        .as("nothing staged by the refused delete").isFalse();
+                assertThat(operator.getById("1")).as("the entry, seen inside the transaction").isNotNull();
+                return null;
+            });
+
+            assertThat(operator.getAll()).as("nothing written by the refused delete").hasSize(1);
+            assertThat(operator.getById("1")).isNotNull();
         }
     }
 
@@ -628,6 +719,47 @@ class SimpleJsonDataOperatorTest {
             
             assertThat(reloaded).isNotNull();
             assertThat(reloaded.getName()).isEqualTo("data");
+        }
+
+        @Test
+        @DisplayName("GATE-05 group two (08-21): flush should throw DataAccessException when the store location cannot be written")
+        void testFlushThrowsDataAccessExceptionWhenUnwritable() throws Exception {
+            // Given - a storeLocation whose own parent path segment is a regular file, so
+            // neither FileUtils.touch (which swallows its own IOException and merely returns
+            // false) nor Files.newBufferedWriter can create the target file. The write attempt
+            // still throws a genuine IOException regardless of process permissions (unlike
+            // File.setWritable(false), which is a no-op when tests run as root).
+            File blocker = new File(storeDir, "blocker-file");
+            assertThat(blocker.createNewFile()).isTrue();
+            String badStoreLocation = blocker.getAbsolutePath() + File.separator + "subdir";
+            SimpleJsonDataOperator<TestData> badOperator =
+                    new SimpleJsonDataOperator<>(badStoreLocation, TestData.class);
+            badOperator.insert(new TestData("1", "test", 10));
+
+            // When / Then
+            assertThatThrownBy(badOperator::flush)
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(t -> ((DataAccessException) t).getErrorCode())
+                    .isEqualTo(ErrorCode.DATA_PERSISTENCE_FAILED);
+        }
+
+        @Test
+        @DisplayName("a flush that cannot write leaves the entry dirty, so the next flush writes it once the location is writable")
+        void failedFlushLeavesTheEntryDirty() throws Exception {
+            File blocker = new File(storeDir, "blocker-file");
+            assertThat(blocker.createNewFile()).isTrue();
+            String badStoreLocation = blocker.getAbsolutePath() + File.separator + "subdir";
+            SimpleJsonDataOperator<TestData> badOperator =
+                    new SimpleJsonDataOperator<>(badStoreLocation, TestData.class);
+            badOperator.insert(new TestData("1", "test", 10));
+            assertThatThrownBy(badOperator::flush).isInstanceOf(DataAccessException.class);
+
+            assertThat(blocker.delete()).isTrue();
+            badOperator.flush();
+
+            assertThat(new File(badStoreLocation, "1.json"))
+                    .as("the entry stayed dirty after the failed flush and the next flush wrote it")
+                    .exists();
         }
     }
 
@@ -676,8 +808,19 @@ class SimpleJsonDataOperatorTest {
         @Test
         @DisplayName("gc should handle empty directory")
         void testGCEmptyDirectory() {
-            // Should not throw
-            operator.gc();
+            // GATE-06 (issue #345): the previous body called gc() with no assertion at all, so a
+            // gc() that threw or one that started deleting files it should have left alone would
+            // both pass silently. gc() lists ".json" files in storeDir and deletes any whose id has
+            // no live cache entry (see SimpleJsonDataOperator#gc); an empty directory has nothing
+            // to delete, so the real check is that nothing throws AND nothing in the directory
+            // changes as a result.
+            assertThatCode(() -> operator.gc())
+                    .as("gc must not throw when the store directory has no .json files to scan")
+                    .doesNotThrowAnyException();
+            assertThat(storeDir).as("gc on an empty directory must not remove the directory itself").exists();
+            assertThat(storeDir.listFiles())
+                    .as("gc on an empty directory must not create any file")
+                    .isEmpty();
         }
     }
 
@@ -710,6 +853,463 @@ class SimpleJsonDataOperatorTest {
 
         public void setValue(int value) {
             this.value = value;
+        }
+    }
+
+    /**
+     * SILENT-02 (02-08): the same set of assertions as
+     * {@code SQLiteDataOperatorTest$LifecycleHookTests}, run against the JSON backend, so the
+     * two backends cannot diverge on when the entity lifecycle hooks fire.
+     */
+    @Nested
+    @DisplayName("Lifecycle Hook Tests (SILENT-02)")
+    class LifecycleHookTests {
+
+        private SimpleJsonDataOperator<DataEntityTest.CountingAuditableEntity> hookOperator;
+
+        @BeforeEach
+        void setUpHookOperator() {
+            File hookDir = new File(storeDir, "counting-auditable");
+            hookDir.mkdirs();
+            hookOperator = new SimpleJsonDataOperator<>(hookDir.getAbsolutePath(),
+                    DataEntityTest.CountingAuditableEntity.class);
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            AuditableDataEntity.clearCurrentUser();
+        }
+
+        @AfterEach
+        void tearDownHookOperator() {
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            AuditableDataEntity.clearCurrentUser();
+        }
+
+        private DataEntityTest.CountingAuditableEntity newEntity(String label) {
+            DataEntityTest.CountingAuditableEntity entity = new DataEntityTest.CountingAuditableEntity();
+            entity.setLabel(label);
+            return entity;
+        }
+
+        @Test
+        @DisplayName("insert should populate created_at and created_by (previously always NULL)")
+        void insertShouldPopulateCreatedAtAndCreatedBy() {
+            UUID user = UUID.randomUUID();
+            AuditableDataEntity.setCurrentUser(user);
+            DataEntityTest.CountingAuditableEntity entity = newEntity("insert-1");
+
+            hookOperator.insert(entity);
+
+            assertThat(entity.getCreatedAt()).isNotNull();
+            assertThat(entity.getCreatedBy()).isEqualTo(user);
+        }
+
+        @Test
+        @DisplayName("update should populate updated_at and updated_by (previously always NULL)")
+        void updateShouldPopulateUpdatedAtAndUpdatedBy() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("update-1");
+            hookOperator.insert(entity);
+
+            UUID user = UUID.randomUUID();
+            AuditableDataEntity.setCurrentUser(user);
+            entity.setLabel("update-1-changed");
+            hookOperator.update(entity);
+
+            assertThat(entity.getUpdatedAt()).isNotNull();
+            assertThat(entity.getUpdatedBy()).isEqualTo(user);
+        }
+
+        @Test
+        @DisplayName("insert/update/getById/delById each fire their matching hook exactly once")
+        void hooksFireExactlyOnceEachForSingleEntityOperations() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("count-1");
+
+            hookOperator.insert(entity);
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(1);
+
+            entity.setLabel("count-1-updated");
+            hookOperator.update(entity);
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateCount()).isEqualTo(1);
+
+            DataEntityTest.CountingAuditableEntity loaded = hookOperator.getById(entity.getId());
+            assertThat(loaded).isNotNull();
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(1);
+
+            hookOperator.delById(entity.getId());
+            assertThat(DataEntityTest.CountingAuditableEntity.onDeleteCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("getAll/page fire onLoad exactly once per returned entity")
+        void getAllAndPageFireOnLoadOncePerReturnedEntity() {
+            hookOperator.insert(newEntity("load-1"));
+            hookOperator.insert(newEntity("load-2"));
+            hookOperator.insert(newEntity("load-3"));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            List<DataEntityTest.CountingAuditableEntity> all = hookOperator.getAll();
+            assertThat(all).hasSize(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(3);
+
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            List<DataEntityTest.CountingAuditableEntity> page = hookOperator.page(1, 2, WhereCondition.empty());
+            assertThat(page).hasSize(2);
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount())
+                    .as("onLoad must fire only for the entities actually returned by the page, not every matched row")
+                    .isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("exist(WhereCondition...) does not fire onLoad -- it is a boolean check, not a read")
+        void existDoesNotFireOnLoad() {
+            hookOperator.insert(newEntity("exist-1"));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            boolean found = hookOperator.exist(
+                    WhereCondition.builder().column("label").value("exist-1").build());
+
+            assertThat(found).isTrue();
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("insert then immediate update: created_at keeps the insert value, updated_at is non-null")
+        void adjacentInsertThenUpdatePreservesCreatedAt() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("adjacency-1");
+            hookOperator.insert(entity);
+            LocalDateTime createdAt = entity.getCreatedAt();
+            assertThat(createdAt).isNotNull();
+
+            entity.setLabel("adjacency-1-updated");
+            hookOperator.update(entity);
+
+            assertThat(entity.getCreatedAt()).isEqualTo(createdAt);
+            assertThat(entity.getUpdatedAt()).isNotNull();
+
+            DataEntityTest.CountingAuditableEntity reloaded = hookOperator.getById(entity.getId());
+            assertThat(reloaded.getCreatedAt()).isEqualTo(createdAt);
+            assertThat(reloaded.getUpdatedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("insertAll(empty list) fires no hooks and stores no entries")
+        void insertAllEmptyFiresNoHooksAndWritesNoRows() {
+            hookOperator.insertAll(Collections.emptyList());
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(0);
+            assertThat(hookOperator.getAll()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("with no current user set, created_by/updated_by stay null (not a placeholder string)")
+        void nullActorLeavesCreatedByNull() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("null-actor-1");
+
+            hookOperator.insert(entity);
+
+            assertThat(entity.getCreatedBy()).isNull();
+            assertThat(entity.getUpdatedBy()).isNull();
+            DataEntityTest.CountingAuditableEntity reloaded = hookOperator.getById(entity.getId());
+            assertThat(reloaded.getCreatedBy()).isNull();
+            assertThat(reloaded.getUpdatedBy()).isNull();
+        }
+
+        @Test
+        @DisplayName("insertAll(3 entities) fires onCreate exactly 3 times, in list order")
+        void insertAllFiresOnCreateThreeTimesInOrder() {
+            DataEntityTest.CountingAuditableEntity e1 = newEntity("batch-1");
+            e1.setId("batch-id-1");
+            DataEntityTest.CountingAuditableEntity e2 = newEntity("batch-2");
+            e2.setId("batch-id-2");
+            DataEntityTest.CountingAuditableEntity e3 = newEntity("batch-3");
+            e3.setId("batch-id-3");
+
+            hookOperator.insertAll(Arrays.asList(e1, e2, e3));
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateOrder())
+                    .containsExactly("batch-id-1", "batch-id-2", "batch-id-3");
+        }
+
+        @Test
+        @DisplayName("updateAll(3 entities) fires onUpdate exactly 3 times, in list order")
+        void updateAllFiresOnUpdateThreeTimesInOrder() throws Exception {
+            DataEntityTest.CountingAuditableEntity e1 = newEntity("batch-u-1");
+            e1.setId("batch-u-id-1");
+            DataEntityTest.CountingAuditableEntity e2 = newEntity("batch-u-2");
+            e2.setId("batch-u-id-2");
+            DataEntityTest.CountingAuditableEntity e3 = newEntity("batch-u-3");
+            e3.setId("batch-u-id-3");
+            hookOperator.insertAll(Arrays.asList(e1, e2, e3));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            hookOperator.updateAll(Arrays.asList(e1, e2, e3));
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateCount()).isEqualTo(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateOrder())
+                    .containsExactly("batch-u-id-1", "batch-u-id-2", "batch-u-id-3");
+        }
+
+        @Test
+        @DisplayName("del(WhereCondition...) deletes by predicate but does not fire onDelete (rows never materialised)")
+        void delByConditionDoesNotFireOnDelete() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("del-condition-1");
+            hookOperator.insert(entity);
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            hookOperator.del(WhereCondition.builder().column("label").value("del-condition-1").build());
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onDeleteCount())
+                    .as("del(WhereCondition...) deletes by predicate without materialising entries -- it must not fire onDelete")
+                    .isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("a rollback discards a staged insert without firing onLoad")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
+        void rollbackDiscardsStagedInsertWithoutOnLoad() {
+            hookOperator.insert(newEntity("txn-1"));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            assertThatThrownBy(() -> hookOperator.transaction(() -> {
+                hookOperator.insert(newEntity("txn-2"));
+                throw new RuntimeException("force rollback");
+            })).isInstanceOf(RuntimeException.class);
+
+            // Discarding the staged insert reads nothing back, so it is not a load; the getAll()
+            // check below fires its own onLoad on the surviving entity.
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount())
+                    .as("a rollback only discards staged writes; that is not a load")
+                    .isEqualTo(0);
+            assertThat(hookOperator.getAll()).hasSize(1);
+        }
+    }
+
+    /** An entity with mutable List and Map columns, for {@link CallerMutableFieldIsolationTests}. */
+    @Table("mutable_rows")
+    public static class MutableRow extends BaseDataEntity<String> {
+        @Column("name")
+        private String name;
+        @Column("tags")
+        private List<String> tags;
+        @Column("attrs")
+        private Map<String, String> attrs;
+
+        public MutableRow() {
+        }
+
+        MutableRow(String id, String name, String tag, String attrValue) {
+            setId(id);
+            this.name = name;
+            this.tags = new ArrayList<>(Collections.singletonList(tag));
+            this.attrs = new LinkedHashMap<>(Collections.singletonMap("key", attrValue));
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public List<String> getTags() {
+            return tags;
+        }
+
+        public Map<String, String> getAttrs() {
+            return attrs;
+        }
+    }
+
+    /**
+     * C11: after {@code updateIf} or {@code update(T)} returns, the caller still holds its entity,
+     * whose List and Map fields it may go on changing. No object reachable from the caller's
+     * entity may be reachable from the stored entry (committed or staged), or the caller's later
+     * change would silently rewrite stored data and reach disk at the next flush.
+     */
+    @Nested
+    @DisplayName("Caller-owned mutable fields never alias stored or staged values (C11)")
+    class CallerMutableFieldIsolationTests {
+
+        private SimpleJsonDataOperator<MutableRow> rows;
+        private File rowsDir;
+
+        @BeforeEach
+        void setUpRows() {
+            rowsDir = new File(storeDir, "mutable-rows");
+            rowsDir.mkdirs();
+            rows = new SimpleJsonDataOperator<>(rowsDir.getAbsolutePath(), MutableRow.class);
+            rows.insert(new MutableRow("row-1", "before", "stored", "stored"));
+        }
+
+        private void mutate(MutableRow caller) {
+            caller.getTags().add("leaked");
+            caller.getAttrs().put("leaked", "leaked");
+        }
+
+        private void assertStoredValueHasNoCallerChange(String when) {
+            MutableRow stored = rows.getById("row-1");
+            assertThat(stored.getTags()).as(when + ": stored List").containsExactly("caller");
+            assertThat(stored.getAttrs()).as(when + ": stored Map").containsOnlyKeys("key");
+        }
+
+        private void assertFlushedBytesHaveNoCallerChange() throws Exception {
+            rows.flush();
+            String flushed = new String(Files.readAllBytes(new File(rowsDir, "row-1.json").toPath()),
+                    StandardCharsets.UTF_8);
+            assertThat(flushed).as("flushed file").contains("caller").doesNotContain("leaked");
+        }
+
+        @Test
+        @DisplayName("outside a transaction: a change to the caller's List or Map after updateIf reaches neither getById nor the flushed file")
+        void updateIfOutsideATransactionStoresADetachedCopy() throws Exception {
+            MutableRow caller = new MutableRow("row-1", "after", "caller", "caller");
+
+            assertThat(rows.updateIf(caller, WhereCondition.builder().column("name").value("before").build())).isTrue();
+            mutate(caller);
+
+            assertStoredValueHasNoCallerChange("after updateIf");
+            assertFlushedBytesHaveNoCallerChange();
+        }
+
+        @Test
+        @DisplayName("outside a transaction: a change to the caller's List or Map after update(T) reaches neither getById nor the flushed file")
+        void updateOutsideATransactionStoresADetachedCopy() throws Exception {
+            MutableRow caller = new MutableRow("row-1", "after", "caller", "caller");
+
+            rows.update(caller);
+            mutate(caller);
+
+            assertStoredValueHasNoCallerChange("after update(T)");
+            assertFlushedBytesHaveNoCallerChange();
+        }
+
+        @Test
+        @DisplayName("inside a transaction: a change to the caller's List or Map after a staged updateIf reaches neither the staged nor the committed value")
+        void stagedUpdateIfStoresADetachedCopy() throws Exception {
+            MutableRow caller = new MutableRow("row-1", "after", "caller", "caller");
+
+            rows.transaction(() -> {
+                assertThat(rows.updateIf(caller, WhereCondition.builder().column("name").value("before").build())).isTrue();
+                mutate(caller);
+                assertStoredValueHasNoCallerChange("staged, after updateIf");
+                return null;
+            });
+
+            assertStoredValueHasNoCallerChange("committed, after updateIf");
+            assertFlushedBytesHaveNoCallerChange();
+        }
+
+        @Test
+        @DisplayName("inside a transaction: a change to the caller's List or Map after a staged update(T) reaches neither the staged nor the committed value")
+        void stagedUpdateStoresADetachedCopy() throws Exception {
+            MutableRow caller = new MutableRow("row-1", "after", "caller", "caller");
+
+            rows.transaction(() -> {
+                rows.update(caller);
+                mutate(caller);
+                assertStoredValueHasNoCallerChange("staged, after update(T)");
+                return null;
+            });
+
+            assertStoredValueHasNoCallerChange("committed, after update(T)");
+            assertFlushedBytesHaveNoCallerChange();
+        }
+    }
+
+    /** An entity whose onDelete hook writes a marker field, for {@link DeleteHookIsolationTests}. */
+    @Table("marked_rows")
+    public static class MarkedRow extends BaseDataEntity<String> {
+        static final AtomicInteger ON_DELETE_COUNT = new AtomicInteger();
+
+        @Column("name")
+        private String name;
+        @Column("marker")
+        private String marker;
+
+        public MarkedRow() {
+        }
+
+        MarkedRow(String id, String name) {
+            setId(id);
+            this.name = name;
+        }
+
+        public String getMarker() {
+            return marker;
+        }
+
+        @Override
+        public void onDelete() {
+            ON_DELETE_COUNT.incrementAndGet();
+            marker = "changed-by-onDelete";
+        }
+    }
+
+    /**
+     * onDelete fires on a detached copy of the entry being deleted, so nothing the hook changes
+     * on the entity reaches a committed value -- in particular not through a delete that is then
+     * rolled back.
+     */
+    @Nested
+    @DisplayName("onDelete runs on a detached copy and never changes a committed value")
+    class DeleteHookIsolationTests {
+
+        private SimpleJsonDataOperator<MarkedRow> rows;
+
+        @BeforeEach
+        void setUpRows() {
+            File rowsDir = new File(storeDir, "marked-rows");
+            rowsDir.mkdirs();
+            rows = new SimpleJsonDataOperator<>(rowsDir.getAbsolutePath(), MarkedRow.class);
+            rows.insert(new MarkedRow("row-1", "kept"));
+            MarkedRow.ON_DELETE_COUNT.set(0);
+        }
+
+        @Test
+        @DisplayName("inside a transaction: a rolled-back delById leaves no onDelete change on the committed entry, and another thread never sees one")
+        void rolledBackDeleteLeavesNoHookChange() throws Exception {
+            CountDownLatch deleted = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Thread deleter = new Thread(() -> {
+                try {
+                    rows.transaction(() -> {
+                        rows.delById("row-1");
+                        deleted.countDown();
+                        release.await(10, TimeUnit.SECONDS);
+                        throw new IllegalStateException("roll the delete back");
+                    });
+                } catch (IllegalStateException expected) {
+                    // the scripted rollback
+                } catch (Throwable t) {
+                    failure.set(t);
+                } finally {
+                    deleted.countDown();
+                }
+            }, "delete-hook-deleter");
+            deleter.start();
+            try {
+                assertThat(deleted.await(10, TimeUnit.SECONDS)).isTrue();
+                // This thread only reads.
+                MarkedRow seen = rows.getById("row-1");
+                assertThat(seen).as("committed entry while the delete is staged").isNotNull();
+                assertThat(seen.getMarker()).as("onDelete change seen by another thread").isNull();
+            } finally {
+                release.countDown();
+                deleter.join(TimeUnit.SECONDS.toMillis(10));
+            }
+
+            assertThat(deleter.isAlive()).isFalse();
+            assertThat(failure.get()).isNull();
+            assertThat(MarkedRow.ON_DELETE_COUNT.get()).as("onDelete fired at the call").isEqualTo(1);
+            MarkedRow afterRollback = rows.getById("row-1");
+            assertThat(afterRollback).as("the rolled-back delete left the entry").isNotNull();
+            assertThat(afterRollback.getMarker()).as("onDelete change left on the committed entry").isNull();
+        }
+
+        @Test
+        @DisplayName("outside a transaction: delById fires onDelete exactly once and removes the entry")
+        void plainDeleteFiresOnDeleteOnceAndRemoves() {
+            assertThat(rows.deleteByIdCounted("row-1")).isEqualTo(1);
+
+            assertThat(MarkedRow.ON_DELETE_COUNT.get()).isEqualTo(1);
+            assertThat(rows.getById("row-1")).isNull();
         }
     }
 }

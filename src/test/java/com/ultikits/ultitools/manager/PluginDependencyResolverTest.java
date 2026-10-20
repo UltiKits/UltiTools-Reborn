@@ -1,25 +1,54 @@
 package com.ultikits.ultitools.manager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.testfixtures.pluginloadafter.JarModuleDuplicateNameA;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleDuplicateNameB;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleLoadAfterBySimpleName;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleMutualLoadAfterX;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleMutualLoadAfterY;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleTarget;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleWithLoadAfter;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleWithUnresolvableLoadAfter;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.PluginDependency;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
+import com.ultikits.ultitools.utils.PluginYmlReader;
 
 /**
  * Unit tests for {@link PluginDependencyResolver}.
@@ -27,6 +56,9 @@ import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependency
  */
 @DisplayName("PluginDependencyResolver Tests")
 class PluginDependencyResolverTest {
+
+    @TempDir
+    File tempDir;
 
     private PluginDependencyResolver resolver;
     private Logger testLogger;
@@ -37,63 +69,208 @@ class PluginDependencyResolverTest {
         resolver = new PluginDependencyResolver(testLogger);
     }
 
+    /**
+     * A URLClassLoader that forces one specific class name to be defined fresh from this
+     * loader's own JAR, bypassing normal parent-first delegation. Without this, loading a class
+     * that is also present on the surrounding test's own classpath (as every static nested
+     * fixture class here is, since Maven compiles the whole test tree) would resolve back to the
+     * parent's copy - whose code source is {@code target/test-classes}, not the temp JAR built
+     * for the test. Everything except the named class still delegates to the parent normally
+     * (UltiToolsPlugin, PluginDependency, the JDK, etc.).
+     */
+    private static final class ChildFirstClassLoader extends URLClassLoader {
+        private final String childFirstName;
+
+        ChildFirstClassLoader(URL[] urls, ClassLoader parent, String childFirstName) {
+            super(urls, parent);
+            this.childFirstName = childFirstName;
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null && childFirstName.equals(name)) {
+                    loaded = findClass(name);
+                }
+                if (loaded == null) {
+                    loaded = super.loadClass(name, false);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+        }
+    }
+
+    /**
+     * Builds a single-entry-plus-plugin.yml JAR for {@code fixtureClass} and loads it back
+     * through a {@link ChildFirstClassLoader}, so the returned {@code Class}'s
+     * {@code getProtectionDomain().getCodeSource()} is genuinely that JAR - a mock cannot
+     * exercise this code path.
+     */
+    @SuppressWarnings("unchecked")
+    private Class<? extends UltiToolsPlugin> loadJarBackedFixture(
+            String jarName, Class<?> fixtureClass, String pluginYmlContent) throws Exception {
+        File jar = new File(tempDir, jarName);
+        String resourceName = fixtureClass.getName().replace('.', '/') + ".class";
+        try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+            output.putNextEntry(new JarEntry(resourceName));
+            try (InputStream input = fixtureClass.getResourceAsStream("/" + resourceName)) {
+                assertNotNull(input, "compiled class resource for " + fixtureClass.getName());
+                copy(input, output);
+            }
+            output.closeEntry();
+
+            output.putNextEntry(new JarEntry("plugin.yml"));
+            output.write(pluginYmlContent.getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+        }
+
+        ChildFirstClassLoader loader = new ChildFirstClassLoader(
+                new URL[]{jar.toURI().toURL()},
+                Thread.currentThread().getContextClassLoader(),
+                fixtureClass.getName());
+        // The class name is not attacker-controllable: every one of this helper's call
+        // sites passes a compile-time class literal (JarModuleTarget.class and friends), so
+        // fixtureClass.getName() is resolved by javac, never from input. The loader is the
+        // test's own jar-backed ChildFirstClassLoader built two lines above.
+        // The suppression must sit on the line immediately above the finding to take effect.
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
+        return (Class<? extends UltiToolsPlugin>) Class.forName(fixtureClass.getName(), true, loader);
+    }
+
+    private static void copy(InputStream input, OutputStream output) throws IOException {
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+    }
+
     // Test plugin classes with various dependency configurations
     public static class PluginA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     public static class PluginB extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     public static class PluginC extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     @PluginDependency(depends = {"PluginA"})
     public static class PluginDependsOnA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     @PluginDependency(depends = {"PluginA", "PluginB"})
     public static class PluginDependsOnAB extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     @PluginDependency(softDepends = {"PluginA"})
     public static class PluginSoftDependsOnA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     @PluginDependency(loadBefore = {"PluginC"})
     public static class PluginLoadBeforeC extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     @PluginDependency(depends = {"MissingPlugin"})
     public static class PluginWithMissingDep extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // #361 (WR-05): a module declaring several missing hard dependencies at once, so the
+    // multi-missing-dependency message has more than one name to report for a SINGLE module
+    // (as opposed to PluginWithMissingDep, which has exactly one).
+    @PluginDependency(depends = {"MissingOne", "MissingTwo", "MissingThree"})
+    public static class PluginWithThreeMissingDeps extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
     }
 
     // Circular dependency plugins
     @PluginDependency(depends = {"CircularB"})
     public static class CircularA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     @PluginDependency(depends = {"CircularA"})
     public static class CircularB extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // A second, independent circular pair - proves two cycles in one input are each reported.
+    @PluginDependency(depends = {"CircularD"})
+    public static class CircularC extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    @PluginDependency(depends = {"CircularC"})
+    public static class CircularD extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // Depends on a cycle member without being part of the cycle itself.
+    @PluginDependency(depends = {"CircularA"})
+    public static class PluginDependsOnCircularA extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // Depends on a plugin that itself has a missing hard dependency.
+    @PluginDependency(depends = {"PluginWithMissingDep"})
+    public static class PluginDependsOnMissingDepPlugin extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // Refused for its own missing hard dependency, and also orders itself before PluginB. The
+    // loadBefore entry is an ordering edge only, so PluginB must not be refused with it.
+    @PluginDependency(depends = {"MissingPlugin"}, loadBefore = {"PluginB"})
+    public static class PluginWithMissingDepLoadBeforeB extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // Only optionally uses a module that is refused for a missing hard dependency, so it must
+    // still load.
+    @PluginDependency(softDepends = {"PluginWithMissingDep"})
+    public static class PluginSoftDependsOnMissingDepPlugin extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // JAR-backed fixtures for plugin.yml loadAfter merging (D-12) live as top-level classes in
+    // com.ultikits.testfixtures.pluginloadafter - see that package's package-info.java for why a
+    // static nested class here would throw IllegalAccessError once reloaded through a
+    // child-first URLClassLoader (a JVM nest-membership conflict, not a test defect).
+
+    // Not JAR-backed itself - only its @PluginDependency entry needs to resolve against the
+    // OTHER node's plugin.yml-derived alias ("TargetModule" -> JarModuleTarget). Safe to keep as
+    // a nested class since it is never reloaded through a different class loader.
+    @PluginDependency(depends = {"TargetModule"})
+    public static class DependsOnYmlNamedTarget extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
     @Nested
@@ -256,6 +433,695 @@ class PluginDependencyResolverTest {
             );
             
             assertThrows(CircularDependencyException.class, () -> resolver.resolve(plugins));
+        }
+    }
+
+    @Nested
+    @DisplayName("Partition and Cycle Path Tests")
+    class PartitionAndCyclePathTests {
+
+        @Test
+        @DisplayName("a cycle refuses only its members while an unrelated plugin stays sortable")
+        void cycleRefusesOnlyItsMembersWhileUnrelatedStaysSortable() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                CircularA.class, CircularB.class, PluginC.class
+            );
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            // Positive and negative asserted together so neither can pass vacuously.
+            assertTrue(ex.getSortedPrefix().contains(PluginC.class));
+            assertFalse(ex.getRefusedPlugins().contains("PluginC"));
+            assertEquals(new HashSet<>(Arrays.asList("CircularA", "CircularB")), ex.getRefusedPlugins());
+        }
+
+        @Test
+        @DisplayName("a returned cycle path's first element equals its last element")
+        void cyclePathFirstAndLastElementsAreEqual() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                CircularA.class, CircularB.class
+            );
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertFalse(ex.getCyclePaths().isEmpty());
+            List<String> path = ex.getCyclePaths().get(0);
+            assertTrue(path.size() >= 2);
+            assertEquals(path.get(0), path.get(path.size() - 1));
+        }
+
+        @Test
+        @DisplayName("a module depending on a cycle member is refused although it is not itself in the cycle")
+        void dependentOfCycleMemberIsRefused() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                CircularA.class, CircularB.class, PluginDependsOnCircularA.class
+            );
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertTrue(ex.getRefusedPlugins().contains("PluginDependsOnCircularA"));
+            boolean inAnyCyclePath = ex.getCyclePaths().stream()
+                .anyMatch(path -> path.contains("PluginDependsOnCircularA"));
+            assertFalse(inAnyCyclePath);
+        }
+
+        @Test
+        @DisplayName("two independent cycles in one input are both reported as separate paths and fully refused")
+        void twoIndependentCyclesAreBothReported() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                CircularA.class, CircularB.class, CircularC.class, CircularD.class
+            );
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertEquals(2, ex.getCyclePaths().size());
+            assertEquals(
+                new HashSet<>(Arrays.asList("CircularA", "CircularB", "CircularC", "CircularD")),
+                ex.getRefusedPlugins()
+            );
+        }
+
+        @Test
+        @DisplayName("a missing hard dependency yields a sortable prefix and an exact refused set")
+        void missingHardDependencyPartition() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class, PluginA.class, PluginB.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertTrue(ex.getSortedPrefix().contains(PluginA.class));
+            assertTrue(ex.getSortedPrefix().contains(PluginB.class));
+            assertEquals(Collections.singleton("PluginWithMissingDep"), ex.getRefusedPlugins());
+        }
+
+        @Test
+        @DisplayName("a module depending on a missing-dependency module is refused alongside it; unrelated modules survive")
+        void dependentOfMissingDependencyModuleIsRefused() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class, PluginDependsOnMissingDepPlugin.class, PluginA.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertTrue(ex.getSortedPrefix().contains(PluginA.class));
+            assertEquals(
+                new HashSet<>(Arrays.asList("PluginWithMissingDep", "PluginDependsOnMissingDepPlugin")),
+                ex.getRefusedPlugins()
+            );
+        }
+
+        @Test
+        @DisplayName("missing-dependency refusal follows only depends edges; optional and ordering "
+                + "dependents survive and stay ordered")
+        void missingDependencyRefusalFollowsOnlyHardEdges() throws Exception {
+            Class<? extends UltiToolsPlugin> loadAfterRefused = loadJarBackedFixture(
+                "loadafter-refused.jar", JarModuleWithLoadAfter.class,
+                "name: LoadAfterModule\nloadAfter:\n  - PluginWithMissingDep\n");
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class,
+                PluginWithMissingDepLoadBeforeB.class,
+                PluginDependsOnMissingDepPlugin.class,
+                PluginSoftDependsOnMissingDepPlugin.class,
+                PluginB.class,
+                loadAfterRefused,
+                PluginLoadBeforeC.class,
+                PluginC.class,
+                PluginA.class,
+                PluginSoftDependsOnA.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            List<Class<? extends UltiToolsPlugin>> prefix = ex.getSortedPrefix();
+            // Only the two declaring modules and their one hard dependent are refused.
+            assertEquals(
+                new HashSet<>(Arrays.asList(
+                    "PluginWithMissingDep", "PluginWithMissingDepLoadBeforeB",
+                    "PluginDependsOnMissingDepPlugin")),
+                ex.getRefusedPlugins(),
+                "refusal for a missing hard dependency must spread only along depends edges");
+            // The optional dependent, the loadBefore target and the plugin.yml loadAfter module
+            // all load.
+            assertTrue(prefix.contains(PluginSoftDependsOnMissingDepPlugin.class), prefix.toString());
+            assertTrue(prefix.contains(PluginB.class), prefix.toString());
+            assertTrue(prefix.contains(loadAfterRefused), prefix.toString());
+            assertEquals(7, prefix.size(), prefix.toString());
+            // Surviving modules keep every ordering constraint among themselves.
+            assertTrue(prefix.indexOf(PluginLoadBeforeC.class) < prefix.indexOf(PluginC.class),
+                prefix.toString());
+            assertTrue(prefix.indexOf(PluginA.class) < prefix.indexOf(PluginSoftDependsOnA.class),
+                prefix.toString());
+        }
+
+        @Test
+        @DisplayName("a missing dependency plus an independent cycle form a complete partition "
+                + "and the message names both")
+        void missingDependencyAndIndependentCycleFormACompletePartition() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class, CircularA.class, CircularB.class,
+                PluginDependsOnCircularA.class, PluginC.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            Set<String> prefixNames = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : ex.getSortedPrefix()) {
+                prefixNames.add(pluginClass.getSimpleName());
+            }
+            Set<String> refused = ex.getRefusedPlugins();
+            Set<String> overlap = new HashSet<>(prefixNames);
+            overlap.retainAll(refused);
+            Set<String> union = new HashSet<>(prefixNames);
+            union.addAll(refused);
+
+            assertTrue(overlap.isEmpty(), "prefix and refused set must be disjoint: " + overlap);
+            assertEquals(
+                new HashSet<>(Arrays.asList("PluginWithMissingDep", "CircularA", "CircularB",
+                    "PluginDependsOnCircularA", "PluginC")),
+                union,
+                "every input module must be either in the sorted prefix or refused");
+            assertEquals(
+                new HashSet<>(Arrays.asList("PluginWithMissingDep", "CircularA", "CircularB",
+                    "PluginDependsOnCircularA")),
+                refused);
+            assertTrue(ex.getMessage().contains("MissingPlugin"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("CircularA"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("CircularB"), ex.getMessage());
+
+            // The independent cycle is carried structurally, not only in the message.
+            assertEquals(1, ex.getCyclePaths().size(), ex.getCyclePaths().toString());
+            List<String> path = ex.getCyclePaths().get(0);
+            assertEquals(path.get(0), path.get(path.size() - 1));
+            assertEquals(new HashSet<>(Arrays.asList("CircularA", "CircularB")), new HashSet<>(path));
+        }
+
+        @Test
+        @DisplayName("a missing-dependency exception built without cycle paths reports an empty, "
+                + "non-null list")
+        void missingDependencyExceptionWithoutCyclePathsHasEmptyList() {
+            MissingDependencyException threeArgument = new MissingDependencyException(
+                "message", Collections.emptyList(), Collections.singleton("PluginWithMissingDep"));
+            MissingDependencyException oneArgument = new MissingDependencyException("message");
+
+            assertNotNull(threeArgument.getCyclePaths());
+            assertTrue(threeArgument.getCyclePaths().isEmpty());
+            assertNotNull(oneArgument.getCyclePaths());
+            assertTrue(oneArgument.getCyclePaths().isEmpty());
+        }
+
+        @Test
+        @DisplayName("a pure missing dependency carries no cycle paths")
+        void pureMissingDependencyCarriesNoCyclePaths() {
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(Arrays.asList(PluginWithMissingDep.class, PluginA.class)));
+
+            assertTrue(ex.getCyclePaths().isEmpty(), ex.getCyclePaths().toString());
+        }
+
+        @Test
+        @DisplayName("no cycle and no missing dependency: neither exception is constructed")
+        void noFailureMeansUnchangedBehaviour() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginA.class, PluginB.class, PluginC.class
+            );
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(plugins);
+
+            assertEquals(3, result.size());
+            assertTrue(result.containsAll(plugins));
+        }
+    }
+
+    /**
+     * Exhaustive property over every non-empty subset of a fixed pool of annotation-only
+     * fixtures (#676 cases 31 and 32). The expected refused set comes from an oracle written
+     * from the contract, not from resolver internals: refusal for a missing hard dependency
+     * follows declared {@code depends} edges only, then every survivor a plain topological sort
+     * over all declared ordering edges cannot place is refused as well.
+     */
+    @Nested
+    @DisplayName("Mixed-Graph Partition Property Tests")
+    class MixedGraphPartitionPropertyTests {
+
+        private final List<Class<? extends UltiToolsPlugin>> pool = Arrays.asList(
+            PluginA.class, PluginB.class, PluginC.class, PluginDependsOnA.class,
+            PluginSoftDependsOnA.class, PluginLoadBeforeC.class, PluginWithMissingDep.class,
+            PluginDependsOnMissingDepPlugin.class, PluginWithMissingDepLoadBeforeB.class,
+            PluginSoftDependsOnMissingDepPlugin.class, CircularA.class, CircularB.class
+        );
+
+        @Test
+        @DisplayName("every subset of the fixture pool yields a complete, ordered partition")
+        void everySubsetOfTheFixturePoolYieldsACompleteOrderedPartition() throws Exception {
+            int subsets = 0;
+            for (int mask = 1; mask < (1 << pool.size()); mask++) {
+                List<Class<? extends UltiToolsPlugin>> subset = new ArrayList<>();
+                for (int i = 0; i < pool.size(); i++) {
+                    if ((mask & (1 << i)) != 0) {
+                        subset.add(pool.get(i));
+                    }
+                }
+                checkSubset(subset);
+                subsets++;
+            }
+            assertEquals(4095, subsets);
+        }
+
+        // Deliberately one exhaustive oracle-versus-resolver comparison per subset; splitting it would hide the pairing.
+        @SuppressWarnings("PMD.NPathComplexity")
+        private void checkSubset(List<Class<? extends UltiToolsPlugin>> subset) throws Exception {
+            Set<String> names = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : subset) {
+                names.add(pluginClass.getSimpleName());
+            }
+
+            // Oracle edges from the annotations: hard (dependency -> dependent, present targets
+            // only) and ordering (first must load before second, every present edge kind).
+            Map<String, Set<String>> hardEdges = new HashMap<>();
+            List<String[]> orderEdges = new ArrayList<>();
+            Set<String> missingDeclarers = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : subset) {
+                String name = pluginClass.getSimpleName();
+                PluginDependency dep = pluginClass.getAnnotation(PluginDependency.class);
+                if (dep == null) {
+                    continue;
+                }
+                for (String target : dep.depends()) {
+                    if (names.contains(target)) {
+                        hardEdges.computeIfAbsent(target, k -> new HashSet<>()).add(name);
+                        orderEdges.add(new String[]{target, name});
+                    } else {
+                        missingDeclarers.add(name);
+                    }
+                }
+                for (String target : dep.softDepends()) {
+                    if (names.contains(target)) {
+                        orderEdges.add(new String[]{target, name});
+                    }
+                }
+                for (String target : dep.loadBefore()) {
+                    if (names.contains(target)) {
+                        orderEdges.add(new String[]{name, target});
+                    }
+                }
+            }
+
+            Set<String> expectedRefused = new HashSet<>(missingDeclarers);
+            List<String> work = new ArrayList<>(missingDeclarers);
+            while (!work.isEmpty()) {
+                String current = work.remove(work.size() - 1);
+                for (String dependent : hardEdges.getOrDefault(current, Collections.emptySet())) {
+                    if (expectedRefused.add(dependent)) {
+                        work.add(dependent);
+                    }
+                }
+            }
+            Set<String> survivors = new HashSet<>(names);
+            survivors.removeAll(expectedRefused);
+            Set<String> placed = new HashSet<>();
+            boolean progress = true;
+            while (progress) {
+                progress = false;
+                for (String candidate : survivors) {
+                    if (placed.contains(candidate)) {
+                        continue;
+                    }
+                    boolean ready = true;
+                    for (String[] edge : orderEdges) {
+                        if (edge[1].equals(candidate) && survivors.contains(edge[0])
+                                && !placed.contains(edge[0])) {
+                            ready = false;
+                            break;
+                        }
+                    }
+                    if (ready) {
+                        placed.add(candidate);
+                        progress = true;
+                    }
+                }
+            }
+            Set<String> unplaced = new HashSet<>(survivors);
+            unplaced.removeAll(placed);
+            expectedRefused.addAll(unplaced);
+
+            List<Class<? extends UltiToolsPlugin>> prefix;
+            Set<String> refused;
+            try {
+                prefix = resolver.resolve(subset);
+                refused = Collections.emptySet();
+            } catch (MissingDependencyException ex) {
+                assertFalse(missingDeclarers.isEmpty(), "missing thrown without one: " + names);
+                assertEquals(unplaced.isEmpty(), ex.getCyclePaths().isEmpty(),
+                    "cycle paths must be present exactly when a cycle blocks survivors: " + names);
+                prefix = ex.getSortedPrefix();
+                refused = ex.getRefusedPlugins();
+            } catch (CircularDependencyException ex) {
+                assertTrue(missingDeclarers.isEmpty(), "cycle thrown over a missing one: " + names);
+                prefix = ex.getSortedPrefix();
+                refused = ex.getRefusedPlugins();
+            }
+
+            List<String> prefixNames = new ArrayList<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : prefix) {
+                prefixNames.add(pluginClass.getSimpleName());
+            }
+            Set<String> overlap = new HashSet<>(prefixNames);
+            overlap.retainAll(refused);
+            Set<String> union = new HashSet<>(prefixNames);
+            union.addAll(refused);
+
+            assertEquals(prefixNames.size(), new HashSet<>(prefixNames).size(),
+                "prefix lists a module twice: " + prefixNames);
+            assertTrue(overlap.isEmpty(), "prefix and refused overlap " + overlap + " for " + names);
+            assertEquals(names, union, "partition does not cover the subset " + names);
+            assertEquals(expectedRefused, new HashSet<>(refused), "refused set for " + names);
+            for (String[] edge : orderEdges) {
+                int before = prefixNames.indexOf(edge[0]);
+                int after = prefixNames.indexOf(edge[1]);
+                if (before >= 0 && after >= 0) {
+                    assertTrue(before < after, edge[0] + " must load before " + edge[1]
+                        + " in " + prefixNames);
+                }
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("Multi-Missing-Dependency and Duplicate-Name Reporting Tests (#361)")
+    class MultiMissingDependencyAndDuplicateNameTests {
+
+        @Test
+        @DisplayName("a module declaring three missing hard dependencies gets one message naming all three")
+        void severalMissingHardDependenciesAreAllNamedInOneMessage() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Collections.singletonList(
+                PluginWithThreeMissingDeps.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertTrue(ex.getMessage().contains("MissingOne"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("MissingTwo"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("MissingThree"), ex.getMessage());
+            // Exactly one module refuses here, so the message must be a single joined entry,
+            // not three separate "Plugin ... requires ..." clauses stitched together.
+            assertEquals(1, ex.getMessage().split("; ").length,
+                "three missing dependencies of the SAME module must be joined into one entry, "
+                + "not reported as three separate refusal clauses. Full message: "
+                + ex.getMessage());
+        }
+
+        @Test
+        @DisplayName("a module declaring exactly one missing hard dependency reads as singular, "
+                + "not a degenerate list")
+        void singleMissingHardDependencyMessageIsNotADegenerateList() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Collections.singletonList(
+                PluginWithMissingDep.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertEquals(
+                "Plugin 'PluginWithMissingDep' requires dependency 'MissingPlugin' which is not available",
+                ex.getMessage(),
+                "the single-missing-dependency message shape must be unchanged by widening the "
+                + "diagnostic to the multi-missing case");
+        }
+
+        @Test
+        @DisplayName("a module with no declared dependencies produces no missing-dependency message")
+        void noDeclaredDependenciesProducesNoMissingDependencyMessage() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> plugins = Collections.singletonList(PluginA.class);
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(plugins);
+
+            assertEquals(1, result.size());
+            assertEquals(PluginA.class, result.get(0));
+        }
+
+        @Test
+        @DisplayName("two modules declaring the same plugin.yml name are reported with both sources named")
+        void duplicatePluginYmlNameIsReportedWithBothSourcesNamed() throws Exception {
+            Class<? extends UltiToolsPlugin> first = loadJarBackedFixture(
+                "dup-a.jar", JarModuleDuplicateNameA.class, "name: DuplicateModule\n");
+            Class<? extends UltiToolsPlugin> second = loadJarBackedFixture(
+                "dup-b.jar", JarModuleDuplicateNameB.class, "name: DuplicateModule\n");
+
+            Logger dupLogger = Logger.getLogger(
+                "PluginDependencyResolverTest.duplicatePluginYmlNameIsReportedWithBothSourcesNamed");
+            dupLogger.setUseParentHandlers(false);
+            List<LogRecord> captured = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // No-op: records are captured synchronously in publish().
+                }
+
+                @Override
+                public void close() {
+                    // No-op: nothing held open that needs releasing.
+                }
+            };
+            dupLogger.addHandler(handler);
+            PluginDependencyResolver dupResolver = new PluginDependencyResolver(dupLogger);
+
+            List<Class<? extends UltiToolsPlugin>> result = dupResolver.resolve(Arrays.asList(first, second));
+
+            // Resolution still has to pick one winner (D-12's alias map keeps that behaviour) --
+            // but BOTH modules still load; a collision is not a refusal.
+            assertEquals(2, result.size());
+
+            boolean warned = captured.stream().anyMatch(record ->
+                record.getLevel().intValue() >= Level.WARNING.intValue()
+                    && record.getMessage() != null
+                    && record.getMessage().contains("DuplicateModule")
+                    && record.getMessage().contains("JarModuleDuplicateNameA")
+                    && record.getMessage().contains("JarModuleDuplicateNameB"));
+            assertTrue(warned, "expected a WARNING naming both modules and the shared plugin.yml "
+                + "name 'DuplicateModule'; captured records: " + captured.stream()
+                    .map(LogRecord::getMessage).collect(java.util.stream.Collectors.toList()));
+        }
+
+        @Test
+        @DisplayName("a duplicate plugin.yml name that also equals another module's simple class "
+                + "name reports THAT CLASS as the actual winner, not the first plugin.yml declarer")
+        void duplicatePluginYmlNameEqualToASimpleClassNameReportsTheClassAsWinner() throws Exception {
+            // JarModuleTarget's OWN alias comes only from its simple class name (buildAliasMap's
+            // FIRST loop, which always runs before any plugin.yml name: is considered) -- giving
+            // it an UNRELATED plugin.yml name: here keeps that separate from the collision below.
+            Class<? extends UltiToolsPlugin> classNamedTarget = loadJarBackedFixture(
+                "target-classname-winner.jar", JarModuleTarget.class, "name: SomeOtherIrrelevantName\n");
+            Class<? extends UltiToolsPlugin> first = loadJarBackedFixture(
+                "dup-c.jar", JarModuleDuplicateNameA.class, "name: JarModuleTarget\n");
+            Class<? extends UltiToolsPlugin> second = loadJarBackedFixture(
+                "dup-d.jar", JarModuleDuplicateNameB.class, "name: JarModuleTarget\n");
+
+            Logger dupLogger = Logger.getLogger(
+                "PluginDependencyResolverTest.duplicatePluginYmlNameEqualToASimpleClassName");
+            dupLogger.setUseParentHandlers(false);
+            List<LogRecord> captured = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // No-op: records are captured synchronously in publish().
+                }
+
+                @Override
+                public void close() {
+                    // No-op: nothing held open that needs releasing.
+                }
+            };
+            dupLogger.addHandler(handler);
+            PluginDependencyResolver dupResolver = new PluginDependencyResolver(dupLogger);
+
+            List<Class<? extends UltiToolsPlugin>> result = dupResolver.resolve(
+                Arrays.asList(classNamedTarget, first, second));
+
+            assertEquals(3, result.size());
+
+            boolean warnedTheRealWinner = captured.stream().anyMatch(record ->
+                record.getMessage() != null
+                    && record.getMessage().contains("JarModuleTarget")
+                    && record.getMessage().contains("JarModuleDuplicateNameA")
+                    && record.getMessage().contains("JarModuleDuplicateNameB")
+                    && record.getMessage().contains("resolve this name to 'JarModuleTarget'"));
+            assertTrue(warnedTheRealWinner,
+                "the alias map's FIRST loop (simple class names) always runs before any "
+                    + "plugin.yml name: is considered, so 'JarModuleTarget' -- the class -- wins "
+                    + "the alias here, NOT 'JarModuleDuplicateNameA' even though it is the first "
+                    + "plugin.yml declarer; the WARNING must name the class that actually wins, "
+                    + "not the naive 'first declarer' answer. Captured records: "
+                    + captured.stream().map(LogRecord::getMessage).collect(java.util.stream.Collectors.toList()));
+        }
+
+        @Test
+        @DisplayName("resolution order for every previously-successful case is unchanged by the "
+                + "widened diagnostic")
+        void resolutionOrderForPreviouslySuccessfulCasesIsUnchanged() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginDependsOnAB.class, PluginLoadBeforeC.class, PluginA.class, PluginB.class, PluginC.class
+            );
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(plugins);
+
+            assertEquals(5, result.size());
+            assertTrue(result.indexOf(PluginA.class) < result.indexOf(PluginDependsOnAB.class),
+                "PluginA must still load before its dependent, PluginDependsOnAB");
+            assertTrue(result.indexOf(PluginB.class) < result.indexOf(PluginDependsOnAB.class),
+                "PluginB must still load before its dependent, PluginDependsOnAB");
+            assertTrue(result.indexOf(PluginLoadBeforeC.class) < result.indexOf(PluginC.class),
+                "PluginLoadBeforeC must still load before PluginC per its loadBefore declaration");
+        }
+    }
+
+    @Nested
+    @DisplayName("plugin.yml loadAfter Merge Tests")
+    class LoadAfterMergeTests {
+
+        @Test
+        @DisplayName("PluginYmlReader returns empty for a directory code source with no plugin.yml")
+        void pluginYmlReaderIsEmptyForDirectoryCodeSourceWithoutPluginYml() {
+            PluginYmlReader.PluginYmlInfo info = PluginYmlReader.read(PluginA.class);
+
+            assertNull(info.getName());
+            assertTrue(info.getLoadAfter().isEmpty());
+        }
+
+        @Test
+        @DisplayName("a real JAR-backed module's plugin.yml loadAfter changes the resolved order")
+        void jarBackedLoadAfterChangesOrder() throws Exception {
+            Class<? extends UltiToolsPlugin> target = loadJarBackedFixture(
+                "target.jar", JarModuleTarget.class, "name: TargetModule\n");
+            Class<? extends UltiToolsPlugin> withLoadAfter = loadJarBackedFixture(
+                "loadafter.jar", JarModuleWithLoadAfter.class,
+                "name: LoadAfterModule\nloadAfter:\n  - TargetModule\n");
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                Arrays.asList(withLoadAfter, target));
+
+            assertEquals(2, result.size());
+            assertTrue(result.indexOf(target) < result.indexOf(withLoadAfter));
+        }
+
+        @Test
+        @DisplayName("a loadAfter entry naming a module not installed is inert - no exception")
+        void unresolvableLoadAfterIsInert() throws Exception {
+            Class<? extends UltiToolsPlugin> withUnresolvable = loadJarBackedFixture(
+                "unresolvable.jar", JarModuleWithUnresolvableLoadAfter.class,
+                "name: UnresolvableLoadAfterModule\nloadAfter:\n  - NoSuchModule\n");
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                Collections.singletonList(withUnresolvable));
+
+            assertEquals(1, result.size());
+            assertEquals(withUnresolvable, result.get(0));
+        }
+
+        @Test
+        @DisplayName("a loadAfter entry naming a module by its simple class name also resolves")
+        void loadAfterBySimpleClassNameResolves() throws Exception {
+            Class<? extends UltiToolsPlugin> target = loadJarBackedFixture(
+                "target2.jar", JarModuleTarget.class, "name: TargetModule\n");
+            Class<? extends UltiToolsPlugin> withLoadAfter = loadJarBackedFixture(
+                "bysimplename.jar", JarModuleLoadAfterBySimpleName.class,
+                "name: LoadAfterBySimpleNameModule\nloadAfter:\n  - JarModuleTarget\n");
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                Arrays.asList(withLoadAfter, target));
+
+            assertEquals(2, result.size());
+            assertTrue(result.indexOf(target) < result.indexOf(withLoadAfter));
+        }
+
+        @Test
+        @DisplayName("a depends entry naming a module by its plugin.yml name resolves via the alias map")
+        void dependsEntryResolvesViaYmlNameAlias() throws Exception {
+            Class<? extends UltiToolsPlugin> target = loadJarBackedFixture(
+                "target3.jar", JarModuleTarget.class, "name: TargetModule\n");
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                Arrays.asList(DependsOnYmlNamedTarget.class, target));
+
+            assertEquals(2, result.size());
+            assertTrue(result.indexOf(target) < result.indexOf(DependsOnYmlNamedTarget.class));
+        }
+
+        @Test
+        @DisplayName("mutual loadAfter between two modules is reported as a cycle, both refused")
+        void mutualLoadAfterIsReportedAsCycle() throws Exception {
+            Class<? extends UltiToolsPlugin> x = loadJarBackedFixture(
+                "mutualx.jar", JarModuleMutualLoadAfterX.class,
+                "name: MutualX\nloadAfter:\n  - MutualY\n");
+            Class<? extends UltiToolsPlugin> y = loadJarBackedFixture(
+                "mutualy.jar", JarModuleMutualLoadAfterY.class,
+                "name: MutualY\nloadAfter:\n  - MutualX\n");
+
+            List<Class<? extends UltiToolsPlugin>> input = Arrays.asList(x, y);
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(input));
+
+            assertTrue(ex.getRefusedPlugins().contains("JarModuleMutualLoadAfterX"));
+            assertTrue(ex.getRefusedPlugins().contains("JarModuleMutualLoadAfterY"));
+        }
+
+        @Test
+        @DisplayName("a malformed plugin.yml logs one warning and returns empty, never throwing")
+        void malformedPluginYmlReturnsEmptyAndWarns() throws Exception {
+            Class<? extends UltiToolsPlugin> malformed = loadJarBackedFixture(
+                "malformed.jar", JarModuleWithUnresolvableLoadAfter.class,
+                "name: [this is not closed\n");
+
+            Logger readerLogger = Logger.getLogger(PluginYmlReader.class.getName());
+            List<LogRecord> captured = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            readerLogger.addHandler(handler);
+            try {
+                PluginYmlReader.PluginYmlInfo info = PluginYmlReader.read(malformed);
+
+                assertTrue(info.getLoadAfter().isEmpty());
+                long warnings = captured.stream()
+                    .filter(record -> Level.WARNING.equals(record.getLevel()))
+                    .count();
+                assertEquals(1, warnings);
+            } finally {
+                readerLogger.removeHandler(handler);
+            }
         }
     }
 
