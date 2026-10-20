@@ -13,7 +13,8 @@ itself mean a tag, GitHub release or Maven Central artifact has been published.
 - Back up the server configuration and module data. For JSON storage, back up `.ultitools-journal`
   together with the tables; never delete that journal, and run only one server per data folder.
 - Install module builds compiled for UltiTools-API 6.3.0 with module `plugin.yml` declaring
-  `api-version: 630`. **Do not assume a 6.2.5 module JAR is binary-compatible.**
+  `api-version: 630`. **If you rely on modules, stay on 6.2.5 until 6.3.0 builds of every module
+  you use are published.** Upgrading only the framework leaves the old modules unloaded.
 - Replace the framework and affected module JARs with the server stopped, then restart.
   `/ul reload` reloads configuration, not JARs.
 - The framework supports **Paper 1.19.2 build 163 or newer**, not plain Spigot. Use Java 17 below
@@ -30,9 +31,11 @@ The same modules' unfiltered latest requests returned HTTP 200 with their older 
 an invalid API-level request returned HTTP 400. This is an availability observation, not an
 inference from a successful build or publication workflow.
 
-Operators must wait for the compatible module builds to be republished to the catalogue before
-installing them through `/upm`. A framework upgrade alone does not republish modules or make older
-module builds compatible. Check catalogue availability again when upgrading.
+Every module build currently offered by that catalogue predates 6.3.0 and is refused by 6.3.0 at
+startup: each overrides the now-`final` `unregisterSelf()`. Operators who rely on modules must stay
+on 6.2.5 until 6.3.0 builds of every module they use are published. Upgrading only the framework
+leaves those modules unloaded. Wait for compatible builds in the catalogue before installing them
+through `/upm`, and check catalogue availability again when upgrading.
 
 ## Breaking API changes and migration
 
@@ -184,14 +187,14 @@ claims that this framework release repairs those separately delivered products.
 | Affected product / symptom | What to do meanwhile | Tracking |
 |---|---|---|
 | Framework: `/upm check` can say no updates during the first seconds of startup | Wait for the console's startup update-check result, then retry. | [#663](https://github.com/UltiKits/UltiTools-Reborn/issues/663) |
-| Framework: a too-new module on Paper below 1.21 can be misreported as built against an older framework | Check the module's server requirement before blaming its framework build. | [#658](https://github.com/UltiKits/UltiTools-Reborn/issues/658) |
+| Framework: a module requiring Paper 1.21 or newer can, on older Paper, be misreported as built against an older framework | Check the module's server requirement before blaming its framework build. | [#658](https://github.com/UltiKits/UltiTools-Reborn/issues/658) |
 | UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade inventory screens can fail on older Paper | Run these five modules on Paper 1.21 or newer. | [#655](https://github.com/UltiKits/UltiTools-Reborn/issues/655) |
 | Framework: a partial module reload repeats its result twice in the log and once in the reply | Read the first result; ignore the duplicates. | [#665](https://github.com/UltiKits/UltiTools-Reborn/issues/665) |
 | Framework: reload/config wording may imply a restart or mix languages; YAML-anchor comments may expand after a language change | Correct the named invalid value and run `/ul reload`; the refused panel edit wrote nothing and needs no restart. | [#598](https://github.com/UltiKits/UltiTools-Reborn/issues/598) |
 | UltiEconomy: a process stop between debit and credit can lose a transfer without a log entry | No module workaround; after an unclean stop, check reported missing transfers and correct balances manually. | [#44](https://github.com/UltiKits/UltiEconomy/issues/44) |
 | UltiEconomy: transfer/refund failure replies can be misleading; a note redemption without a balance row can give no reply and retain the note | After a database problem, inspect balances and logs before paying again. | [#45](https://github.com/UltiKits/UltiEconomy/issues/45) |
 | UltiLogin: console/panel `logadmin reset` can expose the new password in logs | Reset passwords in game, where logging is masked, and keep logs private. | [#57](https://github.com/UltiKits/UltiLogin/issues/57) |
-| UltiWorlds: failed PvP persistence can leave the live flag changed until another player enters | Repeat the command and confirm the live and saved values agree. | [#58](https://github.com/UltiKits/UltiWorlds/issues/58) |
+| UltiWorlds: failed PvP persistence can leave the live flag changed until the next player enters that world | Repeat the command and confirm the live and saved values agree. | [#58](https://github.com/UltiKits/UltiWorlds/issues/58) |
 | Panel: plugin configuration editor is blank/unavailable | Edit configuration files directly on the server. | [#123](https://github.com/UltiKits/UltiPanelFrontend/issues/123) |
 | Panel: Settings says saved before the server accepts; some of its 14 settings do not exist on every server | Check the actual server setting; do not treat the success message as confirmation. | [#124](https://github.com/UltiKits/UltiPanelFrontend/issues/124), [#125](https://github.com/UltiKits/UltiPanelFrontend/issues/125) |
 | Panel: no browser live push, no remote command output, and the management status strip says Disconnected even when online | Read output in the server console and use the dashboard for online state. | [#127](https://github.com/UltiKits/UltiPanelFrontend/issues/127), [#128](https://github.com/UltiKits/UltiPanelFrontend/issues/128), [#131](https://github.com/UltiKits/UltiPanelFrontend/issues/131) |
