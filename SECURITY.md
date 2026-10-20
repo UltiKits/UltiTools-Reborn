@@ -4,11 +4,9 @@
 
 ## Supported Versions
 
-Only the **latest released version** receives security fixes — at the time of
-writing, **6.2.4**. If that number has aged, the
+Only the **latest released version** receives security fixes. The
 [Releases page](https://github.com/UltiKits/UltiTools-Reborn/releases/latest)
-is authoritative; whatever sits there is the supported version, and everything
-before it is not.
+is authoritative: the version shown there is supported; earlier versions are not.
 
 There are no maintained release branches, so a fix is delivered by upgrading
 rather than by backporting. If you are running an older 6.x — or any 5.x —
@@ -63,9 +61,9 @@ be closed with a pointer back here.
 
 ### 支持的版本
 
-只有**最新的正式发布版本**会收到安全修复 —— 写这份文档时是 **6.2.4**。如果这个数字
-已经旧了，以[发布页](https://github.com/UltiKits/UltiTools-Reborn/releases/latest)为准：
-挂在那里的就是受支持的版本，在它之前的都不是。
+只有**最新的正式发布版本**会收到安全修复。以
+[发布页](https://github.com/UltiKits/UltiTools-Reborn/releases/latest)为准：
+页面显示的版本受支持，更早的版本不受支持。
 
 本项目没有维护中的发布分支，所以修复是通过**升级**交付的，不做向后移植。如果你在跑
 更老的 6.x 或者任何 5.x，请先升级再报告。

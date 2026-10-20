@@ -10,7 +10,7 @@
 
 <div align="center"><strong>The Modern Paper Plugin Framework</strong></div>
 
-<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Works with any Bukkit/Paper plugin. Runs on Paper 1.19.2 (build 163 or later) and newer, on the Java version that Paper line requires.</p>
+<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Integrates with Bukkit plugins running on a supported Paper server. Runs on Paper 1.19.2 (build 163 or later) and newer, on the Java version that Paper line requires.</p>
 
 <br>
 
@@ -24,7 +24,6 @@
 <img alt="Spigot Rating" src="https://img.shields.io/spiget/rating/85214?label=SpigotMC&amp;style=flat-square"/>
 <img alt="bStats Players" src="https://img.shields.io/bstats/players/8652?style=flat-square"/>
 <img alt="bStats Servers" src="https://img.shields.io/bstats/servers/8652?style=flat-square"/>
-<a href="https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/overview/alpha"><img src="https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/badge/alpha" alt="CodeFactor" /></a>
 </div>
 
 ---
@@ -55,7 +54,7 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 | Dependency injection | Static singletons everywhere | `@Autowired` like Spring |
 | Data storage | Raw JDBC or custom file I/O | `@Table` + `@Column` ORM, works with MySQL/SQLite/JSON |
 | Config | `getConfig().getString(...)` | `@ConfigEntry` on typed fields with validation |
-| Scheduled tasks | `new BukkitRunnable()` boilerplate | `@Scheduled(period = 6000)` on any method |
+| Scheduled tasks | `new BukkitRunnable()` boilerplate | `@Scheduled(period = 6000)` on a no-argument `void` method in a managed bean |
 | Feature toggles | Manual `if` checks | `@ConditionalOnConfig` skips entire components |
 | Transactions | Manual try/catch/rollback | `@Transactional` AOP proxy |
 | Inter-module events | Custom event buses or static coupling | `@ModuleEventHandler` pub/sub EventBus |
@@ -69,7 +68,7 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 - **Server**: Paper 1.19.2 (build 163 or later) or newer. Plain Spigot is not supported.
 - **Server Java**: the version your Paper line requires: Java 17 for Paper 1.19.2 to 1.20.4, Java 21 from Paper 1.20.5.
 - **Building the framework**: JDK 21 (the bytecode targets Java 8).
-- **Modules**: individual modules may require a newer server. UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade need Minecraft 1.21+; see each module's README.
+- **Modules**: individual modules may require a newer server. UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade need Paper 1.21+; see the [release notes](RELEASE-NOTES-6.3.0.md#before-upgrading) for module-specific requirements.
 - **Known gap below Paper 1.20.5**: the UltiPanel console mirror is not installed, and one WARNING at start-up says so; the panel's log stream then carries plugin lines only.
 - **UltiTools Plugin**: Install on your server
 
@@ -80,20 +79,22 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 <dependency>
     <groupId>com.ultikits</groupId>
     <artifactId>UltiTools-API</artifactId>
-    <version>6.2.4</version>
+    <version>6.3.0</version>
     <scope>provided</scope>
 </dependency>
 ```
 
 **Gradle**
 ```groovy
-compileOnly 'com.ultikits:UltiTools-API:6.2.4'
+compileOnly 'com.ultikits:UltiTools-API:6.3.0'
 ```
 
 > The scope matters. UltiTools-API is a shaded JAR published with a dependency-free POM, and the
-> UltiTools plugin already provides it at runtime. Compile against it, but do not bundle it — a
-> `compile`/`implementation` scope pulls the whole framework (including the un-relocated XSeries)
-> into your own JAR.
+> UltiTools plugin already provides it at runtime. Compile against it, but do not bundle it —
+> with a shade/shadow build, `compile`/`implementation` scope can bundle the framework into your
+> own JAR. XSeries is no longer bundled in 6.3.0; if your module uses it, declare
+> `com.github.cryptomorin:XSeries:13.7.1` separately as `provided`/`compileOnly`. Paper supplies it
+> at runtime through the framework's `libraries:` block.
 
 ### Option A: Write an UltiTools Module (Recommended)
 
@@ -101,7 +102,7 @@ Building an UltiTools module is the best way to develop with UltiTools-API. Modu
 
 - **One-click updates** — Server admins can update your module directly from the UltiTools panel, no manual JAR swapping
 - **Built-in marketplace** — Publish to [UltiCloud](https://panel.ultikits.com) and let users discover, install, and manage your module from a central catalog
-- **Hot reload** — Modules can be loaded and unloaded at runtime without restarting the server
+- **Managed module lifecycle** — Install and update modules through UPM; changes take effect at the next server start
 - **Shared infrastructure** — Database connections, config management, and i18n are handled by the framework; your module stays small and focused
 - **Inter-module communication** — Publish and subscribe to events across modules with the built-in EventBus
 
@@ -122,7 +123,7 @@ This generates a complete, compilable project with `pom.xml`, main class, `plugi
 name: MyPlugin
 version: '${project.version}'
 main: com.example.myplugin.MyPlugin
-api-version: 620
+api-version: 630
 authors: [ YourName ]
 ```
 
@@ -142,9 +143,9 @@ Add `@CmdExecutor` on command classes, `@EventListener` on listener classes, and
 
 For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/guide/introduction).
 
-### Option B: Use from Any Bukkit Plugin
+### Option B: Use from an Existing Bukkit Plugin on Paper
 
-Already have a plugin? You can integrate UltiTools-API into any existing Bukkit/Paper plugin without rewriting it as a module. You get the full framework — DI, ORM, scheduled tasks, EventBus — with a single line of code.
+Already have a Bukkit plugin running on supported Paper? You can integrate UltiTools-API without rewriting it as a module. You get DI, ORM, literal scheduled tasks and EventBus with a single connection call.
 
 Add `depend: [UltiTools]` to your `plugin.yml` and call `UltiToolsAPI.connect(this)`:
 
@@ -164,7 +165,7 @@ public class MyBukkitPlugin extends JavaPlugin {
 }
 ```
 
-After `connect()`, all annotated classes in your plugin's package are auto-discovered and managed by the UltiTools IoC container — everything a native module gets, while keeping your plugin as a standard Bukkit plugin.
+After `connect()`, annotated components in your plugin's package are auto-discovered and managed by the UltiTools IoC container, while your plugin remains a standard Bukkit plugin on Paper. Module-only features, such as config-bound scheduled tasks, still require a native module.
 
 See the [External Plugin API Guide](https://dev.ultikits.com/guide/advanced/external-plugin-api) for full details, or check out the [complete working example](https://github.com/UltiKits/UltiTools-External-Example).
 
@@ -172,7 +173,7 @@ See the [External Plugin API Guide](https://dev.ultikits.com/guide/advanced/exte
 
 ## Quick Look
 
-A complete UltiTools module in under 50 lines:
+The core pieces of a small UltiTools module:
 
 ```java
 // Main class — just one annotation to enable auto-scanning
@@ -218,7 +219,7 @@ public class HomeCommand extends BaseCommandExecutor {
     }
 
     @CmdMapping(format = "set <name>")
-    public void setHome(@CmdSender Player player, @CmdParam("name") String name) {
+    public void setHome(@CmdSender Player player, @CmdParam("name") String name) throws IllegalAccessException {
         homeService.setHome(player, name, player.getLocation());
         player.sendMessage("Home set!");
     }
@@ -243,7 +244,7 @@ public class HomeService {
     public void teleport(Player player, String name) {
         HomeEntity home = plugin.getDataOperator(HomeEntity.class)
             .query()
-            .where("playerId").eq(player.getUniqueId().toString())
+            .where("player_id").eq(player.getUniqueId().toString())
             .and("name").eq(name)
             .first();
 
@@ -256,10 +257,33 @@ public class HomeService {
         }
     }
 
+    public void setHome(Player player, String name, Location location) throws IllegalAccessException {
+        DataOperator<HomeEntity> homes = plugin.getDataOperator(HomeEntity.class);
+        HomeEntity home = homes.query()
+            .where("player_id").eq(player.getUniqueId().toString())
+            .and("name").eq(name)
+            .first();
+        boolean isNew = home == null;
+        if (isNew) {
+            home = new HomeEntity();
+            home.setPlayerId(player.getUniqueId().toString());
+            home.setName(name);
+        }
+        home.setWorld(location.getWorld().getName());
+        home.setX(location.getX());
+        home.setY(location.getY());
+        home.setZ(location.getZ());
+        if (isNew) {
+            homes.insert(home);
+        } else {
+            homes.update(home);
+        }
+    }
+
     public List<HomeEntity> getHomes(Player player) {
         return plugin.getDataOperator(HomeEntity.class)
             .query()
-            .where("playerId").eq(player.getUniqueId().toString())
+            .where("player_id").eq(player.getUniqueId().toString())
             .orderBy("name")
             .list();
     }
@@ -287,11 +311,12 @@ public void pay(@CmdSender Player sender, @CmdParam("player") String target, @Cm
 }
 ```
 
-> **Migrating from `AbstractCommandExecutor`.** The older base class is deprecated
-> (`forRemoval = true`, since 6.2.0) and is scheduled for removal in **6.3.0**. Extend
-> `abstracts.command.BaseCommandExecutor` instead; the only mandatory addition is the abstract
-> `handleHelp(CommandSender)`. Step-by-step instructions and the full list of what 6.3.0 removes
-> are in [`COMPATIBILITY.md`](COMPATIBILITY.md).
+> **Migrating from `AbstractCommandExecutor`.** The older base class and its misspelled
+> `AbstractCommendExecutor` shim are removed in **6.3.0**. Extend
+> `abstracts.command.BaseCommandExecutor` and implement the abstract
+> `handleHelp(CommandSender)`. Step-by-step migration instructions are in
+> [`COMPATIBILITY.md`](COMPATIBILITY.md); the full 6.3.0 removal list is in
+> [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
 
 ### IoC Container with `@Autowired`
 Spring-like dependency injection with three-level cache for circular dependency resolution.
@@ -346,12 +371,16 @@ public class InterestService {
 ```
 
 ### Config Validation
-Invalid config values are automatically caught and reset to safe defaults on load and reload.
+Invalid values that violate declared constraints refuse the module load or configuration reload; operator-written configuration is never automatically reset or overwritten.
 
 ```java
 @Getter @Setter
 @ConfigEntity("config/config.yml")
 public class EcoConfig extends AbstractConfigEntity {
+
+    public EcoConfig(String configFilePath) {
+        super(configFilePath);
+    }
 
     @ConfigEntry(path = "interestRate", comment = "Interest rate per cycle")
     @Range(min = 0.0, max = 1.0)
@@ -368,7 +397,7 @@ public class EcoConfig extends AbstractConfigEntity {
 ```
 
 ### `@ConditionalOnConfig`
-Toggle entire features on/off from config — no `if` checks scattered through code.
+Choose which components register at startup — no `if` checks scattered through code. A restart is required after changing the condition; `/ul reload` only reports the drift.
 
 ```java
 @Service
@@ -399,8 +428,10 @@ public class BankService {
     }
 
     @ExceptionCatch(value = IOException.class, silent = true)
-    public String readExternalData() {
-        // Returns null on IOException instead of crashing
+    public String readExternalData() throws IOException {
+        // Returns null on IOException instead of propagating it
+        return new String(Files.readAllBytes(Paths.get("plugins/MyPlugin/data.txt")),
+            StandardCharsets.UTF_8);
     }
 }
 ```
@@ -436,16 +467,18 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 - **GUI Framework** — Inventory GUIs with pagination via ObliviateInvs, plus a declarative reactive GUI system
 - **i18n** — Built-in internationalization with `i18n("key")`
-- **Hot Module Loading** — Load/unload plugin modules without server restart
+- **Module Management** — Install and update modules through UPM; changes take effect at the next server start
 - **WebSocket + UltiPanel** — Remote server management (commands, files, monitoring, logs)
-- **Plugin Sandbox** — Class blacklisting, path traversal protection, command blocklists
+- **Module JAR Validation** — 100 MB / 10,000-entry limits; no class-name sandbox. Install only modules you trust
+- **Remote Access Guards** — Path traversal protection, editable roots, capabilities and command blocklists
 
 <br>
 
 ## Documentation
 
-Architecture notes, module guides, tutorials, and the API reference all live on the
-documentation site — it is the single source of truth and is kept in sync with each release.
+Architecture notes, module guides, tutorials and the API reference live on the
+documentation site. For 6.3.0 migration and known limitations, also read
+[COMPATIBILITY.md](COMPATIBILITY.md) and the [release notes](RELEASE-NOTES-6.3.0.md).
 
 | Document | Description |
 |----------|-------------|
@@ -470,7 +503,7 @@ UltiTools-Reborn/
 │   ├── events/                  # Module EventBus (EventBus, ModuleEvent, EventPriority, Cancellable)
 │   ├── manager/                 # Core managers (Command, Listener, Config, Plugin, Task)
 │   ├── interfaces/              # Core interfaces (DataOperator, Query, DataStore) + impl/
-│   ├── websocket/               # UltiPanel WebSocket client + handlers
+│   ├── websocket/               # UltiPanel WebSocket client and protocol support
 │   └── utils/                   # SecurityPolicy, CloudAuthManager, ApiRateLimiter
 └── pom.xml
 ```
