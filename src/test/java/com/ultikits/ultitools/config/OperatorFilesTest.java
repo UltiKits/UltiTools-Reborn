@@ -38,6 +38,14 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class OperatorFilesTest {
 
+    /**
+     * The logger this test captures from, held strongly for the whole run. {@code LogManager} keeps named loggers
+     * only weakly, so one looked up in {@code setUp()} and not referenced again can be collected before the code
+     * under test first asks for it; that code then gets a fresh logger without this test's handler.
+     */
+    private static final Logger CAPTURED_LOGGER =
+            Logger.getLogger("com.ultikits.ultitools.config.document.OperatorFileWriter");
+
     private static final String KIT = "# Starter kit, edited by hand\n"
             + "displayName: '&aStarter'\n"
             + "description:\n"
@@ -75,12 +83,12 @@ class OperatorFilesTest {
     @BeforeEach
     void setUp() {
         file = directory.resolve("kits").resolve("starter.yml");
-        Logger.getLogger("com.ultikits.ultitools.config.document.OperatorFileWriter").addHandler(capture);
+        CAPTURED_LOGGER.addHandler(capture);
     }
 
     @AfterEach
     void tearDown() {
-        Logger.getLogger("com.ultikits.ultitools.config.document.OperatorFileWriter").removeHandler(capture);
+        CAPTURED_LOGGER.removeHandler(capture);
     }
 
     @Test

@@ -46,6 +46,13 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 @DisplayName("saveOperatorMapEntry(EntryPresence, ...): an operator's map-entry write only under its stated condition")
 class OperatorMapEntryPreconditionTracerTest {
 
+    /**
+     * The logger this test captures from, held strongly for the whole run. {@code LogManager} keeps named loggers
+     * only weakly, so one looked up in {@code setUp()} and not referenced again can be collected before the code
+     * under test first asks for it; that code then gets a fresh logger without this test's handler.
+     */
+    private static final Logger CAPTURED_LOGGER = Logger.getLogger("com.ultikits");
+
     private static final FileTime OLD = FileTime.fromMillis(1_577_836_800_000L);
     private static final String RULES = "autoreply.yml";
     private static final String BASE = "# Auto replies\n"
@@ -101,7 +108,7 @@ class OperatorMapEntryPreconditionTracerTest {
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
-        Logger.getLogger("com.ultikits").addHandler(capture);
+        CAPTURED_LOGGER.addHandler(capture);
     }
 
     /**
@@ -117,7 +124,7 @@ class OperatorMapEntryPreconditionTracerTest {
 
     @AfterEach
     void tearDown() {
-        Logger.getLogger("com.ultikits").removeHandler(capture);
+        CAPTURED_LOGGER.removeHandler(capture);
         MockBukkitHelper.safeUnmock();
     }
 

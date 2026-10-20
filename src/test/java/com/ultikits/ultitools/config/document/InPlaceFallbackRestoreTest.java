@@ -56,6 +56,13 @@ import com.ultikits.ultitools.manager.ConfigManager;
 @DisplayName("A failed in-place fallback puts the file back from its backup (#622, #582)")
 class InPlaceFallbackRestoreTest {
 
+    /**
+     * The logger this test captures from, held strongly for the whole run. {@code LogManager} keeps named loggers
+     * only weakly, so one looked up in {@code setUp()} and not referenced again can be collected before the code
+     * under test first asks for it; that code then gets a fresh logger without this test's handler.
+     */
+    private static final Logger CAPTURED_LOGGER = Logger.getLogger("com.ultikits");
+
     private static final String ORIGINAL_VALUE = "original-motd-4b1e";
     private static final String NEW_VALUE = "new-motd-9d2a";
     private static final String TEXT = "# Gate settings\nmotd: " + ORIGINAL_VALUE + "\nlimit: 5\n";
@@ -194,7 +201,7 @@ class InPlaceFallbackRestoreTest {
         lenient().when(plugin.getPluginName()).thenReturn("RestoreModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        Logger.getLogger("com.ultikits").addHandler(capture);
+        CAPTURED_LOGGER.addHandler(capture);
     }
 
     /**
@@ -213,7 +220,7 @@ class InPlaceFallbackRestoreTest {
         if (writer != null) {
             writer.close();
         }
-        Logger.getLogger("com.ultikits").removeHandler(capture);
+        CAPTURED_LOGGER.removeHandler(capture);
     }
 
     /** Routes every atomic write of the framework through {@link Faults}. */

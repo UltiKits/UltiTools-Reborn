@@ -142,12 +142,25 @@ class ReleaseValidationTests(unittest.TestCase):
     def test_required_ci_runs_all_release_suites_after_verify(self):
         workflow = WorkflowParser((WORKFLOWS / "maven-ci.yml").read_text(encoding="utf-8")).parse()
         steps = workflow["jobs"]["test"]["steps"]
-        command = "python3 -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v"
+        command = "python3 -B -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v"
         suites = [index for index, step in enumerate(steps) if step.get("run") == command]
         builds = [index for index, step in enumerate(steps) if step.get("run") == "mvn -B clean verify"]
         self.assertEqual(len(suites), 1)
         self.assertEqual(len(builds), 1)
         self.assertLess(builds[0], suites[0])
+        self.assertIn("git status --porcelain", steps[builds[0] + 1]["run"])
+        self.assertIn("git status --porcelain", steps[suites[0] + 1]["run"])
+        pin = [s for s in steps if s.get("name") == "Set up pinned Maven for Central staging"]
+        publish = WorkflowParser((WORKFLOWS / "publish-packages.yml").read_text(encoding="utf-8")).parse()
+        central = publish["jobs"]["publish-central"]["steps"]
+        central_pin = [s for s in central if s.get("name") == "Set up pinned Maven for Central staging"]
+        self.assertEqual(len(pin), 1)
+        self.assertEqual(central_pin, pin)
+        self.assertLess(steps.index(pin[0]), suites[0])
+        self.assertIn("MAVEN_VERSION=3.9.16", pin[0]["run"])
+        self.assertIn("sha512sum --check --strict", pin[0]["run"])
+        self.assertIn("archive.apache.org", pin[0]["run"])
+        self.assertIn('"$GITHUB_PATH"', pin[0]["run"])
         self.assertNotIn("if", steps[suites[0]])
         self.assertNotIn("continue-on-error", steps[suites[0]])
 
@@ -350,6 +363,7 @@ def parse_output_file(path):
 def run_job(job, workspace, base_env, context, runner_temp, uses_handler=None):
     """Run a job's steps in order the way the Actions runner does; return a JobResult."""
     result = JobResult()
+    path_file = runner_temp / "github-path"
     context = dict(context)
     context["steps"] = {}
     result.step_context = context["steps"]
@@ -377,6 +391,9 @@ def run_job(job, workspace, base_env, context, runner_temp, uses_handler=None):
         if "${{" in script:
             raise AssertionError("step %r expands ${{ }} inside its run block; pass values through env" % name)
         env = dict(base_env)
+        env["GITHUB_PATH"] = str(path_file)
+        if path_file.exists():
+            env["PATH"] = os.pathsep.join(reversed(path_file.read_text().splitlines())) + os.pathsep + env["PATH"]
         for key, value in (step.get("env") or {}).items():
             env[key] = substitute(value, context)
         output_file = runner_temp / ("output-%d" % index)
@@ -998,6 +1015,33 @@ class CentralInputsTests(unittest.TestCase):
         self.assertEqual(digests(inputs), before)
         self.assertRegex(values["SIGNER_FINGERPRINT"], r"^[0-9A-F]{40,64}$")
 
+    def test_maven_core_version_guard_reads_properties_not_filename(self):
+        for version, accepted in (("3.10.0", False), ("3.9.16", True), ("3.8.7", True), (None, False)):
+            with self.subTest(version=version):
+                case = self.case_dir(str(version))
+                home = case / "maven"
+                shutil.copytree(str(maven_home()), str(home), symlinks=False)
+                for jar in (home / "lib").glob("maven-core*.jar"):
+                    jar.unlink()
+                core = home / "lib" / "maven-core-3.x.jar"
+                real_core = next((maven_home() / "lib").glob("maven-core*.jar"))
+                entry = "META-INF/maven/org.apache.maven/maven-core/pom.properties"
+                with zipfile.ZipFile(str(real_core)) as source, zipfile.ZipFile(str(core), "w") as dest:
+                    for name in source.namelist():
+                        if name != entry:
+                            dest.writestr(name, source.read(name))
+                    if version is not None:
+                        dest.writestr(entry, "version=%s\n" % version)
+                inputs = self.fixture.make_inputs(case / "inputs")
+                proc, _ = self.fixture.central_inputs(inputs, case / "work", case / "scratch",
+                                                       **{"--maven-home": str(home)})
+                self.assertEqual(proc.returncode, 0 if accepted else 1, proc.stderr.decode())
+                if not accepted:
+                    self.assertIn("refused: maven_version", proc.stderr.decode())
+                    self.assertIn("resolver bookkeeping", proc.stderr.decode())
+                    self.assertFalse((case / "work").exists())
+                    self.assertFalse((case / "scratch").exists())
+
     def signature_refusal_cases(self):
         fixture = self.fixture
 
@@ -1189,7 +1233,7 @@ import org.sonatype.central.publisher.plugin.utils.ProjectUtils;
  * Drives the real central-publishing-maven-plugin 0.9.0 components to a LOCAL file boundary. The mojo's
  * publisher client, uploader, watcher and published-checker stay null, so an attempt to reach the network
  * fails with a NullPointerException instead of opening a connection. Arguments are quadruples of
- * mode (handoff | unregistered | register-only), properties file or "-", POM file and scratch directory;
+ * mode (handoff | resolver-bookkeeping | unregistered | register-only), properties file or "-", POM file and scratch directory;
  * each scenario gets a fresh MavenSession and MavenProject inside one Plexus container.
  */
 public class CentralHandoffProbe {
@@ -1241,8 +1285,11 @@ public class CentralHandoffProbe {
 
         RepositorySystem repositorySystem = container.lookup(RepositorySystem.class);
         DefaultRepositorySystemSession repositorySession = MavenRepositorySystemUtils.newSession();
+        // Sharing the session repository with staging forces Maven 3.10's enhanced-manager layout on 3.8/3.9.
+        File localRepository = "resolver-bookkeeping".equals(mode) ? new File(scratch, "staging")
+                : new File(scratch.getParentFile(), scratch.getName() + "-unused-local-repo");
         repositorySession.setLocalRepositoryManager(repositorySystem.newLocalRepositoryManager(repositorySession,
-                new LocalRepository(new File(scratch.getParentFile(), scratch.getName() + "-unused-local-repo"))));
+                new LocalRepository(localRepository)));
         repositorySession.setOffline(true);
         MavenExecutionRequest request = new DefaultMavenExecutionRequest();
         Properties user = new Properties();
@@ -1517,6 +1564,36 @@ class ActualCentralHandoffTests(unittest.TestCase):
         self.assertEqual(digests(inputs), before, "a retained input or signature changed or disappeared")
         print("ACTUAL_CENTRAL_HANDOFF_OK")
         sys.stdout.flush()
+
+    def test_maven_310_layout_is_reproduced_and_version_is_refused_before_staging(self):
+        case = self.case_dir("resolver-layout")
+        inputs = self.fixture.make_inputs(case / "inputs")
+        before = digests(inputs)
+        values = self.prepare(inputs, case, "control")
+        scratch = Path(values["STAGING_DIR"]).parent
+        results, text = self.probe([("resolver-bookkeeping", values["PROPERTIES"], values["PROJECT_POM"], scratch)],
+                                   values["HELPER_JAR"])
+        staged = set(line.rsplit(" ", 1)[0] for line in self.tagged(results[0], "STAGED"))
+        retained = set(STAGED_DIR + name for name in list(PAYLOADS.values()) + [n + ".asc" for n in SIGNED])
+        checksums = set(STAGED_DIR + name + ext for name in PAYLOADS.values() for ext in CHECKSUM_EXTENSIONS)
+        extras = {STAGED_DIR + "_remote.repositories"} | {
+            STAGED_DIR + "_remote.repositories" + ext for ext in CHECKSUM_EXTENSIONS} | {
+            "com/ultikits/UltiTools-API/maven-metadata-local.xml"}
+        self.assertTrue(results[0]["result"].startswith("STAGED_AND_BUNDLED "), text)
+        self.assertEqual(staged - retained - checksums, extras, text)
+        # The production boundary rejects the Maven version that produces this layout, before any staging.
+        home = case / "maven-310"
+        (home / "lib").mkdir(parents=True)
+        with zipfile.ZipFile(str(home / "lib" / "maven-core-3.x.jar"), "w") as jar:
+            jar.writestr("META-INF/maven/org.apache.maven/maven-core/pom.properties", "version=3.10.0\n")
+        work, refused_scratch = case / "work-refused", case / "scratch-refused"
+        proc, _ = self.fixture.central_inputs(inputs, work, refused_scratch,
+                                               **{"--maven-home": str(home)})
+        self.assertEqual(proc.returncode, 1, proc.stderr.decode())
+        self.assertIn("refused: maven_version", proc.stderr.decode())
+        self.assertFalse(work.exists())
+        self.assertFalse(refused_scratch.exists())
+        self.assertEqual(digests(inputs), before)
 
     def test_unregistered_project_is_refused_by_the_actual_collector(self):
         case = self.case_dir("unregistered")
@@ -1869,6 +1946,36 @@ sys.argv = [args[0]] + args[1:]
 runpy.run_path(args[0], run_name="__main__")
 '''
 
+# External installation is faked like setup-java: no workflow fixture may download or run an archive.
+FAKE_MAVEN_BOOTSTRAP = r'''#!{python} -I
+import json, os, sys
+from pathlib import Path
+name = Path(sys.argv[0]).name
+args = sys.argv[1:]
+version = "3.9.16"
+digest = "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps({"tool": name, "argv": args}) + "\n")
+if name == "curl":
+    url = "https://archive.apache.org/dist/maven/maven-3/%s/binaries/apache-maven-%s-bin.tar.gz" % (version, version)
+    assert args == ["--fail", "--location", "--silent", "--show-error", url, "--output", args[-1]], args
+    Path(args[-1]).write_bytes(b"hermetic Maven archive fixture")
+elif name == "sha512sum":
+    assert args == ["--check", "--strict"], args
+    expected, path = sys.stdin.read().strip().split("  ", 1)
+    assert expected == digest, expected
+    assert Path(path).read_bytes() == b"hermetic Maven archive fixture"
+elif name == "tar":
+    assert args[:1] == ["-xzf"] and args[2:3] == ["-C"], args
+    assert Path(args[1]).read_bytes() == b"hermetic Maven archive fixture"
+    target = Path(args[3]) / ("apache-maven-%s" % version) / "bin"
+    target.mkdir(parents=True)
+    (target / "mvn").symlink_to(Path(os.environ["FAKE_BIN"]) / "mvn")
+else:
+    raise AssertionError(name)
+'''
+
+
 FORBIDDEN_GOALS = ("clean", "compile", "package", "verify", "install", "deploy", "versions:set", "test")
 
 
@@ -1900,7 +2007,9 @@ class PublishWorkflowFixture(object):
         shim = self.root / "python_shim.py"
         shim.write_text(PYTHON_SHIM, encoding="utf-8")
         self.shim = shim
-        for name, text in (("gh", FAKE_GH_PUBLISH), ("mvn", FAKE_MVN_PUBLISH), ("python3", FAKE_PYTHON)):
+        for name, text in (("gh", FAKE_GH_PUBLISH), ("mvn", FAKE_MVN_PUBLISH), ("python3", FAKE_PYTHON),
+                           ("curl", FAKE_MAVEN_BOOTSTRAP), ("sha512sum", FAKE_MAVEN_BOOTSTRAP),
+                           ("tar", FAKE_MAVEN_BOOTSTRAP)):
             make_executable(self.root / "bin" / name, text)
         self.settings = self.root / "empty-settings.xml"
         self.settings.write_text("<settings/>\n", encoding="ascii")
@@ -1921,7 +2030,7 @@ class PublishWorkflowFixture(object):
                "GIT_CONFIG_NOSYSTEM": "1", "GITHUB_WORKSPACE": str(self.release.checkout), "GITHUB_SHA": self.head,
                "GITHUB_REF": "refs/tags/" + TAG, "GITHUB_REF_NAME": TAG, "GITHUB_EVENT_NAME": "release",
                "GITHUB_REPOSITORY": "UltiKits/UltiTools-Reborn", "GITHUB_ACTOR": "fixture-actor",
-               "RUNNER_TEMP": str(runner), "FAKE_LOG": str(self.log), "FAKE_STATE": str(self.state),
+               "RUNNER_TEMP": str(runner), "FAKE_BIN": str(self.root / "bin"), "FAKE_LOG": str(self.log), "FAKE_STATE": str(self.state),
                "FAKE_RELEASE_TAG": TAG, "FAKE_VERSION": VERSION, "FAKE_GHP_TOKEN": "fixture-github-token",
                "FAKE_PY_SHIM": str(self.shim), "REAL_MVN": REAL_MVN or "", "REAL_MAVEN_HOME": str(maven_home() or ""),
                "MAVEN_LOCAL_REPO": str(local_repository()), "EMPTY_SETTINGS": str(self.settings),

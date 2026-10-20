@@ -52,6 +52,8 @@ public class ExternalPluginIntegrationTest {
         // Set up mock Bukkit server
         Server mockServer = mock(Server.class);
         when(mockServer.getLogger()).thenReturn(Logger.getLogger("MockServer"));
+        org.mockito.Mockito.lenient().when(mockServer.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
+        org.mockito.Mockito.lenient().when(mockServer.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
         setStaticField(Bukkit.class, "server", mockServer);
 
         // Set up mock UltiTools with real managers

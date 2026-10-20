@@ -502,6 +502,8 @@ class PanelResponderRegistryTest {
             // own setUp rather than pulling in full MockBukkit for one log line.
             Server mockServer = mock(Server.class);
             lenient().when(mockServer.getLogger()).thenReturn(Logger.getLogger("MockServer"));
+            org.mockito.Mockito.lenient().when(mockServer.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
+            org.mockito.Mockito.lenient().when(mockServer.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
             setStaticField(Bukkit.class, "server", mockServer);
 
             TestHelper.mockUltiToolsInstance(ultiTools -> {

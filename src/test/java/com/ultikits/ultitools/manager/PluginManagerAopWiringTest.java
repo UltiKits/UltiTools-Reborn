@@ -89,11 +89,11 @@ class PluginManagerAopWiringTest {
     @BeforeEach
     void setUpDataStore() {
         UltiTools mockUltiTools = mock(UltiTools.class);
-        jsonStore = new JsonStore("build/test-wireaop-json");
+        jsonStore = new JsonStore("target/test-wireaop-json");
         when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-        scope = DataScope.forExternal("PluginManagerAopWiringTest", new File("build/test-wireaop-json"),
+        scope = DataScope.forExternal("PluginManagerAopWiringTest", new File("target/test-wireaop-json"),
                 Collections.emptySet());
     }
 
@@ -108,14 +108,14 @@ class PluginManagerAopWiringTest {
      * 02-12 Task 2: {@code JsonStore.getOperator(File, Class)} now calls {@code checkOwnership}
      * as its first statement, so the two JSON-backend tests below (which call it directly,
      * bypassing {@code getOperator(DataScope, Class)}) need a {@code PluginManager} whose {@code
-     * findScopeForDataFolder} resolves {@code "build/test-wireaop-json"} back to a scope that owns
+     * findScopeForDataFolder} resolves {@code "target/test-wireaop-json"} back to a scope that owns
      * {@link JsonTestEntity} -- otherwise the call refuses before ever reaching the write it is
      * actually testing. {@link #scope} itself is left with its pre-existing empty owned-entity set
      * (it is also used by every other test in this file for {@code wireAop}, which does not
      * examine that set); a separate scope carries the ownership these two tests specifically need.
      */
     private void stubJsonTestFolderOwnership() {
-        File dataFolder = new File("build/test-wireaop-json");
+        File dataFolder = new File("target/test-wireaop-json");
         DataScope entityScope = DataScope.forExternal("PluginManagerAopWiringTest", dataFolder,
                 Collections.singleton(JsonTestEntity.class));
         PluginManager pluginManager = mock(PluginManager.class);
@@ -272,7 +272,7 @@ class PluginManagerAopWiringTest {
     void shouldRollBackOnJsonBackendWhenTransactionalMethodThrows() {
         stubJsonTestFolderOwnership();
         DataOperator<JsonTestEntity> operator =
-                jsonStore.getOperator(new File("build/test-wireaop-json"), JsonTestEntity.class);
+                jsonStore.getOperator(new File("target/test-wireaop-json"), JsonTestEntity.class);
 
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, scope);
@@ -292,7 +292,7 @@ class PluginManagerAopWiringTest {
     void shouldCommitOnJsonBackendWhenTransactionalMethodSucceeds() {
         stubJsonTestFolderOwnership();
         DataOperator<JsonTestEntity> operator =
-                jsonStore.getOperator(new File("build/test-wireaop-json"), JsonTestEntity.class);
+                jsonStore.getOperator(new File("target/test-wireaop-json"), JsonTestEntity.class);
 
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, scope);
@@ -320,7 +320,7 @@ class PluginManagerAopWiringTest {
         DataStore unsupportedStore = mock(DataStore.class, Answers.CALLS_REAL_METHODS);
         when(unsupportedStore.getStoreType()).thenReturn("mystery-backend");
         DataScope unsupportedScope = DataScope.forExternal("shouldRejectTransactionalBeanForAnyUnsupportedDataSource",
-                new File("build/test-wireaop-unsupported"), Collections.emptySet());
+                new File("target/test-wireaop-unsupported"), Collections.emptySet());
 
         // Reuse the class-level static mock (setUpDataStore() already opened one for UltiTools on
         // this thread) rather than opening a second one -- Mockito forbids two concurrent static
@@ -358,7 +358,7 @@ class PluginManagerAopWiringTest {
         DataSource fakeDataSource = mock(DataSource.class);
         JdbcTransactionManager sharedManager = mock(JdbcTransactionManager.class);
         DataScope sqliteScope = DataScope.forExternal("shouldBindTransactionalAdvisorToSqliteStoreSharedManager",
-                new File("build/test-wireaop-sqlite"), Collections.emptySet());
+                new File("target/test-wireaop-sqlite"), Collections.emptySet());
         when(sqliteStore.getStoreType()).thenReturn("sqlite");
         when(sqliteStore.getDataSource(sqliteScope)).thenReturn(fakeDataSource);
         when(sqliteStore.transactionManagerFor(sqliteScope)).thenReturn(sharedManager);
@@ -385,7 +385,7 @@ class PluginManagerAopWiringTest {
         DataSource fakeDataSource = mock(DataSource.class);
         JdbcTransactionManager sharedManager = mock(JdbcTransactionManager.class);
         DataScope mysqlScope = DataScope.forExternal("shouldBindTransactionalAdvisorToMysqlStoreSharedManager",
-                new File("build/test-wireaop-mysql"), Collections.emptySet());
+                new File("target/test-wireaop-mysql"), Collections.emptySet());
         when(mysqlStore.getStoreType()).thenReturn("mysql");
         when(mysqlStore.getDataSource(mysqlScope)).thenReturn(fakeDataSource);
         when(mysqlStore.transactionManagerFor(mysqlScope)).thenReturn(sharedManager);
@@ -433,7 +433,7 @@ class PluginManagerAopWiringTest {
         when(mockUltiTools.getDataStore()).thenReturn(fakeJdbcStore);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
 
-        DataScope timedScope = DataScope.forExternal("TimedTransactionally", new File("build/test-wireaop-timed"),
+        DataScope timedScope = DataScope.forExternal("TimedTransactionally", new File("target/test-wireaop-timed"),
                 Collections.emptySet());
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, timedScope);

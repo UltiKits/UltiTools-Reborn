@@ -321,6 +321,8 @@ class CommitOutcomeUnknownTest {
         if (Bukkit.getServer() == null) {
             Server server = mock(Server.class);
             when(server.getLogger()).thenReturn(mock(Logger.class));
+            org.mockito.Mockito.lenient().when(server.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
+            org.mockito.Mockito.lenient().when(server.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
             Bukkit.setServer(server);
         }
     }

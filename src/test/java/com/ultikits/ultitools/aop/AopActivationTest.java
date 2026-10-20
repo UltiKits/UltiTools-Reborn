@@ -228,7 +228,7 @@ class AopActivationTest {
     private static void invokeWireAop(SimpleContainer context) {
         try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
             UltiTools mockUltiTools = mock(UltiTools.class);
-            DataStore jsonStore = new JsonStore("build/test-aop-activation-json");
+            DataStore jsonStore = new JsonStore("target/test-aop-activation-json");
             when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
             ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
 

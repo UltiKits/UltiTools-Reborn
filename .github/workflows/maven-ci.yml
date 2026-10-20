@@ -33,6 +33,14 @@ jobs:
       # not active by default.
       run: mvn -B clean verify
       
+    - name: Verify checkout remains clean
+      run: |
+        STATUS="$(git status --porcelain)"
+        if [ -n "$STATUS" ]; then
+          printf '%s\n' "$STATUS"
+          exit 1
+        fi
+
     - name: 🇨🇳 CJK Comment/Javadoc Scope Gate
       # D-11/D-20: enforces the publication-language constraint (English-first comments and
       # javadoc, Chinese as a supplement) over src/main/java, .github/workflows and the
@@ -46,10 +54,32 @@ jobs:
       # script or the allowlist is validated by the same mechanism it governs, not narrowed out.
       run: .github/scripts/check-cjk-scope.sh
       
+    - name: Set up pinned Maven for Central staging
+      run: |
+        set -euo pipefail
+        MAVEN_VERSION=3.9.16
+        MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
+        DOWNLOAD_DIR="$(mktemp -d "$RUNNER_TEMP/maven-download.XXXXXX")"
+        ARCHIVE="$DOWNLOAD_DIR/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+        curl --fail --location --silent --show-error \
+          "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" \
+          --output "$ARCHIVE"
+        printf '%s  %s\n' "$MAVEN_SHA512" "$ARCHIVE" | sha512sum --check --strict
+        tar -xzf "$ARCHIVE" -C "$DOWNLOAD_DIR"
+        echo "$DOWNLOAD_DIR/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
+
     - name: Release tooling regression suites
       # The required test job already has JDK 21; clean verify above resolves the real Central 0.9.0
       # build extension and its runtime dependencies before the mandatory, non-skippable probe.
-      run: python3 -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v
+      run: python3 -B -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v
+
+    - name: Verify release tests leave checkout clean
+      run: |
+        STATUS="$(git status --porcelain)"
+        if [ -n "$STATUS" ]; then
+          printf '%s\n' "$STATUS"
+          exit 1
+        fi
 
     - name: Verification instrument self-tests
       run: |

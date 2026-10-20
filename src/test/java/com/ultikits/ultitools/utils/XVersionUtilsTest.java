@@ -26,6 +26,9 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Scoreboard;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import org.mockbukkit.mockbukkit.MockBukkit;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -45,6 +48,17 @@ import net.md_5.bungee.api.chat.TextComponent;
 @DisplayName("XVersionUtils 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class XVersionUtilsTest {
+
+    @BeforeEach
+    void setUp() {
+        MockBukkitHelper.ensureCleanState();
+        MockBukkit.mock();
+    }
+
+    @AfterEach
+    void tearDown() {
+        MockBukkitHelper.safeUnmock();
+    }
 
     @Nested
     @DisplayName("getColoredPlaneGlass 方法测试")

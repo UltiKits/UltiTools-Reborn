@@ -1247,6 +1247,26 @@ def registrar_lines(manifest, entries, project_pom, model, problems):
     return lines
 
 
+def check_central_maven(lib, problems):
+    """The pinned publisher uses the legacy installer layout provided by Maven 3.8/3.9 only."""
+    cores = sorted(lib.glob("maven-core*.jar")) if lib is not None and lib.is_dir() else []
+    if not cores:
+        problems.add("maven_home", "--maven-home must name the active Maven distribution (lib/maven-core*.jar)")
+        return
+    reason = ("central-publishing-maven-plugin 0.9.0 requires Maven 3.8/3.9 to keep resolver bookkeeping "
+              "out of staging; Maven 3.10 adds _remote.repositories and maven-metadata-local.xml")
+    try:
+        if len(cores) != 1:
+            raise ValueError("ambiguous maven-core jars")
+        with zipfile.ZipFile(str(cores[0])) as jar:
+            raw = jar.read("META-INF/maven/org.apache.maven/maven-core/pom.properties").decode("ascii")
+        versions = re.findall(r"^version\s*=\s*(\S+)\s*$", raw, re.MULTILINE)
+        if len(versions) != 1 or not re.fullmatch(r"3\.[89]\.\d+", versions[0]):
+            raise ValueError("unsupported or missing version: %s" % versions)
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+        problems.add("maven_version", "%s; cannot accept maven-core version: %s" % (reason, exc))
+
+
 def cmd_central_inputs(args):
     """Validate the downloaded retained files and signatures, then write the registrar list and helper JAR."""
     problems = Problems()
@@ -1259,8 +1279,7 @@ def cmd_central_inputs(args):
     check_inputs_listing(manifest, folder, problems)
     check_publication_paths(folder, work, scratch, args.source_checkout, problems)
     lib = Path(args.maven_home) / "lib" if args.maven_home else None
-    if lib is None or not lib.is_dir() or not list(lib.glob("maven-core*.jar")):
-        problems.add("maven_home", "--maven-home must name the active Maven distribution (lib/maven-core*.jar)")
+    check_central_maven(lib, problems)
     fingerprint = verify_signatures(manifest, folder, args.gpg, problems)
     entries = registrar_entries(manifest, folder)
     project_pom = work / PROJECT_MODEL_DIR / "pom.xml"
