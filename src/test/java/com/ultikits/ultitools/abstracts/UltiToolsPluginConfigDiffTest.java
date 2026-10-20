@@ -188,7 +188,7 @@ class UltiToolsPluginConfigDiffTest {
         ArgumentCaptor<AbstractConfigEntity> captor = ArgumentCaptor.forClass(AbstractConfigEntity.class);
         try {
             verify(mockConfigManager, times(2)).register(eq(plugin), captor.capture());
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new AssertionError(e);
         }
         List<String> registeredPaths = new ArrayList<>();

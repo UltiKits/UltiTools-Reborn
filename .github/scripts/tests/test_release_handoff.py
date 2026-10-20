@@ -315,8 +315,10 @@ def real_flattened_pom():
             env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(Path.home()), "LANG": "C.UTF-8"}
             if os.environ.get("JAVA_HOME"):
                 env["JAVA_HOME"] = os.environ["JAVA_HOME"]
-            proc = subprocess.run([REAL_MVN or "mvn", "-o", "-B", "-q",
-                                   "org.codehaus.mojo:flatten-maven-plugin:flatten"], cwd=str(work), env=env,
+            repository = os.environ.get("MAVEN_REPO_LOCAL")
+            repo_args = ["-Dmaven.repo.local=" + repository] if repository else []
+            proc = subprocess.run([REAL_MVN or "mvn", "-o", "-B", "-q"] + repo_args +
+                                  ["org.codehaus.mojo:flatten-maven-plugin:flatten"], cwd=str(work), env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
             flattened = work / ".flattened-pom.xml"
             if proc.returncode != 0 or not flattened.is_file():
@@ -604,7 +606,17 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertEqual(self.fx.git_raw("tag", "-l", TAG), "")
         self.assertEqual(self.fx.git_raw("--git-dir", str(self.fx.origin), "tag", "-l", TAG, cwd=self.fx.root), "")
 
+    def test_prepare_refuses_hidden_untracked_files_before_build(self):
+        self.fx.git_raw("config", "status.showUntrackedFiles", "no")
+        (self.fx.work / "untracked-source.txt").write_text("not accepted\n")
+        result = self.prepare()
+        self.assert_blocked_without_writes(result, "The working tree is not clean")
+        self.assertIn("?? untracked-source.txt", result.stdout.decode())
+        self.assertEqual(self.fx.calls("mvn"), [])
+        self.assertFalse(self.retain.exists())
+
     def test_prepare_refuses_untracked_output_and_names_path(self):
+        self.fx.git_raw("config", "status.showUntrackedFiles", "no")
         result = self.prepare(env={"FAKE_MVN_VARIANT": "untracked-build-file"})
         self.assert_blocked_without_writes(result, "The build changed the working tree")
         self.assertIn("?? build/", result.stdout.decode())

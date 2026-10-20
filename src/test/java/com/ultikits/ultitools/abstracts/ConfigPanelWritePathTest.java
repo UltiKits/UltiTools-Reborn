@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -51,6 +53,7 @@ class ConfigPanelWritePathTest {
         public Values(String path) { super(path); ids.put("old", id); }
     }
     @BeforeEach void setup() {
+        MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("PanelModule");
@@ -59,7 +62,7 @@ class ConfigPanelWritePathTest {
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 call -> new File(directory.toFile(), call.<String>getArgument(0)));
     }
-    @AfterEach void teardown() { MockBukkit.unmock(); }
+    @AfterEach void teardown() { MockBukkitHelper.safeUnmock(); }
     private static ItemStack item() {
         ItemStack value = new ItemStack(Material.DIAMOND_SWORD, 2);
         ItemMeta meta = value.getItemMeta();

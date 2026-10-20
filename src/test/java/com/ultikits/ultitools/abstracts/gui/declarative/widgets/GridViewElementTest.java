@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.widgets;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+
 import com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Element;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.SlotKey;
@@ -42,6 +44,7 @@ public class GridViewElementTest {
 
     @BeforeEach
     void setUp() {
+        MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         Player mockPlayer = Mockito.mock(Player.class);
         rootContext = BuildContext.root(mockPlayer, "test-gui", 6);
@@ -49,7 +52,7 @@ public class GridViewElementTest {
 
     @AfterEach
     void tearDown() {
-        MockBukkit.unmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     // ------------------------------------------------------------------

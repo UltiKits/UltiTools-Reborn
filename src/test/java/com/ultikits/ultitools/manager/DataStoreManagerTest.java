@@ -206,7 +206,7 @@ class DataStoreManagerTest {
             DataStoreManager.unregister(mockStore);
 
             // Assert
-            org.mockito.Mockito.verify(mockStore).destroyAllOperators();
+            verify(mockStore).destroyAllOperators();
             assertThat(mockStore).isNotNull();
         }
     }
@@ -314,8 +314,8 @@ class DataStoreManagerTest {
             DataStoreManager.close();
 
             // Assert
-            org.mockito.Mockito.verify(store1).destroyAllOperators();
-            org.mockito.Mockito.verify(store2).destroyAllOperators();
+            verify(store1).destroyAllOperators();
+            verify(store2).destroyAllOperators();
         }
 
         @Test
@@ -423,21 +423,21 @@ class DataStoreManagerTest {
         @Test
         @DisplayName("register 是同步方法")
         void registerIsSynchronized() throws Exception {
-            java.lang.reflect.Method method = DataStoreManager.class.getDeclaredMethod("register", DataStore.class);
+            Method method = DataStoreManager.class.getDeclaredMethod("register", DataStore.class);
             assertThat(java.lang.reflect.Modifier.isSynchronized(method.getModifiers())).isTrue();
         }
 
         @Test
         @DisplayName("register 是静态方法")
         void registerIsStatic() throws Exception {
-            java.lang.reflect.Method method = DataStoreManager.class.getDeclaredMethod("register", DataStore.class);
+            Method method = DataStoreManager.class.getDeclaredMethod("register", DataStore.class);
             assertThat(java.lang.reflect.Modifier.isStatic(method.getModifiers())).isTrue();
         }
 
         @Test
         @DisplayName("register 是公开方法")
         void registerIsPublic() throws Exception {
-            java.lang.reflect.Method method = DataStoreManager.class.getDeclaredMethod("register", DataStore.class);
+            Method method = DataStoreManager.class.getDeclaredMethod("register", DataStore.class);
             assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
         }
     }
@@ -449,14 +449,14 @@ class DataStoreManagerTest {
         @Test
         @DisplayName("unregister 是同步方法")
         void unregisterIsSynchronized() throws Exception {
-            java.lang.reflect.Method method = DataStoreManager.class.getDeclaredMethod("unregister", DataStore.class);
+            Method method = DataStoreManager.class.getDeclaredMethod("unregister", DataStore.class);
             assertThat(java.lang.reflect.Modifier.isSynchronized(method.getModifiers())).isTrue();
         }
 
         @Test
         @DisplayName("unregister 是静态方法")
         void unregisterIsStatic() throws Exception {
-            java.lang.reflect.Method method = DataStoreManager.class.getDeclaredMethod("unregister", DataStore.class);
+            Method method = DataStoreManager.class.getDeclaredMethod("unregister", DataStore.class);
             assertThat(java.lang.reflect.Modifier.isStatic(method.getModifiers())).isTrue();
         }
     }
@@ -640,9 +640,9 @@ class DataStoreManagerTest {
             DataStoreManager.close();
 
             // Assert
-            org.mockito.Mockito.verify(store1).destroyAllOperators();
-            org.mockito.Mockito.verify(store2).destroyAllOperators();
-            org.mockito.Mockito.verify(store3).destroyAllOperators();
+            verify(store1).destroyAllOperators();
+            verify(store2).destroyAllOperators();
+            verify(store3).destroyAllOperators();
         }
     }
 

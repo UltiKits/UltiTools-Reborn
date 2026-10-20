@@ -190,10 +190,10 @@ class SecurityPolicyTest {
         @Test
         @DisplayName("常用集合类型应该返回true")
         void collectionTypesShouldReturnTrue() {
-            assertThat(SecurityPolicy.isSafeParameterType(java.util.List.class)).isTrue();
+            assertThat(SecurityPolicy.isSafeParameterType(List.class)).isTrue();
             assertThat(SecurityPolicy.isSafeParameterType(java.util.Map.class)).isTrue();
             assertThat(SecurityPolicy.isSafeParameterType(java.util.Set.class)).isTrue();
-            assertThat(SecurityPolicy.isSafeParameterType(java.util.ArrayList.class)).isTrue();
+            assertThat(SecurityPolicy.isSafeParameterType(ArrayList.class)).isTrue();
             assertThat(SecurityPolicy.isSafeParameterType(java.util.HashMap.class)).isTrue();
             assertThat(SecurityPolicy.isSafeParameterType(java.util.HashSet.class)).isTrue();
         }

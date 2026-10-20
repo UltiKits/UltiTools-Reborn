@@ -966,17 +966,17 @@ class ReflectionUtilTest {
     @DisplayName("getAllMethods")
     class GetAllMethods {
 
-        private java.util.List<String> namesOf(java.util.List<Method> methods) {
-            java.util.List<String> names = new ArrayList<>();
+        private List<String> namesOf(List<Method> methods) {
+            List<String> names = new ArrayList<>();
             for (Method method : methods) {
                 names.add(method.getName());
             }
-            java.util.Collections.sort(names);
+            Collections.sort(names);
             return names;
         }
 
-        private java.util.List<Method> named(java.util.List<Method> methods, String name) {
-            java.util.List<Method> matches = new ArrayList<>();
+        private List<Method> named(List<Method> methods, String name) {
+            List<Method> matches = new ArrayList<>();
             for (Method method : methods) {
                 if (name.equals(method.getName())) {
                     matches.add(method);
@@ -994,7 +994,7 @@ class ReflectionUtilTest {
         @Test
         @DisplayName("Should include private, final and static methods from the hierarchy")
         void shouldIncludeNonOverridableMethods() {
-            java.util.List<String> names = namesOf(ReflectionUtil.getAllMethods(GetAllMethodsChild.class));
+            List<String> names = namesOf(ReflectionUtil.getAllMethods(GetAllMethodsChild.class));
             assertTrue(names.contains("finalMethod"), names.toString());
             assertTrue(names.contains("privateMethod"), names.toString());
             assertTrue(names.contains("staticMethod"), names.toString());
@@ -1057,7 +1057,7 @@ class ReflectionUtilTest {
             // widening to public is permitted and leaves the override relation intact. See issue
             // #190: a symmetric name-based key gives the two declarations different keys (one
             // carries the package, the other does not) and lets both survive.
-            java.util.List<Method> slots =
+            List<Method> slots =
                     named(ReflectionUtil.getAllMethods(SamePackageWideningMiddle.class), "slot");
 
             assertEquals(1, slots.size(),
@@ -1075,7 +1075,7 @@ class ReflectionUtilTest {
             // package: overrides the middle, not the root, directly). Overriding is transitive per
             // JLS 8.4.8.1, so all three are one slot. A de-dup that compares each candidate only
             // against the surviving representative keeps the root as a second entry.
-            java.util.List<Method> slots =
+            List<Method> slots =
                     named(ReflectionUtil.getAllMethods(TransitiveWideningLeaf.class), "slot");
 
             assertEquals(1, slots.size(),
@@ -1092,7 +1092,7 @@ class ReflectionUtilTest {
             // Guard against an over-collapsing fix. With no same-package intermediate to bridge
             // them, pkgy.CrossPackageWideningChild.slot() does not override pkgx's package-private
             // slot() - the parent's is not even accessible here - so both must survive.
-            java.util.List<Method> slots =
+            List<Method> slots =
                     named(ReflectionUtil.getAllMethods(CrossPackageWideningChild.class), "slot");
 
             assertEquals(2, slots.size(),
@@ -1111,7 +1111,7 @@ class ReflectionUtilTest {
             // Guard against an over-collapsing fix. private methods are dispatched with
             // invokespecial and never participate in overriding (JLS 8.4.8.1), so these are two
             // distinct methods that merely share a name.
-            java.util.List<Method> slots =
+            List<Method> slots =
                     named(ReflectionUtil.getAllMethods(PrivateSlotChild.class), "slot");
 
             assertEquals(2, slots.size(),
@@ -1123,7 +1123,7 @@ class ReflectionUtilTest {
         void shouldKeepStaticMethodsSeparate() {
             // Guard against an over-collapsing fix. A static method hides, rather than overrides,
             // the one above it - a different relation, and two distinct methods.
-            java.util.List<Method> slots =
+            List<Method> slots =
                     named(ReflectionUtil.getAllMethods(StaticSlotChild.class), "slot");
 
             assertEquals(2, slots.size(),

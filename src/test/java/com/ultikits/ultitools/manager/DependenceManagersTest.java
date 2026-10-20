@@ -280,7 +280,7 @@ class DependenceManagersTest {
             managers.closeContext();
 
             // Assert
-            org.mockito.Mockito.verify(mockContext).close();
+            verify(mockContext).close();
         }
     }
 
@@ -337,7 +337,7 @@ class DependenceManagersTest {
         @Test
         @DisplayName("initInventoryAPI 是公开方法")
         void initInventoryAPIIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("initInventoryAPI", com.ultikits.ultitools.UltiTools.class);
+            java.lang.reflect.Method method = DependenceManagers.class.getMethod("initInventoryAPI", UltiTools.class);
             assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
         }
 

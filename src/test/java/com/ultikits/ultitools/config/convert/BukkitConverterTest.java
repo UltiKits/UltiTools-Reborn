@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.config.convert;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -28,6 +30,7 @@ class BukkitConverterTest {
 
     @BeforeEach
     void setup() {
+        MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         server.addSimpleWorld("world");
         ConfigurationSerialization.registerClass(Holder.class);
@@ -37,7 +40,7 @@ class BukkitConverterTest {
     void teardown() {
         ConfigurationSerialization.unregisterClass(Holder.class);
         ConfigurationSerialization.unregisterClass(NullValue.class);
-        MockBukkit.unmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     static ItemStack item() {

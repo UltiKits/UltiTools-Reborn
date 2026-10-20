@@ -624,7 +624,7 @@ class TransactionFailurePathsTest {
 
     /** Captures a transaction manager's logger while open. */
     static final class ManagerLog implements AutoCloseable {
-        private final java.util.logging.Logger logger;
+        private final Logger logger;
         private final List<java.util.logging.LogRecord> records = new CopyOnWriteArrayList<>();
         private final java.util.logging.Handler handler = new java.util.logging.Handler() {
             @Override
@@ -644,7 +644,7 @@ class TransactionFailurePathsTest {
         };
 
         private ManagerLog(Class<?> manager) {
-            logger = java.util.logging.Logger.getLogger(manager.getName());
+            logger = Logger.getLogger(manager.getName());
         }
 
         static ManagerLog capture(Class<?> manager) {

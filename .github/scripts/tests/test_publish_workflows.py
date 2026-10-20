@@ -139,6 +139,38 @@ class ReleaseValidationTests(unittest.TestCase):
                     self.helper.check_https_host(url, "repo1.maven.org")
         self.helper.check_https_host("https://repo1.maven.org/file", "repo1.maven.org")
 
+    def test_staging_jobs_pin_maven_before_every_maven_run(self):
+        required = {("maven-ci.yml", "test"), ("publish-packages.yml", "publish-central")}
+        exempt = {
+            ("maven-ci.yml", "test-isolated"),  # No staging or release probes.
+            ("maven-ci.yml", "build-snapshot"),  # Packages only; no deployment.
+            ("publish-packages.yml", "publish-github"),  # deploy-file, not Central staging.
+            ("snapshot-publish.yml", "snapshot-publish"),  # Indexed deferral, not a staging ZIP.
+        }
+        found = set()
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            # Trigger path lists are outside the harness's YAML subset; inspect every job instead.
+            jobs = path.read_text(encoding="utf-8").split("\njobs:", 1)[1]
+            workflow = WorkflowParser("jobs:" + jobs).parse()
+            for name, job in workflow.get("jobs", {}).items():
+                steps = job.get("steps", [])
+                calls = [i for i, step in enumerate(steps) if re.search(r"\bmvn\b", step.get("run", ""))]
+                if not calls:
+                    continue
+                key = (path.name, name)
+                found.add(key)
+                if key not in required:
+                    continue
+                pins = [i for i, step in enumerate(steps)
+                        if step.get("name") == "Set up pinned Maven for Central staging"]
+                self.assertEqual(len(pins), 1, key)
+                self.assertNotIn("if", steps[pins[0]], key)
+                self.assertNotIn("continue-on-error", steps[pins[0]], key)
+                for call in calls:
+                    with self.subTest(workflow=path.name, job=name, step=steps[call].get("name")):
+                        self.assertLess(pins[0], call, "pin must precede every Maven run in the job")
+        self.assertEqual(found, required | exempt)
+
     def test_required_ci_runs_all_release_suites_after_verify(self):
         workflow = WorkflowParser((WORKFLOWS / "maven-ci.yml").read_text(encoding="utf-8")).parse()
         steps = workflow["jobs"]["test"]["steps"]
@@ -157,10 +189,13 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(len(pin), 1)
         self.assertEqual(central_pin, pin)
         self.assertLess(steps.index(pin[0]), suites[0])
-        self.assertIn("MAVEN_VERSION=3.9.16", pin[0]["run"])
-        self.assertIn("sha512sum --check --strict", pin[0]["run"])
-        self.assertIn("archive.apache.org", pin[0]["run"])
-        self.assertIn('"$GITHUB_PATH"', pin[0]["run"])
+        self.assertEqual(pin[0]["run"], "bash .github/scripts/setup-pinned-maven.sh")
+        installer = (SCRIPTS / "setup-pinned-maven.sh").read_text(encoding="ascii")
+        self.assertIn("MAVEN_VERSION=3.9.16", installer)
+        self.assertIn("sha512sum --check --strict", installer)
+        self.assertIn("archive.apache.org", installer)
+        self.assertIn("--retry 3 --retry-all-errors --connect-timeout 30 --max-time 300", installer)
+        self.assertIn('"$GITHUB_PATH"', installer)
         self.assertNotIn("if", steps[suites[0]])
         self.assertNotIn("continue-on-error", steps[suites[0]])
 
@@ -360,6 +395,53 @@ def parse_output_file(path):
     return outputs
 
 
+def simulate_uses(step, uses_handler):
+    if uses_handler is not None:
+        uses_handler(step)
+    elif str(step["uses"]).split("@")[0] not in ("actions/checkout", "actions/setup-java"):
+        raise UnsupportedExpression("no simulation for %r" % step["uses"])
+
+
+def run_shell_step(step, name, index, workspace, base_env, context, runner_temp, path_file):
+    script = step.get("run")
+    if script is None:
+        raise UnsupportedExpression("step %r has neither run nor uses" % name)
+    if "${{" in script:
+        raise AssertionError("step %r expands ${{ }} inside its run block; pass values through env" % name)
+    env = dict(base_env)
+    env["GITHUB_PATH"] = str(path_file)
+    if path_file.exists():
+        env["PATH"] = os.pathsep.join(reversed(path_file.read_text().splitlines())) + os.pathsep + env["PATH"]
+    for key, value in (step.get("env") or {}).items():
+        env[key] = substitute(value, context)
+    output_file = runner_temp / ("output-%d" % index)
+    if output_file.exists():
+        output_file.unlink()
+    env["GITHUB_OUTPUT"] = str(output_file)
+    env["GITHUB_STEP_SUMMARY"] = str(runner_temp / "step-summary.md")
+    script_file = runner_temp / ("step-%d.sh" % index)
+    script_file.write_text(script, encoding="utf-8")
+    proc = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", str(script_file)],
+                          cwd=str(workspace), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          timeout=600)
+    return proc, parse_output_file(output_file)
+
+
+def record_shell_step(result, context, step, name, proc, outputs):
+    text = proc.stdout.decode("utf-8", "replace")
+    result.log += "--- step: %s (exit %d)\n%s" % (name, proc.returncode, text)
+    if step.get("id"):
+        context["steps"][step["id"]] = {"outputs": outputs}
+        result.outputs[step["id"]] = outputs
+    if proc.returncode == 0:
+        result.steps.append((name, "success", 0))
+    elif str(step.get("continue-on-error", "")).lower() == "true":
+        result.steps.append((name, "failure-continued", proc.returncode))
+    else:
+        result.steps.append((name, "failure", proc.returncode))
+        result.status = "failure"
+
+
 def run_job(job, workspace, base_env, context, runner_temp, uses_handler=None):
     """Run a job's steps in order the way the Actions runner does; return a JobResult."""
     result = JobResult()
@@ -379,46 +461,11 @@ def run_job(job, workspace, base_env, context, runner_temp, uses_handler=None):
             result.steps.append((name, "skipped", None))
             continue
         if "uses" in step:
-            if uses_handler is not None:
-                uses_handler(step)
-            elif not str(step["uses"]).split("@")[0] in ("actions/checkout", "actions/setup-java"):
-                raise UnsupportedExpression("no simulation for %r" % step["uses"])
+            simulate_uses(step, uses_handler)
             result.steps.append((name, "success", 0))
             continue
-        script = step.get("run")
-        if script is None:
-            raise UnsupportedExpression("step %r has neither run nor uses" % name)
-        if "${{" in script:
-            raise AssertionError("step %r expands ${{ }} inside its run block; pass values through env" % name)
-        env = dict(base_env)
-        env["GITHUB_PATH"] = str(path_file)
-        if path_file.exists():
-            env["PATH"] = os.pathsep.join(reversed(path_file.read_text().splitlines())) + os.pathsep + env["PATH"]
-        for key, value in (step.get("env") or {}).items():
-            env[key] = substitute(value, context)
-        output_file = runner_temp / ("output-%d" % index)
-        if output_file.exists():
-            output_file.unlink()
-        env["GITHUB_OUTPUT"] = str(output_file)
-        env["GITHUB_STEP_SUMMARY"] = str(runner_temp / "step-summary.md")
-        script_file = runner_temp / ("step-%d.sh" % index)
-        script_file.write_text(script, encoding="utf-8")
-        proc = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", str(script_file)],
-                              cwd=str(workspace), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              timeout=600)
-        text = proc.stdout.decode("utf-8", "replace")
-        result.log += "--- step: %s (exit %d)\n%s" % (name, proc.returncode, text)
-        outputs = parse_output_file(output_file)
-        if step.get("id"):
-            context["steps"][step["id"]] = {"outputs": outputs}
-            result.outputs[step["id"]] = outputs
-        if proc.returncode == 0:
-            result.steps.append((name, "success", 0))
-        elif str(step.get("continue-on-error", "")).lower() == "true":
-            result.steps.append((name, "failure-continued", proc.returncode))
-        else:
-            result.steps.append((name, "failure", proc.returncode))
-            result.status = "failure"
+        proc, outputs = run_shell_step(step, name, index, workspace, base_env, context, runner_temp, path_file)
+        record_shell_step(result, context, step, name, proc, outputs)
     return result
 
 
@@ -751,6 +798,7 @@ PLUGIN_YML = ("name: UltiTools\nversion: '%s'\nmain: com.ultikits.ultitools.Ulti
               % VERSION).encode()
 
 PRODUCT_FILES = (".github/scripts/release_artifacts.py", ".github/scripts/check-gpg-expiry.sh",
+                 ".github/scripts/setup-pinned-maven.sh",
                  ".github/scripts/maven/RetainedArtifactsParticipant.java", ".github/scripts/maven/components.xml")
 
 
@@ -1958,7 +2006,8 @@ with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(json.dumps({"tool": name, "argv": args}) + "\n")
 if name == "curl":
     url = "https://archive.apache.org/dist/maven/maven-3/%s/binaries/apache-maven-%s-bin.tar.gz" % (version, version)
-    assert args == ["--fail", "--location", "--silent", "--show-error", url, "--output", args[-1]], args
+    assert args == ["--fail", "--location", "--silent", "--show-error", "--retry", "3", "--retry-all-errors",
+                    "--connect-timeout", "30", "--max-time", "300", url, "--output", args[-1]], args
     Path(args[-1]).write_bytes(b"hermetic Maven archive fixture")
 elif name == "sha512sum":
     assert args == ["--check", "--strict"], args

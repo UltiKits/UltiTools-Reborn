@@ -782,7 +782,7 @@ public class DataEntityTest {
         }
         
         // Allow setting createdAt for testing
-        public void setCreatedAt(java.time.LocalDateTime createdAt) {
+        public void setCreatedAt(LocalDateTime createdAt) {
             super.setCreatedAt(createdAt);
         }
     }

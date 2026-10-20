@@ -66,7 +66,7 @@ class FileOperationManagerTest {
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
         });
 
@@ -471,7 +471,7 @@ class FileOperationManagerTest {
             handleWrite.invoke(fileOperationManager, "append.txt", operationData, "op-5");
 
             // Assert
-            String content = new String(java.nio.file.Files.readAllBytes(testFile.toPath()));
+            String content = new String(Files.readAllBytes(testFile.toPath()));
             assertThat(content).isEqualTo("initial appended");
         }
     }
@@ -654,8 +654,8 @@ class FileOperationManagerTest {
             handleList.invoke(fileOperationManager, "serverdir", new JsonObject(), "filter-test");
 
             // Assert - verify the WebSocket message was sent with marked (not filtered) results
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
-            org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
 
             JsonObject result = captor.getValue();
             JsonObject data = result.getAsJsonObject("data");
@@ -701,8 +701,8 @@ class FileOperationManagerTest {
             handleList.invoke(fileOperationManager, "dirtest", new JsonObject(), "dir-test");
 
             // Assert
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
-            org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
 
             JsonObject result = captor.getValue();
             JsonObject data = result.getAsJsonObject("data");
@@ -739,8 +739,8 @@ class FileOperationManagerTest {
             handleList.invoke(fileOperationManager, "extdir", new JsonObject(), "ext-test");
 
             // Assert
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
-            org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
 
             JsonObject result = captor.getValue();
             JsonObject data = result.getAsJsonObject("data");
@@ -793,8 +793,8 @@ class FileOperationManagerTest {
             handleList.invoke(fileOperationManager, "allblocked", new JsonObject(), "all-blocked-test");
 
             // Assert
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
-            org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
 
             JsonObject result = captor.getValue();
             JsonObject data = result.getAsJsonObject("data");

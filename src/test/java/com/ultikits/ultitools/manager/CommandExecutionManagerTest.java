@@ -92,7 +92,7 @@ class CommandExecutionManagerTest {
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
             // An empty config (absent ultipanel.commands.blocklist key) so the constructor's
             // loadConfiguration() falls through cleanly to the shipped default instead of hitting
@@ -420,7 +420,7 @@ class CommandExecutionManagerTest {
             server.getScheduler().performOneTick();
 
             // Assert
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
             JsonObject result = captor.getValue();
@@ -464,7 +464,7 @@ class CommandExecutionManagerTest {
             manager.executeCommand(commandData);
 
             // Assert
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
             JsonObject result = captor.getValue();
@@ -491,7 +491,7 @@ class CommandExecutionManagerTest {
             manager.executeCommand(commandData);
 
             // Assert
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
             assertThat(captor.getValue().get("serverId").getAsString()).isEqualTo("test-server-id");
@@ -574,7 +574,7 @@ class CommandExecutionManagerTest {
             manager.executeCommand(commandData);
 
             // Assert
-            verify(mockLogger).log(any(java.util.logging.Level.class), anyString());
+            verify(mockLogger).log(any(Level.class), anyString());
         }
     }
 
@@ -670,7 +670,7 @@ class CommandExecutionManagerTest {
         void shouldRejectBlockedCommands() {
             // Arrange
             CommandExecutionManager newManager = new CommandExecutionManager();
-            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Arrays.asList("op", "deop", "stop", "ban-ip"));
+            java.util.Set<String> blocked = new java.util.HashSet<>(Arrays.asList("op", "deop", "stop", "ban-ip"));
             newManager.setBlockedCommands(blocked);
 
             // Assert
@@ -684,7 +684,7 @@ class CommandExecutionManagerTest {
         void shouldAllowSafeCommands() {
             // Arrange
             CommandExecutionManager newManager = new CommandExecutionManager();
-            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Arrays.asList("op", "deop", "stop"));
+            java.util.Set<String> blocked = new java.util.HashSet<>(Arrays.asList("op", "deop", "stop"));
             newManager.setBlockedCommands(blocked);
 
             // Assert
@@ -698,7 +698,7 @@ class CommandExecutionManagerTest {
         void shouldStripLeadingSlash() {
             // Arrange
             CommandExecutionManager newManager = new CommandExecutionManager();
-            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Collections.singletonList("op"));
+            java.util.Set<String> blocked = new java.util.HashSet<>(Collections.singletonList("op"));
             newManager.setBlockedCommands(blocked);
 
             // Assert
@@ -730,7 +730,7 @@ class CommandExecutionManagerTest {
         void shouldBeCaseInsensitive() {
             // Arrange
             CommandExecutionManager newManager = new CommandExecutionManager();
-            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Collections.singletonList("op"));
+            java.util.Set<String> blocked = new java.util.HashSet<>(Collections.singletonList("op"));
             newManager.setBlockedCommands(blocked);
 
             // Assert
@@ -756,7 +756,7 @@ class CommandExecutionManagerTest {
         void shouldExtractBaseCommandCorrectly() {
             // Arrange
             CommandExecutionManager newManager = new CommandExecutionManager();
-            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Collections.singletonList("teleport"));
+            java.util.Set<String> blocked = new java.util.HashSet<>(Collections.singletonList("teleport"));
             newManager.setBlockedCommands(blocked);
 
             // Assert
@@ -779,7 +779,7 @@ class CommandExecutionManagerTest {
             manager.executeCommand(commandData);
 
             // Assert - should send error message, not schedule the command
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
 
             JsonObject result = captor.getValue();
@@ -875,7 +875,7 @@ class CommandExecutionManagerTest {
 
             assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
 
-            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
 
             JsonObject result = captor.getValue();

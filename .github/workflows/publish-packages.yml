@@ -178,6 +178,9 @@ jobs:
         gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
         gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
+    - name: Set up pinned Maven for Central staging
+      run: bash .github/scripts/setup-pinned-maven.sh
+
     - name: 🔐 Configure GPG agent for CI
       run: |
         echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
@@ -264,20 +267,6 @@ jobs:
           gpg --batch --pinentry-mode loopback --passphrase-fd 0 --armor --detach-sign \
             --output "$INPUTS/${FILE}.asc" "$INPUTS/${FILE}" <<< "$MAVEN_GPG_PASSPHRASE"
         done
-
-    - name: Set up pinned Maven for Central staging
-      run: |
-        set -euo pipefail
-        MAVEN_VERSION=3.9.16
-        MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
-        DOWNLOAD_DIR="$(mktemp -d "$RUNNER_TEMP/maven-download.XXXXXX")"
-        ARCHIVE="$DOWNLOAD_DIR/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
-        curl --fail --location --silent --show-error \
-          "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" \
-          --output "$ARCHIVE"
-        printf '%s  %s\n' "$MAVEN_SHA512" "$ARCHIVE" | sha512sum --check --strict
-        tar -xzf "$ARCHIVE" -C "$DOWNLOAD_DIR"
-        echo "$DOWNLOAD_DIR/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
 
     - name: 🧩 Prepare the retained-artifact registrar
       # release_artifacts.py central-inputs re-checks the retained files, verifies the four signatures,

@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.config.convert;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Array;
@@ -47,11 +49,12 @@ class ConverterRoundTripPropertyTest {
 
     @org.junit.jupiter.api.BeforeAll
     static void startBukkit() {
+        MockBukkitHelper.ensureCleanState();
         org.mockbukkit.mockbukkit.MockBukkit.mock().addSimpleWorld("world");
     }
 
     @org.junit.jupiter.api.AfterAll
-    static void stopBukkit() { org.mockbukkit.mockbukkit.MockBukkit.unmock(); }
+    static void stopBukkit() { MockBukkitHelper.safeUnmock(); }
 
     @Test
     void everyFrameworkRegistrationAndFactoryHasAGenerator() {

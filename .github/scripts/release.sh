@@ -187,9 +187,9 @@ helper() { python3 -I "$HELPER" "$@"; }
 # ---------------------------------------------------------------- checkout
 
 check_checkout() {
-    if [ -n "$(git status --porcelain)" ]; then
+    if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
         die "The working tree is not clean. A release must come from a clean tree, otherwise the JAR does not match the commit the tag points at.
-$(git status --porcelain)"
+$(git status --porcelain --untracked-files=normal)"
     fi
 
     CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
@@ -259,10 +259,10 @@ check_tag_free() {
 build_candidate() {
     echo "▶ Verifying and building (mvn -B clean verify, including tests)"
     mvn -B clean verify
-    # Refuse tracked changes and untracked sources that could enter the published JARs.
-    if [ -n "$(git status --porcelain)" ]; then
+    # Refuse tracked changes and non-ignored untracked files; gitignored files are not inspected.
+    if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
         die "The build changed the working tree; the bytes no longer match ${LOCAL_SHA:0:12}.
-$(git status --porcelain)"
+$(git status --porcelain --untracked-files=normal)"
     fi
     [ "$(git rev-parse HEAD)" = "$LOCAL_SHA" ] || die "HEAD moved during the build."
 }

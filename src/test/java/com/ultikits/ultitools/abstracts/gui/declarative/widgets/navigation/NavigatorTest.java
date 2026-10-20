@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.widgets.navigation;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+
 import com.ultikits.ultitools.abstracts.gui.declarative.core.*;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.ItemDisplay;
@@ -24,6 +26,7 @@ public class NavigatorTest {
 
     @BeforeEach
     void setUp() {
+        MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         player = Mockito.mock(Player.class);
         Mockito.when(player.getName()).thenReturn("TestPlayer");
@@ -32,7 +35,7 @@ public class NavigatorTest {
 
     @AfterEach
     void tearDown() {
-        MockBukkit.unmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     @Test

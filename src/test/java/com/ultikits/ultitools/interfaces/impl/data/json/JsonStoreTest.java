@@ -382,7 +382,7 @@ class JsonStoreTest {
         @Test
         @DisplayName("getOperator(File, Class) should refuse another plugin's unregistered folder, with no cache side effect")
         void shouldRefuseUnregisteredFolderViaFileOverloadWithNoSideEffects() throws java.io.IOException {
-            java.io.File someOtherPluginsFolder = java.nio.file.Files.createTempDirectory("json-other-plugin").toFile();
+            java.io.File someOtherPluginsFolder = Files.createTempDirectory("json-other-plugin").toFile();
             when(mockPluginManager.findScopeForDataFolder(someOtherPluginsFolder)).thenReturn(null);
 
             assertThatThrownBy(() -> store.getOperator(someOtherPluginsFolder, AnnotatedTestData.class))
