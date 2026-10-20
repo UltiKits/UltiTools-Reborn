@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
  * from source plus the japicmp report (D-08, D-17, D-22), then runs three independent checks over
  * the merged registry: {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) over the pom's own
  * {@code <exclude>} list, the japicmp report, and the merged registry; {@link ReleaseBoundaryInvariant}
- * (D-03) over the project version, the japicmp baseline version, and the same exclude list; and
+ * (Phase 21 D-12) over the project version, the japicmp baseline version, and the same exclude list; and
  * {@link RemovalDeadlineEvaluator} (D-07) over the project version, the merged registry, and the
  * fresh source scan's key set.
  *
@@ -175,10 +175,12 @@ public final class DeprecationRegistryGenerator {
     }
 
     /**
-     * Runs {@link ReleaseBoundaryInvariant} (D-03) and returns one message per violation - fires
-     * when {@code ${project.version}} carries no {@code -SNAPSHOT} and either the japicmp
-     * {@code <excludes>} list is still populated or {@code japicmp.baseline.version} has not been
-     * advanced past the project version. Dormant on every {@code -SNAPSHOT} build.
+     * Runs {@link ReleaseBoundaryInvariant} (Phase 21 D-12) and returns one message per violation -
+     * fires when {@code ${project.version}} carries no {@code -SNAPSHOT} and
+     * {@code japicmp.baseline.version} is not a released version strictly less than the project
+     * version. A populated {@code <excludes>} list is legal at the release boundary; its entries are
+     * held to the removal ledger by {@link #collectRemovalConsistencyViolations}. Dormant on every
+     * {@code -SNAPSHOT} build.
      */
     private static List<String> collectReleaseBoundaryViolations(Document pomDocument) {
         String projectVersion = readProjectVersion(pomDocument);

@@ -664,7 +664,7 @@ class CommandManagerTest {
             executor.handleHelp(sender);
 
             // Assert
-            org.mockito.Mockito.verify(sender).sendMessage("Help for test command");
+            verify(sender).sendMessage("Help for test command");
         }
     }
 
@@ -699,7 +699,7 @@ class CommandManagerTest {
             executor.handleHelp(sender);
 
             // Assert
-            org.mockito.Mockito.verify(sender).sendMessage("Help for manual command");
+            verify(sender).sendMessage("Help for manual command");
         }
     }
 

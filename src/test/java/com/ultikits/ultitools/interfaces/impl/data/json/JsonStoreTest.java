@@ -69,6 +69,8 @@ class JsonStoreTest {
                 org.mockito.ArgumentMatchers.anyLong()
             )).thenReturn(mockTask);
             
+            org.mockito.Mockito.lenient().when(mockServer.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
+            org.mockito.Mockito.lenient().when(mockServer.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
             Bukkit.setServer(mockServer);
         }
         
@@ -380,7 +382,7 @@ class JsonStoreTest {
         @Test
         @DisplayName("getOperator(File, Class) should refuse another plugin's unregistered folder, with no cache side effect")
         void shouldRefuseUnregisteredFolderViaFileOverloadWithNoSideEffects() throws java.io.IOException {
-            java.io.File someOtherPluginsFolder = java.nio.file.Files.createTempDirectory("json-other-plugin").toFile();
+            java.io.File someOtherPluginsFolder = Files.createTempDirectory("json-other-plugin").toFile();
             when(mockPluginManager.findScopeForDataFolder(someOtherPluginsFolder)).thenReturn(null);
 
             assertThatThrownBy(() -> store.getOperator(someOtherPluginsFolder, AnnotatedTestData.class))

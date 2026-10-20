@@ -219,17 +219,19 @@ class BuildVerificationConfigurationTest {
                 .isEqualTo("verify");
     }
 
+    // Publication consumes the retained, accepted files and never builds (plan 21-06). The registry
+    // generator and japicmp still run on every candidate: release.sh --prepare's `clean verify`
+    // (releaseHelperVerifiesWithTests) is the build those files come from.
     @Test
-    void githubPackagesBuildReachesVerify() throws IOException {
+    void githubPackagesDeploysTheRetainedFilesWithoutABuild() throws IOException {
         assertThat(calls(workflowRuns("publish-packages.yml", "publish-github")))
-                .hasSize(3).anySatisfy(call -> assertThat(call).isEqualTo("-B clean verify -DskipTests"));
+                .containsExactly("-B deploy:deploy-file -s \"$SETTINGS\" \\");
     }
 
     @Test
-    void centralRetainsSigningAndSkipsOnlyTestExecution() throws IOException {
+    void centralPublishesTheRetainedFilesWithoutABuild() throws IOException {
         assertThat(calls(workflowRuns("publish-packages.yml", "publish-central")))
-                .hasSize(2).anySatisfy(call -> assertThat(call).isEqualTo(
-                        "-B deploy -P release -DskipTests -Dgpg.passphrase=\"${MAVEN_GPG_PASSPHRASE}\""));
+                .containsExactly("-B -v | sed -n 's/^Maven home: //p')\"", "-B -f \"$PROJECT_POM\" \\");
     }
 
     @Test
@@ -241,8 +243,9 @@ class BuildVerificationConfigurationTest {
     @Test
     void retainedSnapshotAndCiCallsHaveExplicitDispositions() throws IOException {
         List<String> snapshot = calls(workflowRuns("snapshot-publish.yml", "snapshot-publish"));
-        assertThat(snapshot).hasSize(2);
-        assertThat(snapshot).anySatisfy(call -> assertThat(call).startsWith("-B -q help:evaluate "));
+        // Version classification, the deploy step's own SNAPSHOT re-check, and the snapshot deploy.
+        assertThat(snapshot).hasSize(3);
+        assertThat(snapshot).filteredOn(call -> call.startsWith("-B -q help:evaluate ")).hasSize(2);
         assertThat(snapshot).contains("-B deploy -DskipTests");
         assertThat(calls(workflowRuns("maven-ci.yml", "test")))
                 .containsExactly("-B clean verify", "-B jacoco:report");

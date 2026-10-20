@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plexus descriptor for the release-only Maven core extension. release_artifacts.py central-inputs packages it
+  as META-INF/plexus/components.xml next to the compiled RetainedArtifactsParticipant in an ephemeral helper
+  JAR that publish-packages.yml passes through -Dmaven.ext.class.path. It is never part of the product JAR.
+-->
+<component-set>
+  <components>
+    <component>
+      <role>org.apache.maven.AbstractMavenLifecycleParticipant</role>
+      <role-hint>retained-artifacts</role-hint>
+      <implementation>com.ultikits.release.RetainedArtifactsParticipant</implementation>
+      <isolated-realm>false</isolated-realm>
+    </component>
+  </components>
+</component-set>

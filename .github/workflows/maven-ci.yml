@@ -25,6 +25,9 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
+    - name: Set up pinned Maven for Central staging
+      run: bash .github/scripts/setup-pinned-maven.sh
+
     - name: 🧪 Build & Test with Coverage
       # verify, not test: the shade filters, resource filtering, jar packaging and javadoc
       # generation are all bound to the package phase, so running test alone would leave them
@@ -33,6 +36,14 @@ jobs:
       # not active by default.
       run: mvn -B clean verify
       
+    - name: Verify checkout remains clean
+      run: |
+        STATUS="$(git status --porcelain)"
+        if [ -n "$STATUS" ]; then
+          printf '%s\n' "$STATUS"
+          exit 1
+        fi
+
     - name: 🇨🇳 CJK Comment/Javadoc Scope Gate
       # D-11/D-20: enforces the publication-language constraint (English-first comments and
       # javadoc, Chinese as a supplement) over src/main/java, .github/workflows and the
@@ -46,6 +57,19 @@ jobs:
       # script or the allowlist is validated by the same mechanism it governs, not narrowed out.
       run: .github/scripts/check-cjk-scope.sh
       
+    - name: Release tooling regression suites
+      # The required test job already has JDK 21; clean verify above resolves the real Central 0.9.0
+      # build extension and its runtime dependencies before the mandatory, non-skippable probe.
+      run: python3 -B -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v
+
+    - name: Verify release tests leave checkout clean
+      run: |
+        STATUS="$(git status --porcelain)"
+        if [ -n "$STATUS" ]; then
+          printf '%s\n' "$STATUS"
+          exit 1
+        fi
+
     - name: Verification instrument self-tests
       run: |
         bash .github/scripts/check-cjk-scope.sh --self-test

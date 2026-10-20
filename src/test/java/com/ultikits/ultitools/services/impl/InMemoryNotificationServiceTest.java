@@ -342,7 +342,7 @@ class InMemoryNotificationServiceTest {
             // Arrange
             PlayerMock player = server.addPlayer();
             String message = "Test BossBar";
-            BossBar bossBar = server.createBossBar("Custom", org.bukkit.boss.BarColor.RED, org.bukkit.boss.BarStyle.SOLID);
+            BossBar bossBar = server.createBossBar("Custom", BarColor.RED, BarStyle.SOLID);
 
             // Act
             boolean result = notificationService.sendBossBarNotification(player, message, 10, bossBar);
@@ -375,7 +375,7 @@ class InMemoryNotificationServiceTest {
             // Arrange
             PlayerMock player = server.addPlayer();
             String message = "Full BossBar";
-            BossBar bossBar = server.createBossBar("Custom", org.bukkit.boss.BarColor.BLUE, org.bukkit.boss.BarStyle.SEGMENTED_10);
+            BossBar bossBar = server.createBossBar("Custom", BarColor.BLUE, BarStyle.SEGMENTED_10);
             Sound sound = Sound.ENTITY_EXPERIENCE_ORB_PICKUP;
 
             // Act

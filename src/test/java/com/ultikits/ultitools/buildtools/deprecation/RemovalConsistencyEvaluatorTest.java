@@ -547,4 +547,123 @@ class RemovalConsistencyEvaluatorTest {
                     .isEqualTo(reverseFindings.stream().map(Object::toString).collect(java.util.stream.Collectors.toList()));
         }
     }
+
+    /**
+     * Phase 21 decision D-12: the formal 6.3.0 release keeps comparing against the released 6.2.5
+     * baseline and keeps the exact exclusions the removal ledger registers. With the release
+     * boundary no longer requiring an empty list, this evaluator is the check that keeps every
+     * remaining exclusion honest - these cases pin it at exactly the formal-release inputs.
+     */
+    @Nested
+    @DisplayName("D-12 formal release boundary (baseline 6.2.5, removals registered in 6.3.0)")
+    class FormalReleaseBoundaryTests {
+
+        private static final String RELEASED_BASELINE = "6.2.5";
+
+        private final RegistryKey removedClass =
+                RegistryKey.forClass("com.ultikits.ultitools.abstracts.AbstractCommandExecutor");
+        private final RegistryKey removedMethod = RegistryKey.forMember(
+                "com.ultikits.ultitools.UltiTools", "getVersionWrapper", Collections.<String>emptyList());
+        private final RegistryKey removedField =
+                RegistryKey.forField("com.ultikits.ultitools.UltiTools", "versionWrapper");
+
+        private DeprecationEntry removedIn630(RegistryKey key, DeprecationEntry.Kind kind) {
+            return DeprecationEntry.builder()
+                    .key(key)
+                    .kind(kind)
+                    .since("6.2.0")
+                    .forRemoval(true)
+                    .removeIn("6.3.0")
+                    .status(DeprecationEntry.Status.REMOVED)
+                    .removedIn("6.3.0")
+                    .build();
+        }
+
+        private RegistryLedger registeredRemovals() {
+            return RegistryLedger.of(java.util.Arrays.asList(
+                    removedIn630(removedClass, DeprecationEntry.Kind.CLASS),
+                    removedIn630(removedMethod, DeprecationEntry.Kind.METHOD),
+                    removedIn630(removedField, DeprecationEntry.Kind.FIELD)));
+        }
+
+        private Set<RegistryKey> exactExcludes() {
+            return new java.util.LinkedHashSet<>(java.util.Arrays.asList(removedClass, removedMethod, removedField));
+        }
+
+        /**
+         * A report that genuinely ran: japicmp filters every excluded symbol out, so only the
+         * surviving enclosing class remains visible (binary-compatible after the exclusions).
+         */
+        private JapicmpReportReader.Report reportAfterExclusions() {
+            Map<RegistryKey, JapicmpReportReader.Entry> entries = new LinkedHashMap<>();
+            entries.put(RegistryKey.forClass("com.ultikits.ultitools.UltiTools"), entry("MODIFIED", null, true));
+            return reportOf("PROTECTED", entries);
+        }
+
+        @Test
+        @DisplayName("exact exclusions for every registered removal produce no finding against the released baseline")
+        void exactRegisteredRemovalExclusionsProduceNoFinding() {
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    exactExcludes(), reportAfterExclusions(), registeredRemovals(), RELEASED_BASELINE);
+
+            assertThat(findings).isEmpty();
+        }
+
+        @Test
+        @DisplayName("an extra exclusion the ledger does not register is rejected as stale")
+        void unregisteredExtraExclusionIsRejected() {
+            RegistryKey unregistered = RegistryKey.forMember(
+                    "com.ultikits.ultitools.NotRemovedAnywhere", "hidden", Collections.<String>emptyList());
+            Set<RegistryKey> excludes = exactExcludes();
+            excludes.add(unregistered);
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    excludes, reportAfterExclusions(), registeredRemovals(), RELEASED_BASELINE);
+
+            assertThat(findings)
+                    .hasSize(1)
+                    .allSatisfy(f -> {
+                        assertThat(f.getKind()).isEqualTo(RemovalConsistencyEvaluator.Finding.Kind.STALE_EXCLUSION);
+                        assertThat(f.getKey()).isEqualTo(unregistered);
+                    });
+        }
+
+        @Test
+        @DisplayName("a registered removal whose exclusion is missing is rejected while it is newer than the baseline")
+        void registeredRemovalWithoutItsExclusionIsRejected() {
+            Set<RegistryKey> excludes = exactExcludes();
+            excludes.remove(removedMethod);
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    excludes, reportAfterExclusions(), registeredRemovals(), RELEASED_BASELINE);
+
+            assertThat(findings)
+                    .hasSize(1)
+                    .allSatisfy(f -> {
+                        assertThat(f.getKind())
+                                .isEqualTo(RemovalConsistencyEvaluator.Finding.Kind.MISSING_EXCLUSION_FOR_REMOVED);
+                        assertThat(f.getKey()).isEqualTo(removedMethod);
+                    });
+        }
+
+        @Test
+        @DisplayName("an incompatibility neither excluded nor registered is rejected as an unrecorded removal")
+        void unregisteredIncompatibilityIsRejected() {
+            RegistryKey unrecorded = RegistryKey.forMember(
+                    "com.ultikits.ultitools.UltiTools", "silentlyDropped", Collections.<String>emptyList());
+            Map<RegistryKey, JapicmpReportReader.Entry> entries = new LinkedHashMap<>();
+            entries.put(RegistryKey.forClass("com.ultikits.ultitools.UltiTools"), entry("MODIFIED", null, false));
+            entries.put(unrecorded, entry("REMOVED", "PUBLIC", false));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    exactExcludes(), reportOf("PROTECTED", entries), registeredRemovals(), RELEASED_BASELINE);
+
+            assertThat(findings)
+                    .hasSize(1)
+                    .allSatisfy(f -> {
+                        assertThat(f.getKind()).isEqualTo(RemovalConsistencyEvaluator.Finding.Kind.UNRECORDED_REMOVAL);
+                        assertThat(f.getKey()).isEqualTo(unrecorded);
+                    });
+        }
+    }
 }

@@ -53,7 +53,7 @@ class UltiToolsCommandsTest {
         when(mockCommand.getName()).thenReturn("ul");
         
         mockPluginManager = mock(PluginManager.class);
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getPluginManager()).thenReturn(mockPluginManager);
         });
         

@@ -156,10 +156,10 @@ class PluginInitiationUtilsConfigUpdateTest {
     private List<String> loggedAt(Level level) {
         List<String> lines = new ArrayList<>();
         ArgumentCaptor<String> twoArg = ArgumentCaptor.forClass(String.class);
-        verify(mockLogger, org.mockito.Mockito.atLeast(0)).log(eq(level), twoArg.capture());
+        verify(mockLogger, Mockito.atLeast(0)).log(eq(level), twoArg.capture());
         lines.addAll(twoArg.getAllValues());
         ArgumentCaptor<String> threeArg = ArgumentCaptor.forClass(String.class);
-        verify(mockLogger, org.mockito.Mockito.atLeast(0))
+        verify(mockLogger, Mockito.atLeast(0))
                 .log(eq(level), threeArg.capture(), any(Throwable.class));
         lines.addAll(threeArg.getAllValues());
         return lines;

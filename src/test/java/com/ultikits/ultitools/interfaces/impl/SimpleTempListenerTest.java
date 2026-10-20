@@ -45,6 +45,8 @@ class SimpleTempListenerTest {
             mockServer = mock(Server.class);
             java.util.logging.Logger mockLogger = mock(java.util.logging.Logger.class);
             when(mockServer.getLogger()).thenReturn(mockLogger);
+            org.mockito.Mockito.lenient().when(mockServer.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
+            org.mockito.Mockito.lenient().when(mockServer.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
             Bukkit.setServer(mockServer);
         } else {
             mockServer = Bukkit.getServer();

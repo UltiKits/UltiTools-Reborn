@@ -19,12 +19,13 @@ class XVersionUtilsRecentContentTest {
 
     @BeforeEach
     void setUp() {
+        MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
     }
 
     @AfterEach
     void tearDown() {
-        MockBukkit.unmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     @Test

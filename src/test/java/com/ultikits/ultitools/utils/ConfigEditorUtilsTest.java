@@ -132,7 +132,7 @@ class ConfigEditorUtilsTest {
             Class<?>[] exceptionTypes = method.getExceptionTypes();
             
             assertThat(exceptionTypes).hasSize(1);
-            assertThat(exceptionTypes[0]).isEqualTo(java.io.IOException.class);
+            assertThat(exceptionTypes[0]).isEqualTo(IOException.class);
         }
     }
 

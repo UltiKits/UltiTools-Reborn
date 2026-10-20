@@ -14,6 +14,8 @@ import java.lang.reflect.Field;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 import com.ultikits.ultitools.UltiTools;
 
@@ -24,6 +26,8 @@ class ViewTypeTest {
     @BeforeAll
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     static void setUp() throws Exception {
+        MockBukkitHelper.ensureCleanState();
+        MockBukkit.mock();
         // Save original instance
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
@@ -39,11 +43,13 @@ class ViewTypeTest {
     }
 
     @AfterAll
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     static void tearDown() throws Exception {
         // Restore original instance
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
         instanceField.set(null, originalInstance);
+        MockBukkitHelper.safeUnmock();
     }
 
     @Test

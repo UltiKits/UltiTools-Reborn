@@ -58,6 +58,13 @@ import com.ultikits.ultitools.manager.ConfigManager;
 @DisplayName("A YAML library failure in a gated write is a refusal on every write path (#624)")
 class WriteGateRuntimeFailureTest {
 
+    /**
+     * The logger this test captures from, held strongly for the whole run. {@code LogManager} keeps named loggers
+     * only weakly, so one looked up in {@code setUp()} and not referenced again can be collected before the code
+     * under test first asks for it; that code then gets a fresh logger without this test's handler.
+     */
+    private static final Logger CAPTURED_LOGGER = Logger.getLogger("com.ultikits");
+
     private static final FileTime OLD = FileTime.fromMillis(1_577_836_800_000L);
     private static final String RULES = "autoreply.yml";
     private static final String COMMENTED = "commented.yml";
@@ -122,7 +129,7 @@ class WriteGateRuntimeFailureTest {
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         lenient().when(plugin.i18n("fx.interval")).thenReturn("New interval text");
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        Logger.getLogger("com.ultikits").addHandler(capture);
+        CAPTURED_LOGGER.addHandler(capture);
     }
 
     /**
@@ -139,7 +146,7 @@ class WriteGateRuntimeFailureTest {
     @AfterEach
     void tearDown() {
         OperatorFileWriter.FAULT.set(null);
-        Logger.getLogger("com.ultikits").removeHandler(capture);
+        CAPTURED_LOGGER.removeHandler(capture);
     }
 
     // ------------------------------------------------------------------------------------------- the issue as filed
