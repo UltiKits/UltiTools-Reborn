@@ -4,6 +4,11 @@
 # keeps the exact bytes it built, and later publishes those same bytes after independent
 # acceptance, without building again.
 #
+# Known limitations:
+# A failed `gh release view`, even for an error other than "not found", is treated as an
+# absent release. At worst this creates a second draft for the operator to delete; the
+# retained-byte checks and readback still prevent publishing the wrong bytes.
+#
 # Usage:
 #   .github/scripts/release.sh --prepare <new-retention-dir> [--branch <name>]
 #   .github/scripts/release.sh --publish-approved <manifest> --authority-receipt <file> \
@@ -11,7 +16,8 @@
 #   .github/scripts/release.sh --dry-run [--branch <name>]
 #
 #   --prepare <dir>           Verify a clean checkout, run `mvn -B clean verify`, and copy the
-#                             primary JAR, POM, sources JAR and javadoc JAR into <dir> (which
+#                             primary JAR, flattened POM, sources JAR and javadoc JAR, plus the
+#                             GitHub Packages POM derived from the flattened POM, into <dir> (which
 #                             must not exist yet) together with a public release manifest.
 #                             Creates no tag and no release.
 #   --publish-approved <file> Publish the retained files named by that manifest. Requires the

@@ -23,32 +23,45 @@ import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
 import org.apache.maven.artifact.handler.DefaultArtifactHandler;
 import org.apache.maven.execution.MavenSession;
+import org.apache.maven.model.Plugin;
 import org.apache.maven.project.MavenProject;
 
 /**
- * Assigns the retained, accepted release files to the one project Maven read from the retained POM, so the
- * existing Central publisher collects exactly those bytes instead of anything a build would produce.
+ * Assigns the retained, accepted release files to the one project Maven read, so the existing Central
+ * publisher collects exactly those bytes instead of anything a build would produce.
  *
- * <p>Release publication runs no lifecycle phase. The publisher goal is invoked directly on the retained POM,
- * and this participant, loaded as a core extension through {@code -Dmaven.ext.class.path}, runs in
- * {@code afterProjectsRead}: it sets the project's primary artifact file and attaches the sources JAR, the
- * javadoc JAR and the four detached signatures through public {@link MavenProject} API. The POM itself is the
- * project file, which the publisher stages as the primary artifact's POM metadata; no POM is generated.</p>
+ * <p>Release publication runs no lifecycle phase. The publisher goal is invoked directly on a private copy of
+ * the verified source {@code pom.xml}, the project model, and this participant, loaded as a core extension
+ * through {@code -Dmaven.ext.class.path}, runs in {@code afterProjectsRead}. The publisher cleans its staging,
+ * deferred and output directories only for the first project whose build declares the publisher plugin, so
+ * the model is the source POM, whose build always does, rather than whatever the flattened POM keeps; this
+ * participant refuses a model that does not declare it.
+ * The participant then makes the retained flattened POM the project file with
+ * {@link MavenProject#setPomFile(File)}, the way flatten-maven-plugin does, so the publisher stages exactly
+ * that POM as the primary artifact's POM metadata; no POM is generated. Finally it sets the project's primary
+ * artifact file and attaches the sources JAR, the javadoc JAR and the four detached signatures through public
+ * {@link MavenProject} API.</p>
  *
  * <p>Every file comes from a properties file written by {@code release_artifacts.py central-inputs} after it
  * validated the release manifest and the detached signatures. This class re-checks every file's size and
  * SHA-256 digest immediately before assigning it and refuses the build on any difference, an unexpected
- * project, a pre-assigned primary file, an existing attachment or a link.</p>
+ * project, a project model other than the listed source POM, a model that does not declare the publisher, a
+ * pre-assigned primary file, an existing attachment or a link.</p>
  */
 public class RetainedArtifactsParticipant extends AbstractMavenLifecycleParticipant {
 
     /** User property naming the validated properties file. */
     public static final String PROPERTY = "retainedArtifacts.properties";
 
-    static final String FORMAT = "ultitools-retained-artifacts/1";
+    static final String FORMAT = "ultitools-retained-artifacts/2";
     static final String GROUP_ID = "com.ultikits";
     static final String ARTIFACT_ID = "UltiTools-API";
     static final int ENTRY_COUNT = 8;
+
+    /** Properties prefix of the project-model POM Maven reads; it is never uploaded. */
+    static final String PROJECT_POM = "project_pom.";
+    static final String PUBLISHER_GROUP_ID = "org.sonatype.central";
+    static final String PUBLISHER_ARTIFACT_ID = "central-publishing-maven-plugin";
 
     private static final Pattern FORMAL_VERSION = Pattern.compile("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)");
     private static final Pattern HEX64 = Pattern.compile("[0-9a-f]{64}");
@@ -74,7 +87,6 @@ public class RetainedArtifactsParticipant extends AbstractMavenLifecycleParticip
      * exact type, classifier and file, without a handler lookup that could change the extension.</p>
      */
     @Override
-    @SuppressWarnings("deprecation")
     public void afterProjectsRead(MavenSession session) throws MavenExecutionException {
         String location = session.getUserProperties().getProperty(PROPERTY);
         if (location == null || location.isEmpty()) {
@@ -82,6 +94,15 @@ public class RetainedArtifactsParticipant extends AbstractMavenLifecycleParticip
                     + "validated retained-file list", null);
         }
         Properties properties = load(new File(location));
+        String version = checkProperties(properties);
+        MavenProject project = checkedProject(session, version);
+        File[] files = checkedFiles(properties, version);
+        checkProjectModel(project, properties);
+        bindPublicationPom(project, files[0]);
+        assignArtifacts(project, files, version);
+    }
+
+    private static String checkProperties(Properties properties) throws MavenExecutionException {
         String version = properties.getProperty("version");
         checkKeys(properties);
         if (!FORMAT.equals(properties.getProperty("format"))
@@ -94,7 +115,10 @@ public class RetainedArtifactsParticipant extends AbstractMavenLifecycleParticip
                     + GROUP_ID + ":" + ARTIFACT_ID + " at a formal version with packaging jar and "
                     + ENTRY_COUNT + " files", null);
         }
+        return version;
+    }
 
+    private static MavenProject checkedProject(MavenSession session, String version) throws MavenExecutionException {
         List<MavenProject> projects = session.getProjects();
         if (projects == null || projects.size() != 1) {
             throw refuse("project_count", "expected exactly one project read from the retained POM, got "
@@ -117,7 +141,10 @@ public class RetainedArtifactsParticipant extends AbstractMavenLifecycleParticip
         if (!project.getAttachedArtifacts().isEmpty()) {
             throw refuse("attachments_preexisting", "the project already carries attached artifacts", null);
         }
+        return project;
+    }
 
+    private static File[] checkedFiles(Properties properties, String version) throws MavenExecutionException {
         String base = ARTIFACT_ID + "-" + version;
         File[] files = new File[LAYOUT.length];
         File folder = null;
@@ -142,12 +169,55 @@ public class RetainedArtifactsParticipant extends AbstractMavenLifecycleParticip
             verify(file, properties.getProperty(prefix + "bytes"), properties.getProperty(prefix + "sha256"));
             files[i] = file;
         }
-        File pom = project.getFile();
-        if (pom == null || !canonical(pom).equals(canonical(files[0]))) {
-            throw refuse("pom_not_project_file", "Maven must read the project from the retained POM itself", null);
-        }
+        return files;
+    }
 
-        primary.setFile(files[1]);
+    /** The project model must be the listed, unchanged source POM, and it must declare the publisher. */
+    private static void checkProjectModel(MavenProject project, Properties properties)
+            throws MavenExecutionException {
+        File model = new File(properties.getProperty(PROJECT_POM + "file", ""));
+        if (!model.isAbsolute()) {
+            throw refuse("project_pom_name", "the project-model POM must be named by an absolute path", null);
+        }
+        verify(model, properties.getProperty(PROJECT_POM + "bytes"), properties.getProperty(PROJECT_POM + "sha256"));
+        File pom = project.getFile();
+        if (pom == null || !canonical(pom).equals(canonical(model))) {
+            throw refuse("pom_not_project_file", "Maven must read the project model from the listed source POM",
+                    null);
+        }
+        if (!declaresPublisher(project)) {
+            throw refuse("publisher_not_declared", "the project model does not declare " + PUBLISHER_GROUP_ID + ":"
+                    + PUBLISHER_ARTIFACT_ID + " in its build, so the publisher would not clean its scratch "
+                    + "directories", null);
+        }
+    }
+
+    private static boolean declaresPublisher(MavenProject project) {
+        for (Plugin plugin : project.getBuildPlugins()) {
+            if (PUBLISHER_GROUP_ID.equals(plugin.getGroupId())
+                    && PUBLISHER_ARTIFACT_ID.equals(plugin.getArtifactId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The publisher stages the project file as the POM; make that the retained flattened POM. */
+    private static void bindPublicationPom(MavenProject project, File retainedPom) throws MavenExecutionException {
+        File basedir = project.getBasedir();
+        project.setPomFile(retainedPom);
+        if (!canonical(project.getFile()).equals(canonical(retainedPom)) || basedir == null
+                || !basedir.equals(project.getBasedir())) {
+            throw refuse("pom_binding", "the retained POM could not be bound as the uploaded project file", null);
+        }
+    }
+
+    /** Uses the public Maven API to preserve exact artifact types without handler lookups. */
+    @SuppressWarnings("deprecation")
+    private static void assignArtifacts(MavenProject project, File[] files, String version)
+            throws MavenExecutionException {
+        String base = ARTIFACT_ID + "-" + version;
+        project.getArtifact().setFile(files[1]);
         try {
             for (int i = 2; i < LAYOUT.length; i++) {
                 String[] row = LAYOUT[i];
@@ -173,7 +243,7 @@ public class RetainedArtifactsParticipant extends AbstractMavenLifecycleParticip
 
     private static void checkKeys(Properties properties) throws MavenExecutionException {
         Set<String> expected = new HashSet<String>(Arrays.asList("format", "group_id", "artifact_id", "version",
-                "packaging", "count"));
+                "packaging", "count", PROJECT_POM + "file", PROJECT_POM + "bytes", PROJECT_POM + "sha256"));
         for (int i = 1; i <= ENTRY_COUNT; i++) {
             for (String field : new String[] {"role", "type", "classifier", "file", "bytes", "sha256"}) {
                 expected.add("artifact." + i + "." + field);

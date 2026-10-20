@@ -6,8 +6,9 @@ built. Independent acceptance (UAT, review, a human decision) then judges those 
 --publish-approved publishes the same bytes without building again. This helper is the single
 place that defines what "the same bytes" means:
 
-  retain    copy the four payloads of one clean build (primary JAR, POM, sources JAR, javadoc
-            JAR) into a NEW retention directory and write the public release manifest beside them
+  retain    copy the four payloads of one clean build (primary JAR, flattened POM, sources JAR,
+            javadoc JAR) and the GitHub Packages POM derived from the flattened POM into a NEW
+            retention directory and write the public release manifest beside them
   validate  re-check a manifest, the retained bytes, the source commit they came from and,
             when given, the authority and UAT receipts that accepted that exact manifest
   stage     print the retained files to upload, in manifest order, after re-validating them
@@ -20,8 +21,9 @@ Framework publication (publish-packages.yml, after a release with the retained a
                     GitHub Packages with a bearer token taken from an environment variable) and classify them
                     against the manifest: absent, identical, or a refused mismatch or partial coordinate
   central-inputs    validate the downloaded retained files, their source commit and tag and the four detached
-                    signatures, then write the private registrar list and compile the release-only Maven core
-                    extension (.github/scripts/maven) into an ephemeral helper JAR; nothing product is built
+                    signatures, then write the private registrar list, a private project-model copy of the
+                    verified source pom.xml, and compile the release-only Maven core extension
+                    (.github/scripts/maven) into an ephemeral helper JAR; nothing product is built
   central-recheck   re-hash every listed file and re-verify the signatures after publication
 
 The manifest is public: it names files by basename and carries no local path, no approval
@@ -61,7 +63,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as element_tree
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -71,7 +73,14 @@ FORMAL_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 COORD_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 GITHUB_URL = re.compile(r"github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
-ROLES = ("javadoc", "pom", "primary", "sources")
+ROLES = ("github-packages-pom", "javadoc", "pom", "primary", "sources")
+# The four files Maven Central receives, each with a detached signature. The GitHub Packages POM is retained and
+# released with them but is never signed or sent to Central.
+CENTRAL_ROLES = ("javadoc", "pom", "primary", "sources")
+# GitHub Packages keeps the coordinate com.ultikits:ultitools-api it has always used. Gradle refuses a POM whose
+# artifactId differs from its coordinate, so that registry gets the flattened POM with only the project
+# artifactId lower-cased (maintainer decision, Phase 21).
+GITHUB_PACKAGES_ROLE = "github-packages-pom"
 MANIFEST_KEYS = ("artifact_id", "artifacts", "bytes", "filename", "group_id", "identify_string",
                  "plugin_api_version", "prior_served_version", "product_tree", "repo", "schema_version",
                  "sha256", "source_head", "version")
@@ -268,19 +277,68 @@ def inspect_javadoc(data, problems):
         problems.add("javadoc_with_classes", "the javadoc JAR holds compiled classes")
 
 
-def inspect_pom(data, version, problems):
-    """Return (groupId, artifactId) declared directly by the POM."""
+def parse_release_xml(data):
+    """Parse local release XML without accepting DTDs or entity declarations."""
+    if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+        raise element_tree.ParseError("DOCTYPE and ENTITY declarations are not release metadata")
+    parser = element_tree.XMLParser()
+    parser.feed(data)
+    return parser.close()
+
+
+# The published POM keeps exactly the shape of the UltiTools-API 6.2.5 POM on Maven Central
+# (https://repo1.maven.org/maven2/com/ultikits/UltiTools-API/6.2.5/UltiTools-API-6.2.5.pom), the output of the
+# build's flatten-maven-plugin: these top-level elements, and a build that only declares the Central publisher
+# as a build extension. Anything else (dependencies, repositories, profiles, properties, ...) is refused.
+PUBLICATION_POM_ELEMENTS = ("modelVersion", "groupId", "artifactId", "version", "name", "description", "url",
+                            "licenses", "developers", "scm", "build")
+PUBLICATION_BUILD_PLUGIN = ("org.sonatype.central", "central-publishing-maven-plugin")
+PUBLICATION_PLUGIN_ELEMENTS = ("groupId", "artifactId", "version", "extensions")
+
+
+def local_name(element):
+    return element.tag.split("}", 1)[-1] if isinstance(element.tag, str) else ""
+
+
+def check_publication_build(build, problems):
+    """The build may only declare the Central publisher as an extension, as the 6.2.5 POM does."""
+    plugins = list(build)
+    entries = list(plugins[0]) if len(plugins) == 1 and local_name(plugins[0]) == "plugins" else []
+    fields = {}
+    if len(entries) == 1 and local_name(entries[0]) == "plugin":
+        fields = dict((local_name(child), (child.text or "").strip()) for child in entries[0] if not list(child))
+    if sorted(fields) != sorted(PUBLICATION_PLUGIN_ELEMENTS) or len(list(entries[0])) != len(fields) \
+            or (fields["groupId"], fields["artifactId"]) != PUBLICATION_BUILD_PLUGIN \
+            or fields["extensions"] != "true" or not fields["version"]:
+        problems.add("pom_publication_build", "the publication POM's build must only declare %s:%s as an "
+                     "extension" % PUBLICATION_BUILD_PLUGIN)
+
+
+def check_publication_shape(root, problems):
+    """The retained publication POM must have exactly the top-level elements of the 6.2.5 published POM."""
+    names = [local_name(child) for child in root]
+    if sorted(names) != sorted(PUBLICATION_POM_ELEMENTS):
+        problems.add("pom_publication_section", "the publication POM has %s; the 6.2.5 published shape is "
+                     "exactly %s" % (", ".join(sorted(names)), ", ".join(sorted(PUBLICATION_POM_ELEMENTS))))
+        return
+    check_publication_build([child for child in root if local_name(child) == "build"][0], problems)
+
+
+def inspect_pom(data, version, problems, publication=False):
+    """Return directly declared coordinates; publication POMs must have the 6.2.5 published shape."""
     if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
         problems.add("pom_doctype_refused", "a POM with a DOCTYPE or ENTITY declaration is refused")
         return None, None
     try:
-        root = ET.fromstring(data)
-    except ET.ParseError as exc:
+        root = parse_release_xml(data)
+    except element_tree.ParseError as exc:
         problems.add("pom_unreadable", exc)
         return None, None
+    if publication:
+        check_publication_shape(root, problems)
     fields = {}
     for child in root:
-        tag = child.tag.split("}", 1)[-1] if isinstance(child.tag, str) else ""
+        tag = local_name(child)
         if tag in ("groupId", "artifactId", "version", "packaging"):
             fields[tag] = (child.text or "").strip()
     if fields.get("version") != version:
@@ -297,7 +355,29 @@ def inspect_pom(data, version, problems):
 def payload_names(artifact_id, version):
     base = "%s-%s" % (artifact_id, version)
     return {"primary": base + ".jar", "pom": base + ".pom", "sources": base + "-sources.jar",
-            "javadoc": base + "-javadoc.jar"}
+            "javadoc": base + "-javadoc.jar", GITHUB_PACKAGES_ROLE: base + "-github-packages.pom"}
+
+
+def github_packages_pom(flattened, artifact_id):
+    """The flattened POM with exactly one byte-level change: the project's own artifactId lower-cased.
+    Returns None when that element does not occur exactly once."""
+    original = ("<artifactId>%s</artifactId>" % artifact_id).encode("ascii")
+    if flattened.count(original) != 1:
+        return None
+    return flattened.replace(original, ("<artifactId>%s</artifactId>" % artifact_id.lower()).encode("ascii"))
+
+
+def check_github_packages_pom(contents, group, artifact_id, version, problems):
+    """The GitHub Packages POM must be exactly the derivation of the retained flattened POM."""
+    derived = github_packages_pom(contents["pom"], artifact_id or "")
+    if derived is None or derived != contents[GITHUB_PACKAGES_ROLE]:
+        problems.add("github_packages_pom_mismatch", "the GitHub Packages POM must equal the flattened POM with "
+                     "only its project artifactId lower-cased")
+        return
+    lower = Problems()
+    if inspect_pom(derived, version, lower, publication=True) != (group, artifact_id.lower()):
+        problems.add("github_packages_pom_mismatch", "the GitHub Packages POM does not declare %s:%s:%s" % (
+            group, artifact_id.lower(), version))
 
 
 def manifest_name(artifact_id, version):
@@ -305,27 +385,19 @@ def manifest_name(artifact_id, version):
 
 
 def inspect_payloads(contents, version, problems):
-    """Check the four payload byte strings; return (group, artifact, plugin values)."""
+    """Check the five retained byte strings; return (group, artifact, plugin values)."""
     main_entry, plugin = inspect_primary(contents["primary"], version, problems)
     inspect_sources(contents["sources"], main_entry, problems)
     inspect_javadoc(contents["javadoc"], problems)
-    group, artifact = inspect_pom(contents["pom"], version, problems)
+    group, artifact = inspect_pom(contents["pom"], version, problems, publication=True)
+    if group and artifact:
+        check_github_packages_pom(contents, group, artifact, version, problems)
     return group, artifact, plugin
 
 
 # ------------------------------------------------------------------------ manifest
 
-def validate_manifest_shape(manifest, raw, problems):
-    if raw != canonical_manifest_bytes(manifest):
-        problems.add("manifest_not_canonical", "the manifest bytes are not its canonical serialization")
-    missing = sorted(set(MANIFEST_KEYS) - set(manifest))
-    unknown = sorted(set(manifest) - set(MANIFEST_KEYS))
-    if missing:
-        problems.add("manifest_missing_field", ", ".join(missing))
-    if unknown:
-        problems.add("manifest_unknown_field", "%s (the public manifest allowlists its fields)" % ", ".join(unknown))
-    if missing:
-        return False
+def check_manifest_identity(manifest, problems):
     if manifest["schema_version"] != SCHEMA_VERSION or not is_int(manifest["schema_version"]):
         problems.add("schema_version", "expected %d, got %r" % (SCHEMA_VERSION, manifest["schema_version"]))
     if not isinstance(manifest["repo"], str) or not REPO_RE.match(manifest["repo"]):
@@ -354,12 +426,15 @@ def validate_manifest_shape(manifest, raw, problems):
         problems.add("identify_string_format", repr(identify))
     if not isinstance(manifest["plugin_api_version"], str) or not manifest["plugin_api_version"]:
         problems.add("plugin_api_version_format", repr(manifest["plugin_api_version"]))
+
+
+def check_manifest_artifacts(manifest, problems):
     artifacts = manifest["artifacts"]
     if not isinstance(artifacts, list) or not artifacts:
         problems.add("artifacts_empty", "an empty artifact list is never a release candidate")
         return False
     ok = True
-    expected = payload_names(manifest["artifact_id"], manifest["version"]) if version else {}
+    expected = payload_names(manifest["artifact_id"], manifest["version"]) if version_tuple(manifest["version"]) else {}
     roles = []
     for index, artifact in enumerate(artifacts):
         where = "artifacts[%d]" % index
@@ -391,6 +466,21 @@ def validate_manifest_shape(manifest, raw, problems):
             if manifest[key] != primary[key]:
                 problems.add("primary_mismatch", "top-level %s differs from the primary artifact" % key)
     return ok
+
+
+def validate_manifest_shape(manifest, raw, problems):
+    if raw != canonical_manifest_bytes(manifest):
+        problems.add("manifest_not_canonical", "the manifest bytes are not its canonical serialization")
+    missing = sorted(set(MANIFEST_KEYS) - set(manifest))
+    unknown = sorted(set(manifest) - set(MANIFEST_KEYS))
+    if missing:
+        problems.add("manifest_missing_field", ", ".join(missing))
+    if unknown:
+        problems.add("manifest_unknown_field", "%s (the public manifest allowlists its fields)" % ", ".join(unknown))
+    if missing:
+        return False
+    check_manifest_identity(manifest, problems)
+    return check_manifest_artifacts(manifest, problems)
 
 
 def load_manifest(path, problems):
@@ -434,7 +524,7 @@ def check_retained(manifest, folder, problems):
     return contents
 
 
-def check_source(manifest, checkout, pom_bytes, problems):
+def check_source(manifest, checkout, problems):
     head = manifest["source_head"]
     if git_text(checkout, "cat-file", "-t", head) != "commit":
         problems.add("source_head_unknown", "%s is not a commit in this checkout" % head)
@@ -445,11 +535,23 @@ def check_source(manifest, checkout, pom_bytes, problems):
     repo = origin_repo(checkout)
     if repo != manifest["repo"]:
         problems.add("source_repo_mismatch", "origin %r, manifest %r" % (repo, manifest["repo"]))
+    source_pom = checked_source_pom(checkout, head, problems)
+    if source_pom is not None:
+        coordinates = inspect_pom(source_pom, manifest["version"], problems)
+        if coordinates != (manifest["group_id"], manifest["artifact_id"]):
+            problems.add("pom_coordinates", "the source project coordinates differ from the retained POM")
+
+
+def checked_source_pom(checkout, head, problems):
+    """Check source provenance separately from the flattened publication payload."""
     code, blob = run_git(checkout, "cat-file", "blob", head + ":pom.xml")
     if code != 0:
         problems.add("pom_unreadable", "no pom.xml at %s" % head)
-    elif pom_bytes is not None and blob != pom_bytes:
-        problems.add("pom_not_source_bytes", "the retained POM differs from pom.xml at %s" % head)
+        return None
+    working = read_regular(Path(checkout) / "pom.xml", problems, "source POM")
+    if working is not None and blob != working:
+        problems.add("pom_not_source_bytes", "the working pom.xml differs from %s" % head)
+    return blob
 
 
 # ------------------------------------------------------------------------ receipts
@@ -500,21 +602,7 @@ def check_retained_ref(ref, base, problems, where):
     return data
 
 
-def check_authority(manifest, manifest_sha, path, problems):
-    receipt, _ = load_json_record(path, problems, "authority receipt")
-    if receipt is None:
-        return
-    for where in find_boolean_approvals(receipt, "authority"):
-        problems.add("boolean_approval_rejected", "%s: approval is a retained human response, never a flag" % where)
-    if receipt.get("schema") != AUTHORITY_SCHEMA or receipt.get("evidence_state") != "observed":
-        problems.add("authority_schema", "expected an observed %s receipt" % AUTHORITY_SCHEMA)
-        return
-    if receipt.get("action") != "framework-publish":
-        problems.add("authority_action", "receipt action %r is not framework-publish" % receipt.get("action"))
-    if receipt.get("decision") != "publish":
-        problems.add("authority_not_publish", "decision %r does not grant publication" % receipt.get("decision"))
-    if not isinstance(receipt.get("question"), str) or not receipt["question"].strip():
-        problems.add("authority_question_missing", "the question asked must be retained")
+def check_authority_response(receipt, path, problems):
     response = receipt.get("human_response")
     text = check_retained_ref(response, Path(path).resolve().parent, problems, "authority.human_response")
     quote = receipt.get("response_decision_quote")
@@ -526,6 +614,9 @@ def check_authority(manifest, manifest_sha, path, problems):
             problems.add("response_not_utf8", "the retained response is not UTF-8 text")
         if decoded is not None and (not isinstance(quote, str) or not quote.strip() or quote not in decoded):
             problems.add("decision_not_in_response", "the decision quote must appear verbatim in the response")
+
+
+def check_authority_scope(receipt, manifest, manifest_sha, problems):
     scope = receipt.get("scope")
     if not isinstance(scope, dict):
         problems.add("authority_scope", "scope must be an object")
@@ -549,25 +640,26 @@ def check_authority(manifest, manifest_sha, path, problems):
             PUBLISH_ACTIONS, scope.get("allowed_actions")))
 
 
-def check_uat(manifest, manifest_sha, path, problems):
-    record, _ = load_json_record(path, problems, "UAT receipt")
-    if record is None:
+def check_authority(manifest, manifest_sha, path, problems):
+    receipt, _ = load_json_record(path, problems, "authority receipt")
+    if receipt is None:
         return
-    if record.get("schema") != GATES_SCHEMA or record.get("evidence_state") != "observed":
-        problems.add("uat_schema", "expected an observed %s record" % GATES_SCHEMA)
+    for where in find_boolean_approvals(receipt, "authority"):
+        problems.add("boolean_approval_rejected", "%s: approval is a retained human response, never a flag" % where)
+    if receipt.get("schema") != AUTHORITY_SCHEMA or receipt.get("evidence_state") != "observed":
+        problems.add("authority_schema", "expected an observed %s receipt" % AUTHORITY_SCHEMA)
         return
-    if record.get("release_authorized") is not False:
-        problems.add("release_authorized_not_false", "a gates record never grants release authority")
-    if record.get("repo") != manifest["repo"] or record.get("source_head") != manifest["source_head"]:
-        problems.add("uat_stale", "gates repo/source_head do not match the manifest")
-    if record.get("candidate_sha256") != manifest["sha256"]:
-        problems.add("uat_stale", "gates candidate_sha256 is not the retained primary JAR")
-    if record.get("manifest_sha256") != manifest_sha:
-        problems.add("uat_stale", "gates manifest_sha256 does not match this manifest's bytes")
-    gates = record.get("gates")
-    if not isinstance(gates, list) or not gates:
-        problems.add("uat_gates_missing", "the gates record lists no gate")
-        return
+    if receipt.get("action") != "framework-publish":
+        problems.add("authority_action", "receipt action %r is not framework-publish" % receipt.get("action"))
+    if receipt.get("decision") != "publish":
+        problems.add("authority_not_publish", "decision %r does not grant publication" % receipt.get("decision"))
+    if not isinstance(receipt.get("question"), str) or not receipt["question"].strip():
+        problems.add("authority_question_missing", "the question asked must be retained")
+    check_authority_response(receipt, path, problems)
+    check_authority_scope(receipt, manifest, manifest_sha, problems)
+
+
+def check_gate_evidence(gates, manifest, path, problems):
     base = Path(path).resolve().parent
     seen = {}
     for entry in gates:
@@ -592,6 +684,10 @@ def check_uat(manifest, manifest_sha, path, problems):
             check_retained_ref(entry.get("provider_evidence"), base, problems, "gate %s provider evidence" % name)
         else:
             problems.add("uat_gate_not_passed", "gate %s is %r" % (name, status))
+    return seen
+
+
+def check_independent_uat(seen, manifest, problems):
     uat = seen.get("uat")
     if uat is not None and uat.get("status") == "pass":
         if uat.get("artifact_sha256") != manifest["sha256"]:
@@ -602,7 +698,70 @@ def check_uat(manifest, manifest_sha, path, problems):
             problems.add("release_authorized_not_false", "UAT verdicts keep release_authorized false")
 
 
+def check_uat(manifest, manifest_sha, path, problems):
+    record, _ = load_json_record(path, problems, "UAT receipt")
+    if record is None:
+        return
+    if record.get("schema") != GATES_SCHEMA or record.get("evidence_state") != "observed":
+        problems.add("uat_schema", "expected an observed %s record" % GATES_SCHEMA)
+        return
+    if record.get("release_authorized") is not False:
+        problems.add("release_authorized_not_false", "a gates record never grants release authority")
+    if record.get("repo") != manifest["repo"] or record.get("source_head") != manifest["source_head"]:
+        problems.add("uat_stale", "gates repo/source_head do not match the manifest")
+    if record.get("candidate_sha256") != manifest["sha256"]:
+        problems.add("uat_stale", "gates candidate_sha256 is not the retained primary JAR")
+    if record.get("manifest_sha256") != manifest_sha:
+        problems.add("uat_stale", "gates manifest_sha256 does not match this manifest's bytes")
+    gates = record.get("gates")
+    if not isinstance(gates, list) or not gates:
+        problems.add("uat_gates_missing", "the gates record lists no gate")
+        return
+    seen = check_gate_evidence(gates, manifest, path, problems)
+    check_independent_uat(seen, manifest, problems)
+
+
 # ------------------------------------------------------------------------ commands
+
+def read_build_payloads(checkout, group, artifact_id, version, problems):
+    """Read only the named outputs of the same clean verification build."""
+    names = {}
+    contents, plugin = {}, {}
+    if artifact_id:
+        names = payload_names(artifact_id, version)
+        sources = {"primary": checkout / "target" / names["primary"], "sources": checkout / "target" / names["sources"],
+                   "javadoc": checkout / "target" / names["javadoc"], "pom": checkout / ".flattened-pom.xml"}
+        for role, source in sources.items():
+            data = read_regular(source, problems, role)
+            if data is not None:
+                contents[role] = data
+        if "pom" in contents:
+            derived = github_packages_pom(contents["pom"], artifact_id)
+            if derived is None:
+                problems.add("github_packages_pom_mismatch", "the flattened POM must declare <artifactId>%s"
+                             "</artifactId> exactly once" % artifact_id)
+            else:
+                contents[GITHUB_PACKAGES_ROLE] = derived
+        if len(contents) == len(ROLES):
+            retained_group, retained_artifact, plugin = inspect_payloads(contents, version, problems)
+            if (retained_group, retained_artifact) != (group, artifact_id):
+                problems.add("pom_coordinates", "the publication POM coordinates differ from the source project")
+    return contents, plugin, names
+
+
+def check_retain_destination(retain_dir, checkout, problems):
+    retain = Path(os.path.abspath(retain_dir))
+    if os.path.lexists(str(retain)):
+        problems.add("retain_dir_exists", "prepare writes into a new directory only")
+    elif not retain.parent.is_dir():
+        problems.add("retain_parent_missing", "the parent of the retention directory must exist")
+    else:
+        real_parent = os.path.realpath(str(retain.parent))
+        real_checkout = os.path.realpath(str(checkout))
+        if os.path.commonpath([real_parent, real_checkout]) == real_checkout:
+            problems.add("retain_dir_inside_checkout", "retained files must live outside the source checkout")
+    return retain
+
 
 def cmd_retain(args):
     problems = Problems()
@@ -621,38 +780,13 @@ def cmd_retain(args):
     repo = origin_repo(checkout)
     if repo is None:
         problems.add("source_repo_unresolved", "origin is not a GitHub repository URL")
-    code, pom_blob = run_git(checkout, "cat-file", "blob", head + ":pom.xml")
-    if code != 0:
-        problems.add("pom_unreadable", "no pom.xml at %s" % head)
-        pom_blob = None
-    pom_file = read_regular(checkout / "pom.xml", problems, "pom")
-    if pom_blob is not None and pom_file is not None and pom_blob != pom_file:
-        problems.add("pom_not_source_bytes", "the working pom.xml differs from %s" % head)
+    pom_file = checked_source_pom(checkout, head, problems)
     group = artifact_id = None
     if pom_file is not None:
         group, artifact_id = inspect_pom(pom_file, version, problems)
-    contents, plugin = {}, {}
-    if artifact_id:
-        names = payload_names(artifact_id, version)
-        sources = {"primary": checkout / "target" / names["primary"], "sources": checkout / "target" / names["sources"],
-                   "javadoc": checkout / "target" / names["javadoc"], "pom": checkout / "pom.xml"}
-        for role, source in sources.items():
-            data = read_regular(source, problems, role)
-            if data is not None:
-                contents[role] = data
-        if len(contents) == len(ROLES):
-            _, _, plugin = inspect_payloads(contents, version, problems)
+    contents, plugin, names = read_build_payloads(checkout, group, artifact_id, version, problems)
     prior = prior_served_version(checkout, version, problems)
-    retain = Path(os.path.abspath(args.retain_dir))
-    if os.path.lexists(str(retain)):
-        problems.add("retain_dir_exists", "prepare writes into a new directory only")
-    elif not retain.parent.is_dir():
-        problems.add("retain_parent_missing", "the parent of the retention directory must exist")
-    else:
-        real_parent = os.path.realpath(str(retain.parent))
-        real_checkout = os.path.realpath(str(checkout))
-        if os.path.commonpath([real_parent, real_checkout]) == real_checkout:
-            problems.add("retain_dir_inside_checkout", "retained files must live outside the source checkout")
+    retain = check_retain_destination(args.retain_dir, checkout, problems)
     if problems:
         problems.emit()
         return 1
@@ -722,10 +856,10 @@ def validated(args, problems):
     if manifest is None:
         return None, None
     folder = Path(os.path.abspath(args.manifest)).parent
-    contents = check_retained(manifest, folder, problems)
+    check_retained(manifest, folder, problems)
     manifest_sha = sha256_bytes(raw)
     if getattr(args, "source_checkout", None):
-        check_source(manifest, Path(args.source_checkout), (contents or {}).get("pom"), problems)
+        check_source(manifest, Path(args.source_checkout), problems)
     expected_head = getattr(args, "expected_source_head", None)
     if expected_head is not None and expected_head != manifest["source_head"]:
         problems.add("source_head_mismatch", "the run is at %r, the accepted source is %s" % (
@@ -779,16 +913,7 @@ def cmd_stage(args):
     return 0
 
 
-def cmd_compare(args):
-    """Compare a release's downloaded assets with the accepted manifest, byte for byte."""
-    problems = Problems()
-    manifest, raw = load_manifest(args.manifest, problems)
-    if manifest is None:
-        problems.emit()
-        return 1
-    expected = dict((a["filename"], a["sha256"]) for a in manifest["artifacts"])
-    expected[Path(args.manifest).name] = sha256_bytes(raw)
-    remote = Path(args.remote_dir)
+def compare_remote_payloads(remote, expected, problems):
     present, mismatched, unexpected = [], [], []
     for entry in sorted(os.listdir(str(remote))):
         path = remote / entry
@@ -804,9 +929,13 @@ def cmd_compare(args):
         if sha256_bytes(data) != expected[entry]:
             mismatched.append(entry)
             problems.add("asset_mismatch", "%s on the release differs from the accepted bytes" % entry)
+    return present, mismatched, unexpected
+
+
+def compare_release_view(release_json, manifest, remote, present, mismatched, unexpected, problems):
     draft = None
-    if args.release_json:
-        release, _ = load_json_record(args.release_json, problems, "release view")
+    if release_json:
+        release, _ = load_json_record(release_json, problems, "release view")
         if release is not None:
             draft = release.get("isDraft")
             if release.get("tagName") != "v" + manifest["version"]:
@@ -830,6 +959,21 @@ def cmd_compare(args):
             for name in present:
                 if name not in names:
                     problems.add("asset_not_listed", "%s was downloaded but is not listed on the release" % name)
+    return draft
+
+
+def cmd_compare(args):
+    """Compare a release's downloaded assets with the accepted manifest, byte for byte."""
+    problems = Problems()
+    manifest, raw = load_manifest(args.manifest, problems)
+    if manifest is None:
+        problems.emit()
+        return 1
+    expected = dict((a["filename"], a["sha256"]) for a in manifest["artifacts"])
+    expected[Path(args.manifest).name] = sha256_bytes(raw)
+    remote = Path(args.remote_dir)
+    present, mismatched, unexpected = compare_remote_payloads(remote, expected, problems)
+    draft = compare_release_view(args.release_json, manifest, remote, present, mismatched, unexpected, problems)
     missing = sorted(set(expected) - set(present) - set(mismatched))
     if problems:
         status = "mismatch"
@@ -856,15 +1000,19 @@ def cmd_compare(args):
 # publish-packages.yml publishes the retained, accepted files of a published release; it never builds. The
 # commands below check those files again in the credentialed job, observe the target repositories before and
 # after a write, and prepare the Central handoff: a private list of the exact files and a release-only Maven
-# core extension (.github/scripts/maven) that assigns them to the project Maven reads from the retained POM, so
-# the existing central-publishing-maven-plugin publishes those bytes and nothing a build would produce.
+# core extension (.github/scripts/maven) that assigns them to the project Maven reads, so the existing
+# central-publishing-maven-plugin publishes those bytes and nothing a build would produce. Maven reads the
+# project model from a private copy of the verified source pom.xml, because the plugin only cleans its scratch
+# directories for a project whose build declares it, and the source POM's build always does; the registrar then
+# makes the retained flattened POM the project file, which is the POM the plugin stages and uploads.
 
 REGISTRAR_DIR = Path(os.path.abspath(__file__)).parent / "maven"
 REGISTRAR_SOURCE = "RetainedArtifactsParticipant.java"
 REGISTRAR_DESCRIPTOR = "components.xml"
 REGISTRAR_CLASS = "com/ultikits/release/RetainedArtifactsParticipant.class"
 REGISTRAR_IMPLEMENTATION = "com.ultikits.release.RetainedArtifactsParticipant"
-REGISTRAR_FORMAT = "ultitools-retained-artifacts/1"
+REGISTRAR_FORMAT = "ultitools-retained-artifacts/2"
+PROJECT_MODEL_DIR = "project-model"
 REGISTRAR_FIELDS = ("role", "type", "classifier", "file", "bytes", "sha256")
 # (entry role, Maven type, classifier, manifest role of the payload, file-name suffix)
 REGISTRAR_LAYOUT = (
@@ -907,12 +1055,15 @@ def cmd_repository_state(args):
     expected = dict((a["role"], a["sha256"]) for a in manifest["artifacts"])
     version = manifest["version"]
     coordinate = "%s:%s:%s" % (manifest["group_id"], artifact_id, version)
+    # The lower-case GitHub Packages coordinate serves the POM that names it; Central serves the flattened POM.
+    pom_role = {manifest["artifact_id"]: "pom"}.get(artifact_id, GITHUB_PACKAGES_ROLE)
     observed = {}
     try:
-        for role, extension in (("primary", ".jar"), ("pom", ".pom")):
+        for role, extension in (("primary", ".jar"), (pom_role, ".pom")):
             url = "%s/%s/%s/%s/%s-%s%s" % (base, manifest["group_id"].replace(".", "/"), artifact_id, version,
                                            artifact_id, version, extension)
-            status, body = https_get(url, REPOSITORY_LIMIT, accept="*/*", authorization=authorization)
+            status, body = https_get(url, REPOSITORY_LIMIT, urllib.parse.urlsplit(base).hostname,
+                                     accept="*/*", authorization=authorization)
             if status == 404:
                 observed[role] = "absent"
             elif status == 200:
@@ -956,16 +1107,15 @@ def check_publication_paths(inputs, work, scratch, checkout, problems):
             problems.add("%s_dir_exists" % name, "the %s directory must not exist yet" % name)
         elif not os.path.isdir(os.path.dirname(os.path.abspath(str(path)))):
             problems.add("%s_parent_missing" % name, "the parent of the %s directory must exist" % name)
-    folder = Path(os.path.abspath(str(inputs)))
-    for directory in [folder] + list(folder.parents):
-        if os.path.lexists(str(directory / ".mvn")):
-            problems.add("maven_config_dir", "a .mvn directory at or above the inputs would configure Maven")
-            break
+    for name, path in (("inputs", inputs), ("work", work)):
+        folder = Path(os.path.abspath(str(path)))
+        if any(os.path.lexists(str(directory / ".mvn")) for directory in [folder] + list(folder.parents)):
+            problems.add("maven_config_dir", "a .mvn directory at or above the %s would configure Maven" % name)
 
 
 def check_inputs_listing(manifest, folder, problems):
     expected = set(a["filename"] for a in manifest["artifacts"])
-    expected |= set(name + ".asc" for name in list(expected))
+    expected |= set(a["filename"] + ".asc" for a in manifest["artifacts"] if a["role"] in CENTRAL_ROLES)
     expected.add(manifest_name(manifest["artifact_id"], manifest["version"]))
     try:
         actual = set(os.listdir(str(folder)))
@@ -973,15 +1123,15 @@ def check_inputs_listing(manifest, folder, problems):
         problems.add("inputs_unreadable", "the inputs directory cannot be listed")
         return
     if actual != expected:
-        problems.add("inputs_listing", "the inputs directory must hold exactly the manifest, the four retained files "
-                     "and their signatures (unexpected: %s; missing: %s)" % (
+        problems.add("inputs_listing", "the inputs directory must hold exactly the manifest, the five retained "
+                     "files and the signatures of the four Central files (unexpected: %s; missing: %s)" % (
                          ", ".join(sorted(actual - expected)) or "none", ", ".join(sorted(expected - actual)) or "none"))
 
 
 def verify_signatures(manifest, folder, gpg, problems):
     """Verify each detached signature with gpg; return the one signing key fingerprint, or None."""
     fingerprints = set()
-    for artifact in manifest["artifacts"]:
+    for artifact in [a for a in manifest["artifacts"] if a["role"] in CENTRAL_ROLES]:
         name = artifact["filename"]
         signature = read_regular(Path(folder) / (name + ".asc"), problems, name + ".asc")
         if signature is None:
@@ -1020,8 +1170,8 @@ def registrar_entries(manifest, folder):
 
 def check_descriptor(data, problems):
     try:
-        root = ET.fromstring(data)
-    except ET.ParseError:
+        root = parse_release_xml(data)
+    except element_tree.ParseError:
         problems.add("registrar_descriptor", "components.xml does not parse")
         return
     components = root.findall("components/component")
@@ -1080,6 +1230,22 @@ def write_private(path, data):
         os.close(fd)
 
 
+def registrar_lines(manifest, entries, project_pom, model, problems):
+    """The private registrar list: identity, the project-model POM Maven reads and the eight uploaded files."""
+    lines = ["# Written by release_artifacts.py central-inputs for RetainedArtifactsParticipant; private, never uploaded.",
+             "format=" + REGISTRAR_FORMAT, "group_id=" + manifest["group_id"], "artifact_id=" + manifest["artifact_id"],
+             "version=" + manifest["version"], "packaging=jar", "count=%d" % len(entries),
+             "project_pom.file=%s" % project_pom, "project_pom.bytes=%d" % len(model),
+             "project_pom.sha256=" + sha256_bytes(model)]
+    for index, (role, kind, classifier, path) in enumerate(entries, 1):
+        data = read_regular(path, problems, os.path.basename(path))
+        if data is None:
+            break
+        values = (role, kind, classifier, path, str(len(data)), sha256_bytes(data))
+        lines += ["artifact.%d.%s=%s" % (index, field, value) for field, value in zip(REGISTRAR_FIELDS, values)]
+    return lines
+
+
 def cmd_central_inputs(args):
     """Validate the downloaded retained files and signatures, then write the registrar list and helper JAR."""
     problems = Problems()
@@ -1096,7 +1262,8 @@ def cmd_central_inputs(args):
         problems.add("maven_home", "--maven-home must name the active Maven distribution (lib/maven-core*.jar)")
     fingerprint = verify_signatures(manifest, folder, args.gpg, problems)
     entries = registrar_entries(manifest, folder)
-    for _, _, _, path in entries + [("", "", "", str(work)), ("", "", "", str(scratch))]:
+    project_pom = work / PROJECT_MODEL_DIR / "pom.xml"
+    for _, _, _, path in entries + [("", "", "", str(project_pom)), ("", "", "", str(scratch))]:
         if any(ord(c) < 0x21 or ord(c) > 0x7e for c in path) or "\\" in path:
             problems.add("path_format", "paths handed to Maven must be printable ASCII without spaces or backslashes")
             break
@@ -1105,27 +1272,24 @@ def cmd_central_inputs(args):
             problems.add("signature_invalid", "no detached signature verified")
         problems.emit()
         return 1
-    lines = ["# Written by release_artifacts.py central-inputs for RetainedArtifactsParticipant; private, never uploaded.",
-             "format=" + REGISTRAR_FORMAT, "group_id=" + manifest["group_id"], "artifact_id=" + manifest["artifact_id"],
-             "version=" + manifest["version"], "packaging=jar", "count=%d" % len(entries)]
-    for index, (role, kind, classifier, path) in enumerate(entries, 1):
-        data = read_regular(path, problems, os.path.basename(path))
-        if data is None:
-            break
-        values = (role, kind, classifier, path, str(len(data)), sha256_bytes(data))
-        lines += ["artifact.%d.%s=%s" % (index, field, value) for field, value in zip(REGISTRAR_FIELDS, values)]
+    # validated() already compared this blob with the working pom.xml; the copy keeps Maven out of the checkout.
+    model = checked_source_pom(Path(args.source_checkout), manifest["source_head"], problems)
+    lines = registrar_lines(manifest, entries, project_pom, model or b"", problems)
     if problems:
         problems.emit()
         return 1
     os.mkdir(str(work), 0o700)
+    os.mkdir(str(project_pom.parent), 0o700)
     os.mkdir(str(scratch), 0o700)
+    write_private(project_pom, model)
     properties = work / "registrar.properties"
     write_private(properties, ("\n".join(lines) + "\n").encode("ascii"))
     jar = build_registrar_jar(work, lib, problems)
     if jar is None:
         problems.emit()
         return 1
-    fields = (("RETAINED_POM", entries[0][3]), ("PROPERTIES", str(properties)), ("HELPER_JAR", str(jar)),
+    fields = (("RETAINED_POM", entries[0][3]), ("PROJECT_POM", str(project_pom)),
+              ("PROPERTIES", str(properties)), ("HELPER_JAR", str(jar)),
               ("HELPER_JAR_SHA256", sha256_bytes(jar.read_bytes())), ("STAGING_DIR", str(scratch / "staging")),
               ("DEFERRED_DIR", str(scratch / "deferred")), ("OUTPUT_DIR", str(scratch / "output")),
               ("SIGNER_FINGERPRINT", fingerprint), ("VERSION", manifest["version"]))
@@ -1248,19 +1412,31 @@ def package_metadata_sha256(doc):
     return hashlib.sha256(canonical_json(package_metadata_projection(doc)).encode("ascii")).hexdigest()
 
 
-def https_get(url, limit, accept="application/json", authorization=None):
+def check_https_host(url, expected_host):
+    """Only fetch HTTPS URLs at the host chosen by the caller, never local-file schemes."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        valid = (parsed.scheme == "https" and parsed.hostname == expected_host and bool(expected_host)
+                 and parsed.username is None and parsed.password is None and parsed.port in (None, 443))
+    except ValueError:
+        valid = False
+    if not valid:
+        raise FetchError("refusing a URL outside the expected HTTPS host")
+
+
+def https_get(url, limit, expected_host, accept="application/json", authorization=None):
     """GET over https; return (status, body). 4xx statuses are returned; transport errors raise FetchError.
 
     An authorization value is sent as an unredirected header: urllib does not copy it to a redirect target, so
     a token for one host is never handed to the storage host a repository redirects a download to.
     """
-    if not url.startswith("https://"):
-        raise FetchError("refusing a non-https URL")
+    check_https_host(url, expected_host)
     request = urllib.request.Request(url, headers={"User-Agent": "ultitools-module-release", "Accept": accept})
     if authorization:
         request.add_unredirected_header("Authorization", authorization)
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        # HTTPS scheme and caller-selected host are checked above; no local-file URL can reach this call.
+        with urllib.request.urlopen(request, timeout=60) as response:  # nosemgrep
             final = response.geturl() if hasattr(response, "geturl") else url
             if not str(final).startswith("https://"):
                 raise FetchError("redirected away from https")
@@ -1282,6 +1458,45 @@ def https_get(url, limit, accept="application/json", authorization=None):
 def emit_kv(pairs):
     for key, value in pairs:
         print("%s=%s" % (key, value))
+
+
+def read_dispatch_inputs(env, problems):
+    event_path = env.get("GITHUB_EVENT_PATH")
+    payload = None
+    if not event_path:
+        problems.add("event_missing", "GITHUB_EVENT_PATH is not set")
+    else:
+        raw = read_regular(event_path, problems, "event payload")
+        if raw is not None and len(raw) > EVENT_LIMIT:
+            problems.add("event_too_large", "the event payload exceeds %d bytes" % EVENT_LIMIT)
+        elif raw is not None:
+            try:
+                payload = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+            except (UnicodeDecodeError, ValueError):
+                problems.add("event_invalid_json", "the event payload is not one JSON object with unique keys")
+    return check_dispatch_payload(payload, env, problems)
+
+
+def check_dispatch_payload(payload, env, problems):
+    inputs = None
+    if payload is not None:
+        if not isinstance(payload, dict) or not isinstance(payload.get("inputs"), dict):
+            problems.add("inputs_missing", "the event payload carries no inputs object")
+        else:
+            inputs = payload["inputs"]
+            if "ref" in payload and payload["ref"] != env.get("GITHUB_REF"):
+                problems.add("ref_not_default", "the event ref differs from the run ref")
+            for key in sorted(set(DISPATCH_INPUT_FORMATS) - set(inputs)):
+                problems.add("inputs_missing_key", key)
+            for key in sorted(set(inputs) - set(DISPATCH_INPUT_FORMATS)):
+                problems.add("inputs_unknown_key", "an input outside the seven-key allowlist")
+            for key in sorted(set(inputs) & set(DISPATCH_INPUT_FORMATS)):
+                value = inputs[key]
+                if not isinstance(value, str) or not value:
+                    problems.add("input_format", "%s must be a non-empty string" % key)
+                elif not DISPATCH_INPUT_FORMATS[key].fullmatch(value):
+                    problems.add("input_format", "%s does not match its required format" % key)
+    return inputs
 
 
 def cmd_dispatch_inputs_verify(args):
@@ -1310,37 +1525,7 @@ def cmd_dispatch_inputs_verify(args):
     run_id = env.get("GITHUB_RUN_ID", "")
     if not RUN_ID_FORMAT.fullmatch(run_id):
         problems.add("run_id_format", "GITHUB_RUN_ID is not a run number")
-    event_path = env.get("GITHUB_EVENT_PATH")
-    payload = None
-    if not event_path:
-        problems.add("event_missing", "GITHUB_EVENT_PATH is not set")
-    else:
-        raw = read_regular(event_path, problems, "event payload")
-        if raw is not None and len(raw) > EVENT_LIMIT:
-            problems.add("event_too_large", "the event payload exceeds %d bytes" % EVENT_LIMIT)
-        elif raw is not None:
-            try:
-                payload = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
-            except (UnicodeDecodeError, ValueError):
-                problems.add("event_invalid_json", "the event payload is not one JSON object with unique keys")
-    inputs = None
-    if payload is not None:
-        if not isinstance(payload, dict) or not isinstance(payload.get("inputs"), dict):
-            problems.add("inputs_missing", "the event payload carries no inputs object")
-        else:
-            inputs = payload["inputs"]
-            if "ref" in payload and payload["ref"] != env.get("GITHUB_REF"):
-                problems.add("ref_not_default", "the event ref differs from the run ref")
-            for key in sorted(set(DISPATCH_INPUT_FORMATS) - set(inputs)):
-                problems.add("inputs_missing_key", key)
-            for key in sorted(set(inputs) - set(DISPATCH_INPUT_FORMATS)):
-                problems.add("inputs_unknown_key", "an input outside the seven-key allowlist")
-            for key in sorted(set(inputs) & set(DISPATCH_INPUT_FORMATS)):
-                value = inputs[key]
-                if not isinstance(value, str) or not value:
-                    problems.add("input_format", "%s must be a non-empty string" % key)
-                elif not DISPATCH_INPUT_FORMATS[key].fullmatch(value):
-                    problems.add("input_format", "%s does not match its required format" % key)
+    inputs = read_dispatch_inputs(env, problems)
     if problems or inputs is None:
         problems.emit()
         return 1
@@ -1369,7 +1554,7 @@ def cmd_package_metadata_digest(args):
             return 1
     else:
         try:
-            status, body = https_get(REGISTRY_DOCUMENT_URL, 8 << 20)
+            status, body = https_get(REGISTRY_DOCUMENT_URL, 8 << 20, "registry.npmjs.org")
         except FetchError as exc:
             sys.stderr.write("refused: registry_unavailable: %s\n" % exc)
             return 1
@@ -1449,13 +1634,7 @@ def cmd_module_release_state(args):
     return 0
 
 
-def cmd_module_verify_assets(args):
-    """Compare downloaded draft assets with the dispatch digests, then check manifest and ZIP identity."""
-    problems = Problems()
-    folder = Path(args.assets_dir)
-    jar_name, manifest_name = args.jar_name, manifest_asset_name(args.jar_name)
-    jar = read_regular(folder / jar_name, problems, "staged JAR")
-    raw = read_regular(folder / manifest_name, problems, "staged manifest")
+def check_module_asset_bytes(args, jar, raw, problems):
     if jar is not None and sha256_bytes(jar) != args.artifact_sha256:
         problems.add("artifact_sha256_mismatch", "the staged JAR does not hash to artifact_sha256")
     if raw is not None and sha256_bytes(raw) != args.manifest_sha256:
@@ -1464,19 +1643,9 @@ def cmd_module_verify_assets(args):
         problems.add("asset_size_mismatch", "the downloaded JAR size differs from the release listing")
     if raw is not None and args.manifest_size is not None and len(raw) != args.manifest_size:
         problems.add("asset_size_mismatch", "the downloaded manifest size differs from the release listing")
-    if problems:
-        problems.emit()
-        return 1
-    try:
-        manifest = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
-    except (UnicodeDecodeError, ValueError):
-        problems.add("manifest_invalid", "the staged manifest is not one JSON object with unique keys")
-        problems.emit()
-        return 1
-    if not isinstance(manifest, dict) or sorted(manifest) != sorted(MODULE_MANIFEST_KEYS):
-        problems.add("manifest_fields", "the staged manifest must carry exactly the candidate manifest fields")
-        problems.emit()
-        return 1
+
+
+def check_module_manifest(args, manifest, jar, jar_name, problems):
     expected = {"schema": MODULE_MANIFEST_SCHEMA, "evidence_state": "observed", "kind": "module",
                 "label": "final-candidate", "release_authorized": False, "repo": args.repo,
                 "source_head": args.source_head, "version": args.version, "identify_string": args.identify_string,
@@ -1497,6 +1666,30 @@ def cmd_module_verify_assets(args):
     want = [{"bytes": len(jar), "filename": jar_name, "role": "primary", "sha256": args.artifact_sha256}]
     if artifacts != want:
         problems.add("manifest_artifact_mismatch", "the manifest must list exactly the staged JAR as its primary")
+
+
+def cmd_module_verify_assets(args):
+    """Compare downloaded draft assets with the dispatch digests, then check manifest and ZIP identity."""
+    problems = Problems()
+    folder = Path(args.assets_dir)
+    jar_name, manifest_name = args.jar_name, manifest_asset_name(args.jar_name)
+    jar = read_regular(folder / jar_name, problems, "staged JAR")
+    raw = read_regular(folder / manifest_name, problems, "staged manifest")
+    check_module_asset_bytes(args, jar, raw, problems)
+    if problems:
+        problems.emit()
+        return 1
+    try:
+        manifest = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, ValueError):
+        problems.add("manifest_invalid", "the staged manifest is not one JSON object with unique keys")
+        problems.emit()
+        return 1
+    if not isinstance(manifest, dict) or sorted(manifest) != sorted(MODULE_MANIFEST_KEYS):
+        problems.add("manifest_fields", "the staged manifest must carry exactly the candidate manifest fields")
+        problems.emit()
+        return 1
+    check_module_manifest(args, manifest, jar, jar_name, problems)
     _, plugin = inspect_primary(jar, args.version, problems)
     if plugin.get("api-version") != MODULE_API_LEVEL:
         problems.add("plugin_api_version_mismatch", "plugin.yml api-version is not %s" % MODULE_API_LEVEL)
@@ -1539,7 +1732,7 @@ def cmd_module_ref_sha(args):
 
 def catalogue_call(path):
     """GET one catalogue API path; return (status, data). 404/409 are answers; anything else non-200 errors."""
-    status, body = https_get(CATALOGUE_API + path, 4 << 20)
+    status, body = https_get(CATALOGUE_API + path, 4 << 20, "api.ultikits.com")
     if status not in (200, 404, 409):
         raise FetchError("catalogue answered HTTP %d" % status)
     try:
@@ -1579,7 +1772,8 @@ def catalogue_latest(plugin_id, level630):
 def download_sha256(link):
     if not isinstance(link, str) or not link.startswith("https://"):
         raise FetchError("served download link is not https")
-    status, body = https_get(link, 256 << 20)
+    # The configured catalogue's HTTPS response selects its storage host, not an event input.
+    status, body = https_get(link, 256 << 20, urllib.parse.urlsplit(link).hostname)
     if status != 200:
         raise FetchError("served download answered HTTP %d" % status)
     return sha256_bytes(body)

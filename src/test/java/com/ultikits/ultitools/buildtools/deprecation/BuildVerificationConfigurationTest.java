@@ -231,7 +231,7 @@ class BuildVerificationConfigurationTest {
     @Test
     void centralPublishesTheRetainedFilesWithoutABuild() throws IOException {
         assertThat(calls(workflowRuns("publish-packages.yml", "publish-central")))
-                .containsExactly("-B -v | sed -n 's/^Maven home: //p')\"", "-B -f \"$RETAINED_POM\" \\");
+                .containsExactly("-B -v | sed -n 's/^Maven home: //p')\"", "-B -f \"$PROJECT_POM\" \\");
     }
 
     @Test

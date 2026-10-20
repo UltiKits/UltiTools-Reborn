@@ -85,6 +85,8 @@
                     <flattenMode>ossrh</flattenMode>
                     <pomElements>
                         <dependencies>remove</dependencies>
+                        <!-- Keeps the published POM identical in shape to the 6.2.5 POM on Maven Central. -->
+                        <repositories>remove</repositories>
                     </pomElements>
                 </configuration>
                 <executions>

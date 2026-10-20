@@ -18,15 +18,17 @@ Standard library only.
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent
+REPO_ROOT = SCRIPTS.parent.parent
+REAL_MVN = shutil.which("mvn")
 RELEASE_SH = SCRIPTS / "release.sh"
 HELPER = SCRIPTS / "release_artifacts.py"
 REAL_GIT = shutil.which("git")
@@ -40,8 +42,10 @@ PRIMARY = "UltiTools-API-%s.jar" % VERSION
 POM = "UltiTools-API-%s.pom" % VERSION
 SOURCES = "UltiTools-API-%s-sources.jar" % VERSION
 JAVADOC = "UltiTools-API-%s-javadoc.jar" % VERSION
+# The POM for GitHub Packages, whose coordinate is the lower-case com.ultikits:ultitools-api.
+GHP_POM = "UltiTools-API-%s-github-packages.pom" % VERSION
 MANIFEST = "UltiTools-API-%s-release-manifest.json" % VERSION
-PAYLOADS = (JAVADOC, SOURCES, PRIMARY, POM)
+PAYLOADS = (JAVADOC, SOURCES, PRIMARY, POM, GHP_POM)
 
 POM_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
@@ -50,6 +54,8 @@ POM_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <groupId>com.ultikits</groupId>
     <version>{version}</version>
     <packaging>jar</packaging>
+    <dependencies><dependency><groupId>fixture</groupId><artifactId>shaded</artifactId>
+        <version>1</version><scope>compile</scope></dependency></dependencies>
 </project>
 """
 
@@ -103,6 +109,8 @@ if "verify" in argv:
     jar("UltiTools-API-%s-sources.jar" % version, sources)
     jar("UltiTools-API-%s-javadoc.jar" % version,
         [("index.html", b"<html></html>"), ("com/ultikits/ultitools/UltiTools.html", b"<html></html>")])
+    # The publication POM the real flatten-maven-plugin made from this tree's pom.xml (see real_flattened_pom).
+    shutil.copyfile(os.environ["FAKE_FLATTENED_POM"], str(root / ".flattened-pom.xml"))
     if variant == "dirty-tree":
         with open(str(root / "pom.xml"), "a") as fh:
             fh.write("<!-- rewritten by the build -->\n")
@@ -282,6 +290,36 @@ def sha256_file(path):
     return sha256_bytes(Path(path).read_bytes())
 
 
+_REAL_FLATTENED = {}
+
+
+def real_flattened_pom():
+    """Run the real flatten-maven-plugin, as this tree's pom.xml configures it, offline on that pom.xml at the
+    release version; return the flattened bytes. Cached per process. A run that cannot flatten fails."""
+    if "pom" not in _REAL_FLATTENED:
+        raw = (REPO_ROOT / "pom.xml").read_bytes()
+        pom, count = re.subn(rb"<version>[^<]+</version>", ("<version>%s</version>" % VERSION).encode(), raw, count=1)
+        if count != 1:
+            raise AssertionError("pom.xml has no project version to pin")
+        work = Path(tempfile.mkdtemp(prefix="real-flatten-"))
+        try:
+            (work / "pom.xml").write_bytes(pom)
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(Path.home()), "LANG": "C.UTF-8"}
+            if os.environ.get("JAVA_HOME"):
+                env["JAVA_HOME"] = os.environ["JAVA_HOME"]
+            proc = subprocess.run([REAL_MVN or "mvn", "-o", "-B", "-q",
+                                   "org.codehaus.mojo:flatten-maven-plugin:flatten"], cwd=str(work), env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+            flattened = work / ".flattened-pom.xml"
+            if proc.returncode != 0 or not flattened.is_file():
+                raise AssertionError("BLOCKED: the real flatten-maven-plugin did not run offline:\n"
+                                     + proc.stdout.decode("utf-8", "replace")[-2000:])
+            _REAL_FLATTENED["pom"] = flattened.read_bytes()
+        finally:
+            shutil.rmtree(str(work), ignore_errors=True)
+    return _REAL_FLATTENED["pom"]
+
+
 class ReleaseFixture(object):
     """A temporary framework checkout, its local bare origin and the fake tools."""
 
@@ -296,6 +334,8 @@ class ReleaseFixture(object):
         self.receipts = self.root / "receipts"
         for path in (self.bin, self.home, self.gh_state, self.receipts):
             path.mkdir(parents=True)
+        self.flattened = self.root / "real-flattened-pom.xml"
+        self.flattened.write_bytes(real_flattened_pom())
         self.log.write_text("")
         for name, source in (("mvn", FAKE_MVN), ("gh", FAKE_GH), ("git", FAKE_GIT)):
             exe = self.bin / name
@@ -311,6 +351,7 @@ class ReleaseFixture(object):
             "FAKE_LOG": str(self.log),
             "FAKE_GH_STATE": str(self.gh_state),
             "FAKE_ORIGIN": str(self.origin),
+            "FAKE_FLATTENED_POM": str(self.flattened),
             "REAL_GIT": REAL_GIT,
             "GIT_ALLOW_PROTOCOL": "file",
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -324,7 +365,7 @@ class ReleaseFixture(object):
         self.git_raw("init", "-q", "-b", "main", str(self.work), cwd=self.root)
         self.git_raw("remote", "add", "origin", REPO_URL)
         self.git_raw("config", "url.file://%s.insteadOf" % self.origin, REPO_URL)
-        (self.work / ".gitignore").write_text("target/\n")
+        (self.work / ".gitignore").write_text("target/\n.flattened-pom.xml\n")
         (self.work / "src/main/resources").mkdir(parents=True)
         (self.work / "src/main/resources/plugin.yml").write_text(PLUGIN_YML)
         self.commit_pom(PRIOR, "release " + PRIOR)
@@ -420,7 +461,7 @@ class ReleaseFixture(object):
         primary_sha = manifest["sha256"]
         head = manifest["source_head"]
         text = response_text or ("Question: publish UltiTools-API 6.3.0 exactly as prepared?\n"
-                                 "Answer: publish these exact four files.\n")
+                                 "Answer: publish these exact five files.\n")
         response = self.receipts / "response-framework-publish.txt"
         response.write_text(text)
         evidence = self.receipts / "evidence.txt"
@@ -438,7 +479,7 @@ class ReleaseFixture(object):
         authority = {
             "schema": "phase21-authority/1", "evidence_state": "observed", "action": "framework-publish",
             "repo": REPO, "question": "Publish UltiTools-API 6.3.0 exactly as prepared?", "decision": "publish",
-            "response_decision_quote": "publish these exact four files",
+            "response_decision_quote": "publish these exact five files",
             "human_response": {"path": response.name, "sha256": sha256_file(response),
                                "received_at": "2026-10-19T00:00:00Z"},
             "scope": scope,
@@ -541,7 +582,15 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertEqual((self.retain / PRIMARY).read_bytes(), (target / PRIMARY).read_bytes())
         self.assertEqual((self.retain / SOURCES).read_bytes(), (target / SOURCES).read_bytes())
         self.assertEqual((self.retain / JAVADOC).read_bytes(), (target / JAVADOC).read_bytes())
-        self.assertEqual((self.retain / POM).read_bytes(), (self.fx.work / "pom.xml").read_bytes())
+        retained_pom = (self.retain / POM).read_bytes()
+        self.assertEqual(retained_pom, (self.fx.work / ".flattened-pom.xml").read_bytes())
+        self.assertNotEqual(retained_pom, (self.fx.work / "pom.xml").read_bytes())
+        self.assertNotIn(b"<dependencies>", retained_pom)
+        # GitHub Packages gets the flattened POM with only the project artifactId lower-cased.
+        lower = retained_pom.replace(b"<artifactId>UltiTools-API</artifactId>",
+                                     b"<artifactId>ultitools-api</artifactId>")
+        self.assertNotEqual(lower, retained_pom)
+        self.assertEqual((self.retain / GHP_POM).read_bytes(), lower)
         self.assertEqual(self.fx.gh_writes(), [])
         self.assertIsNone(self.fx.release_assets())
         self.assertEqual(self.fx.git_raw("tag", "-l", TAG), "")
@@ -564,7 +613,7 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertEqual(manifest["sha256"], sha256_file(self.retain / PRIMARY))
         self.assertEqual(manifest["bytes"], (self.retain / PRIMARY).stat().st_size)
         roles = {a["role"]: a for a in manifest["artifacts"]}
-        self.assertEqual(sorted(roles), ["javadoc", "pom", "primary", "sources"])
+        self.assertEqual(sorted(roles), ["github-packages-pom", "javadoc", "pom", "primary", "sources"])
         self.assertEqual([a["filename"] for a in manifest["artifacts"]], sorted(PAYLOADS))
         for artifact in manifest["artifacts"]:
             path = self.retain / artifact["filename"]
@@ -699,14 +748,38 @@ class EdgeHandoffTests(HandoffTestCase):
         manifest, authority, uat = self.approved()
         pom = self.retain / POM
         pom.chmod(0o644)
-        pom.write_bytes(pom.read_bytes().replace(b"<packaging>jar</packaging>", b"<packaging>jar</packaging> "))
+        data = pom.read_bytes()
+        changed = data.replace(b"</description>", b" </description>", 1)
+        self.assertNotEqual(changed, data)
+        pom.write_bytes(changed)
         self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "sha256_mismatch")
 
-    def test_pom_rewritten_consistently_still_differs_from_source(self):
+    def test_github_packages_pom_differing_beyond_the_artifact_id_is_refused(self):
+        # Synthetic refusal fixture: one extra byte in the lower-case POM, with the manifest and receipts
+        # recomputed so only the derivation check can catch it.
+        manifest, _, _ = self.approved()
+        pom = self.retain / GHP_POM
+        pom.chmod(0o644)
+        changed = pom.read_bytes().replace(b"</description>", b" </description>", 1)
+        pom.write_bytes(changed)
+
+        def mutate(m):
+            for artifact in m["artifacts"]:
+                if artifact["role"] == "github-packages-pom":
+                    artifact["bytes"] = len(changed)
+                    artifact["sha256"] = sha256_bytes(changed)
+        rewrite_manifest(manifest, mutate)
+        authority, uat = self.fx.write_receipts(manifest)
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "github_packages_pom_mismatch")
+
+    def test_retained_compile_dependency_is_refused_even_with_consistent_receipts(self):
         manifest, _, _ = self.approved()
         pom = self.retain / POM
         pom.chmod(0o644)
-        changed = pom.read_bytes().replace(b"<modelVersion>", b"<!-- edited --><modelVersion>")
+        changed = pom.read_bytes().replace(b"</project>", b"<dependencies><dependency>"
+                                           b"<groupId>fixture</groupId><artifactId>shaded</artifactId>"
+                                           b"<version>1</version><scope>compile</scope>"
+                                           b"</dependency></dependencies></project>")
         pom.write_bytes(changed)
 
         def mutate(m):
@@ -716,7 +789,7 @@ class EdgeHandoffTests(HandoffTestCase):
                     artifact["sha256"] = sha256_bytes(changed)
         rewrite_manifest(manifest, mutate)
         authority, uat = self.fx.write_receipts(manifest)
-        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "pom_not_source_bytes")
+        self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "pom_publication_section")
 
     def test_detached_signature_may_be_added_but_payloads_stay_exact(self):
         manifest, authority, uat = self.approved()
@@ -806,7 +879,7 @@ class EdgeHandoffTests(HandoffTestCase):
 
     def test_tampered_retained_response_blocks(self):
         manifest, authority, uat = self.approved()
-        (self.fx.receipts / "response-framework-publish.txt").write_text("Answer: publish these exact four files. "
+        (self.fx.receipts / "response-framework-publish.txt").write_text("Answer: publish these exact five files. "
                                                                          "Also anything else.\n")
         self.assert_blocked_without_writes(self.publish(manifest, authority, uat), "evidence_sha256_mismatch")
 

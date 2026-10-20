@@ -31,6 +31,7 @@ No test contacts a network service, publishes anything or reads a credential. St
 """
 
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -42,7 +43,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as element_tree
 import zipfile
 from pathlib import Path
 
@@ -68,6 +69,87 @@ PAYLOADS = {"primary": BASE + ".jar", "pom": BASE + ".pom", "sources": BASE + "-
             "javadoc": BASE + "-javadoc.jar"}
 MANIFEST = BASE + "-release-manifest.json"
 SIGNED = (PAYLOADS["pom"], PAYLOADS["primary"], PAYLOADS["sources"], PAYLOADS["javadoc"])
+# The POM for GitHub Packages (coordinate com.ultikits:ultitools-api): retained and released, never signed or
+# sent to Central. PAYLOADS stays the four files Central publishes.
+GHP_POM = BASE + "-github-packages.pom"
+RETAINED = list(PAYLOADS.values()) + [GHP_POM]
+
+
+class ReleaseValidationTests(unittest.TestCase):
+    """Publication shape and URL trust checks must run before any upload or network read."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("release_validation_helper", HELPER)
+        cls.helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.helper)
+
+    def publication_codes(self, raw):
+        problems = self.helper.Problems()
+        self.helper.inspect_pom(raw, VERSION, problems, publication=True)
+        return [code for code, _ in problems.items]
+
+    def test_real_flatten_output_of_this_tree_has_the_published_shape(self):
+        # A pom.xml change that alters the flattened POM's shape turns this red before any release.
+        self.assertEqual(self.publication_codes(real_flattened_pom_bytes()), [])
+
+    def test_synthetic_extra_or_missing_top_level_elements_are_refused(self):
+        real = real_flattened_pom_bytes()
+        for section in ("dependencies", "dependencyManagement", "repositories", "pluginRepositories", "profiles",
+                        "distributionManagement", "properties", "packaging", "scm"):
+            with self.subTest(extra=section):
+                raw = real.replace(b"</project>", ("<%s/></project>" % section).encode("ascii"))
+                self.assertIn("pom_publication_section", self.publication_codes(raw))
+        missing = re.sub(rb"\s*<scm>.*?</scm>", b"", real, flags=re.S)
+        self.assertIn("pom_publication_section", self.publication_codes(missing))
+
+    def test_synthetic_build_other_than_the_publisher_extension_is_refused(self):
+        real = real_flattened_pom_bytes()
+        plugin = re.search(rb"<plugin>.*?</plugin>", real, flags=re.S).group(0)
+        variants = {
+            "extra-plugin": real.replace(plugin, plugin + b"<plugin><groupId>x</groupId><artifactId>y</artifactId>"
+                                         b"<version>1</version><extensions>true</extensions></plugin>"),
+            "configuration": real.replace(b"</extensions>", b"</extensions><configuration/>"),
+            "not-extension": real.replace(b"<extensions>true</extensions>", b"<extensions>false</extensions>"),
+            "other-plugin": real.replace(b"central-publishing-maven-plugin", b"maven-deploy-plugin"),
+            "extra-build-element": real.replace(b"</plugins>", b"</plugins><resources/>"),
+        }
+        for name, raw in variants.items():
+            with self.subTest(variant=name):
+                self.assertNotEqual(raw, real)
+                self.assertIn("pom_publication_build", self.publication_codes(raw))
+
+    def test_source_pom_is_not_a_publication_pom(self):
+        self.assertIn("pom_publication_section", self.publication_codes(fixture_pom_bytes()))
+
+    def test_local_release_xml_refuses_dtds_and_entities(self):
+        for raw in (b'<!DOCTYPE project><project/>', b'<!ENTITY x "y"><project/>'):
+            with self.subTest(raw=raw):
+                with self.assertRaises(element_tree.ParseError):
+                    self.helper.parse_release_xml(raw)
+                with self.assertRaises(ValueError):
+                    parse_local_pom(raw)
+
+    def test_https_host_refuses_foreign_hosts_and_local_file_schemes(self):
+        for url in ("file:///tmp/release", "http://repo1.maven.org/file",
+                    "https://foreign.invalid/file", "https://repo1.maven.org.foreign.invalid/file",
+                    "https://user@repo1.maven.org/file", "https://repo1.maven.org:8080/file"):
+            with self.subTest(url=url):
+                with self.assertRaises(self.helper.FetchError):
+                    self.helper.check_https_host(url, "repo1.maven.org")
+        self.helper.check_https_host("https://repo1.maven.org/file", "repo1.maven.org")
+
+    def test_required_ci_runs_all_release_suites_after_verify(self):
+        workflow = WorkflowParser((WORKFLOWS / "maven-ci.yml").read_text(encoding="utf-8")).parse()
+        steps = workflow["jobs"]["test"]["steps"]
+        command = "python3 -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v"
+        suites = [index for index, step in enumerate(steps) if step.get("run") == command]
+        builds = [index for index, step in enumerate(steps) if step.get("run") == "mvn -B clean verify"]
+        self.assertEqual(len(suites), 1)
+        self.assertEqual(len(builds), 1)
+        self.assertLess(builds[0], suites[0])
+        self.assertNotIn("if", steps[suites[0]])
+        self.assertNotIn("continue-on-error", steps[suites[0]])
 
 
 # ------------------------------------------------------------------ workflow parsing
@@ -525,12 +607,21 @@ def repository_file(group, artifact, version, extension):
         artifact, version, extension))
 
 
+def parse_local_pom(data):
+    """Read local Maven metadata, refusing DTD and entity declarations before parsing."""
+    if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+        raise ValueError("a local POM must not declare DTDs or entities")
+    parser = element_tree.XMLParser()
+    parser.feed(data)
+    return parser.close()
+
+
 def pom_model(group, artifact, version, depth=0):
     """(properties, dependencies) of a POM in the local repository, with parent properties merged."""
     path = repository_file(group, artifact, version, "pom")
     if depth > 6 or not path.is_file():
         return {}, []
-    root = ET.fromstring(path.read_bytes())
+    root = parse_local_pom(path.read_bytes())
     properties = {}
     parent = root.find("m:parent", POM_NS)
     if parent is not None:
@@ -596,12 +687,38 @@ def blocked_reason():
 
 
 def fixture_pom_bytes():
-    """The real framework pom.xml at the release version; the retained POM is pom.xml at source_head."""
+    """The real source POM, committed separately from the publication fixture."""
     raw = (REPO_ROOT / "pom.xml").read_bytes()
     pom, count = re.subn(rb"<version>[^<]+</version>", ("<version>%s</version>" % VERSION).encode(), raw, count=1)
     if count != 1:
         raise AssertionError("pom.xml has no project version to pin")
     return pom
+
+
+_REAL_FLATTENED = {}
+
+
+def real_flattened_pom_bytes():
+    """The publication POM the real build makes: flatten-maven-plugin, as pom.xml configures it, run offline on
+    this tree's pom.xml at the fixture version. Cached per process; a run that cannot flatten fails, never skips."""
+    if "pom" not in _REAL_FLATTENED:
+        work = Path(tempfile.mkdtemp(prefix="real-flatten-"))
+        try:
+            (work / "pom.xml").write_bytes(fixture_pom_bytes())
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(Path.home()), "LANG": "C.UTF-8"}
+            if os.environ.get("JAVA_HOME"):
+                env["JAVA_HOME"] = os.environ["JAVA_HOME"]
+            proc = run_maven_respecting_gate([REAL_MVN or "mvn", "-o", "-B", "-q",
+                                              "-Dmaven.repo.local=%s" % local_repository(),
+                                              "org.codehaus.mojo:flatten-maven-plugin:flatten"], env, work)
+            flattened = work / ".flattened-pom.xml"
+            if proc.returncode != 0 or not flattened.is_file():
+                raise AssertionError("BLOCKED: the real flatten-maven-plugin did not run offline:\n"
+                                     + proc.stdout.decode("utf-8", "replace")[-2000:])
+            _REAL_FLATTENED["pom"] = flattened.read_bytes()
+        finally:
+            shutil.rmtree(str(work), ignore_errors=True)
+    return _REAL_FLATTENED["pom"]
 
 
 def zip_bytes(entries):
@@ -661,16 +778,22 @@ def flip_byte(path, offset=None):
 
 
 def flip_pom_comment(path):
-    """Change one letter inside the first XML comment, so the POM still parses but its bytes differ."""
+    """Change one letter inside the first XML comment (or, in a comment-free flattened POM, inside the
+    description), so the POM still parses and keeps its shape but its bytes differ."""
     data = bytearray(Path(path).read_bytes())
-    start = data.index(b"<!--") + 4
-    for offset in range(start, data.index(b"-->", start)):
+    if b"<!--" in data:
+        start = data.index(b"<!--") + 4
+        end = data.index(b"-->", start)
+    else:
+        start = data.index(b"<description>") + len(b"<description>")
+        end = data.index(b"</description>", start)
+    for offset in range(start, end):
         if chr(data[offset]).isalpha():
             data[offset] = ord("Q") if data[offset] != ord("Q") else ord("Z")
             os.chmod(str(path), 0o644)
             Path(path).write_bytes(bytes(data))
             return
-    raise AssertionError("the POM comment has no letter to change")
+    raise AssertionError("the POM has no letter to change")
 
 
 class ReleaseFixture(object):
@@ -695,7 +818,7 @@ class ReleaseFixture(object):
         self.git("commit", "-q", "-m", "base")
         self.git("tag", "v" + PRIOR)
         self.base_head = self.git("rev-parse", "HEAD")
-        (self.checkout / ".gitignore").write_text("target/\n", encoding="utf-8")
+        (self.checkout / ".gitignore").write_text("target/\n.flattened-pom.xml\n", encoding="utf-8")
         (self.checkout / "pom.xml").write_bytes(fixture_pom_bytes())
         # The workflow runs scripts from its checkout. A product file that does not exist yet is copied as
         # missing, so the run itself fails instead of the fixture.
@@ -708,6 +831,7 @@ class ReleaseFixture(object):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "candidate")
         self.head = self.git("rev-parse", "HEAD")
+        (self.checkout / ".flattened-pom.xml").write_bytes(real_flattened_pom_bytes())
         target = self.checkout / "target"
         target.mkdir()
         (target / PAYLOADS["primary"]).write_bytes(zip_bytes([
@@ -745,10 +869,10 @@ class ReleaseFixture(object):
         return proc.stdout.decode("utf-8").strip()
 
     def make_inputs(self, dest, signed=True):
-        """What a publish job downloads from the release: the five retained assets, writable, then signed."""
+        """What a publish job downloads from the release: the six retained assets, writable, then signed."""
         dest = Path(dest)
         dest.mkdir(parents=True)
-        for name in list(PAYLOADS.values()) + [MANIFEST]:
+        for name in RETAINED + [MANIFEST]:
             shutil.copyfile(str(self.retained / name), str(dest / name))
         if signed:
             for name in SIGNED:
@@ -826,9 +950,16 @@ class CentralInputsTests(unittest.TestCase):
         proc, values = self.fixture.central_inputs(inputs, work, scratch)
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
         self.assertEqual(sorted(values), ["DEFERRED_DIR", "HELPER_JAR", "HELPER_JAR_SHA256", "OUTPUT_DIR",
-                                          "PROPERTIES", "RETAINED_POM", "SIGNER_FINGERPRINT", "STAGING_DIR",
-                                          "VERSION"])
+                                          "PROJECT_POM", "PROPERTIES", "RETAINED_POM", "SIGNER_FINGERPRINT",
+                                          "STAGING_DIR", "VERSION"])
         self.assertEqual(values["RETAINED_POM"], str(inputs / PAYLOADS["pom"]))
+        # Maven reads the project model from the verified source POM; the flattened POM is what is uploaded.
+        project_pom = Path(values["PROJECT_POM"])
+        self.assertEqual(project_pom, work / "project-model" / "pom.xml")
+        self.assertEqual(project_pom.read_bytes(), (self.fixture.checkout / "pom.xml").read_bytes())
+        self.assertNotEqual(project_pom.read_bytes(), (inputs / PAYLOADS["pom"]).read_bytes())
+        self.assertIn(b"central-publishing-maven-plugin", project_pom.read_bytes())
+        self.assertNotIn(b"<dependencies>", (inputs / PAYLOADS["pom"]).read_bytes())
         self.assertEqual(values["VERSION"], VERSION)
         self.assertEqual([values["STAGING_DIR"], values["DEFERRED_DIR"], values["OUTPUT_DIR"]],
                          [str(scratch / "staging"), str(scratch / "deferred"), str(scratch / "output")])
@@ -836,10 +967,13 @@ class CentralInputsTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
         props = read_properties(values["PROPERTIES"])
         self.assertEqual(stat.S_IMODE(Path(values["PROPERTIES"]).stat().st_mode), 0o600)
-        self.assertEqual(props["format"], "ultitools-retained-artifacts/1")
+        self.assertEqual(props["format"], "ultitools-retained-artifacts/2")
         self.assertEqual((props["group_id"], props["artifact_id"], props["version"], props["packaging"],
                           props["count"]), ("com.ultikits", "UltiTools-API", VERSION, "jar", "8"))
-        self.assertEqual(len(props), 6 + 8 * 6)
+        self.assertEqual(len(props), 6 + 3 + 8 * 6)
+        model = project_pom.read_bytes()
+        self.assertEqual((props["project_pom.file"], props["project_pom.bytes"], props["project_pom.sha256"]),
+                         (str(project_pom), str(len(model)), sha256_bytes(model)))
         for index, (role, kind, classifier, name) in enumerate(LAYOUT, 1):
             prefix = "artifact.%d." % index
             self.assertEqual((props[prefix + "role"], props[prefix + "type"], props[prefix + "classifier"]),
@@ -863,7 +997,7 @@ class CentralInputsTests(unittest.TestCase):
         self.assertEqual(digests(inputs), before)
         self.assertRegex(values["SIGNER_FINGERPRINT"], r"^[0-9A-F]{40,64}$")
 
-    def test_each_refusal_happens_before_anything_is_created(self):
+    def signature_refusal_cases(self):
         fixture = self.fixture
 
         def remove_signature(c):
@@ -883,6 +1017,15 @@ class CentralInputsTests(unittest.TestCase):
             os.unlink(str(c["inputs"] / (PAYLOADS["primary"] + ".asc")))
             sign(fixture.gnupg, c["inputs"] / PAYLOADS["primary"], uid=ReleaseFixture.SIGNER, armor=False)
 
+        return (("remove_signature", remove_signature, "inputs_listing"),
+                 ("extra_file", extra_file, "inputs_listing"),
+                 ("wrong_signature", wrong_signature, "signature_invalid"),
+                 ("other_signer", other_signer, "signature_signer"),
+                 ("binary_signature", binary_signature, "signature_format"))
+
+    def payload_refusal_cases(self):
+        fixture = self.fixture
+
         def payload_byte(c):
             flip_byte(c["inputs"] / PAYLOADS["primary"])
 
@@ -895,6 +1038,12 @@ class CentralInputsTests(unittest.TestCase):
         def tag_version(c):
             c["args"]["--tag"] = "v" + PRIOR
 
+        return (("payload_byte", payload_byte, "sha256_mismatch"),
+                 ("pom_byte", pom_byte, "sha256_mismatch"),
+                 ("head_mismatch", head_mismatch, "source_head_mismatch"),
+                 ("tag_version", tag_version, "tag_mismatch"))
+
+    def path_refusal_cases(self):
         def scratch_inside_inputs(c):
             c["args"]["--scratch-dir"] = str(c["inputs"] / "scratch")
 
@@ -926,16 +1075,7 @@ class CentralInputsTests(unittest.TestCase):
             os.unlink(str(c["inputs"] / PAYLOADS["javadoc"]))
             os.symlink(str(target), str(c["inputs"] / PAYLOADS["javadoc"]))
 
-        cases = (("remove_signature", remove_signature, "inputs_listing"),
-                 ("extra_file", extra_file, "inputs_listing"),
-                 ("wrong_signature", wrong_signature, "signature_invalid"),
-                 ("other_signer", other_signer, "signature_signer"),
-                 ("binary_signature", binary_signature, "signature_format"),
-                 ("payload_byte", payload_byte, "sha256_mismatch"),
-                 ("pom_byte", pom_byte, "sha256_mismatch"),
-                 ("head_mismatch", head_mismatch, "source_head_mismatch"),
-                 ("tag_version", tag_version, "tag_mismatch"),
-                 ("scratch_inside_inputs", scratch_inside_inputs, "path_overlap"),
+        return (("scratch_inside_inputs", scratch_inside_inputs, "path_overlap"),
                  ("work_is_scratch", work_is_scratch, "path_overlap"),
                  ("work_inside_inputs", work_inside_inputs, "path_overlap"),
                  ("scratch_exists", scratch_exists, "scratch_dir_exists"),
@@ -943,6 +1083,9 @@ class CentralInputsTests(unittest.TestCase):
                  ("maven_config", maven_config, "maven_config_dir"),
                  ("no_maven", no_maven, "maven_home"),
                  ("linked_payload", linked_payload, "file_not_regular"))
+    def test_each_refusal_happens_before_anything_is_created(self):
+        fixture = self.fixture
+        cases = self.signature_refusal_cases() + self.payload_refusal_cases() + self.path_refusal_cases()
         for name, mutate, code in cases:
             with self.subTest(case=name):
                 case = self.case_dir(name)
@@ -1320,7 +1463,7 @@ class ActualCentralHandoffTests(unittest.TestCase):
     def tagged(result, tag):
         return [line[len(tag) + 1:] for line in result["lines"] if line.startswith(tag + " ")]
 
-    def assert_handoff(self, result, inputs, scratch, text):
+    def assert_handoff(self, result, inputs, scratch, project_pom, text):
         self.assertTrue(result["result"] and result["result"].startswith("STAGED_AND_BUNDLED "), text)
         self.assertIn("REGISTRAR com.ultikits.release.RetainedArtifactsParticipant", result["lines"])
         # First-project initialization cleaned every seeded work directory.
@@ -1348,6 +1491,11 @@ class ActualCentralHandoffTests(unittest.TestCase):
             self.assertEqual(sidecar, retained[STAGED_DIR + name])
         bundled = dict(line.rsplit(" ", 1) for line in self.tagged(result, "BUNDLED"))
         self.assertEqual(bundled, staged, "the bundle differs from the staged repository layout")
+        # The uploaded POM is the retained flattened POM, never the source POM Maven read the model from.
+        published_pom = bundled[STAGED_DIR + PAYLOADS["pom"]]
+        self.assertEqual(published_pom, sha256_file(inputs / PAYLOADS["pom"]),
+                         "the bundled POM is not the retained one")
+        self.assertNotEqual(published_pom, sha256_file(project_pom), "the source POM was bundled for upload")
 
     def test_actual_plugin_handoff_cleans_scratch_keeps_inputs_and_retries(self):
         case = self.case_dir("handoff")
@@ -1360,11 +1508,11 @@ class ActualCentralHandoffTests(unittest.TestCase):
             for sub in ("staging", "deferred", "output"):
                 (scratch / sub).mkdir()
                 (scratch / sub / "SENTINEL").write_text("seeded before the publisher ran\n", encoding="ascii")
-        results, text = self.probe([("handoff", first["PROPERTIES"], first["RETAINED_POM"], scratches[0]),
-                                    ("handoff", retry["PROPERTIES"], retry["RETAINED_POM"], scratches[1])],
+        results, text = self.probe([("handoff", first["PROPERTIES"], first["PROJECT_POM"], scratches[0]),
+                                    ("handoff", retry["PROPERTIES"], retry["PROJECT_POM"], scratches[1])],
                                    first["HELPER_JAR"])
-        for result, scratch in zip(results, scratches):
-            self.assert_handoff(result, inputs, scratch, text)
+        for result, scratch, values in zip(results, scratches, (first, retry)):
+            self.assert_handoff(result, inputs, scratch, Path(values["PROJECT_POM"]), text)
         self.assertEqual(digests(inputs), before, "a retained input or signature changed or disappeared")
         print("ACTUAL_CENTRAL_HANDOFF_OK")
         sys.stdout.flush()
@@ -1375,7 +1523,7 @@ class ActualCentralHandoffTests(unittest.TestCase):
         before = digests(inputs)
         values = self.prepare(inputs, case, "control")
         scratch = Path(values["STAGING_DIR"]).parent
-        results, text = self.probe([("unregistered", "-", values["RETAINED_POM"], scratch)], values["HELPER_JAR"])
+        results, text = self.probe([("unregistered", "-", values["PROJECT_POM"], scratch)], values["HELPER_JAR"])
         self.assertEqual(results[0]["result"],
                          "COLLECT_REFUSED The packaging for this project did not assign a file to the build artifact",
                          text)
@@ -1388,7 +1536,7 @@ class ActualCentralHandoffTests(unittest.TestCase):
         inputs = self.fixture.make_inputs(case / "inputs")
         values = self.prepare(inputs, case, "base")
         good = Path(values["PROPERTIES"]).read_text(encoding="ascii")
-        pom = values["RETAINED_POM"]
+        pom = values["PROJECT_POM"]
         scenarios, expected = [], []
 
         def add(label, properties, pom_file, code):
@@ -1411,22 +1559,22 @@ class ActualCentralHandoffTests(unittest.TestCase):
                 flip_pom_comment(folder / name)
             else:
                 flip_byte(folder / name)
-            add("byte-%s" % role, props, folder / PAYLOADS["pom"], "sha256_mismatch")
+            add("byte-%s" % role, props, pom, "sha256_mismatch")
         folder, props = copy_inputs("short")
         data = (folder / (PAYLOADS["javadoc"] + ".asc")).read_bytes()
         (folder / (PAYLOADS["javadoc"] + ".asc")).write_bytes(data[:-1])
-        add("short", props, folder / PAYLOADS["pom"], "bytes_mismatch")
+        add("short", props, pom, "bytes_mismatch")
         folder, props = copy_inputs("link")
         shutil.copyfile(str(folder / PAYLOADS["primary"]), str(case / "primary-elsewhere.jar"))
         os.unlink(str(folder / PAYLOADS["primary"]))
         os.symlink(str(case / "primary-elsewhere.jar"), str(folder / PAYLOADS["primary"]))
-        add("link", props, folder / PAYLOADS["pom"], "entry_file")
+        add("link", props, pom, "entry_file")
         extra = case / "props-extra"
         extra.write_text(good + "unexpected=1\n", encoding="ascii")
         add("extra-key", extra, pom, "properties_keys")
         missing = case / "props-missing"
-        missing.write_text("".join(l + "\n" for l in good.splitlines() if not l.startswith("artifact.8.sha256=")),
-                           encoding="ascii")
+        missing.write_text("".join(line + "\n" for line in good.splitlines()
+                                   if not line.startswith("artifact.8.sha256=")), encoding="ascii")
         add("missing-key", missing, pom, "properties_keys")
         other_version = case / "props-version"
         other_version.write_text(good.replace("version=%s\n" % VERSION, "version=6.3.1\n"), encoding="ascii")
@@ -1444,14 +1592,36 @@ class ActualCentralHandoffTests(unittest.TestCase):
         add("folder", split, pom, "entry_folder")
         foreign_pom_dir = case / "foreign-pom"
         foreign_pom_dir.mkdir()
-        shutil.copyfile(pom, str(foreign_pom_dir / PAYLOADS["pom"]))
-        add("pom-not-project-file", values["PROPERTIES"], foreign_pom_dir / PAYLOADS["pom"], "pom_not_project_file")
+        shutil.copyfile(pom, str(foreign_pom_dir / "pom.xml"))
+        add("pom-not-project-file", values["PROPERTIES"], foreign_pom_dir / "pom.xml", "pom_not_project_file")
+        model_copy = case / "model-byte"
+        model_copy.mkdir()
+        shutil.copyfile(pom, str(model_copy / "pom.xml"))
+        flip_pom_comment(model_copy / "pom.xml")
+        model_byte = case / "props-model-byte"
+        model_byte.write_text(good.replace("project_pom.file=%s\n" % pom, "project_pom.file=%s\n" % (
+            model_copy / "pom.xml")), encoding="ascii")
+        add("project-model-byte", model_byte, model_copy / "pom.xml", "sha256_mismatch")
+        # Synthetic refusal fixture: a project model without a build. With it the publisher would skip
+        # cleaning its scratch directories, so the registrar refuses it.
+        no_build_dir = case / "synthetic-no-build-model"
+        no_build_dir.mkdir()
+        no_build = no_build_dir / "pom.xml"
+        no_build.write_bytes(re.sub(rb"\s*<build>.*?</build>", b"", Path(values["RETAINED_POM"]).read_bytes(),
+                                    flags=re.S))
+        no_build_props = case / "props-synthetic-no-build-model"
+        no_build_props.write_text("".join(line + "\n" for line in good.splitlines()
+                                          if not line.startswith("project_pom.")) +
+                                  "project_pom.file=%s\nproject_pom.bytes=%d\nproject_pom.sha256=%s\n" % (
+                                      no_build, no_build.stat().st_size, sha256_file(no_build)),
+                                  encoding="ascii")
+        add("synthetic-no-build-model", no_build_props, no_build, "publisher_not_declared")
         add("unset", "-", pom, "properties_missing")
         snapshot_dir = case / "snapshot-pom"
         snapshot_dir.mkdir()
-        (snapshot_dir / PAYLOADS["pom"]).write_bytes(Path(pom).read_bytes().replace(
+        (snapshot_dir / "pom.xml").write_bytes(Path(pom).read_bytes().replace(
             ("<version>%s</version>" % VERSION).encode(), ("<version>%s-SNAPSHOT</version>" % VERSION).encode(), 1))
-        add("snapshot-project", values["PROPERTIES"], snapshot_dir / PAYLOADS["pom"], "project_identity")
+        add("snapshot-project", values["PROPERTIES"], snapshot_dir / "pom.xml", "project_identity")
         linked = case / "list-link"
         os.symlink(values["PROPERTIES"], str(linked))
         add("linked-list", linked, pom, "properties_file")
@@ -1490,7 +1660,7 @@ class ActualCentralHandoffTests(unittest.TestCase):
                 env["JAVA_HOME"] = os.environ["JAVA_HOME"]
             return run_maven_respecting_gate(argv, env, case)
 
-        accepted = maven(values["PROPERTIES"], values["HELPER_JAR"], values["RETAINED_POM"])
+        accepted = maven(values["PROPERTIES"], values["HELPER_JAR"], values["PROJECT_POM"])
         out = accepted.stdout.decode("utf-8", "replace")
         self.assertIn("[retained-artifacts] assigned %s and 6 attachments" % PAYLOADS["primary"], out)
         self.assertIn("Goal requires online mode for execution but Maven is currently offline", out)
@@ -1504,7 +1674,7 @@ class ActualCentralHandoffTests(unittest.TestCase):
         props = case / "mutated.properties"
         props.write_text(Path(values["PROPERTIES"]).read_text(encoding="ascii").replace(
             str(inputs) + "/", str(mutated) + "/"), encoding="ascii")
-        refused = maven(props, values["HELPER_JAR"], mutated / PAYLOADS["pom"])
+        refused = maven(props, values["HELPER_JAR"], values["PROJECT_POM"])
         out = refused.stdout.decode("utf-8", "replace")
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn("retained-artifacts refused: sha256_mismatch", out)
@@ -1711,7 +1881,7 @@ def assert_private_agent(env):
 
 
 class PublishWorkflowFixture(object):
-    """One release event: the accepted checkout, a release carrying the five retained assets, a fake GitHub
+    """One release event: the accepted checkout, a release carrying the six retained assets, a fake GitHub
     Packages store and a fake Maven Central, and fresh runner directories for each job."""
 
     def __init__(self, release, root):
@@ -1723,7 +1893,7 @@ class PublishWorkflowFixture(object):
         self.log = self.root / "fake-log.jsonl"
         assets = self.state / "release-assets"
         assets.mkdir()
-        for name in list(PAYLOADS.values()) + [MANIFEST]:
+        for name in RETAINED + [MANIFEST]:
             shutil.copyfile(str(release.retained / name), str(assets / name))
         (self.state / "central").mkdir()
         shim = self.root / "python_shim.py"
@@ -1845,13 +2015,18 @@ class PublishWorkflowTests(unittest.TestCase):
         argv = deploys[0]["argv"]
         for expected in ("-DgroupId=com.ultikits", "-DartifactId=ultitools-api", "-Dversion=" + VERSION,
                          "-Dpackaging=jar", "-Dfile=%s" % (gh_inputs / PAYLOADS["primary"]),
-                         "-DpomFile=%s" % (gh_inputs / PAYLOADS["pom"]), "-DgeneratePom=false",
+                         "-DpomFile=%s" % (gh_inputs / GHP_POM), "-DgeneratePom=false",
                          "-DrepositoryId=github", "-Durl=https://maven.pkg.github.com/UltiKits/UltiTools-Reborn"):
             self.assertIn(expected, argv)
         self.assertTrue(deploys[0]["credentials"]["GITHUB_TOKEN"])
         ghp = self.fixture.state / "ghp"
         self.assertEqual(sha256_file(ghp / ("ultitools-api-%s.jar" % VERSION)), self.retained_digest(PAYLOADS["primary"]))
-        self.assertEqual(sha256_file(ghp / ("ultitools-api-%s.pom" % VERSION)), self.retained_digest(PAYLOADS["pom"]))
+        uploaded_pom = ghp / ("ultitools-api-%s.pom" % VERSION)
+        self.assertEqual(sha256_file(uploaded_pom), self.retained_digest(GHP_POM))
+        # The uploaded POM names the coordinate it is uploaded to, or Gradle rejects the module metadata.
+        root = parse_local_pom(uploaded_pom.read_bytes())
+        self.assertEqual((root.findtext("m:groupId", "", POM_NS), root.findtext("m:artifactId", "", POM_NS),
+                          root.findtext("m:version", "", POM_NS)), ("com.ultikits", "ultitools-api", VERSION))
         ghp_reads = [e for e in self.fixture.entries("https") if "maven.pkg.github.com" in e["url"]]
         self.assertTrue(ghp_reads and all(e["auth"] and not e["auth_redirected"] for e in ghp_reads), ghp_reads)
         self.assertTrue(any(e["status"] == 200 for e in ghp_reads), "GitHub Packages was not read back")
@@ -1860,7 +2035,8 @@ class PublishWorkflowTests(unittest.TestCase):
         self.assertEqual(len(publishes), 1, central.log)
         central_inputs = central.runner / "retained-inputs"
         argv = publishes[0]["argv"]
-        self.assertEqual(argv[argv.index("-f") + 1], str(central_inputs / PAYLOADS["pom"]))
+        self.assertEqual(argv[argv.index("-f") + 1],
+                         str(central.runner / "central-helper" / "project-model" / "pom.xml"))
         joined = "\n".join(argv)
         self.assertRegex(joined, r"(?m)^-Dmaven\.ext\.class\.path=%s/.+\.jar$" % re.escape(str(central.runner)))
         self.assertRegex(joined, r"(?m)^-DretainedArtifacts\.properties=%s/.+$" % re.escape(str(central.runner)))
@@ -1879,6 +2055,7 @@ class PublishWorkflowTests(unittest.TestCase):
         self.assertEqual(digests(published), expected)
         for name in PAYLOADS.values():
             self.assertEqual(expected[name], self.retained_digest(name))
+        for name in RETAINED:
             self.assertEqual(sha256_file(gh_inputs / name), self.retained_digest(name))
         verify = subprocess.run([REAL_GPG, "--homedir", str(self.fixture.gnupg), "--batch",
                                  "--verify", str(central_inputs / (PAYLOADS["primary"] + ".asc")),
@@ -1898,13 +2075,17 @@ class PublishWorkflowTests(unittest.TestCase):
         def mutate_pom(assets):
             flip_pom_comment(assets / PAYLOADS["pom"])
 
+        def mutate_github_packages_pom(assets):
+            flip_pom_comment(assets / GHP_POM)
+
         def mutate_manifest(assets):
             path = assets / MANIFEST
             os.chmod(str(path), 0o644)
             path.write_bytes(path.read_bytes().replace(b'"schema_version": 1', b'"schema_version": 1 '))
 
         for label, mutate in (("remove_sources", remove_sources), ("mutate_primary", mutate_primary),
-                              ("mutate_pom", mutate_pom), ("mutate_manifest", mutate_manifest)):
+                              ("mutate_pom", mutate_pom), ("mutate_github_packages_pom", mutate_github_packages_pom),
+                              ("mutate_manifest", mutate_manifest)):
             with self.subTest(case=label):
                 fixture = PublishWorkflowFixture(self.release, tempfile.mkdtemp(prefix="wf-" + label, dir=self.tmp))
                 self.fixture = fixture
@@ -1934,7 +2115,7 @@ class PublishWorkflowTests(unittest.TestCase):
         ghp = self.fixture.state / "ghp"
         ghp.mkdir()
         shutil.copyfile(str(self.release.retained / PAYLOADS["primary"]), str(ghp / ("ultitools-api-%s.jar" % VERSION)))
-        shutil.copyfile(str(self.release.retained / PAYLOADS["pom"]), str(ghp / ("ultitools-api-%s.pom" % VERSION)))
+        shutil.copyfile(str(self.release.retained / GHP_POM), str(ghp / ("ultitools-api-%s.pom" % VERSION)))
         github = self.fixture.run("publish-github")
         self.assertEqual(github.status, "success", github.log)
         self.assertEqual(self.fixture.mvn_goal_calls("deploy:deploy-file"), [])

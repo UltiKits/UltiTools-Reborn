@@ -57,10 +57,11 @@ jobs:
 
     - name: 📥 Download and verify the retained release files
       # Publication consumes the bytes that were accepted, never a new build. release.sh --prepare built
-      # one candidate and retained its primary JAR, POM, sources and javadoc JARs with a SHA-256 manifest;
+      # one candidate and retained its primary JAR, flattened POM, sources and javadoc JARs and the GitHub
+      # Packages POM derived from the flattened POM, with a SHA-256 manifest;
       # UAT and the maintainer accepted exactly those bytes, and release.sh --publish-approved attached
       # them to this release. A rebuild here would differ at least in ZIP timestamps, so its hash would
-      # no longer be the one UAT holds. This step downloads the five assets and checks the manifest, every
+      # no longer be the one UAT holds. This step downloads the six assets and checks the manifest, every
       # size and raw SHA-256, the source commit, tree and pom.xml bytes, and that the tag names the
       # accepted commit. Any missing or changed asset stops the job before anything is published.
       id: retained
@@ -74,17 +75,21 @@ jobs:
         mkdir "$INPUTS"
         gh release download "$GITHUB_REF_NAME" --dir "$INPUTS" \
           --pattern "${BASE}.jar" --pattern "${BASE}.pom" --pattern "${BASE}-sources.jar" \
-          --pattern "${BASE}-javadoc.jar" --pattern "${BASE}-release-manifest.json"
+          --pattern "${BASE}-javadoc.jar" --pattern "${BASE}-github-packages.pom" \
+          --pattern "${BASE}-release-manifest.json"
         python3 -I .github/scripts/release_artifacts.py validate \
           --manifest "$INPUTS/${BASE}-release-manifest.json" --source-checkout "$GITHUB_WORKSPACE" \
           --expected-source-head "$GITHUB_SHA" --tag "$GITHUB_REF_NAME"
         echo "inputs=$INPUTS" >> "$GITHUB_OUTPUT"
     - name: 📦 Publish the retained JAR and POM to GitHub Packages
-      # deploy:deploy-file uploads the retained JAR and the retained POM byte for byte (-DpomFile with
-      # -DgeneratePom=false): no POM is generated or rewritten. The coordinate keeps the lower-case
-      # artifactId ultitools-api this package has always used. The repository is read before and after:
-      # absent -> deploy, identical -> nothing to do, anything else (different bytes, a partial coordinate,
-      # an unreadable answer) fails the job and never overwrites. A failed deploy is a failure, not
+      # deploy:deploy-file uploads the retained JAR and the retained GitHub Packages POM byte for byte
+      # (-DpomFile with -DgeneratePom=false): no POM is generated or rewritten here. The coordinate keeps the
+      # lower-case artifactId ultitools-api this package has always used, and that retained POM is the
+      # flattened POM with only its project artifactId lower-cased to match it (Gradle refuses a POM whose
+      # artifactId differs from its coordinate); release_artifacts.py checks that derivation byte for byte.
+      # The repository is read before and after: absent -> deploy, identical -> nothing to do, anything
+      # else (different bytes, a partial coordinate, an unreadable answer) fails the job and never
+      # overwrites. A failed deploy is a failure, not
       # "probably already there"; only the read-back of identical bytes counts as published.
       id: publish-ghp
       env:
@@ -109,7 +114,7 @@ jobs:
             cd "$RUNNER_TEMP"
             mvn -B deploy:deploy-file -s "$SETTINGS" \
               -DgroupId=com.ultikits -DartifactId=ultitools-api -Dversion="$VERSION" -Dpackaging=jar \
-              -Dfile="$INPUTS/${BASE}.jar" -DpomFile="$INPUTS/${BASE}.pom" -DgeneratePom=false \
+              -Dfile="$INPUTS/${BASE}.jar" -DpomFile="$INPUTS/${BASE}-github-packages.pom" -DgeneratePom=false \
               -DrepositoryId=github -Durl="$REPOSITORY"
           )
           echo "result=published" >> "$GITHUB_OUTPUT"
@@ -196,10 +201,11 @@ jobs:
 
     - name: 📥 Download and verify the retained release files
       # Publication consumes the bytes that were accepted, never a new build. release.sh --prepare built
-      # one candidate and retained its primary JAR, POM, sources and javadoc JARs with a SHA-256 manifest;
+      # one candidate and retained its primary JAR, flattened POM, sources and javadoc JARs and the GitHub
+      # Packages POM derived from the flattened POM, with a SHA-256 manifest;
       # UAT and the maintainer accepted exactly those bytes, and release.sh --publish-approved attached
       # them to this release. A rebuild here would differ at least in ZIP timestamps, so its hash would
-      # no longer be the one UAT holds. This step downloads the five assets and checks the manifest, every
+      # no longer be the one UAT holds. This step downloads the six assets and checks the manifest, every
       # size and raw SHA-256, the source commit, tree and pom.xml bytes, and that the tag names the
       # accepted commit. Any missing or changed asset stops the job before anything is published.
       id: retained
@@ -213,7 +219,8 @@ jobs:
         mkdir "$INPUTS"
         gh release download "$GITHUB_REF_NAME" --dir "$INPUTS" \
           --pattern "${BASE}.jar" --pattern "${BASE}.pom" --pattern "${BASE}-sources.jar" \
-          --pattern "${BASE}-javadoc.jar" --pattern "${BASE}-release-manifest.json"
+          --pattern "${BASE}-javadoc.jar" --pattern "${BASE}-github-packages.pom" \
+          --pattern "${BASE}-release-manifest.json"
         python3 -I .github/scripts/release_artifacts.py validate \
           --manifest "$INPUTS/${BASE}-release-manifest.json" --source-checkout "$GITHUB_WORKSPACE" \
           --expected-source-head "$GITHUB_SHA" --tag "$GITHUB_REF_NAME"
@@ -260,7 +267,8 @@ jobs:
 
     - name: 🧩 Prepare the retained-artifact registrar
       # release_artifacts.py central-inputs re-checks the retained files, verifies the four signatures,
-      # writes a private list of the exact files (GAV, path, size, SHA-256, type, classifier) and compiles
+      # writes a private list of the exact files (GAV, path, size, SHA-256, type, classifier), a private copy of
+      # the verified source pom.xml as the project model, and compiles
       # only .github/scripts/maven/RetainedArtifactsParticipant.java against this Maven distribution into
       # an ephemeral helper JAR. No product source, POM or lifecycle is built. The helper directory and the
       # publisher's scratch directory are new and disjoint from the retained inputs.
@@ -283,16 +291,20 @@ jobs:
 
     - name: 📤 Publish the retained files to Maven Central
       # The existing central-publishing-maven-plugin is the only transport, invoked as a single goal on the
-      # retained POM; no clean/package/verify/deploy phase runs. The registrar, loaded as a core extension,
-      # assigns the retained primary JAR and attaches the sources and javadoc JARs and the four signatures;
-      # the retained POM is the project file and is staged unchanged. The plugin clears its scratch
-      # directories on the first project, which is why the retained inputs live elsewhere. The working
-      # directory is the runner's temporary directory, so no project configuration from the checkout is read.
+      # project model, a private copy (written by central-inputs outside the checkout) of the verified source
+      # pom.xml; no clean/package/verify/deploy phase runs. The plugin clears its scratch directories only for
+      # the first project whose build declares it, so the model is the source POM, whose build always does, and
+      # the registrar refuses a model that does not. The registrar, loaded as a core extension, then makes the
+      # retained flattened POM the project file,
+      # so that POM is what is staged and uploaded, unchanged; it assigns the retained primary JAR and attaches
+      # the sources and javadoc JARs and the four signatures. The scratch directories are cleared, which is why
+      # the retained inputs live elsewhere. The source POM's publisher configuration (server id, autoPublish,
+      # waitUntil) equals the command-line values below.
       if: steps.central-state.outputs.publish == 'true'
       env:
         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
         SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-        RETAINED_POM: ${{ steps.registrar.outputs.retained_pom }}
+        PROJECT_POM: ${{ steps.registrar.outputs.project_pom }}
         HELPER_JAR: ${{ steps.registrar.outputs.helper_jar }}
         PROPERTIES: ${{ steps.registrar.outputs.properties }}
         STAGING_DIR: ${{ steps.registrar.outputs.staging_dir }}
@@ -301,7 +313,7 @@ jobs:
       run: |
         set -euo pipefail
         cd "$RUNNER_TEMP"
-        mvn -B -f "$RETAINED_POM" \
+        mvn -B -f "$PROJECT_POM" \
           -Dmaven.ext.class.path="$HELPER_JAR" -DretainedArtifacts.properties="$PROPERTIES" \
           -DstagingDirectory="$STAGING_DIR" -DdeferredDirectory="$DEFERRED_DIR" -DoutputDirectory="$OUTPUT_DIR" \
           org.sonatype.central:central-publishing-maven-plugin:0.9.0:publish \
