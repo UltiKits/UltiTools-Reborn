@@ -1214,7 +1214,7 @@ To migrate to `abstracts.command.BaseCommandExecutor`:
 
 1. Change the superclass: `extends AbstractCommandExecutor` → `extends BaseCommandExecutor`.
 2. Implement the new abstract method `protected void handleHelp(CommandSender sender)`.
-3. Keep the command annotations, but review the [6.3.0 command changes](#other-command-and-task-runtime-changes-630-that-need-no-migration-period). In particular, a method-level `@CmdTarget` overrides the class value only by matching or narrowing it; widening or lateral overrides refuse the command class, rather than using the old executor's intersection rule.
+3. Keep the command annotations, but review the [6.3.0 `@CmdTarget` composition rule](compatibility/records/6.3.0.md#recorded-instance-cmdtarget-classmethod-composition-is-now-override-with-fail-on-widening-630). In particular, a method-level `@CmdTarget` overrides the class value only by matching or narrowing it; widening or lateral overrides refuse the command class, rather than using the old executor's intersection rule.
 4. The package-scanning overload `CommandManager.registerAll(UltiToolsPlugin, String)`, which cast each scanned
    class to `AbstractCommandExecutor`, was removed in 6.3.0. Commands resolve through the IoC container
    (`registerAll(UltiToolsPlugin)`), which accepts `BaseCommandExecutor`; nothing beyond steps 1-3 is needed unless

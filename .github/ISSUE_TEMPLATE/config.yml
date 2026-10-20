@@ -4,7 +4,7 @@ contact_links:
     url: https://github.com/wisdommen/UltiTools
     about: 旧版本仓库，即将归档
   - name: 自主排错 Troubleshoot
-    url: https://ultikits.com/troubleshoot.html
+    url: https://doc.ultikits.com/en/guide/essentials/troubleshoot
     about: 根据我们提供的自主排错步骤，也许能够解决一些您的问题
   - name: 官方文档 Wiki
     url: https://doc.ultikits.com/

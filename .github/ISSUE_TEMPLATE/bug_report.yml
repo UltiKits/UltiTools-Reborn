@@ -5,9 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        非常感谢你来反馈该插件的BUG！但是在此之前请先确认你遇到的问题确实是一个BUG，按照[自主排错](https://ultikits.com/troubleshoot.html)的步骤也许能够解决你遇到的问题
-        Reproduce the problem on the [latest release](https://github.com/UltiKits/UltiTools-Reborn/releases/latest) before reporting; state explicitly if you are testing a 6.3.0 build.
-        请先在最新正式版复现；测试 6.3.0 构建时请明确说明。5.x 的历史源码见[旧仓库](https://github.com/wisdommen/UltiTools)。
+        Before reporting, follow the [troubleshooting guide](https://doc.ultikits.com/en/guide/essentials/troubleshoot) to check whether it resolves the problem.
+        Reproduce the problem on the [latest release](https://github.com/UltiKits/UltiTools-Reborn/releases/latest) before reporting; state explicitly if you are testing an unreleased build.
+        请先参考自主排错指南并在最新正式版复现；测试未发布构建时请明确说明。5.x 的历史源码见[旧仓库](https://github.com/wisdommen/UltiTools)。
   - type: textarea
     id: the-problem
     attributes:

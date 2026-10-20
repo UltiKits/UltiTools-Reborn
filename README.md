@@ -102,7 +102,7 @@ Building an UltiTools module is the best way to develop with UltiTools-API. Modu
 
 - **One-click updates** — Server admins can update your module directly from the UltiTools panel, no manual JAR swapping
 - **Built-in marketplace** — Publish to [UltiCloud](https://panel.ultikits.com) and let users discover, install, and manage your module from a central catalog
-- **Hot reload** — Modules can be loaded and unloaded at runtime without restarting the server
+- **Managed module lifecycle** — Install and update modules through UPM; changes take effect at the next server start
 - **Shared infrastructure** — Database connections, config management, and i18n are handled by the framework; your module stays small and focused
 - **Inter-module communication** — Publish and subscribe to events across modules with the built-in EventBus
 
@@ -219,7 +219,7 @@ public class HomeCommand extends BaseCommandExecutor {
     }
 
     @CmdMapping(format = "set <name>")
-    public void setHome(@CmdSender Player player, @CmdParam("name") String name) {
+    public void setHome(@CmdSender Player player, @CmdParam("name") String name) throws IllegalAccessException {
         homeService.setHome(player, name, player.getLocation());
         player.sendMessage("Home set!");
     }
@@ -257,15 +257,27 @@ public class HomeService {
         }
     }
 
-    public void setHome(Player player, String name, Location location) {
-        HomeEntity home = new HomeEntity();
-        home.setPlayerId(player.getUniqueId().toString());
-        home.setName(name);
+    public void setHome(Player player, String name, Location location) throws IllegalAccessException {
+        DataOperator<HomeEntity> homes = plugin.getDataOperator(HomeEntity.class);
+        HomeEntity home = homes.query()
+            .where("player_id").eq(player.getUniqueId().toString())
+            .and("name").eq(name)
+            .first();
+        boolean isNew = home == null;
+        if (isNew) {
+            home = new HomeEntity();
+            home.setPlayerId(player.getUniqueId().toString());
+            home.setName(name);
+        }
         home.setWorld(location.getWorld().getName());
         home.setX(location.getX());
         home.setY(location.getY());
         home.setZ(location.getZ());
-        plugin.getDataOperator(HomeEntity.class).insert(home);
+        if (isNew) {
+            homes.insert(home);
+        } else {
+            homes.update(home);
+        }
     }
 
     public List<HomeEntity> getHomes(Player player) {
@@ -302,8 +314,9 @@ public void pay(@CmdSender Player sender, @CmdParam("player") String target, @Cm
 > **Migrating from `AbstractCommandExecutor`.** The older base class and its misspelled
 > `AbstractCommendExecutor` shim are removed in **6.3.0**. Extend
 > `abstracts.command.BaseCommandExecutor` and implement the abstract
-> `handleHelp(CommandSender)`. Step-by-step migration instructions and the full 6.3.0 removal list
-> are in [`COMPATIBILITY.md`](COMPATIBILITY.md).
+> `handleHelp(CommandSender)`. Step-by-step migration instructions are in
+> [`COMPATIBILITY.md`](COMPATIBILITY.md); the full 6.3.0 removal list is in
+> [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
 
 ### IoC Container with `@Autowired`
 Spring-like dependency injection with three-level cache for circular dependency resolution.
@@ -454,7 +467,7 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 - **GUI Framework** — Inventory GUIs with pagination via ObliviateInvs, plus a declarative reactive GUI system
 - **i18n** — Built-in internationalization with `i18n("key")`
-- **Hot Module Loading** — Load/unload plugin modules without server restart
+- **Module Management** — Install and update modules through UPM; changes take effect at the next server start
 - **WebSocket + UltiPanel** — Remote server management (commands, files, monitoring, logs)
 - **Module JAR Validation** — 100 MB / 10,000-entry limits; no class-name sandbox. Install only modules you trust
 - **Remote Access Guards** — Path traversal protection, editable roots, capabilities and command blocklists

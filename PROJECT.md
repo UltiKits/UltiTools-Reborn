@@ -27,8 +27,9 @@
   `@Deprecated(since=…, forRemoval=…)` is a Java 9+ construct). Adding `<release>8</release>` breaks the
   build. Practically: avoid `var` and records, but do not assume a real JDK 8 compiles this.
 - **Runtime dependency model:** Paper is the only declared server API (`paper-api`, `provided` scope).
-  Paper auto-downloads the `libraries:` entries declared in `src/main/resources/plugin.yml`; other
-  dependencies, including XSeries, are also `provided` and are not bundled unless explicitly shaded.
+  Paper auto-downloads the `libraries:` entries declared in `src/main/resources/plugin.yml`, including
+  XSeries (`provided`, not bundled). `obliviate-invs` and `UniversalScheduler` use Maven's default
+  `compile` scope and are bundled by maven-shade-plugin.
   Plain Spigot is not supported. The server floor is Paper 1.19.2 build 163; use Java 17 below Paper
   1.20.5 and Java 21 from Paper 1.20.5 (see `COMPATIBILITY.md`).
 - **Downstream:** consumer plugin modules declare `com.ultikits:UltiTools-API` at `provided` scope. Bumping
