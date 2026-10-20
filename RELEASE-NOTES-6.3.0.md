@@ -157,7 +157,7 @@ remain unchanged.
 `UltiCloudRequests` sends `POST /auth/magic-link` and `GET /auth/magic-link/poll` with the server
 credential. Poll by `requestId`, not player UUID; UUID-only polling is no longer supported.
 Handle `NOT_CONNECTED` without retrying anonymously, and call the helper off the primary thread.
-The [cloud-login guide](https://dev.ultikits.com/guide/advanced/cloud-login) documents this contract.
+The [authenticated request contract](COMPATIBILITY.md#ulticloudrequests-authenticated-ulticloud-requests-on-a-modules-behalf) documents the helper API and failure handling.
 
 ### Other remote changes
 

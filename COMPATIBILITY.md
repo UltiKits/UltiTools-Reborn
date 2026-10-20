@@ -1035,8 +1035,9 @@ This document no longer carries the table itself — three artifacts now split t
 - **This document** — policy: what removal means, when an API becomes eligible, the same-release
   exception, and permanent lessons.
 - [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md) — the generated, cumulative
-  registry: every deprecated/announced/removed member, its `since`, its replacement, and its
-  status.
+  registry: every deprecated/announced/removed member, its `since`, its recorded replacement, and its
+  status. Removed entries retain historical replacement text; a replacement named there may itself
+  have been removed later. Use the per-change record below for the current migration target.
 - [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md) — the 6.3.0 cycle's
   behavioural record: what each removal actually deletes, its replacement, and — per this
   document's own downstream-diagnostic design — exactly what an un-recompiled downstream JAR
@@ -1203,16 +1204,17 @@ something.
 
 ## Migrating off `AbstractCommandExecutor`
 
-`abstracts.AbstractCommandExecutor` was the only removed API in 6.3.0 with real downstream users
+The command-removal survey found real downstream users of `abstracts.AbstractCommandExecutor`
 (15 files across 6 repositories, measured). It has been removed, ahead of those repositories' own
-publication — see [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md) for the full
+publication. Other 6.3.0 removals also affect downstream users; see
+[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md) for each removal's impact,
 reasoning and the maintainer's decision to proceed.
 
 To migrate to `abstracts.command.BaseCommandExecutor`:
 
 1. Change the superclass: `extends AbstractCommandExecutor` → `extends BaseCommandExecutor`.
 2. Implement the new abstract method `protected void handleHelp(CommandSender sender)`.
-3. `@CmdMapping` / `@CmdParam` / `@CmdTarget` / `@CmdCD` / `@UsageLimit` keep their semantics.
+3. Keep the command annotations, but review the [6.3.0 command changes](#other-command-and-task-runtime-changes-630-that-need-no-migration-period). In particular, a method-level `@CmdTarget` overrides the class value only by matching or narrowing it; widening or lateral overrides refuse the command class, rather than using the old executor's intersection rule.
 4. The package-scanning overload `CommandManager.registerAll(UltiToolsPlugin, String)`, which cast each scanned
    class to `AbstractCommandExecutor`, was removed in 6.3.0. Commands resolve through the IoC container
    (`registerAll(UltiToolsPlugin)`), which accepts `BaseCommandExecutor`; nothing beyond steps 1-3 is needed unless

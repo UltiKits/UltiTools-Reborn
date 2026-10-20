@@ -6,8 +6,8 @@ body:
     attributes:
       value: |
         非常感谢你来反馈该插件的BUG！但是在此之前请先确认你遇到的问题确实是一个BUG，按照[自主排错](https://ultikits.com/troubleshoot.html)的步骤也许能够解决你遇到的问题
-        仅接受6.0.0或更高版本的问题反馈，旧版本请先升级后尝试复现问题，仍存在问题再打开 Issue
-        旧版本 (5.2.1) 请前往 [旧仓库](https://github.com/wisdommen/UltiTools) 反馈问题 (即将不受支持)
+        Reproduce the problem on the [latest release](https://github.com/UltiKits/UltiTools-Reborn/releases/latest) before reporting; state explicitly if you are testing a 6.3.0 build.
+        请先在最新正式版复现；测试 6.3.0 构建时请明确说明。5.x 的历史源码见[旧仓库](https://github.com/wisdommen/UltiTools)。
   - type: textarea
     id: the-problem
     attributes:
@@ -22,10 +22,9 @@ body:
       label: 插件版本
       description: 你现在正在使用的插件版本
       options:
-        - 6.0.1
-        - 6.0.0
-        - 5.x 版本请到旧仓库提交 Issue
-        - 这边建议先更新一下插件版本再看看有没有问题
+        - 6.3.0
+        - 6.2.5
+        - Other (specify the exact version in the description) / 其他版本（请在描述中填写完整版本）
     validations:
       required: true
   - type: input
