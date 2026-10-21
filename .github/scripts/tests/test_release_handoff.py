@@ -471,7 +471,8 @@ class ReleaseFixture(object):
         primary_sha = manifest["sha256"]
         head = manifest["source_head"]
         text = response_text or ("Question: publish UltiTools-API 6.3.0 exactly as prepared?\n"
-                                 "Answer: publish these exact five files.\n")
+                                 "Answer: publish these exact five files.\n"
+                                 "Accepted blocked UAT rows: row-a, row-b, row-c.\n")
         response = self.receipts / "response-framework-publish.txt"
         response.write_text(text)
         evidence = self.receipts / "evidence.txt"
@@ -947,6 +948,210 @@ class EdgeHandoffTests(HandoffTestCase):
                 self.fx.log.write_text("")
                 authority, uat = self.fx.write_receipts(manifest, uat_overrides=top, gate_overrides=gates)
                 self.assert_blocked_without_writes(self.publish(manifest, authority, uat), code)
+
+    def validate_receipts(self, manifest, authority, uat):
+        result = self.fx.run_helper("validate", "--manifest", str(manifest),
+                                    "--authority-receipt", str(authority), "--uat-receipt", str(uat))
+        result.stdout += result.stderr
+        return result
+
+    def test_cross_family_gate_names(self):
+        manifest, _, _ = self.approved()
+        for names, error in ((["opus-review"], None), (["codex-review"], None),
+                             (["codex-review", "opus-review"], None),
+                             ([], "uat_gate_missing: codex-review|opus-review"),
+                             (["unknown"], "uat_gate_invalid"),
+                             (["codex-review", "codex-review"], "uat_gate_invalid"),
+                             (["opus-review", "opus-review"], "uat_gate_invalid")):
+            with self.subTest(names=names):
+                authority, uat = self.fx.write_receipts(manifest)
+                data = json.loads(uat.read_text())
+                review = next(g for g in data["gates"] if g["gate"] == "codex-review")
+                data["gates"] = [g for g in data["gates"] if g["gate"] != "codex-review"]
+                data["gates"].extend(dict(review, gate=name) for name in names)
+                uat.write_text(json.dumps(data))
+                result = self.validate_receipts(manifest, authority, uat)
+                if error:
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn(error, result.stdout.decode())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+
+    def test_both_cross_family_reviews_validate_every_entry(self):
+        manifest, _, _ = self.approved()
+        for name in ("codex-review", "opus-review"):
+            for change, error in (({"head": "0" * 40}, "uat_stale"),
+                                  ({"evidence": {}}, "evidence_missing"),
+                                  ({"status": "blocked"}, "uat_gate_not_passed"),
+                                  ({"status": "quota-skipped"}, "uat_gate_not_passed"),
+                                  ({"status": "quota-skipped", "provider_message": "quota exhausted",
+                                    "provider_evidence": {}}, "evidence_missing"),
+                                  ({"evidence": {"path": "evidence.txt", "sha256": "0" * 64}},
+                                   "evidence_sha256_mismatch")):
+                with self.subTest(name=name, change=change):
+                    authority, uat = self.fx.write_receipts(manifest)
+                    data = json.loads(uat.read_text())
+                    review = next(g for g in data["gates"] if g["gate"] == "codex-review")
+                    data["gates"].append(dict(review, gate="opus-review"))
+                    next(g for g in data["gates"] if g["gate"] == name).update(change)
+                    uat.write_text(json.dumps(data))
+                    result = self.validate_receipts(manifest, authority, uat)
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn(error, result.stdout.decode())
+
+    def test_cross_family_quota_skip_requires_retained_provider_evidence(self):
+        manifest, _, _ = self.approved()
+        for name in ("codex-review", "opus-review"):
+            with self.subTest(name=name):
+                authority, uat = self.fx.write_receipts(manifest)
+                data = json.loads(uat.read_text())
+                review = next(g for g in data["gates"] if g["gate"] == "codex-review")
+                review.update(gate=name, status="quota-skipped", provider_message="provider reports quota exhausted",
+                              provider_evidence=review["evidence"])
+                uat.write_text(json.dumps(data))
+                result = self.validate_receipts(manifest, authority, uat)
+                self.assertEqual(result.returncode, 0, result.stdout.decode())
+
+    def test_blocked_uat_requires_exact_canonical_acceptance(self):
+        manifest, _, _ = self.approved()
+        rows = ["row-a", "row-b"]
+        cases = [(rows, rows, None), (rows, None, "uat_gate_not_passed"),
+                 (rows, rows + ["row-c"], "uat_acceptance_mismatch"),
+                 (rows, ["row-a"], "uat_acceptance_mismatch")]
+        for invalid in (["row-b", "row-a"], ["row-a", "row-a"], [], [1], [""], "row-a"):
+            cases.append((rows, invalid, "authority_scope"))
+            cases.append((invalid, rows, "uat_gate_not_passed"))
+        for blocked, accepted, error in cases:
+            with self.subTest(blocked=blocked, accepted=accepted):
+                scope = {} if accepted is None else {"accepted_blocked_uat_rows": accepted}
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides=scope,
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": blocked}})
+                result = self.validate_receipts(manifest, authority, uat)
+                if error:
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn(error, result.stdout.decode())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+                    result = self.publish(manifest, authority, uat, "--dry-run")
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn("Maintainer-accepted blocked UAT rows: 2", result.stdout.decode())
+                    self.assertEqual(self.fx.gh_writes(), [])
+                    self.assert_no_build()
+
+    def test_accepted_blocked_uat_keeps_all_safeguards(self):
+        manifest, _, _ = self.approved()
+        for gate, change, error in (
+                ("uat", {"artifact_sha256": "0" * 64}, "uat_stale"),
+                ("uat", {"independent": False}, "uat_not_independent"),
+                ("uat", {"saw_review_output": True}, "uat_not_independent"),
+                ("uat", {"release_authorized": True}, "release_authorized_not_false"),
+                ("uat", {"head": "0" * 40}, "uat_stale"),
+                ("uat", {"evidence": {}}, "evidence_missing"),
+                ("tests", {"status": "blocked"}, "uat_gate_not_passed")):
+            with self.subTest(gate=gate, change=change):
+                overrides = {"uat": {"status": "blocked", "blocked_rows": ["row-a"]}}
+                overrides.setdefault(gate, {}).update(change)
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]}, gate_overrides=overrides)
+                result = self.validate_receipts(manifest, authority, uat)
+                self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                self.assertIn(error, result.stdout.decode())
+
+    def test_non_uat_blocked_gate_cannot_use_uat_acceptance(self):
+        manifest, _, _ = self.approved()
+        for name in ("ci", "codacy", "own-review", "tests", "verification", "codex-review", "opus-review"):
+            for uat_status in ("pass", "blocked"):
+                with self.subTest(gate=name, uat_status=uat_status):
+                    authority, uat = self.fx.write_receipts(
+                        manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]},
+                        gate_overrides={"uat": {"status": uat_status, "blocked_rows": ["row-a"]}})
+                    data = json.loads(uat.read_text())
+                    if name == "opus-review":
+                        review = next(g for g in data["gates"] if g["gate"] == "codex-review")
+                        data["gates"].append(dict(review, gate=name))
+                    next(g for g in data["gates"] if g["gate"] == name).update(
+                        status="blocked", blocked_rows=["row-a"])
+                    uat.write_text(json.dumps(data))
+                    result = self.validate_receipts(manifest, authority, uat)
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn("uat_gate_not_passed", result.stdout.decode())
+
+    def test_accepted_rows_must_appear_in_retained_response(self):
+        manifest, _, _ = self.approved()
+        for response, error in (("publish these exact five files; row-a; row-b", None),
+                                ("publish these exact five files; row-a", "accepted_row_not_in_response"),
+                                ("publish these exact five files; ROW-A; row-b", "accepted_row_not_in_response")):
+            with self.subTest(response=response):
+                authority, uat = self.fx.write_receipts(
+                    manifest, response_text=response,
+                    scope_overrides={"accepted_blocked_uat_rows": ["row-a", "row-b"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a", "row-b"]}})
+                result = self.validate_receipts(manifest, authority, uat)
+                if error:
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn(error, result.stdout.decode())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+
+    def test_blocked_uat_cross_checks_optional_counts_and_rows(self):
+        manifest, _, _ = self.approved()
+        rows = [{"id": "row-a", "status": "blocked"}, {"id": "row-pass", "status": "pass"}]
+        cases = [({}, None), ({"counts": {"fail": 0, "blocked": 1, "pass": 1}, "rows": rows}, None),
+                 ({"counts": {"fail": 1, "blocked": 1}}, "uat_failed_rows"),
+                 ({"counts": {"fail": 0, "blocked": 2}}, "uat_blocked_count_mismatch"),
+                 ({"rows": rows + [{"id": "row-fail", "status": "fail"}]}, "uat_failed_rows"),
+                 ({"rows": [{"id": "row-b", "status": "blocked"}]}, "uat_blocked_rows_mismatch"),
+                 ({"rows": []}, "uat_blocked_rows_mismatch"),
+                 ({"counts": {}}, None), ({"counts": []}, "uat_counts_invalid"),
+                 ({"counts": {"fail": "0"}}, "uat_counts_invalid"),
+                 ({"counts": {"blocked": True}}, "uat_counts_invalid"),
+                 ({"rows": {}}, "uat_rows_invalid"), ({"rows": [None]}, "uat_rows_invalid"),
+                 ({"rows": [{"status": "blocked"}]}, "uat_blocked_rows_mismatch")]
+        for extra, error in cases:
+            with self.subTest(extra=extra):
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]},
+                    gate_overrides={"uat": dict(extra, status="blocked", blocked_rows=["row-a"])})
+                result = self.validate_receipts(manifest, authority, uat)
+                if error:
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn(error, result.stdout.decode())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+
+    def test_passing_uat_does_not_report_stale_accepted_rows(self):
+        manifest, _, _ = self.approved()
+        authority, uat = self.fx.write_receipts(
+            manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]})
+        result = self.publish(manifest, authority, uat, "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assertIn("Maintainer-accepted blocked UAT rows: 0", result.stdout.decode())
+        self.assertEqual(self.fx.gh_writes(), [])
+        self.assert_no_build()
+
+    def test_accepted_count_extraction_failure_stops_script(self):
+        manifest, authority, uat = self.approved()
+        python = self.fx.bin / "python3"
+        python.write_text("#!%s -I\nimport os, sys\n"
+                          "if '-c' in sys.argv:\n"
+                          "    sys.stderr.write('count extraction failed\\n')\n"
+                          "    sys.exit(73)\n"
+                          "os.execv(%r, [%r] + sys.argv[1:])\n" %
+                          (sys.executable, sys.executable, sys.executable))
+        python.chmod(0o755)
+        result = self.publish(manifest, authority, uat, "--dry-run")
+        self.assert_blocked_without_writes(result, "count extraction failed")
+        self.assertNotIn("Maintainer-accepted blocked UAT rows:", result.stdout.decode())
+        self.assertNotIn("not acceptance evidence", result.stdout.decode())
+        self.assert_no_build()
+
+    def test_unknown_authority_scope_is_refused(self):
+        manifest, _, _ = self.approved()
+        authority, uat = self.fx.write_receipts(manifest, scope_overrides={"unknown_permission": "anything"})
+        result = self.validate_receipts(manifest, authority, uat)
+        self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+        self.assertIn("authority_scope", result.stdout.decode())
 
     # ------------------------------------------------------------- adjacency
 
