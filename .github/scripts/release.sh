@@ -385,7 +385,9 @@ while IFS='=' read -r key value; do
         PRIMARY_SHA256)   PRIMARY_SHA256="$value" ;;
     esac
 done <<< "$FIELDS"
-echo "Maintainer-accepted blocked UAT rows: $(python3 -I -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["scope"].get("accepted_blocked_uat_rows", [])))' "$AUTHORITY_RECEIPT")"
+ACCEPTED_BLOCKED_UAT_COUNT="$(python3 -I -c 'import json,sys; uat=next(g for g in json.load(open(sys.argv[1]))["gates"] if g["gate"] == "uat"); print(len(uat["blocked_rows"]) if uat["status"] == "blocked" else 0)' "$UAT_RECEIPT")" \
+    || die "Could not read the validated blocked UAT row count; nothing was published."
+echo "Maintainer-accepted blocked UAT rows: $ACCEPTED_BLOCKED_UAT_COUNT"
 
 if [ "$LOCAL_SHA" != "$SOURCE_HEAD" ] || [ "$REMOTE_SHA" != "$SOURCE_HEAD" ]; then
     die "The accepted source is ${SOURCE_HEAD:0:12}, but ${RELEASE_BRANCH} is local ${LOCAL_SHA:0:12} / remote ${REMOTE_SHA:0:12}.

@@ -614,8 +614,16 @@ def check_authority_response(receipt, path, problems):
         except UnicodeDecodeError:
             decoded = None
             problems.add("response_not_utf8", "the retained response is not UTF-8 text")
-        if decoded is not None and (not isinstance(quote, str) or not quote.strip() or quote not in decoded):
-            problems.add("decision_not_in_response", "the decision quote must appear verbatim in the response")
+        if decoded is not None:
+            if not isinstance(quote, str) or not quote.strip() or quote not in decoded:
+                problems.add("decision_not_in_response", "the decision quote must appear verbatim in the response")
+            scope = receipt.get("scope")
+            rows = scope.get("accepted_blocked_uat_rows") if isinstance(scope, dict) else None
+            if isinstance(rows, list) and valid_row_ids(rows):
+                for row in rows:
+                    if row not in decoded:
+                        problems.add("accepted_row_not_in_response",
+                                     "accepted blocked UAT row %r must appear verbatim in the response" % row)
 
 
 def valid_row_ids(rows):
@@ -676,6 +684,32 @@ def check_authority(manifest, manifest_sha, path, problems):
     return receipt
 
 
+def check_blocked_uat_details(entry, problems):
+    """Cross-check optional row/count evidence without requiring it on older receipts."""
+    blocked = entry.get("blocked_rows")
+    if "counts" in entry:
+        counts = entry["counts"]
+        if not isinstance(counts, dict) or any(
+                key in counts and (type(counts[key]) is not int or counts[key] < 0)
+                for key in ("fail", "blocked")):
+            problems.add("uat_counts_invalid", "UAT counts must contain non-negative integer counts")
+        else:
+            if counts.get("fail", 0) != 0:
+                problems.add("uat_failed_rows", "blocked UAT must not contain failed rows")
+            if "blocked" in counts and valid_row_ids(blocked) and counts["blocked"] != len(blocked):
+                problems.add("uat_blocked_count_mismatch", "UAT counts.blocked must equal len(blocked_rows)")
+    if "rows" in entry:
+        rows = entry["rows"]
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            problems.add("uat_rows_invalid", "UAT rows must be a list of row objects")
+            return
+        if any(row.get("status") == "fail" for row in rows):
+            problems.add("uat_failed_rows", "blocked UAT must not contain failed rows")
+        actual = [row.get("id") for row in rows if row.get("status") == "blocked"]
+        if not all(isinstance(row, str) for row in actual) or sorted(actual) != blocked:
+            problems.add("uat_blocked_rows_mismatch", "blocked-status row ids must exactly match blocked_rows")
+
+
 def check_gate_evidence(gates, manifest, path, problems, accepted_rows=None):
     """Require all base gates and either review; only explicitly accepted UAT may be blocked."""
     base = Path(path).resolve().parent
@@ -702,6 +736,7 @@ def check_gate_evidence(gates, manifest, path, problems, accepted_rows=None):
                     problems.add("uat_gate_not_passed", "gate uat is 'blocked' without explicit valid row acceptance")
                 elif rows != accepted_rows:
                     problems.add("uat_acceptance_mismatch", "accepted blocked UAT rows must exactly match blocked_rows")
+                check_blocked_uat_details(entry, problems)
             if entry.get("head") != manifest["source_head"]:
                 problems.add("uat_stale", "gate %s ran on %r" % (name, entry.get("head")))
             check_retained_ref(entry.get("evidence"), base, problems, "gate %s evidence" % name)
