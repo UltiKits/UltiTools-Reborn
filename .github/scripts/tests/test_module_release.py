@@ -99,6 +99,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Publish retained draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -271,7 +272,8 @@ import json, os, sys
 STATE = os.environ["FAKE_STATE_DIR"]
 args = sys.argv[1:]
 with open(os.path.join(STATE, "calls.jsonl"), "a", encoding="utf-8") as fh:
-    fh.write(json.dumps({"tool": "npm", "argv": args}) + "\n")
+    fh.write(json.dumps({"tool": "npm", "argv": args,
+                         "github_tokens_present": any(k in os.environ for k in ("GH_TOKEN", "GITHUB_TOKEN"))}) + "\n")
 if args != ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "@ultikits/cli@1.2.0"]:
     sys.stderr.write("fake npm: only the pinned global install is modelled\n")
     sys.exit(96)
@@ -298,7 +300,8 @@ STATE = os.environ["FAKE_STATE_DIR"]
 args = sys.argv[1:]
 with open(os.path.join(STATE, "calls.jsonl"), "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"tool": "ultikits", "argv": args, "cwd": os.getcwd(),
-                         "token_present": bool(os.environ.get("ULTIKITS_TOKEN"))}) + "\n")
+                         "token_present": bool(os.environ.get("ULTIKITS_TOKEN")),
+                         "github_tokens_present": any(k in os.environ for k in ("GH_TOKEN", "GITHUB_TOKEN"))}) + "\n")
 if not os.path.exists(os.path.join(STATE, "cli-installed")):
     sys.stderr.write("ultikits: command not found (the CLI was never installed)\n")
     sys.exit(127)
@@ -328,12 +331,28 @@ while i < len(rest):
         sys.exit(96)
 if not os.environ.get("ULTIKITS_TOKEN") or "--id" not in opts or "--module-version" not in opts:
     sys.exit(1)
+cpath = os.path.join(STATE, "catalogue.json")
+cat = json.load(open(cpath, encoding="utf-8"))
+version = opts["--module-version"]
+def record_step(step):
+    with open(os.path.join(STATE, "calls.jsonl"), "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"tool": "catalogue-write", "step": step, "version": version}) + "\n")
+record_step("create-version")
+existing = [v for v in cat["versions"] if v["version"] == version]
+if any(v.get("file") is not None for v in existing):
+    sys.stderr.write("Version already published\n")
+    sys.exit(1)
+# Backend contract: an owner may immediately re-create an unserved version. Public reads omit it.
+cat["versions"] = [v for v in cat["versions"] if v["version"] != version]
+cat["versions"].append({"version": version, "level": None, "file": None, "identify": opts["--id"]})
+json.dump(cat, open(cpath, "w", encoding="utf-8"), indent=2, sort_keys=True)
+record_step("token")  # The create-version response carries the upload token; there is no extra request.
+record_step("upload")
 if flags.get("upload_fail"):
     sys.stderr.write("Upload failed: HTTP 502\n")
     sys.exit(1)
-cpath = os.path.join(STATE, "catalogue.json")
-cat = json.load(open(cpath, encoding="utf-8"))
-name = "%s-%s.jar" % (opts["--id"], opts["--module-version"])
+cat["versions"] = [v for v in cat["versions"] if v["version"] != version]
+name = "%s-%s.jar" % (opts["--id"], version)
 data = open(jar, "rb").read()
 if flags.get("upload_corrupt"):
     data = data + b"corrupted in transit"
@@ -343,6 +362,17 @@ cat["versions"].append({"version": opts["--module-version"], "level": int(flags.
 if flags.get("upload_shadows_no_level"):
     cat["versions"].append({"version": "1.9.9", "level": 620, "file": name, "identify": opts["--id"]})
 json.dump(cat, open(cpath, "w", encoding="utf-8"), indent=2, sort_keys=True)
+if flags.get("github_asset_swap") or flags.get("github_tag_move"):
+    gpath = os.path.join(STATE, "github.json")
+    gh = json.load(open(gpath, encoding="utf-8"))
+    if flags.get("github_asset_swap"):
+        # Preserve size and asset identity: listing-only checks cannot detect this change.
+        apath = os.path.join(STATE, "assets", "11")
+        original = open(apath, "rb").read()
+        open(apath, "wb").write(bytes([original[0] ^ 1]) + original[1:])
+    if flags.get("github_tag_move"):
+        gh["tags"]["v" + opts["--module-version"]] = "e" * 40
+    json.dump(gh, open(gpath, "w", encoding="utf-8"), indent=2, sort_keys=True)
 print("Published %s@%s" % (opts["--id"], opts["--module-version"]))
 '''
 
@@ -360,7 +390,7 @@ args = sys.argv[1:]
 with open(os.path.join(os.environ["FAKE_STATE_DIR"], "calls.jsonl"), "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"tool": "git", "argv": args}) + "\n")
 rest = args[2:] if args[:1] == ["-C"] else args
-if not rest or rest[0] not in ("rev-parse", "cat-file", "merge-base"):
+if not rest or rest[0] not in ("rev-parse", "cat-file", "merge-base", "diff"):
     sys.stderr.write("guarded git: only read-only subcommands are allowed\n")
     sys.exit(95)
 os.execv({git!r}, [{git!r}] + args)
@@ -416,7 +446,8 @@ def route(url):
         return envelope(404, msg="Plugin not found")
     if not module or len(seg) < 3 or seg[0] != "plugin" or seg[1] != str(module["id"]):
         return envelope(404, msg="Plugin not found")
-    versions = cat["versions"]
+    # Unserved reservations are not published history, latest selections or downloadable versions.
+    versions = [v for v in cat["versions"] if v.get("file") is not None]
     level630 = query.get("apiLevel") == ["630"] and query.get("minApiLevel") == ["630"]
     def link(v):
         return "https://cdn.fixture.invalid/" + v["file"]
@@ -529,7 +560,10 @@ class PublishFixture(object):
         (self.checkout / "pom.xml").write_text(POM_TEMPLATE.format(version=self.version), encoding="utf-8")
         (self.checkout / "ultikits.json").write_text(json.dumps({"identifyString": self.identify,
                                                                  "name": "FixtureMod"}), encoding="utf-8")
-        self.git("add", "pom.xml", "ultikits.json")
+        (self.checkout / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [Unreleased]\n\nNot released.\n\n## [%s] - 2026-10-21\n\n"
+            "- Accepted release.\n\n## [%s]\n\n- Prior release.\n" % (self.version, PRIOR), encoding="utf-8")
+        self.git("add", "pom.xml", "ultikits.json", "CHANGELOG.md")
         self.git("commit", "-q", "-m", "accepted source")
         self.git("remote", "add", "origin", "https://github.com/%s.git" % REPO)
         self.head = self.git("rev-parse", "HEAD")
@@ -721,7 +755,8 @@ class TracerPublishTests(FixtureBase):
         argv = publishes[0]["argv"]
         jar_path = argv[1]
         self.assertEqual(Path(jar_path).name, self.f.jar_name, "positional exact basename, no wildcard")
-        self.assertEqual(argv[2:], ["--id", IDENTIFY, "--module-version", VERSION, "--yes"])
+        self.assertEqual(argv[2:], ["--id", IDENTIFY, "--module-version", VERSION, "--yes", "--changelog",
+                                    "## [%s] - 2026-10-21\n\n- Accepted release." % VERSION])
         self.assertTrue(publishes[0]["token_present"])
         served = self.f.catalogue()["versions"]
         self.assertEqual([v["version"] for v in served], [PRIOR, VERSION])
@@ -1177,7 +1212,7 @@ class FailClosedTests(FixtureBase):
 
     def test_changelog_text_is_passed_as_one_literal_argument(self):
         canary = self.f.root / "changelog-canary"
-        text = "## 2.0.0\n- $(touch %s) `touch %s`\n" % (canary, canary)
+        text = "## [2.0.0]\n- 更新 $(touch %s) `touch %s`\n" % (canary, canary)
         (self.f.runner / "notes.md").write_text(text, encoding="utf-8")
         status, out, err = self.f.run_adapter("--changelog-file", str(self.f.runner / "notes.md"))
         self.assertEqual(status, 0, msg=out + err)
@@ -1200,6 +1235,125 @@ class WrapperContractTests(unittest.TestCase):
         self.assertNotIn("${{", script)
         self.assertNotIn("inputs.", script)
         self.assertNotIn("github.event", script)
+
+
+class ProductPathRegressionTests(FixtureBase):
+    def advance(self, path, text):
+        target = self.f.checkout / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        self.f.git("add", path)
+        self.f.git("commit", "-q", "-m", "subsequent change")
+        head = self.f.git("rev-parse", "HEAD")
+        self.f.update_github(lambda g: g.update(default_head=head))
+        return head
+
+    def test_non_product_commit_keeps_the_retained_candidate_usable(self):
+        head = self.advance("README.md", "Documentation only.\n")
+        status, out, err = self.f.run_wrapper(GITHUB_SHA=head)
+        self.assertEqual(status, 0, out + err)
+        self.assertEqual(self.f.github()["tags"]["v" + VERSION], self.f.head)
+
+    def test_product_resource_addition_is_refused(self):
+        head = self.advance("src/main/resources/new.yml", "enabled: true\n")
+        self.assert_refused(self.f.run_wrapper(GITHUB_SHA=head), "product_tree_differs")
+
+    def test_product_pom_change_is_refused(self):
+        head = self.advance("pom.xml", POM_TEMPLATE.format(version="3.0.0"))
+        self.assert_refused(self.f.run_wrapper(GITHUB_SHA=head), "product_tree_differs")
+
+    def test_manifest_must_still_name_the_original_source_tree(self):
+        manifest = dict(self.f.manifest, product_tree="e" * 40)
+        raw = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
+        (self.f.state / "assets" / "12").write_bytes(raw)
+        self.f.write_event(dict(self.f.inputs, manifest_sha256=sha256_bytes(raw)))
+        self.assert_refused(self.f.run_wrapper(), "product_tree_mismatch")
+
+
+class ChangelogRegressionTests(FixtureBase):
+    def test_only_the_requested_version_section_is_passed(self):
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 0, out + err)
+        argv = self.f.publish_calls()[0]["argv"]
+        self.assertIn("--changelog", argv)
+        self.assertEqual(argv[argv.index("--changelog") + 1],
+                         "## [%s] - 2026-10-21\n\n- Accepted release." % VERSION)
+
+    def test_missing_section_refuses_before_install_or_write(self):
+        (self.f.checkout / "CHANGELOG.md").write_text("## [Unreleased]\n- Later.\n", encoding="utf-8")
+        self.assert_refused(self.f.run_wrapper(), "changelog_section_missing")
+
+    def test_missing_file_refuses_before_install_or_write(self):
+        (self.f.checkout / "CHANGELOG.md").unlink()
+        self.assert_refused(self.f.run_wrapper(), "changelog_unreadable")
+
+    def test_duplicate_version_sections_are_refused(self):
+        (self.f.checkout / "CHANGELOG.md").write_text(
+            "## [%s]\n- First.\n## [%s]\n- Second.\n" % (VERSION, VERSION), encoding="utf-8")
+        self.assert_refused(self.f.run_wrapper(), "changelog_section_ambiguous")
+
+
+class TokenAndReadbackRegressionTests(FixtureBase):
+    def test_install_and_all_cli_invocations_have_no_github_token(self):
+        status, out, err = self.f.run_wrapper(GITHUB_TOKEN="fixture-alternate-github-token")
+        self.assertEqual(status, 0, out + err)
+        calls = self.f.calls("npm") + self.f.calls("ultikits")
+        self.assertEqual(len(calls), 4)
+        for call in calls:
+            self.assertFalse(call["github_tokens_present"], call["tool"])
+        self.assertTrue(self.f.publish_calls()[0]["token_present"])
+
+    def test_same_size_github_asset_replacement_after_upload_is_detected(self):
+        self.f.flags = {"github_asset_swap": True}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, out + err)
+        self.assertIn("artifact_sha256_mismatch", err)
+        self.assertEqual(self.f.receipt()["result"], "partial")
+
+    def test_tag_move_after_upload_is_detected(self):
+        self.f.flags = {"github_tag_move": True}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, out + err)
+        self.assertIn("tag_elsewhere", err)
+
+    def test_github_asset_is_downloaded_again_after_upload(self):
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 0, out + err)
+        calls = self.f.calls()
+        upload = next(i for i, c in enumerate(calls)
+                      if c["tool"] == "ultikits" and c["argv"][:1] == ["publish"] and "--help" not in c["argv"])
+        downloads = [c for c in calls[upload + 1:] if c["tool"] == "gh"
+                     and "repos/%s/releases/assets/11" % REPO in c["argv"]]
+        self.assertTrue(downloads, "GitHub bytes must be re-read after the catalogue upload")
+
+
+class RetryOrderRegressionTests(FixtureBase):
+    def test_failure_after_version_creation_then_fresh_dispatch_recreates_and_uploads(self):
+        self.f.flags = {"upload_fail": True}
+        self.f.save_flags()
+        status, out, err = self.f.run_wrapper()
+        self.assertEqual(status, 3, out + err)
+        steps = [c["step"] for c in self.f.calls("catalogue-write")]
+        self.assertEqual(steps, ["create-version", "token", "upload"])
+        pending = [v for v in self.f.catalogue()["versions"] if v["version"] == VERSION]
+        self.assertEqual(len(pending), 1, "the failed upload happened after reserving a version")
+        self.assertIsNone(pending[0]["file"])
+        self.f.flags = {}
+        self.f.save_flags()
+        self.f.inputs = dict(self.f.inputs, installation_id="inst-retry-fresh-0002")
+        self.f.write_event(self.f.inputs)
+        writes = len(self.f.github_writes())
+        status, out, err = self.f.run_wrapper(GITHUB_RUN_ID="9002")
+        self.assertEqual(status, 0, out + err)
+        self.assertEqual([c["step"] for c in self.f.calls("catalogue-write")],
+                         ["create-version", "token", "upload"] * 2)
+        self.assertEqual(len(self.f.github_writes()), writes)
+        current = [v for v in self.f.catalogue()["versions"] if v["version"] == VERSION]
+        self.assertEqual(len(current), 1, "the owner re-creates rather than duplicates the pending version")
+        self.assertIsNotNone(current[0]["file"])
+        self.assertEqual(self.f.receipt()["run_id"], "9002")
 
 
 if __name__ == "__main__":

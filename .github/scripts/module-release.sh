@@ -28,6 +28,10 @@
 # <jar-prefix>-<version>-release-manifest.json. Environment: the GitHub Actions runner variables, GH_TOKEN
 # (the job token, contents: write) and ULTIKITS_TOKEN (the existing catalogue secret).
 #
+# Consumer contract: actions/checkout must use persist-credentials: false and fetch-depth: 0.
+# npm and every CLI invocation run without GH_TOKEN/GITHUB_TOKEN; only gh inherits the job token.
+# CHANGELOG.md (or --changelog-file) must contain exactly one ## [<version>] section.
+#
 # Exit status: 0 both sides complete; 1 refused before any install or write; 2 usage;
 # 3 a write was attempted but the run did not complete both sides.
 
@@ -147,6 +151,8 @@ WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/module-release.XXXXXX")" || r
 mkdir "$WORK/assets"
 
 helper() { python3 -I "$HELPER" "$@"; }
+# Apply to installation too: disabling lifecycle scripts alone is not a credential boundary.
+without_github_token() { env -u GH_TOKEN -u GITHUB_TOKEN "$@"; }
 
 # Read KEY=VALUE lines printed by the helper into IN_* variables; only allowlisted keys are taken.
 read_kv() {
@@ -174,6 +180,11 @@ echo "installation $IN_INSTALLATION_ID, run $IN_RUN_ID attempt $IN_RUN_ATTEMPT"
 
 JAR_NAME="$JAR_PREFIX-$IN_VERSION.jar"
 MANIFEST_NAME="$JAR_PREFIX-$IN_VERSION-release-manifest.json"
+# The optional path selects a changelog document, never an arbitrary shell fragment. Extract before
+# installation or any external write, even when the two publication sides are already complete.
+[ -n "$CHANGELOG_FILE" ] || CHANGELOG_FILE="$CHECKOUT/CHANGELOG.md"
+CHANGELOG_TEXT="$(helper module-changelog --changelog-file "$CHANGELOG_FILE" --version "$IN_VERSION")" \
+    || refuse changelog_invalid "the released-version changelog section could not be extracted"
 
 # One publication per repository and version on this runner; the workflow's concurrency group serializes
 # runs across runners, and every write is preceded by a fresh remote comparison.
@@ -193,9 +204,10 @@ head_sha="$(git -C "$CHECKOUT" rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" 
 git -C "$CHECKOUT" merge-base --is-ancestor "$IN_SOURCE_HEAD" "$head_sha" 2>/dev/null \
     || refuse source_not_on_default_branch "the accepted source is not on the default branch"
 source_tree="$(git -C "$CHECKOUT" rev-parse --verify "$IN_SOURCE_HEAD^{tree}" 2>/dev/null)"
-head_tree="$(git -C "$CHECKOUT" rev-parse --verify 'HEAD^{tree}' 2>/dev/null)"
-[ -n "$source_tree" ] && [ "$source_tree" = "$head_tree" ] \
-    || refuse product_tree_differs "the default branch tree is not the accepted product tree"
+[ -n "$source_tree" ] || refuse source_head_unknown "the accepted source tree could not be read"
+# Preserve the full accepted tree identity below, but do not invalidate retained bytes for docs or tooling.
+git -C "$CHECKOUT" diff --quiet "$IN_SOURCE_HEAD" "$head_sha" -- pom.xml src/main/ \
+    || refuse product_tree_differs "the default branch product paths differ from the accepted source"
 
 # Observe the remote state; the same reads run again immediately before each write.
 observe_github() {  # $1: suffix for the scratch files
@@ -267,12 +279,12 @@ if [ "$need_catalogue" -eq 1 ]; then
     [[ "$OBSERVED_METADATA" =~ ^[0-9a-f]{64}$ ]] || refuse registry_unavailable "registry metadata digest is malformed"
     [ "$OBSERVED_METADATA" = "$IN_PACKAGE_METADATA_SHA256" ] \
         || refuse package_metadata_changed "fresh $PACKAGE_SPEC metadata differs from the verified snapshot"
-    npm install --global --ignore-scripts --no-audit --no-fund "$PACKAGE_SPEC" > /dev/null 2>&1 \
+    without_github_token npm install --global --ignore-scripts --no-audit --no-fund "$PACKAGE_SPEC" > /dev/null 2>&1 \
         || refuse cli_install_failed "the pinned CLI did not install"
     INSTALLED="$PACKAGE_SPEC"
-    [ "$(ultikits --version 2>/dev/null)" = "$PACKAGE_VERSION" ] || refuse cli_version_mismatch "the installed CLI is not $PACKAGE_VERSION"
-    cli_help="$(ultikits publish --help 2>/dev/null)" || refuse cli_flags_unknown "the CLI publish help is unavailable"
-    [[ "$cli_help" == *"--module-version"* && "$cli_help" == *"--id "* ]] \
+    [ "$(without_github_token ultikits --version 2>/dev/null)" = "$PACKAGE_VERSION" ] || refuse cli_version_mismatch "the installed CLI is not $PACKAGE_VERSION"
+    cli_help="$(without_github_token ultikits publish --help 2>/dev/null)" || refuse cli_flags_unknown "the CLI publish help is unavailable"
+    [[ "$cli_help" == *"--module-version"* && "$cli_help" == *"--id "* && "$cli_help" == *"--changelog "* ]] \
         || refuse cli_flags_unknown "the installed CLI does not document --id and --module-version"
 fi
 
@@ -307,12 +319,9 @@ if [ "$need_catalogue" -eq 1 ]; then
     recheck_github before-catalogue "$([ "$need_release" -eq 1 ] && echo published || echo "$RELEASE_BEFORE")"
     observe_catalogue "-before-upload"
     if [ "$IN_CATALOGUE_STATE" = "absent" ]; then
-        changelog_args=()
-        if [ -n "$CHANGELOG_FILE" ]; then
-            changelog_args=(--changelog "$(cat -- "$CHANGELOG_FILE")")
-        fi
+        changelog_args=(--changelog "$CHANGELOG_TEXT")
         WROTE=1
-        ( cd "$CHECKOUT" && ultikits publish "$WORK/assets/$JAR_NAME" --id "$IDENTIFY" \
+        ( cd "$CHECKOUT" && without_github_token ultikits publish "$WORK/assets/$JAR_NAME" --id "$IDENTIFY" \
             --module-version "$IN_VERSION" --yes "${changelog_args[@]}" > /dev/null 2>&1 ) \
             || { CATALOGUE_OUTCOME="error"; refuse catalogue_upload_failed "the catalogue upload failed"; }
         CATALOGUE_OUTCOME="uploaded"
@@ -325,6 +334,21 @@ if [ "$need_catalogue" -eq 1 ]; then
     read_kv "$WORK/readback.env"
     LEVEL630_AFTER="$IN_LEVEL630_LATEST"
     NO_LEVEL_AFTER="$IN_NO_LEVEL_LATEST"
+    # The CLI has now run. Observe GitHub again and download fresh bytes, not the cached assets or just
+    # their id/size listing: a same-sized replacement must never be reported as successful publication.
+    recheck_github after-catalogue published
+    [ "$TAG_SHA" = "$IN_SOURCE_HEAD" ] || refuse tag_elsewhere "the published tag no longer names the accepted source"
+    mkdir "$WORK/post-assets" || refuse workspace "no readback directory"
+    for pair in "$IN_JAR_ASSET_ID:$JAR_NAME" "$IN_MANIFEST_ASSET_ID:$MANIFEST_NAME"; do
+        gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/${pair%%:*}" \
+            > "$WORK/post-assets/${pair#*:}" 2>/dev/null \
+            || refuse github_unavailable "a published asset could not be read back after upload"
+    done
+    helper module-verify-assets --assets-dir "$WORK/post-assets" --jar-name "$JAR_NAME" \
+        --jar-size "$IN_JAR_ASSET_SIZE" --manifest-size "$IN_MANIFEST_ASSET_SIZE" \
+        --repo "$REPO" --identify-string "$IDENTIFY" --source-head "$IN_SOURCE_HEAD" \
+        --version "$IN_VERSION" --manifest-sha256 "$IN_MANIFEST_SHA256" --artifact-sha256 "$IN_ARTIFACT_SHA256" \
+        > /dev/null || { RELEASE_OUTCOME="error"; refuse github_asset_readback "published assets changed after upload"; }
     echo "catalogue: $IDENTIFY $IN_VERSION served at level 630; no-level latest unchanged"
 fi
 

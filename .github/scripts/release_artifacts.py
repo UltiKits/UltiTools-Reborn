@@ -1668,6 +1668,27 @@ def cmd_package_metadata_digest(args):
     return 0
 
 
+def cmd_module_changelog(args):
+    """Read exactly one Keep a Changelog version section; the text is data for the public CLI flag."""
+    try:
+        text = Path(args.changelog_file).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        sys.stderr.write("refused: changelog_unreadable: the release changelog could not be read\n")
+        return 1
+    lines = text.splitlines(keepends=True)
+    heading = re.compile(r"^##[ \t]+\[" + re.escape(args.version) + r"\](?:[ \t].*)?$")
+    starts = [i for i, line in enumerate(lines) if heading.fullmatch(line.rstrip("\r\n"))]
+    if len(starts) != 1:
+        code = "changelog_section_missing" if not starts else "changelog_section_ambiguous"
+        sys.stderr.write("refused: %s: require exactly one released-version section\n" % code)
+        return 1
+    start = starts[0]
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"^##[ \t]+", lines[i])), len(lines))
+    section = "".join(lines[start:end]).strip("\r\n")
+    print(section)
+    return 0
+
+
 def jar_name_for(prefix, version):
     return "%s-%s.jar" % (prefix, version)
 
@@ -1986,6 +2007,9 @@ def main(argv=None):
     digest = metadata_sub.add_parser("digest", help="print the canonical metadata digest")
     digest.add_argument("--metadata-file", help="hash a saved exact-version document instead of fetching")
     digest.add_argument("--save-metadata", help="also write the fetched exact-version document (once)")
+    changelog = sub.add_parser("module-changelog", help="extract one released version's CHANGELOG section")
+    changelog.add_argument("--changelog-file", required=True)
+    changelog.add_argument("--version", required=True)
     state = sub.add_parser("module-release-state", help="check the dispatched draft release view")
     state.add_argument("--release-json", required=True)
     state.add_argument("--draft-release-id", required=True)
@@ -2020,6 +2044,7 @@ def main(argv=None):
     handlers = {"retain": cmd_retain, "validate": cmd_validate, "stage": cmd_stage, "compare": cmd_compare,
                 "repository-state": cmd_repository_state, "central-inputs": cmd_central_inputs,
                 "central-recheck": cmd_central_recheck,
+                "module-changelog": cmd_module_changelog,
                 "module-release-state": cmd_module_release_state, "module-verify-assets": cmd_module_verify_assets,
                 "module-ref-sha": cmd_module_ref_sha, "catalogue-state": cmd_catalogue_state,
                 "catalogue-readback": cmd_catalogue_readback}
