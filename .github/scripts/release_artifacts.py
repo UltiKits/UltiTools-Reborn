@@ -93,8 +93,9 @@ AUTHORITY_SCHEMA = "phase21-authority/1"
 GATES_SCHEMA = "phase21-gates/1"
 PUBLISH_ACTIONS = ["central-publish", "release", "tag"]
 PUBLISH_DESTINATIONS = ["GitHub", "MavenCentral"]
-REQUIRED_GATES = ("ci", "codacy", "codex-review", "own-review", "tests", "uat", "verification")
-QUOTA_SKIPPABLE = ("codacy", "codex-review")
+REQUIRED_GATES = ("ci", "codacy", "own-review", "tests", "uat", "verification")
+CROSS_FAMILY_GATES = ("codex-review", "opus-review")
+QUOTA_SKIPPABLE = ("codacy",) + CROSS_FAMILY_GATES
 BOOLEAN_APPROVAL_KEYS = ("approved", "approval", "authorized", "is_approved", "granted")
 
 
@@ -617,11 +618,25 @@ def check_authority_response(receipt, path, problems):
             problems.add("decision_not_in_response", "the decision quote must appear verbatim in the response")
 
 
+def valid_row_ids(rows):
+    """Require a non-empty, sorted, unique list of non-empty row-id strings."""
+    return (isinstance(rows, list) and bool(rows)
+            and all(isinstance(row, str) and bool(row.strip()) for row in rows)
+            and rows == sorted(set(rows)))
+
+
 def check_authority_scope(receipt, manifest, manifest_sha, problems):
+    """Bind publication scope exactly, allowing only explicit blocked-UAT row acceptance."""
     scope = receipt.get("scope")
     if not isinstance(scope, dict):
         problems.add("authority_scope", "scope must be an object")
         return
+    allowed = {"repo", "source_head", "product_tree", "version", "manifest_sha256", "artifacts",
+               "destinations", "allowed_actions", "accepted_blocked_uat_rows"}
+    if set(scope) - allowed:
+        problems.add("authority_scope", "unknown scope keys: %s" % sorted(set(scope) - allowed))
+    if "accepted_blocked_uat_rows" in scope and not valid_row_ids(scope["accepted_blocked_uat_rows"]):
+        problems.add("authority_scope", "accepted_blocked_uat_rows must be non-empty, sorted, unique row ids")
     if receipt.get("repo") != manifest["repo"] or scope.get("repo") != manifest["repo"]:
         problems.add("authority_repo", "receipt repo does not match %s" % manifest["repo"])
     for key in ("source_head", "product_tree", "version"):
@@ -658,24 +673,35 @@ def check_authority(manifest, manifest_sha, path, problems):
         problems.add("authority_question_missing", "the question asked must be retained")
     check_authority_response(receipt, path, problems)
     check_authority_scope(receipt, manifest, manifest_sha, problems)
+    return receipt
 
 
-def check_gate_evidence(gates, manifest, path, problems):
+def check_gate_evidence(gates, manifest, path, problems, accepted_rows=None):
+    """Require all base gates and either review; only explicitly accepted UAT may be blocked."""
     base = Path(path).resolve().parent
     seen = {}
     for entry in gates:
         name = entry.get("gate") if isinstance(entry, dict) else None
-        if name not in REQUIRED_GATES or name in seen:
+        if name not in REQUIRED_GATES + CROSS_FAMILY_GATES or name in seen:
             problems.add("uat_gate_invalid", "unknown or repeated gate %r" % name)
             continue
         seen[name] = entry
-    for name in REQUIRED_GATES:
+    if not any(name in seen for name in CROSS_FAMILY_GATES):
+        problems.add("uat_gate_missing", "codex-review|opus-review")
+    for name in REQUIRED_GATES + tuple(name for name in CROSS_FAMILY_GATES if name in seen):
         entry = seen.get(name)
         if entry is None:
             problems.add("uat_gate_missing", name)
             continue
         status = entry.get("status")
-        if status == "pass":
+        blocked_uat = name == "uat" and status == "blocked"
+        if status == "pass" or blocked_uat:
+            if blocked_uat:
+                rows = entry.get("blocked_rows")
+                if not valid_row_ids(rows) or accepted_rows is None:
+                    problems.add("uat_gate_not_passed", "gate uat is 'blocked' without explicit valid row acceptance")
+                elif rows != accepted_rows:
+                    problems.add("uat_acceptance_mismatch", "accepted blocked UAT rows must exactly match blocked_rows")
             if entry.get("head") != manifest["source_head"]:
                 problems.add("uat_stale", "gate %s ran on %r" % (name, entry.get("head")))
             check_retained_ref(entry.get("evidence"), base, problems, "gate %s evidence" % name)
@@ -690,7 +716,7 @@ def check_gate_evidence(gates, manifest, path, problems):
 
 def check_independent_uat(seen, manifest, problems):
     uat = seen.get("uat")
-    if uat is not None and uat.get("status") == "pass":
+    if uat is not None and uat.get("status") in ("pass", "blocked"):
         if uat.get("artifact_sha256") != manifest["sha256"]:
             problems.add("uat_stale", "UAT accepted %r, not the retained primary JAR" % uat.get("artifact_sha256"))
         if uat.get("independent") is not True or uat.get("saw_review_output") is not False:
@@ -699,7 +725,8 @@ def check_independent_uat(seen, manifest, problems):
             problems.add("release_authorized_not_false", "UAT verdicts keep release_authorized false")
 
 
-def check_uat(manifest, manifest_sha, path, problems):
+def check_uat(manifest, manifest_sha, path, problems, accepted_rows=None):
+    """Validate independent retained-byte UAT, including explicitly accepted blocked rows."""
     record, _ = load_json_record(path, problems, "UAT receipt")
     if record is None:
         return
@@ -718,7 +745,7 @@ def check_uat(manifest, manifest_sha, path, problems):
     if not isinstance(gates, list) or not gates:
         problems.add("uat_gates_missing", "the gates record lists no gate")
         return
-    seen = check_gate_evidence(gates, manifest, path, problems)
+    seen = check_gate_evidence(gates, manifest, path, problems, accepted_rows)
     check_independent_uat(seen, manifest, problems)
 
 
@@ -874,8 +901,10 @@ def validated(args, problems):
         if not (authority and uat):
             problems.add("receipt_missing", "publication needs both the authority and the UAT receipt")
         else:
-            check_authority(manifest, manifest_sha, authority, problems)
-            check_uat(manifest, manifest_sha, uat, problems)
+            receipt = check_authority(manifest, manifest_sha, authority, problems)
+            scope = receipt.get("scope") if receipt else None
+            accepted_rows = scope.get("accepted_blocked_uat_rows") if isinstance(scope, dict) else None
+            check_uat(manifest, manifest_sha, uat, problems, accepted_rows)
     return manifest, manifest_sha
 
 

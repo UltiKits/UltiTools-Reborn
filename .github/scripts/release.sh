@@ -22,7 +22,9 @@
 #                             Creates no tag and no release.
 #   --publish-approved <file> Publish the retained files named by that manifest. Requires the
 #                             receipts below, re-checks source, remote, version, tag and bytes,
-#                             and never runs Maven.
+#                             and never runs Maven. Requires codex-review or opus-review (or both).
+#                             Only blocked UAT rows exactly listed in the authority scope's
+#                             accepted_blocked_uat_rows are allowed; all independence checks still apply.
 #   --authority-receipt <f>   The retained human publication decision for this exact manifest.
 #   --uat-receipt <f>         The gates record whose UAT accepted this exact manifest.
 #   --dry-run                 Alone: run every check and the build, create nothing. With
@@ -383,6 +385,7 @@ while IFS='=' read -r key value; do
         PRIMARY_SHA256)   PRIMARY_SHA256="$value" ;;
     esac
 done <<< "$FIELDS"
+echo "Maintainer-accepted blocked UAT rows: $(python3 -I -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["scope"].get("accepted_blocked_uat_rows", [])))' "$AUTHORITY_RECEIPT")"
 
 if [ "$LOCAL_SHA" != "$SOURCE_HEAD" ] || [ "$REMOTE_SHA" != "$SOURCE_HEAD" ]; then
     die "The accepted source is ${SOURCE_HEAD:0:12}, but ${RELEASE_BRANCH} is local ${LOCAL_SHA:0:12} / remote ${REMOTE_SHA:0:12}.
