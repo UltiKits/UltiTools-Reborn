@@ -5,8 +5,7 @@ panel integrations. These notes describe changes against the **released v6.2.5 c
 commit ancestry. The module EventBus and declarative GUI already existed in 6.2.5; the changes
 below repair and extend them rather than introduce them for the first time.
 
-**Prepared for 6.3.0; not a publication announcement.** A formal version in the POM does not by
-itself mean a tag, GitHub release or Maven Central artifact has been published.
+**Also on the developer docs site (English / 中文): https://dev.ultikits.com/guide/release-notes/6.3.0.html**
 
 ## Before upgrading
 
@@ -24,18 +23,9 @@ itself mean a tag, GitHub release or Maven Central artifact has been published.
 
 ### Module catalogue availability
 
-**As checked on 2026-10-20, `/upm` has no new 6.3.0 (`api-version: 630`) modules to offer.**
-The public catalogue listed all 15 active modules; for every module,
-`GET /plugin/<id>/latest?apiLevel=630&minApiLevel=630` returned HTTP 409 (no compatible version).
-The same modules' unfiltered latest requests returned HTTP 200 with their older versions;
-an invalid API-level request returned HTTP 400. This is an availability observation, not an
-inference from a successful build or publication workflow.
-
-Every module build currently offered by that catalogue predates 6.3.0 and is refused by 6.3.0 at
-startup: each overrides the now-`final` `unregisterSelf()`. Operators who rely on modules must stay
-on 6.2.5 until 6.3.0 builds of every module they use are published. Upgrading only the framework
-leaves those modules unloaded. Wait for compatible builds in the catalogue before installing them
-through `/upm`, and check catalogue availability again when upgrading.
+At the 6.3.0 release, the `/upm` catalogue does not yet offer 6.3.0 (`api-version: 630`) module builds,
+and module builds made for 6.2.x are refused by 6.3.0 at startup. If your server relies on modules,
+stay on 6.2.5 until 6.3.0 builds of every module you use are available, then upgrade.
 
 ## Breaking API changes and migration
 
@@ -195,12 +185,12 @@ claims that this framework release repairs those separately delivered products.
 | UltiEconomy: transfer/refund failure replies can be misleading; a note redemption without a balance row can give no reply and retain the note | After a database problem, inspect balances and logs before paying again. | [#45](https://github.com/UltiKits/UltiEconomy/issues/45) |
 | UltiLogin: console/panel `logadmin reset` can expose the new password in logs | Reset passwords in game, where logging is masked, and keep logs private. | [#57](https://github.com/UltiKits/UltiLogin/issues/57) |
 | UltiWorlds: failed PvP persistence can leave the live flag changed until the next player enters that world | Repeat the command and confirm the live and saved values agree. | [#58](https://github.com/UltiKits/UltiWorlds/issues/58) |
-| Panel: plugin configuration editor is blank/unavailable | Edit configuration files directly on the server. | [#123](https://github.com/UltiKits/UltiPanelFrontend/issues/123) |
-| Panel: Settings says saved before the server accepts; some of its 14 settings do not exist on every server | Check the actual server setting; do not treat the success message as confirmation. | [#124](https://github.com/UltiKits/UltiPanelFrontend/issues/124), [#125](https://github.com/UltiKits/UltiPanelFrontend/issues/125) |
-| Panel: no browser live push, no remote command output, and the management status strip says Disconnected even when online | Read output in the server console and use the dashboard for online state. | [#127](https://github.com/UltiKits/UltiPanelFrontend/issues/127), [#128](https://github.com/UltiKits/UltiPanelFrontend/issues/128), [#131](https://github.com/UltiKits/UltiPanelFrontend/issues/131) |
-| Panel: a refused command still reports Command execution request sent | Check `ultipanel.capabilities.commands` and the server console; commands default off. | [#55](https://github.com/UltiKits/ultipanel-api-worker/issues/55) |
-| Panel: legacy paid activation-code redemption for permanent Pro is unavailable or fails | No verified self-service workaround. Eligible holders' historical permanent Pro entitlement remains supported; the complete repair is deferred to 6.4.0 and redemption may remain unavailable until then. The historical inventory's authority and completeness are not established. | [#60](https://github.com/UltiKits/ultipanel-api-worker/issues/60) |
-| Developer CLI: `ultikits versions list` prints undefined fields | Look up module versions in the panel or catalogue web page. | [#2](https://github.com/UltiKits/ultikits-cli/issues/2) |
+| Panel: plugin configuration editor is blank/unavailable | Edit configuration files directly on the server. | Tracked internally |
+| Panel: Settings says saved before the server accepts; some of its 14 settings do not exist on every server | Check the actual server setting; do not treat the success message as confirmation. | Tracked internally |
+| Panel: no browser live push, no remote command output, and the management status strip says Disconnected even when online | Read output in the server console and use the dashboard for online state. | Tracked internally |
+| Panel: a refused command still reports Command execution request sent | Check `ultipanel.capabilities.commands` and the server console; commands default off. | Tracked internally |
+| Panel: legacy paid activation-code redemption for permanent Pro is unavailable or fails | No verified self-service workaround. Eligible holders' historical permanent Pro entitlement remains supported; the complete repair is deferred to 6.4.0 and redemption may remain unavailable until then. | Tracked internally |
+| Developer CLI: `ultikits versions list` prints undefined fields | Look up module versions in the panel or catalogue web page. | Tracked internally |
 
 ## Further reference
 
