@@ -690,7 +690,7 @@ def check_blocked_uat_details(entry, problems):
     if "counts" in entry:
         counts = entry["counts"]
         if not isinstance(counts, dict) or any(
-                key in counts and (type(counts[key]) is not int or counts[key] < 0)
+                key in counts and (not is_int(counts[key]) or counts[key] < 0)
                 for key in ("fail", "blocked")):
             problems.add("uat_counts_invalid", "UAT counts must contain non-negative integer counts")
         else:
