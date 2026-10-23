@@ -68,7 +68,7 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 - **Server**: Paper 1.19.2 (build 163 or later) or newer. Plain Spigot is not supported.
 - **Server Java**: the version your Paper line requires: Java 17 for Paper 1.19.2 to 1.20.4, Java 21 from Paper 1.20.5.
 - **Building the framework**: JDK 21 (the bytecode targets Java 8).
-- **Modules**: individual modules may require a newer server. UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade need Paper 1.21+; see the [release notes](RELEASE-NOTES-6.3.0.md#before-upgrading) for module-specific requirements.
+- **Modules**: individual modules may require a newer server. UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade need Paper 1.21+; see the [release notes](https://dev.ultikits.com/guide/release-notes/6.3.0.html#before-upgrading) for module-specific requirements.
 - **Known gap below Paper 1.20.5**: the UltiPanel console mirror is not installed, and one WARNING at start-up says so; the panel's log stream then carries plugin lines only.
 - **UltiTools Plugin**: Install on your server
 
@@ -478,7 +478,7 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 Architecture notes, module guides, tutorials and the API reference live on the
 documentation site. For 6.3.0 migration and known limitations, also read
-[COMPATIBILITY.md](COMPATIBILITY.md) and the [release notes](RELEASE-NOTES-6.3.0.md).
+[COMPATIBILITY.md](COMPATIBILITY.md) and the [release notes](https://dev.ultikits.com/guide/release-notes/6.3.0.html).
 
 | Document | Description |
 |----------|-------------|
