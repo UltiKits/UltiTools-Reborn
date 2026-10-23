@@ -2147,7 +2147,7 @@ class PublishWorkflowFixture(object):
         # talk to the real user's agent socket. The guard refuses to run if that ever happens.
         self.gnupg = self.root / "gnupg"
         make_key(self.gnupg, ReleaseFixture.SIGNER)
-        (self.root / "home" / ".gnupg").mkdir(mode=0o700)
+        # setup-java v6 exports an isolated GNUPGHOME without creating $HOME/.gnupg.
         self.head = release.head
         self.vars = {"PUBLISH_TO_CENTRAL": "true"}
         self.extra_env = {}
@@ -2238,6 +2238,33 @@ class PublishWorkflowTests(unittest.TestCase):
         self.assertEqual(self.fixture.entries("mvn-forbidden"), [])
         for entry in self.fixture.entries("gh"):
             self.assertEqual(entry["argv"][:2], ["release", "download"], entry["argv"])
+
+    def run_gpg_configuration(self, unset_home=False):
+        steps = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-central"]["steps"]
+        step = next(step for step in steps if "Configure GPG agent for CI" in step.get("name", ""))
+        env = self.fixture.env(self.fixture.root / "runners")
+        if unset_home:
+            del env["GNUPGHOME"]
+        return subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+                              cwd=str(self.release.checkout), env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=30)
+
+    def test_gpg_configuration_uses_setup_java_isolated_home(self):
+        default_home = self.fixture.root / "home" / ".gnupg"
+        self.assertFalse(default_home.exists())
+        configured = self.run_gpg_configuration()
+        self.assertEqual(configured.returncode, 0, configured.stdout.decode("utf-8", "replace"))
+        self.assertEqual((self.fixture.gnupg / "gpg-agent.conf").read_text(), "allow-loopback-pinentry\n")
+        self.assertEqual((self.fixture.gnupg / "gpg.conf").read_text(), "pinentry-mode loopback\n")
+        self.assertFalse(default_home.exists())
+
+    def test_gpg_configuration_rejects_unset_setup_java_home(self):
+        configured = self.run_gpg_configuration(unset_home=True)
+        self.assertNotEqual(configured.returncode, 0)
+        self.assertIn("GNUPGHOME must be set by actions/setup-java", configured.stdout.decode("utf-8", "replace"))
+        self.assertFalse((self.fixture.root / "home" / ".gnupg").exists())
+        self.assertFalse((self.fixture.gnupg / "gpg-agent.conf").exists())
+        self.assertFalse((self.fixture.gnupg / "gpg.conf").exists())
 
     def test_both_jobs_publish_the_retained_bytes_without_a_lifecycle_build(self):
         validate, outputs = self.fixture.run_validate()
