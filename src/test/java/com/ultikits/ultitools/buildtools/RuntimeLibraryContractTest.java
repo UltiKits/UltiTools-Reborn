@@ -204,7 +204,7 @@ class RuntimeLibraryContractTest {
 
     @Test
     void xseriesIsTheDecidedVersion() throws Exception {
-        assertThat(libraryCoordinates()).contains("com.github.cryptomorin:XSeries:13.7.1");
+        assertThat(libraryCoordinates()).contains("com.github.cryptomorin:XSeries:14.0.0");
     }
 
     private static List<String> libraryCoordinates() throws Exception {

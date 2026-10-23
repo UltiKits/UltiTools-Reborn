@@ -93,8 +93,9 @@ compileOnly 'com.ultikits:UltiTools-API:6.3.0'
 > UltiTools plugin already provides it at runtime. Compile against it, but do not bundle it —
 > with a shade/shadow build, `compile`/`implementation` scope can bundle the framework into your
 > own JAR. XSeries is no longer bundled in 6.3.0; if your module uses it, declare
-> `com.github.cryptomorin:XSeries:13.7.1` separately as `provided`/`compileOnly`. Paper supplies it
-> at runtime through the framework's `libraries:` block.
+> `com.github.cryptomorin:XSeries:13.7.1` separately as `provided`/`compileOnly` for 6.3.0
+> (`com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1). Match the version in your framework's
+> `plugin.yml` `libraries:` block; Paper supplies it at runtime.
 
 ### Option A: Write an UltiTools Module (Recommended)
 

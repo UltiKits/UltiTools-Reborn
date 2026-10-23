@@ -43,6 +43,25 @@ explains it; the sections below are the reference and stay authoritative where t
 13. 了解框架本身的服务器要求：Paper 1.19.2 build 163 或更新，Paper 1.20.5 以下用 Java 17，1.20.5 起用 Java 21；UltiKits 官方模块只写明它们支持的 UltiTools-API 版本（`api-version: 630` 即 6.3.0 或更高）（见 [Support matrix](#support-matrix)）。
 14. 如果模块在 JSON 存储上使用 `DataOperator#transaction(...)` 或 `@Transactional`，或者依赖“失败的加入方 `@Transactional` 方法 / 失败的嵌套 `DataOperator#transaction(...)` 作用域可以被调用方承受”，请检查事务相关的变化：`datasource.type: json` 下的事务现在是暂存的、跨同一插件各表原子的，并且在 `commit` 返回后即持久；普通 JSON 写入可能为等待事务的表锁而停顿最多 5 秒；由 `DataOperator#transaction(...)` 开启的事务在第一次读取某张表时就锁住它（与 6.2.5 中每个回调按操作器逐个运行一致），所以其中的读取也可能停顿最多 5 秒；凭读到的值计算写入的 `@Transactional` 方法应使用 `updateIf` 或 `@Transactional(isolation = Isolation.REPEATABLE_READ)`；在所有后端上，失败的加入方方法或嵌套作用域都会把整个事务标记为仅回滚，最外层提交会抛出 `UnexpectedRollbackException`（见 [JSON transactions](#json-transactions-630--staged-atomic-and-durable)、[A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) 和 [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)）。如果你同时运营服务器，请阅读 JSON 事务一节中的服主须知：把 `.ultitools-journal` 与各表一起备份、永远不要删除它，并且一个数据文件夹只运行一个服务器。
 
+## XSeries 14 (as of 6.3.1)
+
+The framework-provided XSeries runtime library moves from **13.7.1 to 14.0.0**;
+Paper still downloads it through `plugin.yml` `libraries:` rather than finding it shaded in the framework JAR.
+These removed APIs belong to the bundled XSeries library, not to UltiTools-API's own API.
+Third-party modules using XSeries must check these removed public APIs and recompile:
+
+- `com.cryptomorin.xseries.reflection.minecraft.NMSExtras` and its nested types
+  (`Animation`, `DataWatcherItemType`, `EntityPose`, `LivingEntityFlags`, `WorldlessBlockWrapper`)
+  are removed; use the new `reflection.minecraft.capabilities` classes extending `MinecraftCapability`.
+- The public no-argument `com.cryptomorin.xseries.profiles.builder.XSkull()` constructor is removed;
+  use the static factory methods, such as `XSkull.createItem()` or `XSkull.of(...)`.
+- `com.cryptomorin.xseries.reflection.XReflection.getLatestPatchNumberOf(int)` is removed;
+  use `getLatestPatchNumberOf(int majorVersion, int minorVersion)` (for example, `(1, 21)`).
+
+See the [XSeries 14.0.0 release notes](https://github.com/CryptoMorin/XSeries/releases/tag/v14.0.0)
+and the published [13.7.1](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/13.7.1/XSeries-13.7.1-sources.jar)
+and [14.0.0 sources](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/14.0.0/XSeries-14.0.0-sources.jar).
+
 ## Config layer (6.3.0)
 
 This section is the configuration migration contract **as of v6.3.0**. The new public extension

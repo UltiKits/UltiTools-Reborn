@@ -15,9 +15,19 @@ updates:
       # JUnit 6 requires Java 17; tests retain the JUnit 5 API for this Java 8-bytecode project.
       - dependency-name: "org.junit.jupiter:*"
         versions: [">=6"]
-      # Connector/J 10+ is outside the reviewed Java 8-compatible 9.x runtime line.
+      # Real-engine test drivers are bumped by hand together with paper-api.
       - dependency-name: "com.mysql:mysql-connector-j"
-        versions: [">=10"]
+      - dependency-name: "org.xerial:sqlite-jdbc"
+      # Adventure 5 is incompatible with the Adventure 4 API supplied by Paper.
+      - dependency-name: "net.kyori:*"
+        versions: [">=5"]
+      # SnakeYAML artifacts are deliberate old-version test fixtures.
+      - dependency-name: "org.yaml:snakeyaml"
+      # Compile-only APIs provided by Paper.
+      - dependency-name: "org.apache.logging.log4j:*"
+      - dependency-name: "com.google.code.gson:gson"
+      # Release tooling pin; upgrade only with the retained-artifact publisher.
+      - dependency-name: "org.sonatype.central:central-publishing-maven-plugin"
       # Mockito already runs on JDK 21, but a new major needs a reviewed JDK/API baseline.
       - dependency-name: "org.mockito:*"
         versions: [">=6"]

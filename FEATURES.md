@@ -219,7 +219,8 @@ instrument in this codebase. The last three
 ## XSeries lookups
 
 Framework helpers that resolve an item or a sound by name through XSeries, which reaches the server
-through the `libraries:` block (`com.github.cryptomorin:XSeries:13.7.1`). Both are reached only through
+through the `libraries:` block (`com.github.cryptomorin:XSeries:13.7.1` in released 6.3.0;
+`com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1). Both are reached only through
 a shipped module, so each row names the module path that exercises it. No annotation drives either
 helper, so these rows reconcile against no annotation.
 

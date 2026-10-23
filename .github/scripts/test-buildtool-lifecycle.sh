@@ -325,10 +325,10 @@ def mojo_pair(events, identity):
 def check_lifecycle(log, mode, root, started=None, observation=None):
     # log is retained for diagnostics ONLY. Test stdout cannot create execution evidence.
     events = read_observation(observation, root)
-    compiler = mojo_pair(events, ('org.apache.maven.plugins', 'maven-compiler-plugin', '3.11.0',
+    compiler = mojo_pair(events, ('org.apache.maven.plugins', 'maven-compiler-plugin', '3.16.0',
                                   'compile', 'compile-deprecation-buildtools'))
-    japicmp = mojo_pair(events, ('com.github.siom79.japicmp', 'japicmp-maven-plugin', '0.26.1', 'cmp', 'default'))
-    generator = mojo_pair(events, ('org.codehaus.mojo', 'exec-maven-plugin', '3.6.3',
+    japicmp = mojo_pair(events, ('com.github.siom79.japicmp', 'japicmp-maven-plugin', '0.26.5', 'cmp', 'default'))
+    generator = mojo_pair(events, ('org.codehaus.mojo', 'exec-maven-plugin', '3.6.4',
                                    'java', 'generate-deprecation-registry'))
     positions = [int(event['sequence']) for pair in (compiler, japicmp, generator) for event in pair]
     project_start = next(int(event['sequence']) for event in events if event['type'] == 'ProjectStarted')
@@ -357,7 +357,7 @@ def check_lifecycle(log, mode, root, started=None, observation=None):
                       'true' if mode == 'skip-compilation' else 'false')
     require(all((event.get('skipTests'), event.get('mavenTestSkip')) == expected_flags
                 for event in events[1:]), 'Wrong native test flags')
-    mojo_pair(events, ('org.apache.maven.plugins', 'maven-surefire-plugin', '3.2.5', 'test', 'default-test'))
+    mojo_pair(events, ('org.apache.maven.plugins', 'maven-surefire-plugin', '3.6.0', 'test', 'default-test'))
     reports = list((root / 'target/surefire-reports').glob('TEST-*.xml'))
     if mode == 'skip-compilation':
         require(not (root / 'target/test-classes').exists(), 'Clean skip-compilation used test output')
@@ -591,10 +591,10 @@ def self_test():
         events = [{'type': 'ObserverStarted'}, dict(common, type='SessionStarted'),
                   dict(common, type='ProjectStarted')]
         for group, artifact, version, goal, execution in (
-                ('org.apache.maven.plugins', 'maven-compiler-plugin', '3.11.0', 'compile', 'compile-deprecation-buildtools'),
-                ('org.apache.maven.plugins', 'maven-surefire-plugin', '3.2.5', 'test', 'default-test'),
-                ('com.github.siom79.japicmp', 'japicmp-maven-plugin', '0.26.1', 'cmp', 'default'),
-                ('org.codehaus.mojo', 'exec-maven-plugin', '3.6.3', 'java', 'generate-deprecation-registry')):
+                ('org.apache.maven.plugins', 'maven-compiler-plugin', '3.16.0', 'compile', 'compile-deprecation-buildtools'),
+                ('org.apache.maven.plugins', 'maven-surefire-plugin', '3.6.0', 'test', 'default-test'),
+                ('com.github.siom79.japicmp', 'japicmp-maven-plugin', '0.26.5', 'cmp', 'default'),
+                ('org.codehaus.mojo', 'exec-maven-plugin', '3.6.4', 'java', 'generate-deprecation-registry')):
             mojo = dict(common, groupId=group, artifactId=artifact, version=version, goal=goal, executionId=execution,
                         arguments=str(product), **{'config.outputDirectory': str(product / 'target/buildtools-classes'),
                         'config.mainClass': 'com.ultikits.ultitools.buildtools.deprecation.DeprecationRegistryGenerator'})
@@ -613,9 +613,9 @@ def self_test():
         save(events)
         noise = '\n'.join([
             'DeprecationRegistryGenerator: wrote fixture output',
-            '[INFO] --- exec-maven-plugin:3.6.3:java (generate-deprecation-registry) @ fixture ---',
-            '[INFO] --- japicmp-maven-plugin:0.26.1:cmp (default) @ fixture ---',
-            'maven-compiler-plugin:3.11.0:compile (compile-deprecation-buildtools)',
+            '[INFO] --- exec-maven-plugin:3.6.4:java (generate-deprecation-registry) @ fixture ---',
+            '[INFO] --- japicmp-maven-plugin:0.26.5:cmp (default) @ fixture ---',
+            'maven-compiler-plugin:3.16.0:compile (compile-deprecation-buildtools)',
             'Tests run: 99999, Failures: 0, Errors: 0, Skipped: 0',
             json.dumps(events[-1])])
         check_lifecycle(noise, 'skip-compilation', product, observation=observation)

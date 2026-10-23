@@ -31,9 +31,9 @@ import org.jetbrains.annotations.ApiStatus;
  * rollback that succeeded. A connection whose commit or rollback failed is discarded instead: a
  * HikariCP pool is told to evict it ({@link HikariDataSource#evictConnection(Connection)}, which
  * closes the physical connection, and the database rolls the open transaction back), and any other
- * connection is closed. Measured on HikariCP 5.1.0: a pooled connection merely closed after a
- * rollback that keeps failing goes back to the pool with auto-commit off and the transaction still
- * open, and the next borrower's work joins it; an evicted one is never handed out again.
+ * connection is closed. Returning a connection after a failed rollback risks letting the next
+ * borrower join an unresolved transaction; explicit eviction ensures that connection is never
+ * handed out again.
  * <p>
  * What the caller can rely on afterwards (this class serves SQLite and MySQL):
  * <ul>

@@ -14,6 +14,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
+import java.util.Properties;
+
+import static org.junit.jupiter.api.Assertions.assertAll;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import com.zaxxer.hikari.HikariConfig;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -156,6 +163,31 @@ class MysqlDataStoreTest {
         if (ultiToolsStaticMock != null) {
             ultiToolsStaticMock.close();
         }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"true, 250, 2048", "false, 73, 8192"})
+    void shouldKeepDriverPropertiesAsConfiguredStrings(boolean cachePrepStmts,
+                                                       int prepStmtCacheSize,
+                                                       int prepStmtCacheSqlLimit) {
+        setupMysqlConfig();
+        when(mockConfig.getBoolean("mysql.cachePrepStmts")).thenReturn(cachePrepStmts);
+        when(mockConfig.getInt("mysql.prepStmtCacheSize")).thenReturn(prepStmtCacheSize);
+        when(mockConfig.getInt("mysql.prepStmtCacheSqlLimit")).thenReturn(prepStmtCacheSqlLimit);
+
+        HikariConfig config = MysqlDataStore.buildConfig(new MysqlConfig(mockConfig));
+        Properties properties = config.getDataSourceProperties();
+
+        // Connector/J reads stringPropertyNames(), so preserving only the value is insufficient.
+        assertAll(
+                () -> assertThat(properties.get("cachePrepStmts"))
+                        .isInstanceOf(String.class).isEqualTo(String.valueOf(cachePrepStmts)),
+                () -> assertThat(properties.get("prepStmtCacheSize"))
+                        .isInstanceOf(String.class).isEqualTo(String.valueOf(prepStmtCacheSize)),
+                () -> assertThat(properties.get("prepStmtCacheSqlLimit"))
+                        .isInstanceOf(String.class).isEqualTo(String.valueOf(prepStmtCacheSqlLimit)),
+                () -> assertThat(properties.stringPropertyNames())
+                        .contains("cachePrepStmts", "prepStmtCacheSize", "prepStmtCacheSqlLimit"));
     }
 
     @Nested
