@@ -531,6 +531,7 @@ class SnapshotFixture(object):
         scripts.mkdir(parents=True)
         shutil.copy2(SCRIPTS / "ci_changed_paths.py", scripts / "ci_changed_paths.py")
         def git(*args):
+            assert REAL_GIT is not None, "snapshot range fixtures require Git"
             return subprocess.check_output([REAL_GIT, *args], cwd=workspace).decode().strip()
         git("init", "-q")
         git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base")
@@ -604,6 +605,7 @@ class SnapshotPublishTests(unittest.TestCase):
         self.assertRegex(result.log, r"::notice::.*6\.3\.0.*no(thing)? .*publish", result.log)
 
     def test_docs_only_push_does_not_even_evaluate_the_version(self):
+        assert REAL_GIT is not None, "snapshot range fixtures require Git"
         workspace = self.fixture.root / "workspace"
         before = self.fixture.head
         (workspace / "README.md").write_text("docs only")

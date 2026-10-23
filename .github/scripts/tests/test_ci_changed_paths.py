@@ -46,7 +46,7 @@ class ChangedPathsTests(unittest.TestCase):
         if not ok:
             self.assertNotEqual(process.returncode, 0, process.stdout + process.stderr)
             self.assertFalse(output.exists())
-            return None
+            return {}
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         return dict(line.split("=", 1) for line in output.read_text().splitlines())
 
