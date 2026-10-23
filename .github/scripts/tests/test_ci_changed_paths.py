@@ -167,7 +167,10 @@ class FixtureGitIsolationTests(unittest.TestCase):
                             "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(config),
                             "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
                             "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
-                    settings = {"commit.gpgsign": "true", "tag.gpgsign": "true", "gpg.program": str(failing)} if pollution.endswith("signing") else {"core.hooksPath": str(hooks)}
+                    if pollution.endswith("signing"):
+                        settings = {"commit.gpgsign": "true", "tag.gpgsign": "true", "gpg.program": str(failing)}
+                    else:
+                        settings = {"core.hooksPath": str(hooks)}
                     env = dict(base)
                     for index, (key, value) in enumerate(settings.items()):
                         if pollution.startswith("global"):
@@ -215,9 +218,13 @@ class MainOnlyWorkflowTests(unittest.TestCase):
         self.assertFalse(any("badge" in str(step) or "Coverage Gate Check" in str(step) for step in job["steps"]))
         codacy = step_named(job, "📤 Upload Coverage to Codacy")
         self.assertEqual(codacy["if"],
-                         "steps.changes.outputs.build == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' || "
-                         "steps.changes.outputs.build == 'true' && github.event_name == 'pull_request' && "
+                         "steps.changes.outputs.build == 'true' && env.CODACY_TOKEN_PRESENT == 'true' && "
+                         "github.event_name == 'push' && github.ref == 'refs/heads/main' || "
+                         "steps.changes.outputs.build == 'true' && env.CODACY_TOKEN_PRESENT == 'true' && "
+                         "github.event_name == 'pull_request' && "
                          "github.event.pull_request.head.repo.full_name == github.repository")
+        self.assertEqual(workflow["jobs"]["test"]["env"],
+                         {"CODACY_TOKEN_PRESENT": "${{ secrets.CODACY_API_TOKEN != '' }}"})
         self.assertIn("/14.1.3/codacy-coverage-reporter-linux", codacy["run"])
         self.assertIn("sha256sum --check --strict", codacy["run"])
         self.assertNotIn("get.sh", codacy["run"])
@@ -234,19 +241,39 @@ class MainOnlyWorkflowTests(unittest.TestCase):
             for ref in ("refs/heads/main", "refs/pull/725/merge"):
                 for repository in ("UltiKits/UltiTools-Reborn", "contributor/fork"):
                     for build in ("true", "false"):
-                        with self.subTest(event=event, ref=ref, repository=repository, build=build):
+                      for token in ("true", "false"):
+                        with self.subTest(event=event, ref=ref, repository=repository, build=build, token=token):
                             context = {"steps": {"changes": {"outputs": {"build": build}}},
+                                       "env": {"CODACY_TOKEN_PRESENT": token},
                                        "github": {"event_name": event, "ref": ref,
                                                   "repository": "UltiKits/UltiTools-Reborn",
                                                   "event": {"pull_request": {"head": {"repo": {"full_name": repository}}}}}}
-                            expected = build == "true" and (
+                            expected = build == "true" and token == "true" and (
                                 (event == "push" and ref == "refs/heads/main") or
                                 (event == "pull_request" and repository == "UltiKits/UltiTools-Reborn"))
                             self.assertEqual(condition_holds(guard, context), expected)
         # Push events do not contain pull_request; short-circuit evaluation must still work.
-        context = {"steps": {"changes": {"outputs": {"build": "true"}}},
+        context = {"steps": {"changes": {"outputs": {"build": "true"}}}, "env": {"CODACY_TOKEN_PRESENT": "true"},
                    "github": {"event_name": "push", "ref": "refs/heads/main"}}
         self.assertTrue(condition_holds(guard, context))
+
+    def test_codacy_upload_is_skipped_without_a_token_for_every_actor(self):
+        workflow = load_workflow(WORKFLOWS / "maven-ci.yml")
+        guard = step_named(workflow["jobs"]["test"], "📤 Upload Coverage to Codacy")["if"]
+        same_repo = {"head": {"repo": {"full_name": "UltiKits/UltiTools-Reborn"}}}
+        cases = (
+            ("same-repo PR, empty token", "pull_request", "refs/pull/725/merge", "dependabot-free-actor", "false", False),
+            ("dependabot PR, empty token", "pull_request", "refs/pull/726/merge", "dependabot[bot]", "false", False),
+            ("main push, token present", "push", "refs/heads/main", "maintainer", "true", True),
+        )
+        for label, event, ref, actor, token, expected in cases:
+            with self.subTest(label):
+                context = {"steps": {"changes": {"outputs": {"build": "true"}}},
+                           "env": {"CODACY_TOKEN_PRESENT": token},
+                           "github": {"event_name": event, "ref": ref, "actor": actor,
+                                      "repository": "UltiKits/UltiTools-Reborn",
+                                      "event": {"pull_request": same_repo}}}
+                self.assertEqual(condition_holds(guard, context), expected)
 
     def test_pr_concurrency_is_cancellable_but_each_push_has_its_own_group(self):
         concurrency = load_workflow(WORKFLOWS / "maven-ci.yml")["concurrency"]
