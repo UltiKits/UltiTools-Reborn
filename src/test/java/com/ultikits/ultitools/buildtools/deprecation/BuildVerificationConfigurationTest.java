@@ -283,10 +283,13 @@ class BuildVerificationConfigurationTest {
                         .isEqualTo(java.util.Arrays.asList("minor", "patch"));
                 List<Map<String, Object>> ignores = (List<Map<String, Object>>) update.get("ignore");
                 assertThat(ignores).extracting(rule -> rule.get("dependency-name"))
-                        .containsExactly("org.junit.jupiter:*", "com.mysql:mysql-connector-j", "org.mockito:*",
-                                "io.papermc.paper:paper-api");
+                        .containsExactly("org.junit.jupiter:*", "com.mysql:mysql-connector-j", "org.xerial:sqlite-jdbc",
+                                "net.kyori:*", "org.yaml:snakeyaml", "org.apache.logging.log4j:*",
+                                "com.google.code.gson:gson", "org.sonatype.central:central-publishing-maven-plugin",
+                                "org.mockito:*", "io.papermc.paper:paper-api");
                 assertThat(ignores).extracting(rule -> rule.get("versions")).containsExactly(
-                        java.util.Collections.singletonList(">=6"), java.util.Collections.singletonList(">=10"),
+                        java.util.Collections.singletonList(">=6"), null, null,
+                        java.util.Collections.singletonList(">=5"), null, null, null, null,
                         java.util.Collections.singletonList(">=6"), java.util.Arrays.asList("<1.21", ">=1.22"));
             } else {
                 assertThat(update).doesNotContainKey("open-pull-requests-limit");
