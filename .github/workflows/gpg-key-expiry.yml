@@ -11,11 +11,7 @@ name: 🔑 GPG Key Expiry
 # fingerprint -- the fingerprint is public information, distributed alongside every .asc signature
 # pushed to Maven Central, and exists precisely so a consumer can verify the signature.
 #
-# ⚠ The schedule trigger only fires for a workflow on the **default branch**. This repository's
-#   default branch is main, while development happens on alpha, so the scheduled warning only
-#   really starts running once alpha is merged into main. Until then, the real-time gate on the
-#   publish path (the key-validity check inside publish-packages.yml) is the primary line of
-#   defense.
+# The schedule runs from main, the default and sole integration branch.
 
 on:
   schedule:
@@ -24,6 +20,7 @@ on:
   workflow_dispatch:
   # Self-tests when the check script itself changes, so this warning system does not quietly break.
   pull_request:
+    branches: [main]
     paths:
       - '.github/workflows/gpg-key-expiry.yml'
       - '.github/scripts/check-gpg-expiry.sh'
@@ -34,11 +31,12 @@ permissions:
 jobs:
   check-expiry:
     name: GPG key expiry check
+    timeout-minutes: 5
     runs-on: ubuntu-latest
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4 (v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: 🔎 Fetch public key from keyserver
         env:

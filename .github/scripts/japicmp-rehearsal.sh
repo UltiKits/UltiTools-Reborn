@@ -13,7 +13,7 @@
 # next MINOR release that does removals inherits the tool (D-04), not a one-off record.
 #
 # What it does NOT prove: branch-protection configuration (that ROADMAP criterion 1 needs a
-# required status check on both alpha and main) is confirmed separately, by hand, in
+# required status check on main) is confirmed separately, by hand, in
 # 08-VALIDATION.md -- this script only exercises the build side.
 #
 # Usage:
