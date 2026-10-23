@@ -64,23 +64,29 @@ public class MysqlDataStore implements DataStore {
     public MysqlDataStore() {
         MysqlConfig mysqlConfig = new MysqlConfig(UltiTools.getInstance().getConfig());
 
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:mysql://" + mysqlConfig.getHost() + ":" + mysqlConfig.getPort() + "/" + mysqlConfig.getDatabase());
-        config.setUsername(mysqlConfig.getUsername());
-        config.setPassword(mysqlConfig.getPassword());
-        config.addDataSourceProperty("cachePrepStmts", mysqlConfig.isCachePrepStmts());
-        config.addDataSourceProperty("prepStmtCacheSize", mysqlConfig.getPrepStmtCacheSize());
-        config.addDataSourceProperty("prepStmtCacheSqlLimit", mysqlConfig.getPrepStmtCacheSqlLimit());
-        config.setConnectionTimeout(mysqlConfig.getConnectionTimeout());
-        config.setKeepaliveTime(mysqlConfig.getKeepaliveTime());
-        config.setMaxLifetime(mysqlConfig.getMaxLifetime());
-        config.setConnectionTestQuery(mysqlConfig.getConnectionTestQuery());
-        config.setMaximumPoolSize(mysqlConfig.getMaximumPoolSize());
+        HikariConfig config = buildConfig(mysqlConfig);
         try {
             dataSource = new HikariDataSource(config);
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.SEVERE, UltiTools.getInstance().i18n("Mysql数据库连接失败：") + e.getMessage());
         }
+    }
+
+    /** Builds the pool configuration without opening a database connection. */
+    static HikariConfig buildConfig(MysqlConfig mysqlConfig) {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:mysql://" + mysqlConfig.getHost() + ":" + mysqlConfig.getPort() + "/" + mysqlConfig.getDatabase());
+        config.setUsername(mysqlConfig.getUsername());
+        config.setPassword(mysqlConfig.getPassword());
+        config.addDataSourceProperty("cachePrepStmts", String.valueOf(mysqlConfig.isCachePrepStmts()));
+        config.addDataSourceProperty("prepStmtCacheSize", String.valueOf(mysqlConfig.getPrepStmtCacheSize()));
+        config.addDataSourceProperty("prepStmtCacheSqlLimit", String.valueOf(mysqlConfig.getPrepStmtCacheSqlLimit()));
+        config.setConnectionTimeout(mysqlConfig.getConnectionTimeout());
+        config.setKeepaliveTime(mysqlConfig.getKeepaliveTime());
+        config.setMaxLifetime(mysqlConfig.getMaxLifetime());
+        config.setConnectionTestQuery(mysqlConfig.getConnectionTestQuery());
+        config.setMaximumPoolSize(mysqlConfig.getMaximumPoolSize());
+        return config;
     }
 
     @Override
