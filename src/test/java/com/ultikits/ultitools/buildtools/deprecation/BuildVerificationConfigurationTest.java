@@ -248,26 +248,23 @@ class BuildVerificationConfigurationTest {
         assertThat(snapshot).filteredOn(call -> call.startsWith("-B -q help:evaluate ")).hasSize(2);
         assertThat(snapshot).contains("-B deploy -DskipTests");
         assertThat(calls(workflowRuns("maven-ci.yml", "test")))
-                .containsExactly("-B clean verify", "-B jacoco:report");
-        assertThat(calls(workflowRuns("maven-ci.yml", "test-isolated")))
-                .containsExactly("-B test -Dgroups=isolated -DexcludedGroups=");
-        List<String> diagnostic = calls(workflowRuns("maven-ci.yml", "build-snapshot"));
-        assertThat(diagnostic).hasSize(2);
-        assertThat(diagnostic).anySatisfy(call -> assertThat(call).startsWith("versions:set "));
-        // Diagnostic artifacts are not a second full verification gate.
-        assertThat(diagnostic).contains("-B package javadoc:javadoc -DskipTests");
+                .containsExactly("-B clean verify",
+                        "-B test -Dgroups=isolated -DexcludedGroups=");
+        assertThat(calls(workflowRuns("maven-ci.yml", "release-tooling")))
+                .containsExactly("-B -ntp dependency:resolve-plugins");
     }
 
     @Test
-    void bothDependabotEcosystemsTargetAlpha() throws IOException {
+    void bothDependabotEcosystemsTargetMain() throws IOException {
         for (Map<String, Object> update : dependabotUpdates()) {
             assertThat(update).as("explicit integration target for %s", update.get("package-ecosystem"))
-                    .containsEntry("target-branch", "alpha");
+                    .containsEntry("target-branch", "main");
         }
     }
 
     @Test
-    void dependabotRetainsExactlyTwoWeeklyRootEcosystemsAndExistingLimits() throws IOException {
+    @SuppressWarnings("unchecked")
+    void dependabotRetainsTwoMonthlyGroupedRootEcosystemsAndJdkIgnores() throws IOException {
         Map<String, Object> config = yaml(Paths.get(".github/dependabot.yml"));
         assertThat(config).containsOnlyKeys("version", "updates").containsEntry("version", 2);
         List<Map<String, Object>> updates = dependabotUpdates();
@@ -275,9 +272,22 @@ class BuildVerificationConfigurationTest {
                 .containsExactly("maven", "github-actions");
         for (Map<String, Object> update : updates) {
             assertThat(update).containsEntry("directory", "/");
-            assertThat(update.get("schedule")).isEqualTo(java.util.Collections.singletonMap("interval", "weekly"));
+            assertThat(update.get("schedule")).isEqualTo(java.util.Collections.singletonMap("interval", "monthly"));
+            Map<String, Map<String, Object>> groups = (Map<String, Map<String, Object>>) update.get("groups");
+            assertThat(groups).hasSize(1);
+            assertThat(groups.values().iterator().next().get("patterns"))
+                    .isEqualTo(java.util.Collections.singletonList("*"));
             if ("maven".equals(update.get("package-ecosystem"))) {
                 assertThat(update).containsEntry("open-pull-requests-limit", 10);
+                assertThat(groups.get("maven-minor-patch").get("update-types"))
+                        .isEqualTo(java.util.Arrays.asList("minor", "patch"));
+                List<Map<String, Object>> ignores = (List<Map<String, Object>>) update.get("ignore");
+                assertThat(ignores).extracting(rule -> rule.get("dependency-name"))
+                        .containsExactly("org.junit.jupiter:*", "com.mysql:mysql-connector-j", "org.mockito:*",
+                                "io.papermc.paper:paper-api");
+                assertThat(ignores).extracting(rule -> rule.get("versions")).containsExactly(
+                        java.util.Collections.singletonList(">=6"), java.util.Collections.singletonList(">=10"),
+                        java.util.Collections.singletonList(">=6"), java.util.Arrays.asList("<1.21", ">=1.22"));
             } else {
                 assertThat(update).doesNotContainKey("open-pull-requests-limit");
             }
@@ -286,50 +296,40 @@ class BuildVerificationConfigurationTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void ciRetainsTriggersJobsPermissionsAndRunsLightweightSelfTests() throws IOException {
+    void ciRetainsRequiredMainCheckAndRunsLightweightSelfTests() throws IOException {
         Map<String, Object> workflow = yaml(Paths.get(".github/workflows/maven-ci.yml"));
         // SnakeYAML's YAML 1.1 resolver represents the unquoted GitHub Actions `on` key as true.
         Map<String, Object> triggers = (Map<String, Object>) workflow.get(Boolean.TRUE);
         assertThat(triggers).containsOnlyKeys("push", "pull_request");
-        assertThat(triggers.get("push")).isEqualTo(java.util.Collections.singletonMap(
-                "branches", java.util.Collections.singletonList("**")));
-        assertThat(triggers.get("pull_request")).isEqualTo(java.util.Collections.singletonMap(
-                "branches", java.util.Arrays.asList("main", "alpha")));
+        for (String event : java.util.Arrays.asList("push", "pull_request")) {
+            assertThat(triggers.get(event)).isEqualTo(java.util.Collections.singletonMap(
+                    "branches", java.util.Collections.singletonList("main")));
+        }
         Map<String, Map<String, Object>> jobs = (Map<String, Map<String, Object>>) workflow.get("jobs");
-        assertThat(jobs).containsOnlyKeys("test", "test-isolated", "build-snapshot");
+        assertThat(jobs).containsOnlyKeys("test", "release-tooling");
         for (Map<String, Object> job : jobs.values()) {
             assertThat(job.get("permissions")).isEqualTo(java.util.Collections.singletonMap("contents", "read"));
             assertThat(job.get("runs-on")).isEqualTo("ubuntu-latest");
+            assertThat(job).containsKey("timeout-minutes").doesNotContainKeys("if", "needs");
         }
         assertThat(jobs.get("test").get("name")).isEqualTo("🧪 Test & Coverage");
-        assertThat(jobs.get("test-isolated").get("name")).isEqualTo("🧪 Isolated Tests");
-        assertThat(jobs.get("build-snapshot").get("name")).isEqualTo("🔨 Build SNAPSHOT");
-        assertThat(jobs.get("build-snapshot").get("needs")).isEqualTo("test");
-        assertThat(jobs.get("build-snapshot").get("if"))
-                .isEqualTo("github.event_name == 'push' && github.ref == 'refs/heads/alpha'");
+        assertThat(jobs.get("release-tooling").get("name")).isEqualTo("Release tooling regression suites");
+        Map<String, Object> concurrency = (Map<String, Object>) workflow.get("concurrency");
+        assertThat(concurrency).containsEntry("group", "${{ github.workflow }}-${{ github.ref }}")
+                .containsEntry("cancel-in-progress", "${{ github.event_name == 'pull_request' }}");
         String runs = workflowRuns("maven-ci.yml", "test");
         assertThat(runs.split("\\n")).contains("mvn -B clean verify", ".github/scripts/check-cjk-scope.sh",
                 "bash .github/scripts/check-cjk-scope.sh --self-test",
                 "bash .github/scripts/test-buildtool-lifecycle.sh --self-test");
-        assertThat(runs).doesNotContain("--matrix", "check-comment-only-diff.sh --self-test");
-        assertThat(calls(workflowRuns("maven-ci.yml", "test-isolated")))
-                .containsExactly("-B test -Dgroups=isolated -DexcludedGroups=");
+        assertThat(runs).doesNotContain("--matrix", "check-comment-only-diff.sh --self-test",
+                "setup-pinned-maven.sh", "unittest discover");
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void mainPromotionSourceGuardStillRequiresSameRepositoryAlpha() throws IOException {
-        Map<String, Object> guard = yaml(Paths.get(".github/workflows/pr-source-guard.yml"));
-        assertThat(guard.get(Boolean.TRUE)).isEqualTo(java.util.Collections.singletonMap("pull_request",
-                java.util.Collections.singletonMap("branches", java.util.Collections.singletonList("main"))));
-        Map<String, Map<String, Object>> jobs = (Map<String, Map<String, Object>>) guard.get("jobs");
-        assertThat(jobs).containsOnlyKeys("check-source");
-        assertThat(jobs.get("check-source").get("permissions"))
-                .isEqualTo(java.util.Collections.singletonMap("contents", "read"));
-        String script = workflowRuns("pr-source-guard.yml", "check-source");
-        assertThat(script).contains("if [ \"$HEAD_REPO\" != \"$THIS_REPO\" ]; then",
-                "if [ \"$HEAD_REF\" != \"alpha\" ]; then", "exit 1");
-        assertThat(script).doesNotContain("dependabot", "hotfix", "continue-on-error");
+    void mainOnlyDoesNotRetainPromotionOrClosureAutomation() {
+        assertThat(Paths.get(".github/workflows/pr-source-guard.yml")).doesNotExist();
+        assertThat(Paths.get(".github/workflows/phase-closeout.yml")).doesNotExist();
+        assertThat(Paths.get(".github/scripts/close_declared_issues.py")).doesNotExist();
     }
 
     @Test

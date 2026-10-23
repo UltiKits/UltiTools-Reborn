@@ -140,10 +140,9 @@ class ReleaseValidationTests(unittest.TestCase):
         self.helper.check_https_host("https://repo1.maven.org/file", "repo1.maven.org")
 
     def test_staging_jobs_pin_maven_before_every_maven_run(self):
-        required = {("maven-ci.yml", "test"), ("publish-packages.yml", "publish-central")}
+        required = {("maven-ci.yml", "release-tooling"), ("publish-packages.yml", "publish-central")}
         exempt = {
-            ("maven-ci.yml", "test-isolated"),  # No staging or release probes.
-            ("maven-ci.yml", "build-snapshot"),  # Packages only; no deployment.
+            ("maven-ci.yml", "test"),  # Verification, no staging or release probes.
             ("publish-packages.yml", "publish-github"),  # deploy-file, not Central staging.
             ("snapshot-publish.yml", "snapshot-publish"),  # Indexed deferral, not a staging ZIP.
         }
@@ -164,40 +163,48 @@ class ReleaseValidationTests(unittest.TestCase):
                 pins = [i for i, step in enumerate(steps)
                         if step.get("name") == "Set up pinned Maven for Central staging"]
                 self.assertEqual(len(pins), 1, key)
-                self.assertNotIn("if", steps[pins[0]], key)
+                if key == ("maven-ci.yml", "release-tooling"):
+                    self.assertEqual(steps[pins[0]]["if"], "steps.changes.outputs.tooling == 'true'")
+                else:
+                    self.assertNotIn("if", steps[pins[0]], key)
                 self.assertNotIn("continue-on-error", steps[pins[0]], key)
                 for call in calls:
                     with self.subTest(workflow=path.name, job=name, step=steps[call].get("name")):
                         self.assertLess(pins[0], call, "pin must precede every Maven run in the job")
         self.assertEqual(found, required | exempt)
 
-    def test_required_ci_runs_all_release_suites_after_verify(self):
-        workflow = WorkflowParser((WORKFLOWS / "maven-ci.yml").read_text(encoding="utf-8")).parse()
-        steps = workflow["jobs"]["test"]["steps"]
+    def test_parallel_ci_runs_all_release_suites_with_the_pinned_maven(self):
+        workflow = load_workflow(WORKFLOWS / "maven-ci.yml")
+        job = workflow["jobs"]["release-tooling"]
+        self.assertNotIn("needs", job)
+        self.assertNotIn("if", job)
+        steps = job["steps"]
         command = "python3 -B -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v"
-        suites = [index for index, step in enumerate(steps) if step.get("run") == command]
-        builds = [index for index, step in enumerate(steps) if step.get("run") == "mvn -B clean verify"]
+        suites = [i for i, step in enumerate(steps) if step.get("run") == command]
         self.assertEqual(len(suites), 1)
-        self.assertEqual(len(builds), 1)
-        self.assertLess(builds[0], suites[0])
-        self.assertIn("git status --porcelain", steps[builds[0] + 1]["run"])
         self.assertIn("git status --porcelain", steps[suites[0] + 1]["run"])
-        pin = [s for s in steps if s.get("name") == "Set up pinned Maven for Central staging"]
-        publish = WorkflowParser((WORKFLOWS / "publish-packages.yml").read_text(encoding="utf-8")).parse()
-        central = publish["jobs"]["publish-central"]["steps"]
-        central_pin = [s for s in central if s.get("name") == "Set up pinned Maven for Central staging"]
-        self.assertEqual(len(pin), 1)
-        self.assertEqual(central_pin, pin)
-        self.assertLess(steps.index(pin[0]), suites[0])
-        self.assertEqual(pin[0]["run"], "bash .github/scripts/setup-pinned-maven.sh")
-        installer = (SCRIPTS / "setup-pinned-maven.sh").read_text(encoding="ascii")
-        self.assertIn("MAVEN_VERSION=3.9.16", installer)
-        self.assertIn("sha512sum --check --strict", installer)
-        self.assertIn("archive.apache.org", installer)
-        self.assertIn("--retry 3 --retry-all-errors --connect-timeout 30 --max-time 300", installer)
-        self.assertIn('"$GITHUB_PATH"', installer)
-        self.assertNotIn("if", steps[suites[0]])
+        pin = step_named(job, "Set up pinned Maven for Central staging")
+        self.assertLess(steps.index(pin), suites[0])
+        self.assertEqual(pin["run"], "bash .github/scripts/setup-pinned-maven.sh")
+        self.assertEqual(pin["if"], "steps.changes.outputs.tooling == 'true'")
+        self.assertEqual(steps[suites[0]]["if"], pin["if"])
         self.assertNotIn("continue-on-error", steps[suites[0]])
+        resolve = step_named(job, "Resolve release probe dependencies")
+        self.assertLess(steps.index(pin), steps.index(resolve))
+        self.assertLess(steps.index(resolve), suites[0])
+        self.assertEqual(resolve["if"], pin["if"])
+        self.assertEqual(resolve["run"], "mvn -B -ntp dependency:resolve-plugins")
+        central = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-central"]
+        self.assertEqual(step_named(central, pin["name"])["run"], pin["run"])
+        test_steps = workflow["jobs"]["test"]["steps"]
+        self.assertFalse(any(s.get("name") == pin["name"] for s in test_steps))
+        build = step_named(workflow["jobs"]["test"], "🧪 Build & Test with Coverage")
+        self.assertEqual(build["run"], "mvn -B clean verify")
+        self.assertIn("git status --porcelain", test_steps[test_steps.index(build) + 1]["run"])
+        installer = (SCRIPTS / "setup-pinned-maven.sh").read_text(encoding="ascii")
+        for value in ("MAVEN_VERSION=3.9.16", "sha512sum --check --strict", "archive.apache.org",
+                      "--retry 3 --retry-all-errors --connect-timeout 30 --max-time 300", '"$GITHUB_PATH"'):
+            self.assertIn(value, installer)
 
 
 # ------------------------------------------------------------------ workflow parsing
@@ -300,6 +307,8 @@ class WorkflowParser(object):
             rest = rest.split(" #", 1)[0].rstrip()
         if rest.startswith("[") and rest.endswith("]"):
             return [item.strip() for item in rest[1:-1].split(",") if item.strip()]
+        if rest == "{}":
+            return {}
         if rest.startswith("{"):
             raise ValueError("flow mappings are not supported: %r" % rest)
         return rest
@@ -340,6 +349,8 @@ def lookup(path, context):
 
 def evaluate(expression, context):
     expression = expression.strip()
+    if " && " in expression:
+        return all(evaluate(part, context) for part in expression.split(" && "))
     match = COMPARISON.match(expression)
     if match:
         left = lookup(match.group(1), context)
@@ -515,19 +526,35 @@ class SnapshotFixture(object):
             (self.root / name).mkdir()
         self.log = self.root / "fake-log.jsonl"
         make_executable(self.root / "bin" / "mvn", FAKE_MVN_SNAPSHOT)
+        workspace = self.root / "workspace"
+        scripts = workspace / ".github" / "scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "ci_changed_paths.py", scripts / "ci_changed_paths.py")
+        def git(*args):
+            return subprocess.check_output([REAL_GIT, *args], cwd=workspace).decode().strip()
+        git("init", "-q")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base")
+        before = git("rev-parse", "HEAD")
+        (workspace / "pom.xml").write_text("fixture product change")
+        git("add", "pom.xml")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "product")
+        self.head = git("rev-parse", "HEAD")
+        self.event = self.root / "event.json"
+        self.event.write_text(json.dumps({"before": before}))
 
     def env(self, version, eval_fail=False):
         env = {"PATH": "%s:%s" % (self.root / "bin", os.environ.get("PATH", "/usr/bin:/bin")),
                "HOME": str(self.root / "home"), "FAKE_LOG": str(self.log), "FAKE_PROJECT_VERSION": version,
                "RUNNER_TEMP": str(self.root / "runner"), "GITHUB_WORKSPACE": str(self.root / "workspace"),
-               "GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/alpha", "LANG": "C.UTF-8"}
+               "GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "LANG": "C.UTF-8",
+               "GITHUB_EVENT_PATH": str(self.event), "GITHUB_SHA": self.head}
         if eval_fail:
             env["FAKE_EVAL_FAIL"] = "1"
         return env
 
     def context(self):
         return {"secrets": {"SONATYPE_USERNAME": "fixture-user", "SONATYPE_PASSWORD": "fixture-password"},
-                "github": {"ref": "refs/heads/alpha", "event_name": "push"}, "vars": {}}
+                "github": {"ref": "refs/heads/main", "event_name": "push"}, "vars": {}}
 
     def run(self, version, eval_fail=False):
         workflow = load_workflow(SNAPSHOT_WORKFLOW)
@@ -540,7 +567,7 @@ class SnapshotFixture(object):
 
 
 class SnapshotPublishTests(unittest.TestCase):
-    """A formal version on alpha is a successful non-publication; only a SNAPSHOT reaches the deploy."""
+    """A formal version on main is a successful non-publication; only a SNAPSHOT reaches the deploy."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="snapshot-wf-")
@@ -575,6 +602,32 @@ class SnapshotPublishTests(unittest.TestCase):
         self.assertEqual(self.fixture.deploy_calls(), [], result.log)
         self.assertEqual(result.outcome("Deploy snapshot to Central"), "skipped", result.log)
         self.assertRegex(result.log, r"::notice::.*6\.3\.0.*no(thing)? .*publish", result.log)
+
+    def test_docs_only_push_does_not_even_evaluate_the_version(self):
+        workspace = self.fixture.root / "workspace"
+        before = self.fixture.head
+        (workspace / "README.md").write_text("docs only")
+        subprocess.check_call([REAL_GIT, "add", "README.md"], cwd=workspace)
+        subprocess.check_call([REAL_GIT, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                               "commit", "-qm", "docs"], cwd=workspace)
+        self.fixture.head = subprocess.check_output([REAL_GIT, "rev-parse", "HEAD"], cwd=workspace).decode().strip()
+        self.fixture.event.write_text(json.dumps({"before": before}))
+        result = self.fixture.run("6.3.1-SNAPSHOT")
+        self.assertEqual(result.status, "success", result.log)
+        self.assertEqual(read_log(self.fixture.log), [])
+        self.assertEqual(result.outcome("Classify the project version"), "skipped")
+
+    def test_manual_dispatch_publishes_only_from_main(self):
+        job = load_workflow(SNAPSHOT_WORKFLOW)["jobs"]["snapshot-publish"]
+        for ref, expected in (("refs/heads/feature", "skipped"), ("refs/heads/main", "success")):
+            with self.subTest(ref=ref):
+                context = self.fixture.context()
+                context["github"].update(ref=ref, event_name="workflow_dispatch")
+                env = self.fixture.env("6.3.1-SNAPSHOT")
+                env.update(GITHUB_REF=ref, GITHUB_EVENT_NAME="workflow_dispatch")
+                result = run_job(job, self.fixture.root / "workspace", env, context, self.fixture.root / "runner")
+                self.assertEqual(result.status, expected, result.log)
+                self.assertEqual(len(self.fixture.deploy_calls()), 0 if expected == "skipped" else 1)
 
     def test_malformed_or_empty_version_fails_without_deploy(self):
         for version in ("", "6.3", "6.3.0-RC1", "v6.3.0", "06.3.0", " 6.3.0", "6.3.0\n6.3.1",
@@ -612,7 +665,8 @@ class SnapshotPublishTests(unittest.TestCase):
                    or "secrets." in str(s.get("with") or "")]
         self.assertEqual(holders, ["Deploy snapshot to Central"])
         deploy = step_named(job, "Deploy snapshot to Central")
-        self.assertEqual(str(deploy.get("if", "")).replace(" ", ""), "steps.version.outputs.kind=='snapshot'")
+        self.assertEqual(str(deploy.get("if", "")).replace(" ", ""),
+                         "steps.changes.outputs.product=='true'&&steps.version.outputs.kind=='snapshot'")
         classify = [s for s in job["steps"] if s.get("id") == "version"]
         self.assertEqual(len(classify), 1)
         self.assertNotIn("secrets.", json.dumps(classify[0]))

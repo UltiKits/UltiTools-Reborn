@@ -1,23 +1,35 @@
-# Dependabot configuration for UltiTools-API.
-#
-# Two ecosystems are tracked, both on a weekly schedule against the integration
-# branch alpha: Maven (this project's own dependencies) and GitHub Actions (the workflows
-# under .github/workflows/).
-#
-# UltiTools-API 的 Dependabot 配置。
-# 跟踪两个生态,均对集成分支 alpha 按周计划:Maven(本项目自身依赖)与
-# GitHub Actions(.github/workflows/ 下的工作流)。
+# Monthly dependency updates against the sole integration branch.
 version: 2
 updates:
   - package-ecosystem: "maven"
     directory: "/"
-    target-branch: "alpha"
+    target-branch: "main"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 10
+    groups:
+      maven-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # JUnit 6 requires Java 17; tests retain the JUnit 5 API for this Java 8-bytecode project.
+      - dependency-name: "org.junit.jupiter:*"
+        versions: [">=6"]
+      # Connector/J 10+ is outside the reviewed Java 8-compatible 9.x runtime line.
+      - dependency-name: "com.mysql:mysql-connector-j"
+        versions: [">=10"]
+      # Mockito already runs on JDK 21, but a new major needs a reviewed JDK/API baseline.
+      - dependency-name: "org.mockito:*"
+        versions: [">=6"]
+      # Paper 26.x moves beyond the JDK 21 / Paper 1.21 compile-time baseline.
+      - dependency-name: "io.papermc.paper:paper-api"
+        versions: ["<1.21", ">=1.22"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
-    target-branch: "alpha"
+    target-branch: "main"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      github-actions:
+        patterns: ["*"]

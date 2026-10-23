@@ -2,41 +2,50 @@ name: UltiTools API CI
 
 on:
   push:
-    branches: [ "**" ]
+    branches: [main]
   pull_request:
-    branches: [ "main", "alpha" ]
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # ==================== Test Stage ====================
   test:
     name: 🧪 Test & Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
-    
     steps:
     - name: 📥 Checkout code
-      uses: actions/checkout@v4
-    
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        fetch-depth: 0
+
+    - name: Classify changed paths
+      id: changes
+      run: python3 -I .github/scripts/ci_changed_paths.py
+
+    - name: Non-product fast path
+      if: steps.changes.outputs.build != 'true'
+      run: echo 'No product or Java test changes; the required test check passes without a Maven build.'
+
     - name: ☕ Set up JDK 21
-      uses: actions/setup-java@v4
+      if: steps.changes.outputs.build == 'true'
+      uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
       with:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
 
-    - name: Set up pinned Maven for Central staging
-      run: bash .github/scripts/setup-pinned-maven.sh
-
     - name: 🧪 Build & Test with Coverage
-      # verify, not test: the shade filters, resource filtering, jar packaging and javadoc
-      # generation are all bound to the package phase, so running test alone would leave them
-      # to execute for the first time only after merging.
-      # No need to disable signing: maven-gpg-plugin lives only in the release profile and is
-      # not active by default.
+      # Verify also exercises packaging, API compatibility and deprecation-registry checks.
+      if: steps.changes.outputs.build == 'true'
       run: mvn -B clean verify
-      
+
     - name: Verify checkout remains clean
+      if: steps.changes.outputs.build == 'true'
       run: |
         STATUS="$(git status --porcelain)"
         if [ -n "$STATUS" ]; then
@@ -44,210 +53,107 @@ jobs:
           exit 1
         fi
 
-    - name: 🇨🇳 CJK Comment/Javadoc Scope Gate
-      # D-11/D-20: enforces the publication-language constraint (English-first comments and
-      # javadoc, Chinese as a supplement) over src/main/java, .github/workflows and the
-      # buildtools test package. Invoked with no threshold flag, so the script's default
-      # zero-violation exit applies -- the migration aid existed only for introducing the gate
-      # before GATE-02's conversion batches finished (08-04..08-17), and the conversion is now
-      # finished. Runs after the Maven build so a compile failure is reported before a
-      # text-scan failure. Placed inside this job (the sole required status check on both alpha
-      # and main), not a new job, so no branch-protection change is needed. Runs on every
-      # trigger of this workflow -- there is no separate paths: filter here, so a change to the
-      # script or the allowlist is validated by the same mechanism it governs, not narrowed out.
+    - name: 🧪 Run isolated-tagged tests
+      # A fresh Maven/Surefire JVM still isolates scheduler state. Reuse compiled classes, not reports.
+      # JaCoCo appends execution data and the test-bound report includes both invocations.
+      if: steps.changes.outputs.build == 'true'
+      run: |
+        mv target/surefire-reports target/regular-surefire-reports
+        mvn -B test -Dgroups=isolated -DexcludedGroups=
+
+    - name: CJK Comment/Javadoc Scope Gate
+      # Lightweight checks run even on the fast path; do not hide changes to their own mechanism.
       run: .github/scripts/check-cjk-scope.sh
-      
-    - name: Release tooling regression suites
-      # The required test job already has JDK 21; clean verify above resolves the real Central 0.9.0
-      # build extension and its runtime dependencies before the mandatory, non-skippable probe.
-      run: python3 -B -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v
-
-    - name: Verify release tests leave checkout clean
-      run: |
-        STATUS="$(git status --porcelain)"
-        if [ -n "$STATUS" ]; then
-          printf '%s\n' "$STATUS"
-          exit 1
-        fi
 
     - name: Verification instrument self-tests
       run: |
         bash .github/scripts/check-cjk-scope.sh --self-test
         bash .github/scripts/test-buildtool-lifecycle.sh --self-test
 
-    - name: 📊 Generate JaCoCo Coverage Report
-      run: mvn -B jacoco:report
-      
-    - name: 📈 JaCoCo Coverage Report Summary
-      id: jacoco
-      uses: cicirello/jacoco-badge-generator@v2
-      with:
-        jacoco-csv-file: target/site/jacoco/jacoco.csv
-        badges-directory: .github/badges
-        generate-coverage-badge: true
-        generate-branches-badge: true
-        generate-summary: true
-        
-    - name: 📋 Display Coverage Summary
-      run: |
-        echo "## 📊 Test Coverage Report" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-        echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Line coverage** | ${{ steps.jacoco.outputs.coverage }}% |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Branch coverage** | ${{ steps.jacoco.outputs.branches }}% |" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📁 Detailed Coverage Data" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        cat target/site/jacoco/jacoco.csv | head -20 >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        
     - name: 📤 Upload Coverage Report
-      uses: actions/upload-artifact@v4
+      if: steps.changes.outputs.build == 'true'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: jacoco-coverage-report
         path: target/site/jacoco/
-        retention-days: 30
-        
+        retention-days: 7
+
     - name: 📤 Upload Test Results
-      uses: actions/upload-artifact@v4
-      if: always()
+      if: always() && steps.changes.outputs.build == 'true'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: test-results
-        path: target/surefire-reports/
-        retention-days: 30
-        
+        path: |
+          target/surefire-reports/
+          target/regular-surefire-reports/
+        retention-days: 7
+
     - name: 📤 Upload japicmp Report
-      uses: actions/upload-artifact@v4
-      if: always()
+      if: always() && steps.changes.outputs.build == 'true'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: japicmp-report
         path: target/japicmp/
-        retention-days: 30
-        
-    - name: ✅ Coverage Gate Check
-      run: |
-        COVERAGE=${{ steps.jacoco.outputs.coverage }}
-        BRANCHES=${{ steps.jacoco.outputs.branches }}
-        echo "📊 Current line coverage: ${COVERAGE}%"
-        echo "📊 Current branch coverage: ${BRANCHES}%"
-        # A coverage threshold check could be set here
-        # if (( $(echo "$COVERAGE < 50" | bc -l) )); then
-        #   echo "❌ Coverage below 50%, build failed"
-        #   exit 1
-        # fi
-        echo "✅ Tests passed, coverage meets requirements"
+        retention-days: 7
 
     - name: 📤 Upload Coverage to Codacy
-      if: github.event_name == 'push'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.changes.outputs.build == 'true'
       env:
         CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
         CODACY_ORGANIZATION_PROVIDER: gh
         CODACY_USERNAME: UltiKits
         CODACY_PROJECT_NAME: UltiTools-Reborn
-      run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r target/site/jacoco/jacoco.xml
+      run: |
+        set -euo pipefail
+        REPORTER="$RUNNER_TEMP/codacy-coverage-reporter"
+        curl --fail --location --retry 3 --output "$REPORTER" \
+          https://github.com/codacy/codacy-coverage-reporter/releases/download/14.1.3/codacy-coverage-reporter-linux
+        printf '%s  %s\n' '15c5f052207d27b8501ab5d5910c68c206ea70b0157ee1725132780530580875' "$REPORTER" | sha256sum --check --strict
+        chmod +x "$REPORTER"
+        "$REPORTER" report -r target/site/jacoco/jacoco.xml
 
-  # ==================== Isolated Test Stage ====================
-  # TaskManagerTest is tagged @Tag("isolated") because it mutates global scheduler state, so it
-  # is excluded from the default `mvn -B clean verify` run above (see pom.xml's excludedGroups
-  # property). This job gives it its own Maven invocation and its own build directory - a
-  # separate job rather than a second step in the `test` job (D-28) - so it cannot observe or
-  # overwrite the other job's surefire output or the japicmp report, and so its own isolation
-  # from global scheduler state is real rather than nominal.
-  test-isolated:
-    name: 🧪 Isolated Tests
+  release-tooling:
+    name: Release tooling regression suites
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-
     steps:
     - name: 📥 Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        fetch-depth: 0
+
+    - name: Classify changed paths
+      id: changes
+      run: python3 -I .github/scripts/ci_changed_paths.py
 
     - name: ☕ Set up JDK 21
-      uses: actions/setup-java@v4
+      if: steps.changes.outputs.tooling == 'true'
+      uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
       with:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
 
-    - name: 🧪 Run isolated-tagged tests
-      # -Dgroups=isolated selects only the isolated tag; -DexcludedGroups= clears pom.xml's
-      # default exclusion (which would otherwise still filter this class out).
-      run: mvn -B test -Dgroups=isolated -DexcludedGroups=
+    - name: Set up pinned Maven for Central staging
+      if: steps.changes.outputs.tooling == 'true'
+      run: bash .github/scripts/setup-pinned-maven.sh
 
-    - name: 📤 Upload Isolated Test Results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: isolated-test-results
-        path: target/surefire-reports/
-        retention-days: 30
+    - name: Resolve release probe dependencies
+      # Populate the real Central plugin's runtime dependencies without compiling the product.
+      if: steps.changes.outputs.tooling == 'true'
+      run: mvn -B -ntp dependency:resolve-plugins
 
-  # ==================== Build SNAPSHOT Stage ====================
-  build-snapshot:
-    name: 🔨 Build SNAPSHOT
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    # alpha is the development trunk, so a SNAPSHOT artifact is only meaningful for it; the
-    # official artifact on main is produced by publish-packages.yml at release time.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/alpha'
-    
-    steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-    
-    - name: ☕ Set up JDK 21
-      uses: actions/setup-java@v4
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-        cache: maven
+    - name: Release tooling regression suites
+      if: steps.changes.outputs.tooling == 'true'
+      run: python3 -B -I -m unittest discover -s .github/scripts/tests -p 'test_*.py' -v
 
-    - name: 🏷️ Get Project Version from pom.xml
-      id: version
-      uses: avides/actions-project-version-check@v1.4.0
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        file-to-check: pom.xml
-        only-return-version: true
-
-    - name: 🔧 Set SNAPSHOT Version
-      id: snapshot
+    - name: Verify release tests leave checkout clean
+      if: steps.changes.outputs.tooling == 'true'
       run: |
-        BASE_VERSION=${{ steps.version.outputs.version }}
-        # Remove any existing -SNAPSHOT suffix, then add the new one
-        CLEAN_VERSION=${BASE_VERSION%-SNAPSHOT}
-        SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-        SNAPSHOT_VERSION="${CLEAN_VERSION}-SNAPSHOT-${SHORT_SHA}"
-        echo "snapshot_version=${SNAPSHOT_VERSION}" >> $GITHUB_OUTPUT
-        echo "📦 SNAPSHOT version: ${SNAPSHOT_VERSION}"
-        # Update the version number in pom.xml
-        mvn versions:set -DnewVersion=${SNAPSHOT_VERSION} -DgenerateBackupPoms=false
-        
-    - name: 🔨 Build SNAPSHOT with Maven
-      run: mvn -B package javadoc:javadoc -DskipTests
-
-    - name: 📦 Archive SNAPSHOT artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ultitools-snapshot-${{ steps.snapshot.outputs.snapshot_version }}
-        path: target/UltiTools-API-${{ steps.snapshot.outputs.snapshot_version }}.jar
-        retention-days: 14
-        
-
-    - name: 📝 SNAPSHOT Build Summary
-      run: |
-        echo "## 📦 SNAPSHOT Build Complete" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
-        echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Version** | \`${{ steps.snapshot.outputs.snapshot_version }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Triggered by** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "💡 **Tip**: SNAPSHOT artifacts are retained for 14 days and can be downloaded from Artifacts" >> $GITHUB_STEP_SUMMARY
+        STATUS="$(git status --porcelain)"
+        if [ -n "$STATUS" ]; then
+          printf '%s\n' "$STATUS"
+          exit 1
+        fi
