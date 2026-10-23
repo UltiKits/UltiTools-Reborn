@@ -10,7 +10,7 @@
   It ships its own IoC container, ByteBuddy-based AOP, an ORM over MySQL/SQLite/JSON, a declarative reactive
   GUI layer, a module EventBus, and a WebSocket client for remote server management.
 - **Maven coordinates:** `com.ultikits:UltiTools-API` — read the current version from `pom.xml`;
-  `main` and `alpha` do not always carry the same one. Produces a shaded JAR via maven-shade-plugin.
+  releases are marked by tags on `main`. Produces a shaded JAR via maven-shade-plugin.
 - **No Spring.** The IoC container is hand-written (`context/SimpleContainer`); `pom.xml` declares no Spring
   dependency at all. `@Service`, `@Autowired`, `@Configuration` and friends are **this framework's own
   annotations** under `com.ultikits.ultitools.annotations` — importing Spring's will not resolve against the
@@ -37,15 +37,11 @@
 
 ## Branching Rule
 
-**Two long-lived branches. Never commit to either directly.**
+**One long-lived branch. Never commit to it directly.**
 
-- **`main` is the GitHub default branch** (`origin/HEAD` → `origin/main`). Scheduled workflow triggers
-  fire only for the copy of a workflow that lives here.
-- **`alpha` is the integration branch**, not the default. Day-to-day work targets `alpha`.
-- **A pull request into `main` may only come from `alpha`.** `pr-source-guard.yml` checks that source
-  branch; whether it is required is repository configuration, not guaranteed by the workflow file.
-  Everything else integrates into `alpha` first. Target `alpha` unless told otherwise.
-- **Before editing, run `git branch --show-current`.** If it returns `main` or `alpha`, branch off first.
+- **`main` is the GitHub default and sole integration branch.** Feature pull requests target `main`;
+  releases are marked by tags. GitHub closing keywords close issues when those pull requests merge.
+- **Before editing, run `git branch --show-current`.** If it returns `main`, branch off first.
 - **Enforcement is configured through repository rulesets and branch protection, and it changes.** Do not
   assume a branch is locked just because this file says so — check the live state:
 
@@ -57,13 +53,6 @@
   ```
 - **Branch naming:** `feature/<short-description>`, `fix/<short-description>`, `chore/<short-description>`,
   `docs/<short-description>`.
-- Measure the current divergence instead of trusting a number written here:
-
-  ```bash
-  MB=$(git merge-base origin/main origin/alpha)
-  git rev-list --count $MB..origin/main     # commits main is ahead
-  git rev-list --count $MB..origin/alpha    # commits alpha is ahead
-  ```
 
 ## Build / Test / Verify
 
@@ -96,11 +85,9 @@ All jobs run on JDK 21 (temurin). **Workflow files change more often than this c
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `maven-ci.yml` | `push` on every branch, **and** `pull_request` into `main` or `alpha` | `mvn -B clean verify`, release-tooling regression suites and JaCoCo reporting; Codacy coverage upload on pushes. An isolated-test job runs separately. A third job builds a SNAPSHOT artifact only on `push` to `alpha`. |
-| `pr-source-guard.yml` | `pull_request` into `main` | Rejects a pull request whose head is not this repository's `alpha`. Required-check configuration is maintained separately. |
+| `maven-ci.yml` | `push` and `pull_request` into `main` | The required `🧪 Test & Coverage` job always reports. Product or Java test changes run `mvn -B clean verify` and a separate isolated-tagged invocation in the same job; other changes take the lightweight path. Release-tooling Python suites run in parallel only for workflow/script changes. Coverage is uploaded to Codacy only on main pushes that build. |
 | `publish-packages.yml` | `release: [published]` — a published GitHub Release, **not** a tag push | Validates the tag and retained manifest, then publishes the already accepted assets without rebuilding. GitHub Packages uses lowercase `ultitools-api`; the Maven Central job runs only if `PUBLISH_TO_CENTRAL == 'true'`. |
-| `snapshot-publish.yml` | `push` to `alpha`, `workflow_dispatch` | Publishes well-formed `-SNAPSHOT` versions to Central. A formal version such as `6.3.0` succeeds without publishing; malformed versions fail. |
-| `phase-closeout.yml` | `pull_request_target: [closed]` into `alpha` or `main` | On a merged PR, reads issue declarations and closes them. It uses the default branch's workflow and script, so an `alpha`-only change takes effect only after promotion to `main`. |
+| `snapshot-publish.yml` | `push` to `main`, `workflow_dispatch` on `main` only | Publishes well-formed `-SNAPSHOT` versions to Central only when product paths changed in the full pushed range (or on manual dispatch). Formal versions succeed without publishing; malformed versions fail. |
 | `gpg-key-expiry.yml` | monthly `schedule`, `workflow_dispatch`, and pull requests touching its own script | Warns before the Maven Central signing key expires. Uses the public key only. `schedule` fires only for workflows living on the **default** branch. |
 
 Maven Central publishing goes through `central-publishing-maven-plugin` with server id `ultikits-sonatype`.
@@ -112,7 +99,7 @@ After independent acceptance and the maintainer's decision, `--publish-approved 
 rebuilding. `publish-packages.yml` consumes the attached assets on `release: published`; it does not
 compile a replacement artifact. There is no `workflow_dispatch` release workflow.
 
-The release path is shared with every downstream module repository — **get maintainer sign-off before
+The framework release retains accepted bytes — **get maintainer sign-off before
 changing `publish-packages.yml` or `.github/scripts/release.sh`.** Verification-only changes to
 `maven-ci.yml` are made routinely.
 

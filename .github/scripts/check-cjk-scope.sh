@@ -118,7 +118,7 @@
 # there with no threshold flag, so the zero-violation default applies. The migration aid
 # (--max-violations) existed only to let the gate be introduced before GATE-02's conversion
 # batches finished (08-04..08-17); the conversion is now finished and the gate is live and
-# required on both alpha and main. IN-01 (08-REVIEW.md): this header previously said "NOT wired
+# required on main. IN-01 (08-REVIEW.md): this header previously said "NOT wired
 # into maven-ci.yml yet" after the wiring had already landed -- corrected here to match.
 #
 set -euo pipefail
