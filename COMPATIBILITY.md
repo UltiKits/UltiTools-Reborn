@@ -20,7 +20,7 @@ explains it; the sections below are the reference and stay authoritative where t
 9. If a field uses `@Scheduled(config = …, periodKey/delayKey = …)` or `@CmdCD(config = …, key = …)`, declare `api-version: 630`, keep a bound `@Scheduled` synchronous, and drop any `@Range` on the bound field, whose range the binding replaces (see [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)).
 10. Check command bodies for the one-tick delay they no longer get: a synchronous body now runs at dispatch, so code inside an `InventoryClickEvent` that opens or closes an inventory or dispatches a command must defer it with `runTask`, and a body that dispatches its own command meets `@UsageLimit` and `@CmdCD` on the same tick (see [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)).
 11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
-12. Keep the framework out of your JAR, and if your module uses XSeries declare it yourself as `provided`/`compileOnly` (`com.github.cryptomorin:XSeries:13.7.1` or your own pin): the framework no longer shades it but still delivers it at runtime through its `libraries:` block, and Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
+12. Keep the framework out of your JAR, and if your module uses XSeries declare it yourself as `provided`/`compileOnly` (`com.github.cryptomorin:XSeries:14.0.0` or your own pin): the framework no longer shades it but still delivers it at runtime through its `libraries:` block, and Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
 13. Know the framework's own server requirements: Paper 1.19.2 build 163 or newer, Java 17 below Paper 1.20.5 and Java 21 from it; the UltiKits modules state only the UltiTools-API version they support (6.3.0 or later for `api-version: 630`) (see [Support matrix](#support-matrix)).
 14. If your module uses `DataOperator#transaction(...)` or `@Transactional` on JSON storage, or relies on a failing joined `@Transactional` method or a failing nested `DataOperator#transaction(...)` scope being survivable, review the transaction changes: on `datasource.type: json` transactions are now staged, atomic across a plugin's tables and durable once `commit` returns; a plain JSON write can wait up to 5 seconds for a transaction's table lock; a transaction begun by `DataOperator#transaction(...)` locks each table at its first read, as 6.2.5 ran each callback alone per operator, so a read inside it can wait up to 5 seconds too; a `@Transactional` method that computes a write from a value it read uses `updateIf` or `@Transactional(isolation = Isolation.REPEATABLE_READ)`; and on every backend a failing joined method or nested scope marks the whole transaction rollback-only, so the outermost commit throws `UnexpectedRollbackException` (see [JSON transactions](#json-transactions-630--staged-atomic-and-durable), [A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) and [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)). If you also run the server, read the operator guidance in the JSON transactions section: back up `.ultitools-journal` with the tables, never delete it, and run one server per data folder.
 
@@ -39,9 +39,27 @@ explains it; the sections below are the reference and stay authoritative where t
 9. 字段使用 `@Scheduled(config = …, periodKey/delayKey = …)` 或 `@CmdCD(config = …, key = …)` 时，声明 `api-version: 630`，绑定配置的 `@Scheduled` 保持同步，并删除该字段上的 `@Range`（由绑定自带的范围取代）（见 [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)）。
 10. 检查依赖“延后一刻执行”的命令代码：同步命令体现在于分发时立即执行，因此在 `InventoryClickEvent` 中打开或关闭物品栏、或分发命令的代码要用 `runTask` 推迟，分发自身命令的命令体会在同一刻遇到 `@UsageLimit` 和 `@CmdCD`（见 [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)）。
 11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
-12. 不要把框架打进自己的 JAR；模块用到 XSeries 时请自行以 `provided`/`compileOnly` 声明（`com.github.cryptomorin:XSeries:13.7.1` 或你自己固定的版本）：框架不再内嵌它，但仍通过自己的 `libraries:` 在运行时提供，Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
+12. 不要把框架打进自己的 JAR；模块用到 XSeries 时请自行以 `provided`/`compileOnly` 声明（`com.github.cryptomorin:XSeries:14.0.0` 或你自己固定的版本）：框架不再内嵌它，但仍通过自己的 `libraries:` 在运行时提供，Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
 13. 了解框架本身的服务器要求：Paper 1.19.2 build 163 或更新，Paper 1.20.5 以下用 Java 17，1.20.5 起用 Java 21；UltiKits 官方模块只写明它们支持的 UltiTools-API 版本（`api-version: 630` 即 6.3.0 或更高）（见 [Support matrix](#support-matrix)）。
 14. 如果模块在 JSON 存储上使用 `DataOperator#transaction(...)` 或 `@Transactional`，或者依赖“失败的加入方 `@Transactional` 方法 / 失败的嵌套 `DataOperator#transaction(...)` 作用域可以被调用方承受”，请检查事务相关的变化：`datasource.type: json` 下的事务现在是暂存的、跨同一插件各表原子的，并且在 `commit` 返回后即持久；普通 JSON 写入可能为等待事务的表锁而停顿最多 5 秒；由 `DataOperator#transaction(...)` 开启的事务在第一次读取某张表时就锁住它（与 6.2.5 中每个回调按操作器逐个运行一致），所以其中的读取也可能停顿最多 5 秒；凭读到的值计算写入的 `@Transactional` 方法应使用 `updateIf` 或 `@Transactional(isolation = Isolation.REPEATABLE_READ)`；在所有后端上，失败的加入方方法或嵌套作用域都会把整个事务标记为仅回滚，最外层提交会抛出 `UnexpectedRollbackException`（见 [JSON transactions](#json-transactions-630--staged-atomic-and-durable)、[A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) 和 [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)）。如果你同时运营服务器，请阅读 JSON 事务一节中的服主须知：把 `.ultitools-journal` 与各表一起备份、永远不要删除它，并且一个数据文件夹只运行一个服务器。
+
+## XSeries 14 (as of the next release after 6.3.0)
+
+The framework-provided XSeries runtime library moves from **13.7.1 to 14.0.0**;
+Paper still downloads it through `plugin.yml` `libraries:` rather than finding it shaded in the framework JAR.
+Third-party modules using XSeries must check these removed public APIs and recompile:
+
+- `com.cryptomorin.xseries.reflection.minecraft.NMSExtras` and its nested types
+  (`Animation`, `DataWatcherItemType`, `EntityPose`, `LivingEntityFlags`, `WorldlessBlockWrapper`)
+  are removed; use the new `reflection.minecraft.capabilities` classes extending `MinecraftCapability`.
+- The public no-argument `com.cryptomorin.xseries.profiles.builder.XSkull()` constructor is removed;
+  use the static factory methods, such as `XSkull.createItem()` or `XSkull.of(...)`.
+- `com.cryptomorin.xseries.reflection.XReflection.getLatestPatchNumberOf(int)` is removed;
+  use `getLatestPatchNumberOf(int majorVersion, int minorVersion)` (for example, `(1, 21)`).
+
+See the [XSeries 14.0.0 release notes](https://github.com/CryptoMorin/XSeries/releases/tag/v14.0.0)
+and the published [13.7.1](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/13.7.1/XSeries-13.7.1-sources.jar)
+and [14.0.0 sources](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/14.0.0/XSeries-14.0.0-sources.jar).
 
 ## Config layer (6.3.0)
 
@@ -3411,7 +3429,7 @@ delivered at all; the framework uses Paper's native Adventure (see the plan 18-3
 above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
 delivered through the `libraries:` route in the table instead, the same way HikariCP already
 was. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
-along for the ride: declare it yourself (`com.github.cryptomorin:XSeries:13.7.1`, or your own
+along for the ride: declare it yourself (`com.github.cryptomorin:XSeries:14.0.0`, or your own
 pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
