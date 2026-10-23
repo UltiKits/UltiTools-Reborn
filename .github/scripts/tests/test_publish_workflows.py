@@ -193,7 +193,7 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertLess(steps.index(pin), steps.index(resolve))
         self.assertLess(steps.index(resolve), suites[0])
         self.assertEqual(resolve["if"], pin["if"])
-        self.assertEqual(resolve["run"], "mvn -B -ntp dependency:resolve-plugins")
+        self.assertEqual(resolve["run"], "mvn -B -ntp process-resources dependency:resolve-plugins")
         central = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-central"]
         self.assertEqual(step_named(central, pin["name"])["run"], pin["run"])
         test_steps = workflow["jobs"]["test"]["steps"]
@@ -349,8 +349,15 @@ def lookup(path, context):
 
 def evaluate(expression, context):
     expression = expression.strip()
+    # GitHub evaluates && before || and short-circuits both operators.
+    if " || " in expression:
+        return any(evaluate(part, context) for part in expression.split(" || "))
     if " && " in expression:
         return all(evaluate(part, context) for part in expression.split(" && "))
+    path_comparison = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_.-]*)\s*(==|!=)\s*([A-Za-z_][A-Za-z0-9_.-]*)", expression)
+    if path_comparison:
+        equal = lookup(path_comparison.group(1), context) == lookup(path_comparison.group(3), context)
+        return equal if path_comparison.group(2) == "==" else not equal
     match = COMPARISON.match(expression)
     if match:
         left = lookup(match.group(1), context)

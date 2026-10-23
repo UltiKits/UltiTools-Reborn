@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -27,9 +27,9 @@ jobs:
       id: changes
       run: python3 -I .github/scripts/ci_changed_paths.py
 
-    - name: Non-product fast path
+    - name: Plain-documentation fast path
       if: steps.changes.outputs.build != 'true'
-      run: echo 'No product or Java test changes; the required test check passes without a Maven build.'
+      run: echo 'Only plain documentation changed; the required test check passes without a Maven build.'
 
     - name: ☕ Set up JDK 21
       if: steps.changes.outputs.build == 'true'
@@ -97,7 +97,7 @@ jobs:
         retention-days: 7
 
     - name: 📤 Upload Coverage to Codacy
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.changes.outputs.build == 'true'
+      if: steps.changes.outputs.build == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' || steps.changes.outputs.build == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       env:
         CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
         CODACY_ORGANIZATION_PROVIDER: gh
@@ -141,9 +141,9 @@ jobs:
       run: bash .github/scripts/setup-pinned-maven.sh
 
     - name: Resolve release probe dependencies
-      # Populate the real Central plugin's runtime dependencies without compiling the product.
+      # Run flatten online to populate its runtime realm, then resolve the offline Central probe dependencies.
       if: steps.changes.outputs.tooling == 'true'
-      run: mvn -B -ntp dependency:resolve-plugins
+      run: mvn -B -ntp process-resources dependency:resolve-plugins
 
     - name: Release tooling regression suites
       if: steps.changes.outputs.tooling == 'true'

@@ -251,7 +251,7 @@ class BuildVerificationConfigurationTest {
                 .containsExactly("-B clean verify",
                         "-B test -Dgroups=isolated -DexcludedGroups=");
         assertThat(calls(workflowRuns("maven-ci.yml", "release-tooling")))
-                .containsExactly("-B -ntp dependency:resolve-plugins");
+                .containsExactly("-B -ntp process-resources dependency:resolve-plugins");
     }
 
     @Test
@@ -315,7 +315,8 @@ class BuildVerificationConfigurationTest {
         assertThat(jobs.get("test").get("name")).isEqualTo("🧪 Test & Coverage");
         assertThat(jobs.get("release-tooling").get("name")).isEqualTo("Release tooling regression suites");
         Map<String, Object> concurrency = (Map<String, Object>) workflow.get("concurrency");
-        assertThat(concurrency).containsEntry("group", "${{ github.workflow }}-${{ github.ref }}")
+        assertThat(concurrency).containsEntry("group",
+                "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}")
                 .containsEntry("cancel-in-progress", "${{ github.event_name == 'pull_request' }}");
         String runs = workflowRuns("maven-ci.yml", "test");
         assertThat(runs.split("\\n")).contains("mvn -B clean verify", ".github/scripts/check-cjk-scope.sh",

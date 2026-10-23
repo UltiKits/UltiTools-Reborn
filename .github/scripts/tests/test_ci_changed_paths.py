@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_publish_workflows import SCRIPTS, WORKFLOWS, WorkflowParser, fixture_git, fixture_git_env, load_workflow, step_named
+from test_publish_workflows import SCRIPTS, WORKFLOWS, WorkflowParser, condition_holds, fixture_git, fixture_git_env, load_workflow, step_named
 
 
 class ChangedPathsTests(unittest.TestCase):
@@ -65,13 +65,47 @@ class ChangedPathsTests(unittest.TestCase):
         self.commit("src/test/java/ExampleTest.java")
         self.assertEqual(self.classify("push"), {"product": "false", "build": "true", "tooling": "false"})
 
-    def test_tooling_changes_only_run_release_lane(self):
-        for path in (".github/scripts/new.py", ".github/workflows/new.yml"):
+    def test_tooling_changes_run_both_lanes(self):
+        for path in (".github/scripts/new.py", ".github/workflows/new.yml", "pom.xml"):
             with self.subTest(path=path):
                 before = self.git("rev-parse", "HEAD")
                 self.commit(path)
                 self.assertEqual(self.classify("push", before=before),
-                                 {"product": "false", "build": "false", "tooling": "true"})
+                                 {"product": str(path == "pom.xml").lower(), "build": "true", "tooling": "true"})
+
+    def test_only_plain_documentation_uses_the_fast_path(self):
+        cases = {"README.md": False, "guide/setup.md": False, "docs/diagram.png": False,
+                 ".github/dependabot.yml": True, ".github/pull_request_template.md": True,
+                 "compatibility/deprecations.json": True, "compatibility/DEPRECATIONS.md": True,
+                 "compatibility/records/6.3.0.md": True, "DEPRECATIONS.md": True, "PROJECT.md": True,
+                 "src/test/resources/config-golden/MANIFEST.md": True,
+                 "src/test/resources/framework-config/MANIFEST.md": True,
+                 "src/main/resources/README.md": True, "src/README.md": True,
+                 "LICENSE": True, ".mvn/maven.config": True, "diagram.png": True,
+                 "docs/script.py": True}
+        for path, build in cases.items():
+            with self.subTest(path=path):
+                before = self.git("rev-parse", "HEAD")
+                self.commit(path, "changed documentation or build input")
+                self.assertEqual(self.classify("push", before=before)["build"], str(build).lower())
+
+    def test_plain_docs_cannot_hide_an_asserted_markdown_change_in_the_range(self):
+        self.commit("PROJECT.md")
+        self.commit("README.md", "last commit is plain docs")
+        self.assertEqual(self.classify("push")["build"], "true")
+
+    def test_workflow_permission_and_dependabot_mutations_run_java_assertions(self):
+        cases = ((".github/workflows/maven-ci.yml", "contents: read", "contents: write"),
+                 (".github/dependabot.yml", 'target-branch: "main"', 'target-branch: "obsolete"'))
+        for path, valid, invalid in cases:
+            with self.subTest(path=path):
+                original = (WORKFLOWS.parent.parent / path).read_text()
+                self.assertIn(valid, original, "positive control: mutation must change the actual configuration")
+                before = self.commit(path, original)
+                self.commit(path, original.replace(valid, invalid, 1))
+                result = self.classify("pull_request", payload={
+                    "pull_request": {"base": {"sha": before}, "head": {"sha": self.git("rev-parse", "HEAD")}}})
+                self.assertEqual(result["build"], "true", "the Java configuration assertions must run")
 
     def test_product_deletion_and_rename_out_of_scope_still_build(self):
         before = self.commit("src/main/java/Example.java")
@@ -176,11 +210,14 @@ class MainOnlyWorkflowTests(unittest.TestCase):
         self.assertIn("-Dgroups=isolated -DexcludedGroups=", isolated)
         self.assertIn("mv target/surefire-reports target/regular-surefire-reports", isolated)
         self.assertIn("target/regular-surefire-reports/", step_named(job, "📤 Upload Test Results")["with"]["path"])
-        self.assertEqual(step_named(job, "Non-product fast path")["if"], "steps.changes.outputs.build != 'true'")
+        self.assertEqual(step_named(job, "Plain-documentation fast path")["if"], "steps.changes.outputs.build != 'true'")
         self.assertNotIn("build-snapshot", workflow["jobs"])
         self.assertFalse(any("badge" in str(step) or "Coverage Gate Check" in str(step) for step in job["steps"]))
         codacy = step_named(job, "📤 Upload Coverage to Codacy")
-        self.assertEqual(codacy["if"], "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.changes.outputs.build == 'true'")
+        self.assertEqual(codacy["if"],
+                         "steps.changes.outputs.build == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' || "
+                         "steps.changes.outputs.build == 'true' && github.event_name == 'pull_request' && "
+                         "github.event.pull_request.head.repo.full_name == github.repository")
         self.assertIn("/14.1.3/codacy-coverage-reporter-linux", codacy["run"])
         self.assertIn("sha256sum --check --strict", codacy["run"])
         self.assertNotIn("get.sh", codacy["run"])
@@ -189,6 +226,34 @@ class MainOnlyWorkflowTests(unittest.TestCase):
                 if "CODACY_API_TOKEN" in str(step):
                     self.assertEqual(name, "test")
                     self.assertEqual(step, codacy)
+
+    def test_codacy_guard_allows_only_built_main_pushes_and_same_repo_prs(self):
+        guard = step_named(load_workflow(WORKFLOWS / "maven-ci.yml")["jobs"]["test"],
+                           "📤 Upload Coverage to Codacy")["if"]
+        for event in ("push", "pull_request", "workflow_dispatch"):
+            for ref in ("refs/heads/main", "refs/pull/725/merge"):
+                for repository in ("UltiKits/UltiTools-Reborn", "contributor/fork"):
+                    for build in ("true", "false"):
+                        with self.subTest(event=event, ref=ref, repository=repository, build=build):
+                            context = {"steps": {"changes": {"outputs": {"build": build}}},
+                                       "github": {"event_name": event, "ref": ref,
+                                                  "repository": "UltiKits/UltiTools-Reborn",
+                                                  "event": {"pull_request": {"head": {"repo": {"full_name": repository}}}}}}
+                            expected = build == "true" and (
+                                (event == "push" and ref == "refs/heads/main") or
+                                (event == "pull_request" and repository == "UltiKits/UltiTools-Reborn"))
+                            self.assertEqual(condition_holds(guard, context), expected)
+        # Push events do not contain pull_request; short-circuit evaluation must still work.
+        context = {"steps": {"changes": {"outputs": {"build": "true"}}},
+                   "github": {"event_name": "push", "ref": "refs/heads/main"}}
+        self.assertTrue(condition_holds(guard, context))
+
+    def test_pr_concurrency_is_cancellable_but_each_push_has_its_own_group(self):
+        concurrency = load_workflow(WORKFLOWS / "maven-ci.yml")["concurrency"]
+        self.assertEqual(concurrency, {
+            "group": "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}",
+            "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"})
+        self.assertNotIn("concurrency", load_workflow(WORKFLOWS / "snapshot-publish.yml"))
 
     def test_snapshot_main_only_and_product_range_guards(self):
         workflow = load_workflow(WORKFLOWS / "snapshot-publish.yml")
