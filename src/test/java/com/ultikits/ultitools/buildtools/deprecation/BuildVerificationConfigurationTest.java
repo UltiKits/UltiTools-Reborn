@@ -184,7 +184,7 @@ class BuildVerificationConfigurationTest {
     void buildHelpersHaveIndependentCompilation() throws Exception {
         Document pom = pom();
         String execution = COMPILER + "/executions/execution[id='compile-deprecation-buildtools']";
-        assertThat(value(pom, COMPILER + "/version")).isEqualTo("3.11.0");
+        assertThat(value(pom, COMPILER + "/version")).isEqualTo("3.16.0");
         assertThat(value(pom, COMPILER + "/configuration/source")).isEqualTo("${java.version}");
         assertThat(value(pom, COMPILER + "/configuration/target")).isEqualTo("${java.version}");
         assertThat(value(pom, COMPILER + "/configuration/annotationProcessorPaths/path/artifactId"))
@@ -208,7 +208,7 @@ class BuildVerificationConfigurationTest {
     @Test
     void generatorUsesExplicitBuildOutputAfterJapicmp() throws Exception {
         Document pom = pom();
-        assertThat(value(pom, EXEC + "/version")).isEqualTo("3.6.3");
+        assertThat(value(pom, EXEC + "/version")).isEqualTo("3.6.4");
         assertThat(value(pom, EXEC + "/configuration/classpathScope")).isEqualTo("compile");
         assertThat(value(pom, EXEC + "/configuration/additionalClasspathElements/additionalClasspathElement"))
                 .isEqualTo("${project.build.directory}/buildtools-classes");
