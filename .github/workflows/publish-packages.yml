@@ -187,8 +187,8 @@ jobs:
 
     - name: 🔐 Configure GPG agent for CI
       run: |
-        echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-        echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+        echo "allow-loopback-pinentry" >> "${GNUPGHOME:?GNUPGHOME must be set by actions/setup-java}"/gpg-agent.conf
+        echo "pinentry-mode loopback" >> "${GNUPGHOME:?GNUPGHOME must be set by actions/setup-java}"/gpg.conf
         gpg-connect-agent reloadagent /bye || true
 
     - name: 🔑 Check GPG key expiry
