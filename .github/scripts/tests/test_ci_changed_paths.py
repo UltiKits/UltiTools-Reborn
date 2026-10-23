@@ -8,13 +8,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_publish_workflows import SCRIPTS, WORKFLOWS, WorkflowParser, load_workflow, step_named
+from test_publish_workflows import SCRIPTS, WORKFLOWS, WorkflowParser, fixture_git, fixture_git_env, load_workflow, step_named
 
 
 class ChangedPathsTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="ci-paths-")
         self.root = Path(self.temporary.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
         self.git("init", "-q")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
@@ -24,7 +26,7 @@ class ChangedPathsTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def git(self, *args):
-        return subprocess.check_output(["git", *args], cwd=self.root).decode().strip()
+        return fixture_git(self.root, self.home, *args)
 
     def commit(self, path, text="fixture"):
         target = self.root / path
@@ -39,7 +41,7 @@ class ChangedPathsTests(unittest.TestCase):
         event_file.write_text(json.dumps(payload if payload is not None else {"before": before or self.base}))
         output = self.root / "output.txt"
         output.unlink(missing_ok=True)
-        env = dict(os.environ, GITHUB_EVENT_NAME=event, GITHUB_SHA=head or self.git("rev-parse", "HEAD"),
+        env = dict(fixture_git_env(self.home), GITHUB_EVENT_NAME=event, GITHUB_SHA=head or self.git("rev-parse", "HEAD"),
                    GITHUB_EVENT_PATH=str(event_file), GITHUB_OUTPUT=str(output))
         process = subprocess.run([sys.executable, "-I", str(SCRIPTS / "ci_changed_paths.py")],
                                  cwd=self.root, env=env, capture_output=True, text=True)
@@ -102,6 +104,60 @@ class ChangedPathsTests(unittest.TestCase):
 
     def test_manual_dispatch_can_request_product_build(self):
         self.assertEqual(self.classify("workflow_dispatch")["product"], "true")
+
+
+class FixtureGitIsolationTests(unittest.TestCase):
+    def test_new_fixtures_ignore_contributor_signing_and_hooks(self):
+        targets = ("test_ci_changed_paths.ChangedPathsTests.test_docs_only_push_is_fast",
+                   "test_publish_workflows.SnapshotPublishTests.test_docs_only_push_does_not_even_evaluate_the_version")
+        runner = ("import sys, unittest; sys.path.insert(0, sys.argv[1]); "
+                  "unittest.main(module=None, argv=['unittest', sys.argv[2]], verbosity=2)")
+        for pollution in ("global-signing", "global-hooks", "environment-signing", "environment-hooks"):
+            for target in targets:
+                with self.subTest(pollution=pollution, target=target), tempfile.TemporaryDirectory(prefix="git-pollution-") as folder:
+                    root = Path(folder)
+                    home = root / "home"
+                    home.mkdir()
+                    marker = root / "unexpected-execution"
+                    failing = root / "unavailable-signer"
+                    failing.write_text("#!/bin/sh\nprintf 'reached\\n' >> '" + str(marker) + "'\nexit 73\n")
+                    failing.chmod(0o700)
+                    hooks = root / "hooks"
+                    hooks.mkdir()
+                    hook = hooks / "pre-commit"
+                    hook.write_bytes(failing.read_bytes())
+                    hook.chmod(0o700)
+                    config = root / "contributor.gitconfig"
+                    config.touch()
+                    base = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+                            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(config),
+                            "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                            "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+                    settings = {"commit.gpgsign": "true", "tag.gpgsign": "true", "gpg.program": str(failing)} if pollution.endswith("signing") else {"core.hooksPath": str(hooks)}
+                    env = dict(base)
+                    for index, (key, value) in enumerate(settings.items()):
+                        if pollution.startswith("global"):
+                            subprocess.run(["git", "config", "--file", str(config), key, value], env=base, check=True)
+                        else:
+                            env["GIT_CONFIG_KEY_%d" % index] = key
+                            env["GIT_CONFIG_VALUE_%d" % index] = value
+                    if pollution.startswith("environment"):
+                        env["GIT_CONFIG_COUNT"] = str(len(settings))
+                    # Positive control: this exact subprocess-only pollution really blocks a normal commit.
+                    control = root / "control"
+                    control.mkdir()
+                    subprocess.run(["git", "init", "-q"], cwd=control, env=base, check=True)
+                    blocked = subprocess.run(["git", "commit", "--allow-empty", "-qm", "control"],
+                                             cwd=control, env=env, capture_output=True, text=True)
+                    self.assertNotEqual(blocked.returncode, 0, pollution)
+                    self.assertTrue(marker.exists(), blocked.stderr)
+                    marker.unlink()
+                    before = config.read_bytes()
+                    process = subprocess.run([sys.executable, "-B", "-I", "-c", runner, str(SCRIPTS / "tests"), target],
+                                             cwd=root, env=env, capture_output=True, text=True)
+                    self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+                    self.assertFalse(marker.exists(), "fixture must not execute contributor signer/hooks")
+                    self.assertEqual(config.read_bytes(), before, "fixture must not rewrite contributor configuration")
 
 
 class MainOnlyWorkflowTests(unittest.TestCase):

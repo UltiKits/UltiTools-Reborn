@@ -519,6 +519,24 @@ sys.exit(96)
 '''
 
 
+def fixture_git_env(home):
+    """Use a private identity/configuration, as ReleaseFixture.git does, not the contributor's Git state."""
+    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+
+
+def fixture_git(checkout, home, *args):
+    assert REAL_GIT is not None, "range fixtures require Git"
+    process = subprocess.run([REAL_GIT, "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
+                              "-c", "core.hooksPath=/dev/null", "-C", str(checkout), *args],
+                             env=fixture_git_env(home), capture_output=True, text=True)
+    if process.returncode != 0:
+        raise AssertionError("fixture git %s failed: %s" % (args, process.stderr))
+    return process.stdout.strip()
+
+
 class SnapshotFixture(object):
     def __init__(self, root):
         self.root = Path(root)
@@ -530,25 +548,26 @@ class SnapshotFixture(object):
         scripts = workspace / ".github" / "scripts"
         scripts.mkdir(parents=True)
         shutil.copy2(SCRIPTS / "ci_changed_paths.py", scripts / "ci_changed_paths.py")
-        def git(*args):
-            assert REAL_GIT is not None, "snapshot range fixtures require Git"
-            return subprocess.check_output([REAL_GIT, *args], cwd=workspace).decode().strip()
-        git("init", "-q")
-        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base")
-        before = git("rev-parse", "HEAD")
+        self.git("init", "-q")
+        self.git("commit", "--allow-empty", "-qm", "base")
+        before = self.git("rev-parse", "HEAD")
         (workspace / "pom.xml").write_text("fixture product change")
-        git("add", "pom.xml")
-        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "product")
-        self.head = git("rev-parse", "HEAD")
+        self.git("add", "pom.xml")
+        self.git("commit", "-qm", "product")
+        self.head = self.git("rev-parse", "HEAD")
         self.event = self.root / "event.json"
         self.event.write_text(json.dumps({"before": before}))
 
+    def git(self, *args):
+        return fixture_git(self.root / "workspace", self.root / "home", *args)
+
     def env(self, version, eval_fail=False):
-        env = {"PATH": "%s:%s" % (self.root / "bin", os.environ.get("PATH", "/usr/bin:/bin")),
+        env = fixture_git_env(self.root / "home")
+        env.update({"PATH": "%s:%s" % (self.root / "bin", os.environ.get("PATH", "/usr/bin:/bin")),
                "HOME": str(self.root / "home"), "FAKE_LOG": str(self.log), "FAKE_PROJECT_VERSION": version,
                "RUNNER_TEMP": str(self.root / "runner"), "GITHUB_WORKSPACE": str(self.root / "workspace"),
                "GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "LANG": "C.UTF-8",
-               "GITHUB_EVENT_PATH": str(self.event), "GITHUB_SHA": self.head}
+               "GITHUB_EVENT_PATH": str(self.event), "GITHUB_SHA": self.head})
         if eval_fail:
             env["FAKE_EVAL_FAIL"] = "1"
         return env
@@ -605,14 +624,12 @@ class SnapshotPublishTests(unittest.TestCase):
         self.assertRegex(result.log, r"::notice::.*6\.3\.0.*no(thing)? .*publish", result.log)
 
     def test_docs_only_push_does_not_even_evaluate_the_version(self):
-        assert REAL_GIT is not None, "snapshot range fixtures require Git"
         workspace = self.fixture.root / "workspace"
         before = self.fixture.head
         (workspace / "README.md").write_text("docs only")
-        subprocess.check_call([REAL_GIT, "add", "README.md"], cwd=workspace)
-        subprocess.check_call([REAL_GIT, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-                               "commit", "-qm", "docs"], cwd=workspace)
-        self.fixture.head = subprocess.check_output([REAL_GIT, "rev-parse", "HEAD"], cwd=workspace).decode().strip()
+        self.fixture.git("add", "README.md")
+        self.fixture.git("commit", "-qm", "docs")
+        self.fixture.head = self.fixture.git("rev-parse", "HEAD")
         self.fixture.event.write_text(json.dumps({"before": before}))
         result = self.fixture.run("6.3.1-SNAPSHOT")
         self.assertEqual(result.status, "success", result.log)
