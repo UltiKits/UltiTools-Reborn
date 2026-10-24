@@ -75,6 +75,7 @@ import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.utils.CloudOutboxListener;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
@@ -351,6 +352,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         registerCommands();
         Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
+        // Plan 22-07 (S-16): registered once for the plugin's whole enabled lifetime, beside the
+        // join listener above; whether an event is captured is decided per event, on the current
+        // session, so an unlinked server writes no state file.
+        Bukkit.getServer().getPluginManager().registerEvents(new CloudOutboxListener(), this);
         scheduleStartupMessages();
         releaseEarlyLogCapture(loginSuccess);
     }

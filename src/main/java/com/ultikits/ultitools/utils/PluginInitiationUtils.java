@@ -2239,7 +2239,13 @@ public class PluginInitiationUtils {
         return CloudSession.current().isCurrent();
     }
 
-    /** Stops the v2 connection and invalidates pending login results during plugin shutdown. */
+    /**
+     * Stops the v2 connection and invalidates pending login results during plugin shutdown.
+     * <p>
+     * The pending reliable-delivery state is written before this returns: {@code invalidate()}
+     * flushes the outbox and the command-dedupe set (D-15), so a stop persists what the 30 s tick
+     * has not written yet.
+     */
     public static void stopWebsocket() {
         CloudSession.current().invalidate();
     }

@@ -130,7 +130,10 @@ class CloudReconnectStateMachineTest {
             assertThat(runtime.attempts).hasSize(1);
             assertThat(runtime.schedulers).hasSize(1);
             runtime.last().close(1011);
-            assertThat(runtime.scheduler().pending()).isEqualTo(1);
+            // Plan 22-07 arms one more task on this same session-owned scheduler: the 30 s
+            // state-flush tick. Together with the connection's one queued retry that is two, and
+            // the twenty repeated init calls above added neither a second owner nor a second retry.
+            assertThat(runtime.scheduler().pending()).isEqualTo(2);
             runtime.advance(1000);
             assertThat(runtime.attempts).hasSize(2);
         }

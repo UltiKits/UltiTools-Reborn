@@ -343,7 +343,11 @@ public class CloudAuthManager {
         boolean hadAnything;
         boolean cancelled;
         synchronized (CloudSession.class) {
-            tornDown = PluginInitiationUtils.disableCloud(CloudSession.current());
+            CloudSession session = CloudSession.current();
+            // S-32: the buffered state goes BEFORE the teardown, so the flush inside
+            // invalidate() finds the store detached and writes nothing.
+            session.discardCloudState();
+            tornDown = PluginInitiationUtils.disableCloud(session);
             retiring = linkedCredential(tornDown);
             hadAnything = tornDown.hasAnythingToClear() || retiring != null;
             cancelled = tornDown.consumePendingCancellation();

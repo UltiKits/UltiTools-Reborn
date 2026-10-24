@@ -8,6 +8,7 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -17,6 +18,7 @@ import java.util.logging.Logger;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
@@ -80,6 +82,11 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * {@code synchronized (this)} region ({@link #invalidate()} and {@link #initializeManagers()}
  * respectively) -- so this lock is never acquired without the session monitor already held, and
  * never used to acquire anything further.</li>
+ * <li>{@link CloudStateStore}'s JVM-wide write lock (plan 22-07) -- taken by every load, flush
+ * and detach of {@code cloud-outbox.json}, always below the session monitor: {@link
+ * #invalidate()}'s and the shutdown flush's write cannot interleave with the 30 s task's, which
+ * holds only this lock and never the session monitor. Its inner locks are the {@link CloudOutbox}
+ * and {@link CommandDedupeSet} monitors, which are leaves.</li>
  * <li>The {@link AgentConnection} monitor and {@code CredentialStore.LOCK}, taken by
  * {@link ServerCredentialStore}, are siblings of {@code LOG_WIRING_LOCK}: never nested in one
  * another, always below the session monitor. AgentConnection never calls out while holding its
@@ -126,6 +133,13 @@ final class CloudSession {
      * "gave up after %d attempts" log line -- the two classes are in the same package.
      */
     static final int MAX_REINIT_ATTEMPTS = 10;
+
+    /**
+     * How often the session persists its reliable-delivery state (D-15): the outbox and the
+     * command-dedupe set are written to {@code .ultikits/cloud-outbox.json} only when one of them
+     * changed since the last write, but the change itself is observed on this cadence.
+     */
+    private static final long STATE_FLUSH_INTERVAL_MS = 30_000L;
 
     /** Added to the device poll interval for each {@code slow_down} answer (RFC 8628 section 3.5). */
     private static final long DEVICE_SLOW_DOWN_INCREMENT_MS = 5_000L;
@@ -206,6 +220,29 @@ final class CloudSession {
      * {@link #commitCredential(ServerCredential)}.
      */
     private volatile ServerCredential credential;
+
+    /**
+     * The bounded buffer of unacknowledged reliable events of this session's credential, or
+     * {@code null} while no credential is adopted (or after the identity was discarded).
+     * Written only while holding this session's monitor; volatile because the 30 s flush task on
+     * the agent thread reads it without taking that monitor.
+     */
+    private volatile CloudOutbox cloudOutbox;
+
+    /** The recently seen command ids of this session's credential, or {@code null}. */
+    private volatile CommandDedupeSet commandDedupe;
+
+    /** The state file of this session's credential, or {@code null}. */
+    private volatile CloudStateStore cloudState;
+
+    /** The server id whose buffered state the three fields above hold, or {@code null}. */
+    private volatile String cloudStateServerId;
+
+    /** The pending 30 s state-flush task of this session's connection, or {@code null}. */
+    private volatile ScheduledFuture<?> stateFlushTask;
+
+    /** Whether the current state-write failure streak already logged its one WARNING (T-22-31). */
+    private volatile boolean stateFlushFailureLogged;
 
     private AgentConnection agentConnection;
     private ScheduledExecutorService agentExecutor;
@@ -409,6 +446,11 @@ final class CloudSession {
         stopPolling();
         stopTokenRefreshScheduler();
         closeWebSocketClient();
+        // D-15: a pending outbox or command-dedupe change must reach the disk before the
+        // connection that owns it goes away -- this is also the flush the plugin's shutdown
+        // performs, through PluginInitiationUtils#stopWebsocket(). It is a no-op on a session
+        // whose identity was discarded, because that store is detached.
+        flushCloudState();
         stopConnection();
     }
 
@@ -774,13 +816,26 @@ final class CloudSession {
 
     // ---- Agent connection (protocol v2) ----
 
-    /** Loads framework-owned state without rewriting it or performing any network request. */
+    /**
+     * Loads framework-owned state without rewriting it or performing any network request.
+     * <p>
+     * Adopting the credential also adopts its reliable-delivery state (D-15): the outbox and the
+     * command-dedupe set are created and loaded from {@code .ultikits/cloud-outbox.json} here, so
+     * an event captured before a restart is still in the buffer afterwards.
+     */
     synchronized boolean loadServerCredential() {
         if (invalidated || this != current()) {
             return false;
         }
-        credential = ServerCredentialStore.load();
-        return credential != null;
+        ServerCredential loaded = ServerCredentialStore.load();
+        // Assigned even when the store is empty, exactly as before: a session whose saved
+        // credential was deleted out of band must not keep reporting its own stale copy as linked.
+        credential = loaded;
+        if (loaded == null) {
+            return false;
+        }
+        adoptCloudState(loaded);
+        return true;
     }
 
     /** Starts this session's single connection owner; repeated calls never restart a terminal state. */
@@ -809,10 +864,14 @@ final class CloudSession {
                 sockets, policy, agentClock, timing, PanelConnectionLog::log);
         listener.connection = agentConnection;
         agentExecutor.execute(listener.connection::start);
+        // The state cadence lives on the connection's own scheduler (D-15), so it exists exactly
+        // as long as this session owns a connection and is cancelled with it.
+        scheduleStateFlush();
     }
 
     /** Stops and detaches the connection without ever waiting for its scheduler thread. */
     synchronized void stopConnection() {
+        cancelStateFlushTask();
         AgentConnection previous = agentConnection;
         agentConnection = null;
         if (previous != null) {
@@ -821,6 +880,208 @@ final class CloudSession {
         if (agentExecutor != null) {
             agentExecutor.shutdown();
             agentExecutor = null;
+        }
+    }
+
+    // ---- Reliable-delivery state (protocol v2, plan 22-07) ----
+
+    /**
+     * Adds one reliable event to this session's outbox, if it can be captured at all (D-14, S-16):
+     * a session that holds no credential returns silently, so an unlinked server writes no state
+     * file, and so does one whose operator turned {@code ultipanel.capabilities.player-events}
+     * off. The connection's own state is deliberately not consulted: buffering while disconnected
+     * is the point of the outbox.
+     *
+     * @param type    the envelope type, for example {@code player.join}
+     * @param payload the event payload
+     */
+    synchronized void offerReliableEvent(String type, JsonObject payload) {
+        CloudOutbox buffer = cloudOutbox;
+        if (buffer == null || !Capability.PLAYER_EVENTS.isEnabled()) {
+            return;
+        }
+        buffer.enqueue(type, payload);
+    }
+
+    /**
+     * @return this session's outbox, or {@code null} while no credential is adopted (plan 22-08
+     *         sends and acknowledges its entries)
+     */
+    CloudOutbox cloudOutbox() {
+        return cloudOutbox;
+    }
+
+    /**
+     * @return this session's command-dedupe set, or {@code null} while no credential is adopted
+     *         (plan 22-09 applies it to inbound command messages)
+     */
+    CommandDedupeSet commandDedupe() {
+        return commandDedupe;
+    }
+
+    /**
+     * Writes the pending outbox and command-dedupe changes, if there are any. Called from
+     * {@link #invalidate()} -- which {@code PluginInitiationUtils#stopWebsocket()} runs at plugin
+     * shutdown -- so a stop persists what a 30 s tick has not yet written (D-15). A failure is
+     * logged and swallowed: teardown must not be blocked by an unwritable state file.
+     */
+    synchronized void flushCloudState() {
+        CloudStateStore store = cloudState;
+        String serverId = cloudStateServerId;
+        if (store == null || serverId == null) {
+            return;
+        }
+        flushStateQuietly(store, serverId);
+    }
+
+    /**
+     * Forgets this session's reliable-delivery state for good (S-12, S-32): the 30 s task is
+     * cancelled, the store is detached and its file deleted under the store's write lock, and the
+     * in-memory buffer and command-id set are cleared. Every later flush of that store is a no-op,
+     * so neither the tick, nor {@link #invalidate()}, nor the shutdown flush can bring
+     * {@code cloud-outbox.json} back for an identity that no longer exists. A new credential
+     * adopted afterwards starts from a fresh store and an empty file.
+     */
+    synchronized void discardCloudState() {
+        cancelStateFlushTask();
+        CloudStateStore store = cloudState;
+        cloudState = null;
+        cloudStateServerId = null;
+        CloudOutbox buffer = cloudOutbox;
+        cloudOutbox = null;
+        CommandDedupeSet dedupe = commandDedupe;
+        commandDedupe = null;
+        if (store != null) {
+            try {
+                store.detachAndDelete();
+            } catch (RuntimeException failure) {
+                PanelConnectionLog.log(Level.WARNING,
+                        "UltiCloud: the buffered state file could not be deleted (" + failure.getMessage()
+                        + "). Delete it by hand; it is no longer used.");
+            }
+        }
+        if (buffer != null) {
+            buffer.clear();
+        }
+        if (dedupe != null) {
+            dedupe.clear();
+        }
+    }
+
+    /**
+     * Creates and loads this session's reliable-delivery state for {@code adopted} (D-15). The
+     * caller holds this session's monitor. A state file written by hand for another identity is
+     * discarded by {@link CloudStateStore#load(String)}, and an unresolvable state location leaves
+     * the session without persistence rather than failing the login.
+     *
+     * @param adopted the credential this session just adopted
+     */
+    private void adoptCloudState(ServerCredential adopted) {
+        if (cloudState != null) {
+            if (adopted.getServerId().equals(cloudStateServerId)) {
+                return;
+            }
+            // The buffered state belongs to the identity this session is leaving behind.
+            discardCloudState();
+        }
+        CloudOutbox buffer = new CloudOutbox(CloudOutbox.DEFAULT_CAPACITY, System::currentTimeMillis);
+        CommandDedupeSet dedupe = new CommandDedupeSet(CommandDedupeSet.DEFAULT_DEDUPE_MAX,
+                CommandDedupeSet.DEFAULT_DEDUPE_TTL_MS, System::currentTimeMillis);
+        CloudStateStore store;
+        try {
+            store = new CloudStateStore(CloudStateStore.defaultPath(), buffer, dedupe);
+        } catch (RuntimeException failure) {
+            PanelConnectionLog.log(Level.WARNING,
+                    "UltiCloud: the reliable delivery state has nowhere to live (" + failure.getMessage()
+                    + "). Buffered player join/leave events are kept in memory only.");
+            return;
+        }
+        cloudOutbox = buffer;
+        commandDedupe = dedupe;
+        cloudState = store;
+        cloudStateServerId = adopted.getServerId();
+        store.load(adopted.getServerId());
+    }
+
+    /**
+     * Arms the state cadence from whatever this session currently holds; called once per
+     * connection, since the flush task lives on the connection's own executor.
+     */
+    private void scheduleStateFlush() {
+        CloudStateStore store = cloudState;
+        String serverId = cloudStateServerId;
+        ScheduledExecutorService executor = agentExecutor;
+        if (store == null || serverId == null || executor == null) {
+            return;
+        }
+        scheduleStateFlush(store, serverId, executor);
+    }
+
+    private void scheduleStateFlush(CloudStateStore store, String serverId,
+            ScheduledExecutorService executor) {
+        try {
+            stateFlushTask = executor.schedule(new StateFlushTick(store, serverId, executor),
+                    STATE_FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            // The connection's executor is already shut down; the shutdown flush has run.
+            stateFlushTask = null;
+        }
+    }
+
+    private synchronized void cancelStateFlushTask() {
+        ScheduledFuture<?> pending = stateFlushTask;
+        stateFlushTask = null;
+        if (pending != null) {
+            pending.cancel(false);
+        }
+    }
+
+    /**
+     * One state write; never throws. A failed write keeps the store's dirty flags set, so the next
+     * tick retries, and only the first failure of a streak is reported (T-22-31).
+     *
+     * @param store    the store to write
+     * @param serverId the linked server's id
+     */
+    private void flushStateQuietly(CloudStateStore store, String serverId) {
+        try {
+            store.flushIfDirty(serverId);
+            stateFlushFailureLogged = false;
+        } catch (RuntimeException failure) {
+            if (!stateFlushFailureLogged) {
+                stateFlushFailureLogged = true;
+                PanelConnectionLog.log(Level.WARNING,
+                        "UltiCloud: the reliable delivery state could not be saved (" + failure.getMessage()
+                        + "). It is retried every 30 seconds; buffered player join/leave events are lost if "
+                        + "the server stops first.");
+            }
+        }
+    }
+
+    /**
+     * One 30 s tick (D-15). Runs on the agent thread and therefore takes <b>only</b> the state
+     * store's write lock -- never this session's monitor (S-37) -- so a flush under the session
+     * monitor, in {@link #invalidate()}, cannot deadlock with it. It keeps re-arming itself for as
+     * long as this session still holds the store it was created for; a discarded identity nulls
+     * that field, which ends the chain.
+     */
+    private final class StateFlushTick implements Runnable {
+        private final CloudStateStore store;
+        private final String serverId;
+        private final ScheduledExecutorService executor;
+
+        StateFlushTick(CloudStateStore store, String serverId, ScheduledExecutorService executor) {
+            this.store = store;
+            this.serverId = serverId;
+            this.executor = executor;
+        }
+
+        @Override
+        public void run() {
+            flushStateQuietly(store, serverId);
+            if (cloudState == store) {
+                scheduleStateFlush(store, serverId, executor);
+            }
         }
     }
 
@@ -962,6 +1223,8 @@ final class CloudSession {
                             + "Cloud features are stopped. Check credentials.json and run /ulticloud login again."
                             + requestSuffix(requestId));
                 } finally {
+                    // S-12: the buffered state belongs to the credential that was just revoked.
+                    discardCloudState();
                     credential = null;
                 }
             }
@@ -1070,6 +1333,7 @@ final class CloudSession {
         }
         ServerCredentialStore.save(newCredential);
         this.credential = newCredential;
+        adoptCloudState(newCredential);
         return true;
     }
 
