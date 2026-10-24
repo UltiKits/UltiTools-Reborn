@@ -68,7 +68,7 @@ class TelemetryEndToEndTest {
     @DisplayName("a welcome sends status, players, plugins and worlds from the live server state")
     void welcomeSendsTheFourContractSnapshots() {
         RecordingChannel channel = new RecordingChannel();
-        AgentTelemetry telemetry = new AgentTelemetry(monitor, () -> true, () -> 1000L);
+        AgentTelemetry telemetry = new AgentTelemetry(monitor, () -> true, () -> 1000L, Runnable::run);
 
         telemetry.onWelcome(channel);
 
@@ -118,7 +118,7 @@ class TelemetryEndToEndTest {
     @DisplayName("a disabled telemetry capability records nothing on welcome or tick")
     void disabledTelemetryRecordsNothing() {
         RecordingChannel channel = new RecordingChannel();
-        AgentTelemetry telemetry = new AgentTelemetry(monitor, () -> false, () -> 0L);
+        AgentTelemetry telemetry = new AgentTelemetry(monitor, () -> false, () -> 0L, Runnable::run);
 
         telemetry.onWelcome(channel);
         telemetry.tick(channel);

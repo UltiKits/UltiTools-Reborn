@@ -241,7 +241,7 @@ class AgentTelemetryTest {
     }
 
     private AgentTelemetry telemetry() {
-        return new AgentTelemetry(monitor, () -> true, clock::get);
+        return new AgentTelemetry(monitor, () -> true, clock::get, Runnable::run);
     }
 
     private void publish(JsonArray players, JsonArray plugins, JsonArray worlds) {

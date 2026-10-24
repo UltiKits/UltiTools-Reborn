@@ -6,11 +6,17 @@ import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.utils.ContractPrimitives;
+import com.ultikits.ultitools.utils.PayloadReader;
 import com.ultikits.ultitools.websocket.CloudChannel;
+import com.ultikits.ultitools.websocket.CloudRequest;
+import com.ultikits.ultitools.websocket.CloudRequestHandler;
 import org.bukkit.Bukkit;
 
 import java.lang.management.ManagementFactory;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.Executor;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -39,7 +45,7 @@ import java.util.regex.Pattern;
  *
  * @since 6.3.1
  */
-final class AgentTelemetry {
+final class AgentTelemetry implements CloudRequestHandler {
     private static final Logger LOGGER = Logger.getLogger(AgentTelemetry.class.getName());
 
     /** Contract {@code timing.statusIntervalMs}; {@code status} is sent once per interval. */
@@ -79,6 +85,11 @@ final class AgentTelemetry {
     private static final String PLUGINS_SNAPSHOT = "plugins.snapshot";
     private static final String WORLDS_SNAPSHOT = "worlds.snapshot";
 
+    /** The refresh targets {@code snapshot.request} may name, in schema order (SEMANTICS item 4). */
+    static final String[] TARGETS = {"status", "plugins", "worlds"};
+
+    private static final String SNAPSHOT_REQUEST_RESULT = "snapshot.request.result";
+
     private static final String[] ENVIRONMENTS = {"normal", "nether", "the_end"};
     private static final String[] DIFFICULTIES = {"peaceful", "easy", "normal", "hard"};
     private static final String[] GAME_MODES = {"survival", "creative", "adventure", "spectator"};
@@ -97,8 +108,9 @@ final class AgentTelemetry {
     private final ServerMonitorManager monitor;
     private final BooleanSupplier telemetryEnabled;
     private final LongSupplier clock;
+    private final Executor mainThread;
 
-    private long lastStatusAt;
+    private final Tracked statusTrack = new Tracked();
     private final Tracked playerTrack = new Tracked();
     private final Tracked pluginTrack = new Tracked();
     private final Tracked worldTrack = new Tracked();
@@ -109,11 +121,15 @@ final class AgentTelemetry {
      * @param monitor supplies the sampled server state, TPS and CPU load
      * @param telemetryEnabled the {@code telemetry} capability switch; false silences every frame
      * @param clock supplies epoch milliseconds for the cadence, never the wall clock directly
+     * @param mainThread runs the sampling and the reply of a {@code snapshot.request}: Bukkit state
+     *                   may only be read there, while the router dispatches on its own threads
      */
-    AgentTelemetry(ServerMonitorManager monitor, BooleanSupplier telemetryEnabled, LongSupplier clock) {
+    AgentTelemetry(ServerMonitorManager monitor, BooleanSupplier telemetryEnabled, LongSupplier clock,
+            Executor mainThread) {
         this.monitor = monitor;
         this.telemetryEnabled = telemetryEnabled;
         this.clock = clock;
+        this.mainThread = mainThread;
     }
 
     /**
@@ -128,9 +144,7 @@ final class AgentTelemetry {
             return;
         }
         long now = clock.getAsLong();
-        if (send(channel, STATUS, statusPayload())) {
-            lastStatusAt = now;
-        }
+        sendForced(channel, STATUS, this::statusPayload, statusTrack, now);
         sendForced(channel, PLAYERS_SNAPSHOT, this::playersPayload, playerTrack, now);
         sendForced(channel, PLUGINS_SNAPSHOT, this::pluginsPayload, pluginTrack, now);
         sendForced(channel, WORLDS_SNAPSHOT, this::worldsPayload, worldTrack, now);
@@ -141,7 +155,7 @@ final class AgentTelemetry {
      * connection may well be a different gateway with a different view.
      */
     void onClose() {
-        lastStatusAt = 0L;
+        statusTrack.clear();
         playerTrack.clear();
         pluginTrack.clear();
         worldTrack.clear();
@@ -157,8 +171,8 @@ final class AgentTelemetry {
             return;
         }
         long now = clock.getAsLong();
-        if (now - lastStatusAt >= STATUS_INTERVAL_MS && send(channel, STATUS, statusPayload())) {
-            lastStatusAt = now;
+        if (now - statusTrack.lastAt >= STATUS_INTERVAL_MS) {
+            sendForced(channel, STATUS, this::statusPayload, statusTrack, now);
         }
         sendChanged(channel, PLAYERS_SNAPSHOT, this::playersPayload, playerTrack, now);
         sendChanged(channel, PLUGINS_SNAPSHOT, this::pluginsPayload, pluginTrack, now);
@@ -169,11 +183,107 @@ final class AgentTelemetry {
      * Sends one snapshot regardless of the coalescing window, because the panel asked for it, and
      * restarts that snapshot's window from now.
      */
-    private static void sendForced(CloudChannel channel, String type, Supplier<JsonObject> payload,
+    private static boolean sendForced(CloudChannel channel, String type, Supplier<JsonObject> payload,
             Tracked track, long now) {
         JsonObject built = payload.get();
-        if (send(channel, type, built)) {
-            track.remember(built.toString(), now);
+        if (!send(channel, type, built)) {
+            return false;
+        }
+        track.remember(built.toString(), now);
+        return true;
+    }
+
+    /**
+     * Handles {@code snapshot.request}: pushes the requested snapshots in request order and then
+     * answers {@code snapshot.request.result} with what was sent (SEMANTICS item 4, checker B-W3).
+     *
+     * <p>The target list is validated here, on the dispatching thread, so a payload the schema
+     * rejects fails exactly like any other invalid message. The push itself is handed to the
+     * injected main-thread executor, because the sampling it triggers reads Bukkit state.</p>
+     *
+     * @param request the parsed request
+     * @param channel the reply channel
+     */
+    @Override
+    public void handle(CloudRequest request, CloudChannel channel) {
+        final List<String> targets = requestedTargets(request);
+        final String replyTo = request.id();
+        mainThread.execute(() -> sendRequested(replyTo, targets, channel));
+    }
+
+    /**
+     * @return the requested targets with duplicates collapsed, which the schema cannot express
+     *         and SEMANTICS item 9 makes the plugin's job
+     */
+    private static List<String> requestedTargets(CloudRequest request) {
+        JsonArray requested = new PayloadReader(request.id(), request.payload())
+                .keys(new String[]{"targets"})
+                .array("targets", 1, TARGETS.length);
+        List<String> targets = new ArrayList<>();
+        for (JsonElement element : requested) {
+            String target = snapshotTarget(request.id(), element);
+            if (!targets.contains(target)) {
+                targets.add(target);
+            }
+        }
+        return targets;
+    }
+
+    /**
+     * Validates one target through the shared payload reader, so an unknown or misspelled element
+     * fails as {@code invalid_message} rather than being dropped silently.
+     */
+    private static String snapshotTarget(String id, JsonElement element) {
+        JsonObject single = new JsonObject();
+        single.add("target", element);
+        return new PayloadReader(id, single).keys(new String[]{"target"}).enumValue("target", TARGETS);
+    }
+
+    /**
+     * Pushes the requested snapshots whether or not their content changed -- the panel asked for
+     * them -- and restarts each one's coalescing window from now, then answers the request.
+     */
+    private void sendRequested(String replyTo, List<String> targets, CloudChannel channel) {
+        long now = clock.getAsLong();
+        JsonArray sent = new JsonArray();
+        for (String target : targets) {
+            String type = STATUS.equals(target) ? STATUS : target + ".snapshot";
+            if (sendForced(channel, type, payloadSupplier(type), track(type), now)) {
+                sent.add(target);
+            }
+        }
+        JsonObject data = new JsonObject();
+        data.add("sent", sent);
+        channel.replyOk(replyTo, SNAPSHOT_REQUEST_RESULT, data);
+    }
+
+    private Supplier<JsonObject> payloadSupplier(String type) {
+        switch (type) {
+            case STATUS:
+                return this::statusPayload;
+            case PLAYERS_SNAPSHOT:
+                return this::playersPayload;
+            case PLUGINS_SNAPSHOT:
+                return this::pluginsPayload;
+            case WORLDS_SNAPSHOT:
+                return this::worldsPayload;
+            default:
+                throw new IllegalArgumentException("Unknown snapshot type: " + type);
+        }
+    }
+
+    private Tracked track(String type) {
+        switch (type) {
+            case STATUS:
+                return statusTrack;
+            case PLAYERS_SNAPSHOT:
+                return playerTrack;
+            case PLUGINS_SNAPSHOT:
+                return pluginTrack;
+            case WORLDS_SNAPSHOT:
+                return worldTrack;
+            default:
+                throw new IllegalArgumentException("Unknown snapshot type: " + type);
         }
     }
 
