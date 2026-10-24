@@ -23,6 +23,7 @@ import com.ultikits.ultitools.utils.CloudAuthManager;
  *   /ulticloud login  — Link this server to UltiCloud
  *   /ulticloud logout — Unlink this server and revoke its credential
  *   /ulticloud status — Show link and connection status
+ *   /ulticloud reconnect — Retry the UltiCloud connection now
  */
 @CmdExecutor(description = "UltiCloud Authentication Commands", alias = "ulticloud", requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
@@ -36,6 +37,13 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     static final String CANCELLED_KEY = "Cancelled the pending UltiCloud link request. Cloud features are stopped.";
     static final String NOT_LINKED_KEY = "This server is not linked to UltiCloud.";
     static final String STOPPED_KEY = "Cloud features have been stopped regardless.";
+    static final String RECONNECT_STARTED_KEY = "Reconnecting to UltiCloud now.";
+    static final String RECONNECT_STATUS_KEY = "Use /ulticloud status to see the result.";
+    static final String ALREADY_CONNECTED_KEY = "This server is already connected to UltiCloud.";
+    static final String ALREADY_CONNECTING_KEY = "A connection attempt to UltiCloud is already in progress.";
+    static final String UPGRADE_REQUIRED_KEY = "UltiCloud no longer accepts this UltiTools version. Upgrade UltiTools, then restart the server.";
+    static final String RECONNECT_NOT_LINKED_KEY = "This server is not linked to UltiCloud. Use /ulticloud login to link it.";
+    static final String RECONNECT_RATE_LIMITED_KEY = "Please wait %d seconds before trying again.";
 
     /**
      * Starts the device login. Deliberately <b>not</b> {@code @RunAsync} (#740): since 6.3.0 a
@@ -91,6 +99,32 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         }
     }
 
+    @CmdMapping(format = "reconnect")
+    public void reconnect(@CmdSender CommandSender sender) {
+        CloudAuthManager.ReconnectResult result = CloudAuthManager.reconnect();
+        switch (result.getKind()) {
+            case STARTED:
+                say(sender, ChatColor.GREEN, RECONNECT_STARTED_KEY);
+                say(sender, ChatColor.GRAY, RECONNECT_STATUS_KEY);
+                break;
+            case ALREADY_CONNECTED:
+                say(sender, ChatColor.GREEN, ALREADY_CONNECTED_KEY);
+                break;
+            case ALREADY_CONNECTING:
+                say(sender, ChatColor.YELLOW, ALREADY_CONNECTING_KEY);
+                break;
+            case UPGRADE_REQUIRED:
+                say(sender, ChatColor.YELLOW, UPGRADE_REQUIRED_KEY);
+                break;
+            case RATE_LIMITED:
+                say(sender, ChatColor.RED, RECONNECT_RATE_LIMITED_KEY, result.getRemainingSeconds());
+                break;
+            case NOT_LINKED:
+            default:
+                say(sender, ChatColor.YELLOW, RECONNECT_NOT_LINKED_KEY);
+        }
+    }
+
     @Override
     protected void handleHelp(CommandSender sender) {
         sender.sendMessage(ChatColor.AQUA + "=== UltiCloud Commands ===");
@@ -98,6 +132,8 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         sender.sendMessage(ChatColor.WHITE + "/ulticloud logout" + ChatColor.GRAY
             + " - Unlink this server and revoke its credential");
         sender.sendMessage(ChatColor.WHITE + "/ulticloud status" + ChatColor.GRAY + " - Show link and connection status");
+        sender.sendMessage(ChatColor.WHITE + "/ulticloud reconnect" + ChatColor.GRAY
+            + " - Retry the UltiCloud connection now");
     }
 
     /**

@@ -42,6 +42,7 @@ public class CloudAuthManager {
     static final int MAX_SUGGESTED_NAME_CODE_POINTS = 64;
     /** The message a login reports when an overlapping login already replaced its session. */
     static final String LOGIN_IN_PROGRESS = "Another login attempt is already in progress; please try again";
+    private static final long RECONNECT_COOLDOWN_MS = 10_000L;
 
     private CloudAuthManager() {
     }
@@ -370,6 +371,55 @@ public class CloudAuthManager {
     /** Completed unlink outcomes; none contains a credential. @since 6.3.1 */
     public enum LogoutOutcome {
         NOT_LINKED, REVOKED, DELETED_LOCALLY_REVOKE_FAILED, CANCELLED_PENDING
+    }
+
+    /**
+     * Requests an immediate connection attempt without waiting for the network. The ten-second
+     * cooldown applies to every invocation, including one refused by the current connection state.
+     *
+     * @return whether an attempt was queued, or why the request was refused
+     * @since 6.3.1
+     */
+    public static synchronized ReconnectResult reconnect() {
+        if (!ApiRateLimiter.isAllowed("reconnect", RECONNECT_COOLDOWN_MS)) {
+            return new ReconnectResult(ReconnectResult.Kind.RATE_LIMITED,
+                    Math.max(1L, ApiRateLimiter.getRemainingCooldown("reconnect", RECONNECT_COOLDOWN_MS)));
+        }
+        return new ReconnectResult(CloudSession.current().reconnectNow(), 0L);
+    }
+
+    /**
+     * Immutable result of a manual reconnect request; an accepted attempt runs asynchronously.
+     *
+     * @since 6.3.1
+     */
+    public static final class ReconnectResult {
+        /**
+         * Whether a retry was accepted, or the reason no retry was queued.
+         *
+         * @since 6.3.1
+         */
+        public enum Kind {
+            STARTED, ALREADY_CONNECTED, ALREADY_CONNECTING, UPGRADE_REQUIRED, NOT_LINKED, RATE_LIMITED
+        }
+
+        private final Kind kind;
+        private final long remainingSeconds;
+
+        ReconnectResult(Kind kind, long remainingSeconds) {
+            this.kind = kind;
+            this.remainingSeconds = remainingSeconds;
+        }
+
+        /** @return the result of this request */
+        public Kind getKind() {
+            return kind;
+        }
+
+        /** @return remaining cooldown seconds when rate-limited, otherwise zero */
+        public long getRemainingSeconds() {
+            return remainingSeconds;
+        }
     }
 
     /**

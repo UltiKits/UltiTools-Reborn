@@ -823,6 +823,47 @@ final class CloudSession {
         }
     }
 
+    CloudAuthManager.ReconnectResult.Kind reconnectNow() {
+        AgentConnection captured;
+        synchronized (this) {
+            if (invalidated || this != current() || credential == null) {
+                return CloudAuthManager.ReconnectResult.Kind.NOT_LINKED;
+            }
+            captured = agentConnection;
+        }
+        AgentConnection.State state = captured == null ? AgentConnection.State.IDLE : captured.state();
+        switch (state) {
+            case OPEN:
+                return CloudAuthManager.ReconnectResult.Kind.ALREADY_CONNECTED;
+            case CONNECTING:
+                return CloudAuthManager.ReconnectResult.Kind.ALREADY_CONNECTING;
+            case UPGRADE_REQUIRED:
+                return CloudAuthManager.ReconnectResult.Kind.UPGRADE_REQUIRED;
+            case CREDENTIAL_REJECTED:
+                return CloudAuthManager.ReconnectResult.Kind.NOT_LINKED;
+            case IDLE:
+            case STOPPED:
+                return restartForManualReconnect(captured);
+            default:
+                synchronized (this) {
+                    if (invalidated || this != current() || agentConnection != captured) {
+                        return CloudAuthManager.ReconnectResult.Kind.NOT_LINKED;
+                    }
+                    agentExecutor.execute(captured::reconnectNow);
+                }
+                return CloudAuthManager.ReconnectResult.Kind.STARTED;
+        }
+    }
+
+    private synchronized CloudAuthManager.ReconnectResult.Kind restartForManualReconnect(AgentConnection captured) {
+        if (invalidated || this != current() || credential == null || agentConnection != captured) {
+            return CloudAuthManager.ReconnectResult.Kind.NOT_LINKED;
+        }
+        stopConnection();
+        startConnection();
+        return CloudAuthManager.ReconnectResult.Kind.STARTED;
+    }
+
     synchronized AgentConnection.State connectionState() {
         return agentConnection == null ? AgentConnection.State.STOPPED : agentConnection.state();
     }
