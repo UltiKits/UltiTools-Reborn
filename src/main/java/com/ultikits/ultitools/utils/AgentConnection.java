@@ -23,7 +23,47 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  * <p>
  * It is the <b>single owner</b> of every connect, retry and terminal decision for the
  * {@code /v1/agent} socket: nothing else opens a socket, schedules a retry or decides that the
- * connection is over.
+ * connection is over. (v1 had four owners deciding whether to keep trying.)
+ *
+ * <table>
+ *   <caption>Transitions</caption>
+ *   <tr><th>From</th><th>Event</th><th>To</th></tr>
+ *   <tr><td>IDLE, STOPPED, terminal</td><td>{@link #start()} with a credential</td><td>CONNECTING (fresh cycle)</td></tr>
+ *   <tr><td>CONNECTING</td><td>upgrade accepted</td><td>OPEN</td></tr>
+ *   <tr><td>CONNECTING</td><td>refused 401</td><td>CREDENTIAL_REJECTED</td></tr>
+ *   <tr><td>CONNECTING</td><td>refused 426</td><td>UPGRADE_REQUIRED</td></tr>
+ *   <tr><td>CONNECTING</td><td>refused 402</td><td>PLAN_LIMITED (fixed plan-limit interval)</td></tr>
+ *   <tr><td>CONNECTING</td><td>refused 429</td><td>BACKOFF (long, at least {@code Retry-After})</td></tr>
+ *   <tr><td>CONNECTING</td><td>other refusal, close, handshake deadline</td><td>BACKOFF (normal)</td></tr>
+ *   <tr><td>OPEN, CONNECTING</td><td>close 4401 / 4426</td><td>CREDENTIAL_REJECTED / UPGRADE_REQUIRED</td></tr>
+ *   <tr><td>OPEN, CONNECTING</td><td>close 4402</td><td>PLAN_LIMITED (one probe after the attempt-0 delay)</td></tr>
+ *   <tr><td>OPEN, CONNECTING</td><td>close 4400, 4429</td><td>BACKOFF (long)</td></tr>
+ *   <tr><td>OPEN, CONNECTING</td><td>close 4000</td><td>BACKOFF (long), or SUPERSEDED on the third in a row</td></tr>
+ *   <tr><td>OPEN</td><td>any other close, heartbeat timeout</td><td>BACKOFF (normal)</td></tr>
+ *   <tr><td>BACKOFF, PLAN_LIMITED</td><td>retry due, or {@link #reconnectNow()}</td><td>CONNECTING</td></tr>
+ *   <tr><td>SUPERSEDED</td><td>{@link #reconnectNow()}</td><td>CONNECTING (counters reset)</td></tr>
+ *   <tr><td>any</td><td>{@link #stop()}</td><td>STOPPED</td></tr>
+ * </table>
+ * What the owner deletes or prints on a terminal state is the owner's decision (the cloud
+ * session); this class only reports it, once, through the {@link Listener}.
+ * <p>
+ * <b>Why an attempt id.</b> v1 reconnected by reusing one client object, so a reconnect carried
+ * the stale headers (and bearer) of the first connect, and a late callback of an old socket could
+ * change the state of a new one. Here every attempt builds a new socket with the bearer read at
+ * that moment, and every socket's events are bound to the id ({@code generation}) the attempt had
+ * when it started; the id only ever increases (an attempt's end, a retry, {@link #stop()} and a
+ * terminal state each move it on), so an event whose id is not the current one is ignored.
+ * <p>
+ * <b>Threads and locks.</b> Socket callbacks arrive on Java-WebSocket's threads (or synchronously
+ * inside a forced close); each one only posts a task onto the single-thread agent scheduler. All
+ * state changes run under this instance's monitor. The monitor is never held while calling out:
+ * listener callbacks, socket opens, closes and sends, the credential supplier and the log sink
+ * all run after it is released, so a listener may call {@link #stop()}. In the session's lock
+ * order this monitor sits beside {@code CredentialStore.LOCK} and the state-file write lock,
+ * below the session monitor; nothing here blocks or waits (no {@code connectBlocking}, no
+ * {@code Future#get}).
+ * <p>
+ * Every contract number lives in the one {@code PROVISIONAL} section below.
  */
 final class AgentConnection {
 
@@ -177,6 +217,20 @@ final class AgentConnection {
         SUPERSEDED
     }
 
+    /** What {@link #reconnectNow()} did. */
+    enum ReconnectOutcome {
+        /** An attempt was started at once. */
+        STARTED,
+        /** Already connected. */
+        ALREADY_OPEN,
+        /** An attempt is already in flight. */
+        ALREADY_CONNECTING,
+        /** Stopped because an upgrade is required; reconnecting cannot help. */
+        UPGRADE_REQUIRED,
+        /** Not running (never started, stopped, or the credential was rejected). */
+        NOT_RUNNING
+    }
+
     /** Callbacks to the owner (the cloud session). Never invoked while this monitor is held. */
     interface Listener {
         /** @param state the new state, once per real transition */
@@ -314,6 +368,9 @@ final class AgentConnection {
     private int attemptsSinceEstablished;
     private int currentAttemptNumber;
     private int normalFailures;
+    private int longFailures;
+    private int consecutiveSuperseded;
+    private long openedAtMillis;
     private ScheduledFuture<?> retryFuture;
     private long retryAtMillis;
     private boolean planEpisode;
@@ -432,6 +489,78 @@ final class AgentConnection {
     }
 
     /**
+     * Retries at once from BACKOFF, PLAN_LIMITED or SUPERSEDED, cancelling the pending retry
+     * (from SUPERSEDED with every counter reset; from PLAN_LIMITED the plan-limit episode
+     * continues, so a renewed 402 sends no second notice). Used by {@code /ulticloud reconnect}.
+     *
+     * @return {@code STARTED}, or why nothing was started
+     */
+    ReconnectOutcome reconnectNow() {
+        ReconnectOutcome refusal;
+        synchronized (this) {
+            refusal = reconnectRefusal(state);
+        }
+        if (refusal != null) {
+            return refusal;
+        }
+        String bearer = readBearer();
+        Effects out = new Effects();
+        ReconnectOutcome outcome;
+        synchronized (this) {
+            outcome = reconnectRefusal(state);
+            if (outcome == null) {
+                outcome = ReconnectOutcome.STARTED;
+                if (state == State.SUPERSEDED) {
+                    resetCycle();
+                }
+                cancelRetry();
+                if (bearer == null) {
+                    generation++;
+                    moveTo(State.STOPPED, out);
+                    outcome = ReconnectOutcome.NOT_RUNNING;
+                } else {
+                    beginAttempt(bearer, out);
+                }
+            }
+        }
+        out.run();
+        return outcome;
+    }
+
+    private static ReconnectOutcome reconnectRefusal(State s) {
+        switch (s) {
+            case BACKOFF:
+            case PLAN_LIMITED:
+            case SUPERSEDED:
+                return null;
+            case OPEN:
+                return ReconnectOutcome.ALREADY_OPEN;
+            case CONNECTING:
+                return ReconnectOutcome.ALREADY_CONNECTING;
+            case UPGRADE_REQUIRED:
+                return ReconnectOutcome.UPGRADE_REQUIRED;
+            default:
+                return ReconnectOutcome.NOT_RUNNING;
+        }
+    }
+
+    /**
+     * Marks the open connection as established (Wave A: by the owner once open; plan 22-08 moves
+     * the call to {@code welcome}): resets the normal and long backoff counters and the attempt
+     * number. A no-op unless OPEN.
+     */
+    void markEstablished() {
+        synchronized (this) {
+            if (state != State.OPEN) {
+                return;
+            }
+            normalFailures = 0;
+            longFailures = 0;
+            attemptsSinceEstablished = 0;
+        }
+    }
+
+    /**
      * Sends a text frame.
      *
      * @param text the frame
@@ -474,6 +603,8 @@ final class AgentConnection {
         cancelRetry();
         attemptsSinceEstablished = 0;
         normalFailures = 0;
+        longFailures = 0;
+        consecutiveSuperseded = 0;
         planEpisode = false;
         planNoticeSent = false;
     }
@@ -523,10 +654,12 @@ final class AgentConnection {
                 return;
             }
             moveTo(State.OPEN, out);
+            openedAtMillis = clock.getAsLong();
             if (planEpisode) {
                 planEpisode = false;
                 planNoticeSent = false;
                 normalFailures = 0;
+                longFailures = 0;
                 out.log(Level.INFO, "UltiCloud: the plan limit no longer applies; this server is connected again.");
             }
             out.add(listener::onOpened);
@@ -562,6 +695,9 @@ final class AgentConnection {
                 case PLAN_LIMIT:
                     planLimitRefusal(rejection, reason, out);
                     break;
+                case RETRY_LONG:
+                    retryLong(reason, rejection.retryAfterSeconds(), out);
+                    break;
                 default:
                     retryNormal(reason, out);
                     break;
@@ -576,6 +712,8 @@ final class AgentConnection {
             if (id != generation || (state != State.CONNECTING && state != State.OPEN)) {
                 return;
             }
+            boolean wasOpen = state == State.OPEN;
+            long openFor = wasOpen ? clock.getAsLong() - openedAtMillis : 0;
             String reason = code == CLOSE_NEVER_CONNECTED ? "could not connect" : "closed " + code;
             switch (forClose(code)) {
                 case STOP_DELETE_CREDENTIAL:
@@ -583,6 +721,16 @@ final class AgentConnection {
                     break;
                 case STOP_KEEP_CREDENTIAL:
                     terminal(State.UPGRADE_REQUIRED, () -> listener.onUpgradeRequired(null, null), out);
+                    break;
+                case PLAN_LIMIT:
+                    planLimitClose(reason, out);
+                    break;
+                case RETRY_LONG:
+                    if (code == CLOSE_SUPERSEDED) {
+                        superseded(wasOpen && openFor >= timing.supersededResetMs, out);
+                    } else {
+                        retryLong(reason, -1, out);
+                    }
                     break;
                 default:
                     retryNormal(reason, out);
@@ -615,14 +763,67 @@ final class AgentConnection {
         }
     }
 
+    /**
+     * Under the monitor: close 4402. The close frame cannot carry the reason or the manage link,
+     * so one probe follows after the normal attempt-0 delay; its 402 sends the notice.
+     */
+    private void planLimitClose(String reason, Effects out) {
+        planEpisode = true;
+        planNoticeSent = false;
+        scheduleRetry(State.PLAN_LIMITED, policy.delayMillis(0), reason, Level.INFO, out);
+    }
+
+    /** Under the monitor: a failure other than the plan limit ends a plan-limit episode. */
+    private void endPlanEpisode() {
+        planEpisode = false;
+        planNoticeSent = false;
+    }
+
     private void retryNormal(String reason, Effects out) {
+        endPlanEpisode();
         long delay = policy.delayMillis(normalFailures);
         normalFailures = bump(normalFailures);
         scheduleRetry(State.BACKOFF, delay, reason, Level.INFO, out);
     }
 
-    /** Under the monitor: ends the attempt and schedules the next one. */
-    private void scheduleRetry(State next, long delayMs, String reason, Level level, Effects out) {
+    /** Under the monitor: a long-class failure; a 429 waits at least its {@code Retry-After}. */
+    private void retryLong(String reason, long retryAfterSeconds, Effects out) {
+        endPlanEpisode();
+        long delay = policy.longDelayMillis(longFailures);
+        longFailures = bump(longFailures);
+        if (retryAfterSeconds >= 0) {
+            delay = Math.min(RETRY_AFTER_MAX_SECONDS * 1000L, Math.max(delay, retryAfterSeconds * 1000L));
+        }
+        scheduleRetry(State.BACKOFF, delay, reason, Level.INFO, out);
+    }
+
+    /**
+     * Under the monitor: close 4000. Three in a row with no connection lasting
+     * {@code supersededResetMs} in between stop retrying (credential kept); the earlier ones back
+     * off long with a warning instead of the retry line.
+     */
+    private void superseded(boolean afterLongLivedConnection, Effects out) {
+        endPlanEpisode();
+        consecutiveSuperseded = afterLongLivedConnection ? 1 : bump(consecutiveSuperseded);
+        if (consecutiveSuperseded >= SUPERSEDED_STOP_AFTER) {
+            terminal(State.SUPERSEDED, listener::onSuperseded, out);
+            return;
+        }
+        long delay = policy.longDelayMillis(longFailures);
+        longFailures = bump(longFailures);
+        if (scheduleRetry(State.BACKOFF, delay, null, Level.INFO, out)) {
+            out.log(Level.WARNING, "UltiCloud: another connection is using this server's credential and "
+                    + "replaced this one (close " + CLOSE_SUPERSEDED + "); retrying in " + seconds(delay) + " s.");
+        }
+    }
+
+    /**
+     * Under the monitor: ends the attempt and schedules the next one; logs the retry line unless
+     * {@code reason} is null (the caller logs its own line).
+     *
+     * @return whether the retry was scheduled
+     */
+    private boolean scheduleRetry(State next, long delayMs, String reason, Level level, Effects out) {
         long token = ++generation;
         handle = null;
         cancelRetry();
@@ -632,10 +833,13 @@ final class AgentConnection {
             retryAtMillis = clock.getAsLong() + delayMs;
         } catch (RejectedExecutionException e) {
             moveTo(State.STOPPED, out);
-            return;
+            return false;
         }
-        out.log(level, "UltiCloud: connection attempt " + currentAttemptNumber + " failed (" + reason
-                + "); retrying in " + seconds(delayMs) + " s.");
+        if (reason != null) {
+            out.log(level, "UltiCloud: connection attempt " + currentAttemptNumber + " failed (" + reason
+                    + "); retrying in " + seconds(delayMs) + " s.");
+        }
+        return true;
     }
 
     private void runRetry(long token) {
