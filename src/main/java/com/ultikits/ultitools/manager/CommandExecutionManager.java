@@ -53,6 +53,27 @@ public class CommandExecutionManager {
     private static final String ACTION_EXECUTE_COMMAND = "execute_command";
 
     /**
+     * {@code command.result.data.output} maxItems in the frozen 2.0.0 contract.
+     */
+    private static final int MAX_OUTPUT_LINES = 1000;
+
+    /**
+     * {@code command.result.data.output} items maxLength, counted in Unicode code points as the
+     * schema and {@link com.ultikits.ultitools.utils.PayloadReader} count it.
+     */
+    private static final int MAX_OUTPUT_LINE_CHARS = 4096;
+
+    /**
+     * {@code command.result} payload message maxLength, counted in Unicode code points.
+     */
+    private static final int MAX_RESULT_MESSAGE_CHARS = 500;
+
+    /**
+     * {@code command.result.data.executionMs} maximum in the frozen contract.
+     */
+    private static final long MAX_EXECUTION_MS = 86400000L;
+
+    /**
      * The {@code command_result} text for a command the server console accepted. A panel command
      * is typed into the server console (maintainer decision, 6.3.0): it runs as the console sender,
      * and Paper sends a console command's replies to the console itself, never to a sender the
@@ -261,6 +282,8 @@ public class CommandExecutionManager {
     /**
      * Receives one v2 command outcome, independently of the transport framing.
      * Framework failures propagate to the caller; only dispatch failures call {@link #failed(String)}.
+     * Messages are non-empty and at most {@value #MAX_RESULT_MESSAGE_CHARS} code points, the
+     * {@code command.result} payload bound.
      *
      * @since 6.3.1
      */
@@ -279,7 +302,11 @@ public class CommandExecutionManager {
     /**
      * Executes a v2 request using Paper's console-permission feedback sender.
      * The caller owns acknowledgement, deduplication, lifecycle checks and transport byte limits.
-     * The injected executor must enqueue work onto the server main thread in arrival order.
+     * The 6.3.0 validation order runs on the calling thread, so a refusal is answered without
+     * waiting for the main thread; only the dispatch and its feedback capture are handed to the
+     * injected executor, which must enqueue work onto the server main thread in arrival order.
+     * Output is cut to the {@code command.result} schema bounds — {@value #MAX_OUTPUT_LINES} lines
+     * of {@value #MAX_OUTPUT_LINE_CHARS} code points — and the flag reports that cut.
      * This method only reads operator configuration and never rewrites it.
      *
      * @param commandLine command text, optionally prefixed with a slash
@@ -289,35 +316,57 @@ public class CommandExecutionManager {
      * @since 6.3.1
      */
     public void execute(String commandLine, String actor, Executor mainThread, CommandResultSink sink) {
-        mainThread.execute(() -> {
-            if (commandLine == null || commandLine.trim().isEmpty()) {
-                sink.failed("Command cannot be empty");
-                return;
-            }
-            AccessDecision decision = isCommandAllowed(commandLine);
-            if (!decision.isAllowed()) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                        FrameworkText.format("[远程命令] 已拦截: %s", commandLine));
-                recordCommandDecision(commandLine, actor, decision.getMessage());
-                String name = commandLine.trim();
-                if (name.startsWith("/")) {
-                    name = name.substring(1);
-                }
-                name = name.split("\\s+")[0].toLowerCase(Locale.ROOT);
-                sink.blocked(name.substring(name.indexOf(':') + 1), decision.getMessage());
-                return;
-            }
-            if (!Capability.COMMANDS.isEnabled()) {
-                String refusal = Capability.COMMANDS.refusalMessage();
-                recordCommandDecision(commandLine, actor, refusal);
-                sink.failed(refusal);
-                return;
-            }
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                    FrameworkText.format("[远程命令] > %s", commandLine));
-            recordCommandDecision(commandLine, actor, null);
-            executeCaptured(commandLine, sink);
-        });
+        if (commandLine == null || commandLine.trim().isEmpty()) {
+            sink.failed("Command cannot be empty");
+            return;
+        }
+        AccessDecision decision = isCommandAllowed(commandLine);
+        if (!decision.isAllowed()) {
+            // Keep this WARNING line — the same control the v1 path carries.
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    FrameworkText.format("[远程命令] 已拦截: %s", commandLine));
+            recordCommandDecision(commandLine, actor, decision.getMessage());
+            sink.blocked(baseCommandName(commandLine), resultMessage(decision.getMessage()));
+            return;
+        }
+        // Defensive: the router gates the capability before this handler runs. A wiring mistake
+        // must not turn into an execution path, so the switch is checked here as well.
+        if (!Capability.COMMANDS.isEnabled()) {
+            String refusal = resultMessage(Capability.COMMANDS.refusalMessage());
+            recordCommandDecision(commandLine, actor, refusal);
+            sink.failed(refusal);
+            return;
+        }
+        UltiTools.getInstance().getLogger().log(Level.INFO,
+                FrameworkText.format("[远程命令] > %s", commandLine));
+        recordCommandDecision(commandLine, actor, null);
+        mainThread.execute(() -> executeCaptured(commandLine, sink));
+    }
+
+    /**
+     * The blocklist key from a command line: first word, leading slash and namespace prefix
+     * stripped, lower-cased — the same normalization {@link #isCommandAllowed(String)} applies.
+     */
+    private static String baseCommandName(String commandLine) {
+        String name = commandLine.trim();
+        if (name.startsWith("/")) {
+            name = name.substring(1);
+        }
+        name = name.split("\\s+")[0].toLowerCase(Locale.ROOT);
+        return name.substring(name.indexOf(':') + 1);
+    }
+
+    /**
+     * Fits a result message inside the schema bound and never returns a blank one.
+     */
+    private static String resultMessage(String message) {
+        if (message == null || message.trim().isEmpty()) {
+            return "The command could not be completed.";
+        }
+        if (message.codePointCount(0, message.length()) <= MAX_RESULT_MESSAGE_CHARS) {
+            return message;
+        }
+        return message.substring(0, message.offsetByCodePoints(0, MAX_RESULT_MESSAGE_CHARS));
     }
 
     private void recordCommandDecision(String command, String actor, String refusal) {
@@ -351,15 +400,28 @@ public class CommandExecutionManager {
         try {
             accepted = Bukkit.dispatchCommand(sender, command);
         } catch (Exception ex) {
-            sink.failed(ex.getMessage());
+            sink.failed(resultMessage(ex.getMessage()));
             return;
         }
-        long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-        if (accepted) {
-            sink.completed(lines, false, elapsed);
-        } else {
+        long elapsed = Math.min(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), MAX_EXECUTION_MS);
+        if (!accepted) {
             sink.failed(NOT_ACCEPTED_OUTPUT);
+            return;
         }
+        boolean truncated = false;
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.codePointCount(0, line.length()) > MAX_OUTPUT_LINE_CHARS) {
+                lines.set(i, line.substring(0, line.offsetByCodePoints(0, MAX_OUTPUT_LINE_CHARS)));
+                truncated = true;
+            }
+        }
+        List<String> kept = lines;
+        if (kept.size() > MAX_OUTPUT_LINES) {
+            kept = new ArrayList<>(kept.subList(0, MAX_OUTPUT_LINES));
+            truncated = true;
+        }
+        sink.completed(kept, truncated, elapsed);
     }
 
     /**

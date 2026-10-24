@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.utils;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.manager.CommandExecutionManager;
@@ -7,6 +9,7 @@ import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Executor;
@@ -31,6 +34,9 @@ import java.util.regex.Pattern;
 final class RemoteCommandHandler implements CloudRequestHandler {
     private static final Logger LOGGER = Logger.getLogger(RemoteCommandHandler.class.getName());
     private static final Pattern COMMAND = Pattern.compile("^[^\\r\\n]{1,1000}$");
+    /** {@code command.result.payload.details} property values and keys maxLength. */
+    private static final int MAX_DETAIL_CHARS = 500;
+    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
     private final CommandExecutionManager manager;
     private final DedupeLedger ledger;
     private final Executor mainThread;
@@ -52,19 +58,16 @@ final class RemoteCommandHandler implements CloudRequestHandler {
             @Override
             public void blocked(String matched, String message) {
                 JsonObject details = new JsonObject();
-                details.addProperty("matched", matched);
+                details.addProperty("matched", cut(matched, MAX_DETAIL_CHARS));
                 channel.replyError(request.id(), "command.result", "command_blocked", message, details);
             }
 
             @Override
             public void completed(List<String> lines, boolean truncated, long executionMs) {
-                JsonArray output = new JsonArray();
-                for (String line : lines) {
-                    output.add(line);
-                }
+                BoundedOutput output = fitOutput(lines, channel.limits().commandOutputMaxBytes());
                 JsonObject data = new JsonObject();
-                data.add("output", output);
-                data.addProperty("truncated", truncated);
+                data.add("output", output.lines);
+                data.addProperty("truncated", truncated || output.truncated);
                 data.addProperty("executionMs", executionMs);
                 channel.replyOk(request.id(), "command.result", data);
             }
@@ -82,6 +85,38 @@ final class RemoteCommandHandler implements CloudRequestHandler {
         }
     }
 
+    /**
+     * Keeps as many leading output lines as fit the negotiated cap on the serialized array's UTF-8
+     * size, dropping trailing lines. The cap bounds the array itself, not the whole frame.
+     */
+    private static BoundedOutput fitOutput(List<String> lines, int maxBytes) {
+        int[] sizes = new int[lines.size()];
+        long total = 2; // the enclosing brackets
+        for (int i = 0; i < lines.size(); i++) {
+            sizes[i] = GSON.toJson(lines.get(i)).getBytes(StandardCharsets.UTF_8).length;
+            total += sizes[i] + (i > 0 ? 1 : 0);
+        }
+        int keep = lines.size();
+        while (keep > 0 && total > maxBytes) {
+            total -= sizes[keep - 1] + (keep > 1 ? 1 : 0);
+            keep--;
+        }
+        JsonArray output = new JsonArray();
+        for (int i = 0; i < keep; i++) {
+            output.add(lines.get(i));
+        }
+        return new BoundedOutput(output, keep < lines.size());
+    }
+
+    private static String cut(String text, int maxChars) {
+        if (text == null) {
+            return null;
+        }
+        return text.codePointCount(0, text.length()) <= maxChars
+                ? text
+                : text.substring(0, text.offsetByCodePoints(0, maxChars));
+    }
+
     private void runUnlessDisabling(Runnable action, CloudRequest request, CloudChannel channel) {
         try {
             if (disabling.getAsBoolean()) {
@@ -97,5 +132,16 @@ final class RemoteCommandHandler implements CloudRequestHandler {
     private static void internalError(CloudRequest request, CloudChannel channel, RuntimeException failure) {
         LOGGER.warning("UltiCloud: remote command framework failure; exception=" + failure.getClass().getName());
         channel.replyError(request.id(), "command.result", "internal_error", "The command could not be processed.", null);
+    }
+
+    /** An output array plus whether the byte cap forced lines to be dropped. */
+    private static final class BoundedOutput {
+        private final JsonArray lines;
+        private final boolean truncated;
+
+        private BoundedOutput(JsonArray lines, boolean truncated) {
+            this.lines = lines;
+            this.truncated = truncated;
+        }
     }
 }
