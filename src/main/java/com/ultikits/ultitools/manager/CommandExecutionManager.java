@@ -307,7 +307,10 @@ public class CommandExecutionManager {
         /** Reports synchronous feedback captured before dispatch returned, and main-thread execution time. */
         void completed(List<String> lines, boolean truncated, long executionMs);
 
-        /** Reports an empty command, disabled capability or command dispatch failure, without a stack trace. */
+        /**
+         * Reports an empty command, a disabled capability, a refused command's captured reply or a
+         * dispatch exception's message — never a stack trace.
+         */
         void failed(String message);
     }
 
@@ -412,6 +415,10 @@ public class CommandExecutionManager {
         try {
             accepted = Bukkit.dispatchCommand(sender, command);
         } catch (Exception ex) {
+            // The panel receives the message only, so the stack trace lives here or nowhere. The
+            // command name is logged without its arguments: an argument can carry a secret.
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    FrameworkText.format("[远程命令] 命令执行异常: %s", baseCommandName(commandLine)), ex);
             sink.failed(resultMessage(ex.getMessage()));
             return;
         }

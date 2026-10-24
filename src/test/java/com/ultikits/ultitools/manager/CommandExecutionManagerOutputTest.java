@@ -21,10 +21,13 @@ import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -40,6 +43,7 @@ class CommandExecutionManagerOutputTest {
     private ServerMock server;
     private YamlConfiguration config;
     private RemoteActionLog actionLog;
+    private Logger logger;
 
     @BeforeEach
     void setUp() {
@@ -48,9 +52,10 @@ class CommandExecutionManagerOutputTest {
         config = new YamlConfiguration();
         config.set(Capability.COMMANDS.getConfigPath(), true);
         actionLog = mock(RemoteActionLog.class);
+        logger = mock(Logger.class);
         TestHelper.mockUltiToolsInstance(plugin -> {
             when(plugin.getConfig()).thenReturn(config);
-            when(plugin.getLogger()).thenReturn(mock(Logger.class));
+            when(plugin.getLogger()).thenReturn(logger);
             when(plugin.getRemoteActionLog()).thenReturn(actionLog);
         });
         doAnswer(invocation -> {
@@ -203,6 +208,22 @@ class CommandExecutionManagerOutputTest {
 
         assertThat(sink.failedCalls).isEqualTo(1);
         assertThat(sink.failedMessage).isNotBlank();
+    }
+
+    @Test
+    void aDispatchExceptionIsLoggedWithTheCommandNameAndTheStackTrace() {
+        register("crash", (sender, args) -> {
+            throw new IllegalStateException("boom");
+        });
+
+        RecordingSink sink = execute("crash secret-argument");
+
+        assertThat(sink.failedCalls).isEqualTo(1);
+        // The command name only — an argument may carry a secret — and with the throwable, so the
+        // operator keeps the stack trace the panel never receives.
+        verify(logger).log(eq(Level.WARNING),
+                argThat(line -> line.contains("crash") && !line.contains("secret-argument")),
+                any(IllegalStateException.class));
     }
 
     @Test
