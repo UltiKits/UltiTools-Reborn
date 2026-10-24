@@ -1,28 +1,17 @@
 package com.ultikits.ultitools.utils;
 
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
 import java.io.Reader;
-import java.io.Writer;
-import java.nio.channels.Channels;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.FileAttribute;
-import java.nio.file.attribute.PosixFilePermission;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 
@@ -75,7 +64,9 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
  * parent directory is forced after it where the platform allows (a directory cannot be opened as a
  * channel on Windows, so that step is best-effort), so a power loss cannot leave the credential path
  * naming a file whose bytes never reached the disk. Writes are rare -- login, token refresh, the
- * first server UUID -- so the cost of the two flushes is negligible.
+ * first server UUID -- so the cost of the two flushes is negligible. The temporary-file, owner-only,
+ * force and atomic-move steps live in {@link OwnerOnlyAtomicFile}, the one writer this class shares
+ * with {@link CloudStateStore}'s {@code cloud-outbox.json} (plan 22-03); there is no second copy.
  * <p>
  * Both the current (new) and the pre-6.3.0 (old) target paths require a live
  * {@link UltiTools#getInstance()} to resolve in production -- the new one climbs two directories
@@ -128,10 +119,6 @@ public final class CredentialStore {
      * restoring the default production resolution. Package-private -- production code must never
      * call this.
      */
-    /** Owner read and write only: the mode of every credential file this class writes on POSIX (D19-060). */
-    private static final Set<PosixFilePermission> OWNER_ONLY =
-            Collections.unmodifiableSet(EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
-
     private static volatile Path targetPathOverride;
 
     /**
@@ -256,6 +243,19 @@ public final class CredentialStore {
         }
         File serverRoot = instance.getDataFolder().getParentFile().getParentFile();
         return new File(new File(serverRoot, NEW_DIR_NAME), CREDENTIAL_FILE_NAME).toPath().toAbsolutePath();
+    }
+
+    /**
+     * The directory that holds the credential file: {@code <server root>/.ultikits} in production, or the parent of
+     * the {@link #setTargetPathForTesting(Path) test override} when one is set. {@link CloudStateStore} keeps
+     * {@code cloud-outbox.json} beside {@code credentials.json} here, so both framework-owned files share one
+     * location rule (plan 22-03).
+     *
+     * @return the absolute directory of {@link #resolveTargetPath()}
+     * @throws DataAccessException under the same condition as {@link #resolveTargetPath()}
+     */
+    static Path stateDirectory() {
+        return resolveTargetPath().getParent();
     }
 
     /**
@@ -603,6 +603,13 @@ public final class CredentialStore {
         }
     }
 
+    /**
+     * Writes {@code data} through {@link OwnerOnlyAtomicFile#write(Path, String, OwnerOnlyAtomicFile.WriterBody)},
+     * the one atomic owner-only writer this class shares with {@link CloudStateStore} (plan 22-03, S-15): a
+     * same-directory temporary file with the fixed name {@code credentials.json.tmp}, created owner-only on POSIX,
+     * forced to disk and moved over the target with {@code ATOMIC_MOVE}. This class keeps its own simulated-failure
+     * hook, its Gson serialisation and its {@link DataAccessException} messages; the I/O lives in the helper only.
+     */
     private static void writeLocked(Map<String, Object> data) {
         if (simulateWriteFailureForTesting) {
             throw new DataAccessException("Simulated write failure (test only)");
@@ -618,66 +625,15 @@ public final class CredentialStore {
         }
 
         Path tempFile = (parent != null ? parent : target).resolve(TEMP_FILE_NAME);
-        boolean moved = false;
         try {
-            // The temporary file becomes the credential file at the atomic move below, so its mode is the file's
-            // mode. On a POSIX file system it is created owner-only (rw-------), and narrowed again in case an
-            // earlier, interrupted write left it with another mode; otherwise every token refresh would widen a
-            // file the operator restricted to 600 to the process umask (D19-060). Other file systems are unchanged.
-            boolean posix = tempFile.getFileSystem().supportedFileAttributeViews().contains("posix");
-            FileAttribute<?>[] ownerOnly = posix
-                    ? new FileAttribute<?>[] {PosixFilePermissions.asFileAttribute(OWNER_ONLY)}
-                    : new FileAttribute<?>[0];
-            try (FileChannel channel = FileChannel.open(tempFile, EnumSet.of(StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE), ownerOnly);
-                 Writer writer = new BufferedWriter(new OutputStreamWriter(
-                         Channels.newOutputStream(channel), StandardCharsets.UTF_8.newEncoder()))) {
-                if (posix) {
-                    Files.setPosixFilePermissions(tempFile, OWNER_ONLY);
-                }
-                GSON.toJson(data, writer);
-                writer.flush();
-                // The bytes must reach the disk before the rename can, or a power loss could leave
-                // the credential path naming an empty file (#573).
-                channel.force(true);
-            }
-            try {
-                Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                moved = true;
-                forceDirectory(parent);
-            } catch (AtomicMoveNotSupportedException e) {
-                throw new DataAccessException(
-                        "Atomic replace of " + target + " is not supported on this filesystem "
-                                + "(temp file " + tempFile + "); refusing to silently fall back to a "
-                                + "non-atomic copy", e);
-            }
+            OwnerOnlyAtomicFile.write(target, TEMP_FILE_NAME, writer -> GSON.toJson(data, writer));
+        } catch (AtomicMoveNotSupportedException e) {
+            throw new DataAccessException(
+                    "Atomic replace of " + target + " is not supported on this filesystem "
+                            + "(temp file " + tempFile + "); refusing to silently fall back to a "
+                            + "non-atomic copy", e);
         } catch (IOException e) {
             throw new DataAccessException("Failed to write " + target, e);
-        } finally {
-            if (!moved) {
-                try {
-                    Files.deleteIfExists(tempFile);
-                } catch (IOException ignored) {
-                    // Best-effort cleanup only; the write already failed and has been reported above.
-                }
-            }
-        }
-    }
-
-    /**
-     * Forces a directory's entries to disk after the rename, so the rename itself survives a power
-     * loss. Best-effort: Windows cannot open a directory as a channel, and a failure here cannot undo
-     * a rename that already happened, so it is logged at {@link Level#FINE} and not reported as a
-     * failed write.
-     */
-    private static void forceDirectory(Path directory) {
-        if (directory == null) {
-            return;
-        }
-        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
-            channel.force(true);
-        } catch (IOException | UnsupportedOperationException e) {
-            log(Level.FINE, "Could not force the credential directory " + directory + " to disk: " + e);
         }
     }
 
