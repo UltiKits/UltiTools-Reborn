@@ -204,7 +204,7 @@ class RemoteCommandHandlerTest {
     @Test
     void disablingBetweenAckAndExecutionSendsNoResultAndLogsOnceAtFine() {
         AtomicInteger dispatches = countDispatches("list");
-        List<LogRecord> fine = captureFineRecords();
+        List<LogRecord> fine = captureRecords(RemoteCommandHandler.class.getName());
         RemoteCommandHandler handler = handler(new CommandExecutionManager(), () -> true);
 
         handler.handle(request("list"), channel);
@@ -214,6 +214,75 @@ class RemoteCommandHandlerTest {
         assertThat(channel.frames()).hasSize(1);
         assertThat(dispatches.get()).isZero();
         assertThat(fine).anySatisfy(record -> assertThat(record.getMessage()).contains("disabling"));
+    }
+
+    @Test
+    void aRedeliveredIdIsReAckedAndNotExecutedAgainAfterARestart() {
+        AtomicInteger dispatches = countDispatches("list");
+        CloudRequest request = request("list");
+
+        handler(new CommandExecutionManager(), () -> false).handle(request, channel);
+        drainMainThread();
+        // A restart keeps the persisted ledger: a new handler over the same port.
+        handler(new CommandExecutionManager(), () -> false).handle(request, channel);
+        drainMainThread();
+
+        assertThat(dispatches.get()).isEqualTo(1);
+        List<JsonObject> frames = channel.frames();
+        assertThat(frames).hasSize(3);
+        assertThat(frames.get(0).get("type").getAsString()).isEqualTo("command.ack");
+        assertThat(frames.get(1).get("type").getAsString()).isEqualTo("command.result");
+        assertThat(frames.get(2).get("type").getAsString()).isEqualTo("command.ack");
+    }
+
+    @Test
+    void aPersistenceFailureWarnsWithTheIdOnlyAndStillAcksAndExecutes() {
+        ledger.persistFails = true;
+        AtomicInteger dispatches = countDispatches("persistprobe");
+        List<LogRecord> warnings = captureRecords(AckFirstGate.class.getName());
+        CloudRequest request = request("persistprobe");
+        RemoteCommandHandler handler = handler(new CommandExecutionManager(), () -> false);
+
+        handler.handle(request, channel);
+        drainMainThread();
+
+        assertThat(dispatches.get()).isEqualTo(1);
+        List<JsonObject> frames = channel.frames();
+        assertThat(frames).hasSize(2);
+        assertThat(frames.get(0).get("type").getAsString()).isEqualTo("command.ack");
+        assertThat(frames.get(1).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        List<String> warned = new ArrayList<>();
+        for (LogRecord record : warnings) {
+            if (record.getLevel() == Level.WARNING) {
+                warned.add(record.getMessage());
+            }
+        }
+        assertThat(warned).hasSize(1);
+        assertThat(warned.get(0)).contains(request.id()).doesNotContain("persistprobe");
+    }
+
+    @Test
+    void twoIdsAreAckedImmediatelyAndExecuteInArrivalOrder() {
+        List<String> executed = new ArrayList<>();
+        register("firstcmd", (sender, args) -> {
+            executed.add("first");
+            return true;
+        });
+        register("secondcmd", (sender, args) -> {
+            executed.add("second");
+            return true;
+        });
+        RemoteCommandHandler handler = handler(new CommandExecutionManager(), () -> false);
+
+        handler.handle(request("firstcmd"), channel);
+        handler.handle(request("secondcmd"), channel);
+
+        assertThat(channel.frames()).extracting(frame -> frame.get("type").getAsString())
+                .containsExactly("command.ack", "command.ack");
+        drainMainThread();
+
+        assertThat(executed).containsExactly("first", "second");
+        assertThat(channel.frames()).hasSize(4);
     }
 
     private RemoteCommandHandler handler(CommandExecutionManager manager, java.util.function.BooleanSupplier disabling) {
@@ -279,9 +348,9 @@ class RemoteCommandHandlerTest {
         return CloudLimits.fromWelcome(limits);
     }
 
-    private static List<LogRecord> captureFineRecords() {
+    private static List<LogRecord> captureRecords(String loggerName) {
         List<LogRecord> records = new ArrayList<>();
-        Logger logger = Logger.getLogger(RemoteCommandHandler.class.getName());
+        Logger logger = Logger.getLogger(loggerName);
         logger.setLevel(Level.ALL);
         Handler handler = new Handler() {
             @Override
@@ -311,6 +380,7 @@ class RemoteCommandHandlerTest {
     private static final class Ledger implements DedupeLedger {
         private final Set<String> ids = new HashSet<>();
         private final Map<String, JsonObject> receipts = new HashMap<>();
+        private boolean persistFails;
 
         @Override
         public boolean firstSeen(String id) {
@@ -318,7 +388,10 @@ class RemoteCommandHandlerTest {
         }
 
         @Override
-        public void persistNow() {
+        public void persistNow() throws java.io.IOException {
+            if (persistFails) {
+                throw new java.io.IOException("disk full");
+            }
         }
 
         @Override
