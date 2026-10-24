@@ -282,7 +282,8 @@ public class CommandExecutionManager {
     /**
      * Receives one v2 command outcome, independently of the transport framing.
      * Framework failures propagate to the caller; only dispatch failures call {@link #failed(String)}.
-     * Messages are non-empty and at most {@value #MAX_RESULT_MESSAGE_CHARS} code points, the
+     * Messages are non-empty and at most
+     * {@value CommandExecutionManager#MAX_RESULT_MESSAGE_CHARS} code points, the
      * {@code command.result} payload bound.
      *
      * @since 6.3.1
