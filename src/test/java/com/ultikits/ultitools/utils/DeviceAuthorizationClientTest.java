@@ -401,7 +401,7 @@ class DeviceAuthorizationClientTest {
         Files.write(tempDir.resolve("credentials.json"), "{\"uuid\":\"0123456789abc\"}".getBytes(StandardCharsets.UTF_8));
         responder.set(answer(500, "{}"));
 
-        client.authorize("6.3.1", null, CloudAuthManager.storedAttachToServerId());
+        client.authorize("6.3.1", null, CloudAuthManager.storedLegacyServerUuid());
 
         JsonObject body = JsonParser.parseString(cloudRequests.get(0).text()).getAsJsonObject();
         assertThat(body.has("legacyServerUuid")).isFalse();
@@ -414,7 +414,7 @@ class DeviceAuthorizationClientTest {
                 "{\"uuid\":\"01234567-89AB-cdef-0123-456789abcdef\"}".getBytes(StandardCharsets.UTF_8));
         responder.set(answer(500, "{}"));
 
-        client.authorize("6.3.1", null, CloudAuthManager.storedAttachToServerId());
+        client.authorize("6.3.1", null, CloudAuthManager.storedLegacyServerUuid());
 
         JsonObject body = JsonParser.parseString(cloudRequests.get(0).text()).getAsJsonObject();
         assertThat(body.has("legacyServerUuid")).as("the authorize body names the install id legacyServerUuid").isTrue();

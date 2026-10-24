@@ -202,7 +202,7 @@ public class CloudAuthManager {
      * @return this server's stored install id ({@code uuid} in {@code credentials.json}) normalised by
      *         {@link LegacyServerId#canonical(String)}, or {@code null}; reads only, never writes
      */
-    static String storedAttachToServerId() {
+    static String storedLegacyServerUuid() {
         CredentialStore.ReadResult result = CredentialStore.read();
         if (!result.isParsed()) {
             return null;

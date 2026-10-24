@@ -39,11 +39,11 @@ class DeviceAuthorizationClient {
      * @param frameworkVersion        the running framework version, sent verbatim
      * @param suggestedNameOrNull     the default server name for the confirmation page, or
      *                                {@code null} to omit the field
-     * @param attachToServerIdOrNull  this server's normalised install id, or {@code null} to omit the
+     * @param legacyServerUuidOrNull  this server's normalised install id, or {@code null} to omit the
      *                                field
      * @return the grant, or the reason it could not be obtained; never {@code null}
      */
-    AuthorizeResult authorize(String frameworkVersion, String suggestedNameOrNull, String attachToServerIdOrNull) {
+    AuthorizeResult authorize(String frameworkVersion, String suggestedNameOrNull, String legacyServerUuidOrNull) {
         JsonObject body = new JsonObject();
         body.addProperty("clientKind", "server");
         body.addProperty("framework", frameworkVersion);
@@ -51,8 +51,8 @@ class DeviceAuthorizationClient {
         if (suggestedNameOrNull != null) {
             body.addProperty("suggestedName", suggestedNameOrNull);
         }
-        if (attachToServerIdOrNull != null) {
-            body.addProperty("attachToServerId", attachToServerIdOrNull);
+        if (legacyServerUuidOrNull != null) {
+            body.addProperty("legacyServerUuid", legacyServerUuidOrNull);
         }
         CloudHttp.Response response = CloudHttp.postJson(AUTHORIZE_PATH, body, null);
         if (response.outcome() == CloudHttp.Outcome.NOT_CONFIGURED) {

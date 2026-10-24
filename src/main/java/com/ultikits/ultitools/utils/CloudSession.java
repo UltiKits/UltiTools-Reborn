@@ -777,7 +777,7 @@ final class CloudSession {
         DeviceAuthorizationClient.AuthorizeResult result;
         try {
             result = deviceClient().authorize(CloudAuthManager.runningFrameworkVersion(),
-                CloudAuthManager.suggestedServerName(), CloudAuthManager.storedAttachToServerId());
+                CloudAuthManager.suggestedServerName(), CloudAuthManager.storedLegacyServerUuid());
         } catch (RuntimeException e) {
             result = DeviceAuthorizationClient.AuthorizeResult.failed(
                 "unexpected " + e.getClass().getSimpleName(), -1);
