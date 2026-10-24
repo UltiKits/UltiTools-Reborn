@@ -7,7 +7,7 @@ import java.util.List;
 import com.ultikits.ultitools.UltiTools;
 
 /**
- * The panel-facing remote surface, sliced into eight independently-switchable capabilities plus
+ * The panel-facing remote surface, sliced into ten independently-switchable capabilities plus
  * the {@link #NONE} sentinel for protocol-level messages.
  * <p>
  * Each config-backed constant owns its own {@code ultipanel.capabilities.*} key, its own D-08
@@ -52,6 +52,14 @@ public enum Capability {
     SERVER_PROPERTIES("server-properties", false, Arrays.asList(
             "Whether the panel may read and edit server.properties safe keys.",
             "面板是否可以读取与编辑 server.properties 的安全白名单键。"
+    )),
+    POWER_ACTIONS("power-actions", false, Arrays.asList(
+            "Whether the panel may stop or restart this server through the structured power action, which does not pass through the command blocklist.",
+            "面板是否可以通过结构化电源动作停止或重启本服务器；该动作不经过命令黑名单。"
+    )),
+    PLAYER_ACTIONS("player-actions", false, Arrays.asList(
+            "Whether the panel may kick players, change their game mode or teleport them.",
+            "面板是否可以踢出玩家、修改他们的游戏模式或传送他们。"
     )),
 
     /**
