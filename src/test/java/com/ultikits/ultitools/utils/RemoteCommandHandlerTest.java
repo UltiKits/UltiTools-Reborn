@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.logging.Handler;
@@ -229,6 +230,25 @@ class RemoteCommandHandlerTest {
         drainMainThread();
 
         assertThat(channel.frames()).hasSize(1);
+        assertThat(dispatches.get()).isZero();
+        assertThat(fine).anySatisfy(record -> assertThat(record.getMessage()).contains("disabling"));
+    }
+
+    @Test
+    void disablingOnTheMainThreadAfterTheAckDropsTheExecution() {
+        AtomicInteger dispatches = countDispatches("list");
+        List<LogRecord> fine = captureRecords(RemoteCommandHandler.class.getName());
+        AtomicBoolean disabling = new AtomicBoolean(false);
+        RemoteCommandHandler handler = handler(new CommandExecutionManager(), disabling::get);
+
+        handler.handle(request("list"), channel);
+        // Validation runs on the calling thread and has already passed; the flag flips in the
+        // window between it and the queued main-thread dispatch, which is the second check.
+        disabling.set(true);
+        drainMainThread();
+
+        assertThat(channel.frames()).hasSize(1);
+        assertThat(channel.frames().get(0).get("type").getAsString()).isEqualTo("command.ack");
         assertThat(dispatches.get()).isZero();
         assertThat(fine).anySatisfy(record -> assertThat(record.getMessage()).contains("disabling"));
     }

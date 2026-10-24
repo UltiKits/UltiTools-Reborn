@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 import net.kyori.adventure.text.Component;
@@ -15,6 +16,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockito.ArgumentCaptor;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -86,7 +88,33 @@ class CommandExecutionManagerOutputTest {
         assertThat(sink.blockedMatched).isEqualTo("stop");
         assertThat(sink.blockedMessage).contains("ultipanel.commands.blocklist");
         assertThat(sink.failedCalls).isZero();
-        verify(actionLog).record(any(RemoteActionLog.Entry.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"stop", "/STOP", "minecraft:stop"})
+    void aBlockedCommandWritesTheDeniedActionLogEntry(String command) {
+        execute(command);
+
+        ArgumentCaptor<RemoteActionLog.Entry> entry = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(actionLog).record(entry.capture());
+        assertThat(entry.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(entry.getValue().getCapability()).isEqualTo("COMMANDS");
+        assertThat(entry.getValue().getAction()).isEqualTo("execute_command");
+        assertThat(entry.getValue().getTarget()).isEqualTo(command);
+        assertThat(entry.getValue().getActor()).isEqualTo("panel");
+        assertThat(entry.getValue().getReason()).contains("ultipanel.commands.blocklist");
+    }
+
+    @Test
+    void aBlockedCommandIsAlsoLoggedAsAWarning() {
+        AtomicInteger dispatches = countDispatches("stop");
+
+        execute("/STOP");
+
+        assertThat(dispatches.get()).isZero();
+        // The 6.3.0 interception line, kept as the control that proves the refusal was observed.
+        String expected = FrameworkText.format("[远程命令] 已拦截: %s", "/STOP");
+        verify(logger).log(eq(Level.WARNING), eq(expected));
     }
 
     @Test
