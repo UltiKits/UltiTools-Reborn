@@ -6,7 +6,13 @@ import org.jetbrains.annotations.ApiStatus;
 import java.util.Arrays;
 import java.util.HashSet;
 
-/** @since 6.3.1 */
+/**
+ * Immutable limits from one accepted welcome; internal, not for module use.
+ * Values follow the frozen protocol contract's bounds and are rejected, not clamped,
+ * when invalid. A new connection may negotiate a different snapshot.
+ *
+ * @since 6.3.1
+ */
 @ApiStatus.Internal
 public final class CloudLimits {
     private final int maxFrameBytes;
@@ -34,10 +40,17 @@ public final class CloudLimits {
         this.fileMaxBytes = fileMaxBytes;
     }
 
+    /** @return the frozen protocol's DEFAULT_LIMITS, used before welcome */
     public static CloudLimits defaults() {
         return new CloudLimits(1048576, 50, 200, 8192, 100, 1000, 1000, 86400, 65536, 393216);
     }
 
+    /**
+     * Reads the exact welcome.limits shape, including its nested log object.
+     * @param limits all required integer fields, with no unknown fields
+     * @return an immutable snapshot with every value inside the contract bounds
+     * @throws IllegalArgumentException if the shape, types or bounds are invalid
+     */
     public static CloudLimits fromWelcome(JsonObject limits) {
         exactKeys(limits, "maxFrameBytes", "log", "outboxMax", "commandDedupeMax", "commandDedupeTtlSeconds",
                 "commandOutputMaxBytes", "fileMaxBytes");
@@ -72,14 +85,24 @@ public final class CloudLimits {
         throw new IllegalArgumentException("Invalid welcome limit: " + key);
     }
 
+    /** @return maximum UTF-8 bytes of a complete serialized frame */
     public int maxFrameBytes() { return maxFrameBytes; }
+    /** @return log lines replenished per second in the token bucket */
     public int logRatePerSec() { return logRatePerSec; }
+    /** @return maximum log-line burst allowed by the token bucket */
     public int logBurst() { return logBurst; }
+    /** @return maximum UTF-8 bytes of one serialized log-line object */
     public int logLineMaxBytes() { return logLineMaxBytes; }
+    /** @return maximum number of lines in one log.lines batch */
     public int logBatchMaxLines() { return logBatchMaxLines; }
+    /** @return maximum number of unacknowledged reliable events retained */
     public int outboxMax() { return outboxMax; }
+    /** @return maximum number of deduplicated request ids retained */
     public int commandDedupeMax() { return commandDedupeMax; }
+    /** @return deduplication retention time in seconds */
     public int commandDedupeTtlSeconds() { return commandDedupeTtlSeconds; }
+    /** @return maximum UTF-8 bytes of the serialized command-output array */
     public int commandOutputMaxBytes() { return commandOutputMaxBytes; }
+    /** @return maximum raw UTF-8 file-content bytes, not JSON frame bytes */
     public int fileMaxBytes() { return fileMaxBytes; }
 }

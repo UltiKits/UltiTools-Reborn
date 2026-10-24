@@ -12,6 +12,11 @@ import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+/**
+ * Frames protocol replies over a socket handoff, enforcing correlation and UTF-8
+ * frame limits. Oversized replies send a small correlated error instead, while
+ * returning false for the original reply. No payload validation is performed here.
+ */
 final class FramedChannel implements CloudChannel {
     private static final Logger LOGGER = Logger.getLogger(FramedChannel.class.getName());
     private final Predicate<String> socketSend;
@@ -20,6 +25,14 @@ final class FramedChannel implements CloudChannel {
     private final Supplier<String> ids;
     private final LongSupplier clock;
 
+    /**
+     * Binds framing to one connection's lifecycle; suppliers must be safe on calling threads.
+     * @param socketSend returns true only after handing the frame to the socket
+     * @param established true only between accepted welcome and close
+     * @param limits current accepted limits, or defaults before welcome
+     * @param ids supplies a fresh valid ULID for each outgoing frame
+     * @param clock supplies epoch milliseconds for outgoing timestamps
+     */
     FramedChannel(Predicate<String> socketSend, BooleanSupplier established, Supplier<CloudLimits> limits,
                   Supplier<String> ids, LongSupplier clock) {
         this.socketSend = Objects.requireNonNull(socketSend, "socketSend");
