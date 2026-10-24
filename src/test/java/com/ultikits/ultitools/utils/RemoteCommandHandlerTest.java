@@ -217,6 +217,20 @@ class RemoteCommandHandlerTest {
     }
 
     @Test
+    void aDisabledPluginSendsNoResultEvenForABlockedCommand() {
+        AtomicInteger dispatches = countDispatches("stop");
+        RemoteCommandHandler handler = handler(new CommandExecutionManager(), () -> true);
+
+        handler.handle(request("minecraft:stop"), channel);
+        drainMainThread();
+
+        // The acknowledgement is owed before execution; no outcome may follow it while disabling.
+        assertThat(channel.frames()).hasSize(1);
+        assertThat(channel.frames().get(0).get("type").getAsString()).isEqualTo("command.ack");
+        assertThat(dispatches.get()).isZero();
+    }
+
+    @Test
     void aRedeliveredIdIsReAckedAndNotExecutedAgainAfterARestart() {
         AtomicInteger dispatches = countDispatches("list");
         CloudRequest request = request("list");

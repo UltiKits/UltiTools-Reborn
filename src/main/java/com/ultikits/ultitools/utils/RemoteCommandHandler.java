@@ -78,8 +78,10 @@ final class RemoteCommandHandler implements CloudRequestHandler {
             }
         };
         try {
-            AckFirstGate.handle(request, channel, ledger, () -> manager.execute(command, "panel",
-                    action -> mainThread.execute(() -> runUnlessDisabling(action, request, channel)), sink));
+            AckFirstGate.handle(request, channel, ledger, () -> runUnlessDisabling(
+                    () -> manager.execute(command, "panel",
+                            action -> mainThread.execute(() -> runUnlessDisabling(action, request, channel)), sink),
+                    request, channel));
         } catch (RuntimeException ex) {
             internalError(request, channel, ex);
         }
@@ -117,6 +119,12 @@ final class RemoteCommandHandler implements CloudRequestHandler {
                 : text.substring(0, text.offsetByCodePoints(0, maxChars));
     }
 
+    /**
+     * Runs one step of the acknowledged request unless the plugin is disabling. The check is
+     * applied twice — once before validation, so a shutting-down plugin sends no outcome at all
+     * after the acknowledgement, and once on the main thread, for the window between validation
+     * and the dispatch itself (D-16's disabling clause).
+     */
     private void runUnlessDisabling(Runnable action, CloudRequest request, CloudChannel channel) {
         try {
             if (disabling.getAsBoolean()) {
