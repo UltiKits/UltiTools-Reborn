@@ -76,6 +76,41 @@ class AgentMessageRouterTest {
     }
 
     @Test
+    void moduleRequestsPassTheLiteralSentinelToTheCapabilityPredicate() {
+        assertThat(AgentMessageTypes.spec("module.request").capability()).isEqualTo("fromPayload:module");
+        List<String> checked = new ArrayList<>();
+        AgentMessageRouter router = new AgentMessageRouter(capability -> {
+            checked.add(capability);
+            return "fromPayload:module".equals(capability);
+        }, capability -> "disabled");
+        RecordingChannel channel = new RecordingChannel();
+        router.register("module.request", (request, replies) ->
+                replies.replyOk(request.id(), "module.response", JsonNull.INSTANCE));
+
+        router.dispatch(frame("module.request").toString(), channel);
+
+        assertThat(checked).containsExactly("fromPayload:module");
+        assertThat(channel.frames()).hasSize(1);
+        assertThat(channel.frames().get(0).get("type").getAsString()).isEqualTo("module.response");
+        assertThat(channel.frames().get(0).get("replyTo").getAsString()).isEqualTo(ID);
+    }
+
+    @Test
+    void rejectingTheModuleSentinelPreventsModuleDispatch() {
+        CloudRequestHandler handler = mock(CloudRequestHandler.class);
+        AgentMessageRouter router = new AgentMessageRouter(capability -> false, capability -> "disabled");
+        router.register("module.request", handler);
+        RecordingChannel channel = new RecordingChannel();
+
+        router.dispatch(frame("module.request").toString(), channel);
+
+        assertError(channel, ID, "capability_not_accepted");
+        assertThat(channel.frames().get(0).getAsJsonObject("payload").getAsJsonObject("details")
+                .get("capability").getAsString()).isEqualTo("fromPayload:module");
+        verifyNoInteractions(handler);
+    }
+
+    @Test
     void malformedPayloadHasInvalidMessageRatherThanInternalError() {
         AgentMessageRouter router = new AgentMessageRouter(cap -> true, cap -> "disabled");
         router.register("command.execute", (request, channel) -> new PayloadReader(request.id(), request.payload()).bool("missing"));
