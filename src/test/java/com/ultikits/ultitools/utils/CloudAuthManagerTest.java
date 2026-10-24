@@ -1616,6 +1616,21 @@ class CloudAuthManagerTest {
         }
 
         @Test
+        @DisplayName("the 6.3.0 five-argument login still works: onSuccess receives the complete verification URI")
+        void legacyOverloadReceivesTheCompleteUri() {
+            CloudSession.setDeviceSeamsForTesting(grantedClient(600, 5), scheduler, clock);
+            AtomicReference<String> url = new AtomicReference<>();
+            AtomicBoolean requesting = new AtomicBoolean();
+
+            CloudAuthManager.login(() -> { }, remaining -> { }, () -> requesting.set(true), url::set, error -> { });
+            scheduler.runNext();
+
+            assertThat(requesting).isTrue();
+            assertThat(url.get()).isEqualTo("https://panel.ultikits.com/device?code=BCDF-GHJK");
+            assertThat(scheduler.pending()).as("polling started").isEqualTo(1);
+        }
+
+        @Test
         @DisplayName("a stored credential makes login report already linked, with nothing requested")
         void storedCredentialIsAlreadyLinked() {
             ServerCredentialStore.save(DeviceLoginTestSupport.credential("Survival"));
