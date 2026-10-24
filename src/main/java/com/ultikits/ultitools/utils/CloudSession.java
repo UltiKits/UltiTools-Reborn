@@ -9,6 +9,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -112,6 +113,16 @@ final class CloudSession {
      * "gave up after %d attempts" log line -- the two classes are in the same package.
      */
     static final int MAX_REINIT_ATTEMPTS = 10;
+
+    /** Added to the device poll interval for each {@code slow_down} answer (RFC 8628 section 3.5). */
+    private static final long DEVICE_SLOW_DOWN_INCREMENT_MS = 5_000L;
+
+    /** Test seam: replaces the device-login REST client of every session; {@code null} = default. */
+    private static volatile DeviceAuthorizationClient deviceClientOverride;
+    /** Test seam: replaces the device-step scheduler of every session; {@code null} = poll executor. */
+    private static volatile DeviceStepScheduler deviceSchedulerOverride;
+    /** Test seam: replaces the device-login clock of every session; {@code null} = wall clock. */
+    private static volatile LongSupplier deviceClockOverride;
 
     /** The current session. Never {@code null} -- initialised eagerly so every static facade
      * method on {@link CloudAuthManager} always has something to delegate to, even before any
@@ -298,6 +309,7 @@ final class CloudSession {
      */
     static void resetForTesting() {
         current = new CloudSession();
+        setDeviceSeamsForTesting(null, null, null);
         // 16-10 gap-closure addendum: logStreamOwner is a second JVM-wide static this class owns
         // (issue #465) -- left unset, a leftover reference from a previous test class would make
         // shutdownLogStreamManager() wrongly believe a DIFFERENT session still owns the wiring and
@@ -764,7 +776,7 @@ final class CloudSession {
         }
         DeviceAuthorizationClient.AuthorizeResult result;
         try {
-            result = deviceClient.authorize(CloudAuthManager.runningFrameworkVersion(),
+            result = deviceClient().authorize(CloudAuthManager.runningFrameworkVersion(),
                 CloudAuthManager.suggestedServerName(), CloudAuthManager.storedAttachToServerId());
         } catch (RuntimeException e) {
             result = DeviceAuthorizationClient.AuthorizeResult.failed(
@@ -800,7 +812,9 @@ final class CloudSession {
         if (invalidated) {
             return;
         }
-        DevicePoll poll = new DevicePoll(grant, listener, grant.intervalSeconds() * 1000L);
+        // The deadline is fixed once, when the device code arrived: now + expiresIn.
+        DevicePoll poll = new DevicePoll(grant, listener, now() + grant.expiresInSeconds() * 1000L,
+            grant.intervalSeconds() * 1000L);
         scheduleDeviceStep(() -> pollDeviceOnce(poll), poll.intervalMillis);
     }
 
@@ -815,6 +829,11 @@ final class CloudSession {
         if (invalidated) {
             return false;
         }
+        DeviceStepScheduler override = deviceSchedulerOverride;
+        if (override != null) {
+            pollTask = override.schedule(step, delayMillis);
+            return true;
+        }
         if (pollExecutor == null) {
             pollExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
                 Thread thread = new Thread(runnable, "UltiCloud-device-login");
@@ -826,16 +845,87 @@ final class CloudSession {
         return true;
     }
 
+    /**
+     * One poll step. RFC 8628 section 3.5 semantics: {@code authorization_pending} polls again after
+     * the interval; {@code slow_down} first adds {@value #DEVICE_SLOW_DOWN_INCREMENT_MS} ms to it,
+     * cumulatively; a transient failure (network, 5xx, 429, unreadable answer) polls again after the
+     * interval, or after {@code max(interval, Retry-After)} when UltiCloud answered 429; denied,
+     * expired and rejected stop. Reaching the deadline while still pending or failing transiently is
+     * the same as expired -- checked before each poll, so no request is sent after it.
+     */
+    // A step runs on a ScheduledExecutorService, which would keep an exception silently in the
+    // step's Future; every failure must end the login visibly instead.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void pollDeviceOnce(DevicePoll poll) {
         if (!isCurrent()) {
             return;
         }
-        DeviceAuthorizationClient.PollResult result = deviceClient.pollToken(poll.grant.deviceCode());
-        if (result.kind() == DeviceAuthorizationClient.PollResult.Kind.GRANTED) {
-            completeDeviceLogin(poll, result.credential());
+        if (now() >= poll.deadline) {
+            finishDeviceLogin(poll, DeviceAuthorizationClient.PollResult.Kind.EXPIRED, null, null);
             return;
         }
-        scheduleDeviceStep(() -> pollDeviceOnce(poll), poll.intervalMillis);
+        DeviceAuthorizationClient.PollResult result;
+        try {
+            result = deviceClient().pollToken(poll.grant.deviceCode());
+        } catch (RuntimeException e) {
+            result = DeviceAuthorizationClient.PollResult.transientFailure(-1);
+        }
+        switch (result.kind()) {
+            case GRANTED:
+                completeDeviceLogin(poll, result.credential());
+                return;
+            case SLOW_DOWN:
+                poll.intervalMillis += DEVICE_SLOW_DOWN_INCREMENT_MS;
+                scheduleDeviceStep(() -> pollDeviceOnce(poll), poll.intervalMillis);
+                return;
+            case TRANSIENT:
+                long retryAfterMillis = result.retryAfterSeconds() * 1000L;
+                scheduleDeviceStep(() -> pollDeviceOnce(poll), Math.max(poll.intervalMillis, retryAfterMillis));
+                return;
+            case EXPIRED:
+            case DENIED:
+            case REJECTED:
+                finishDeviceLogin(poll, result.kind(), result.code(), result.message());
+                return;
+            case PENDING:
+            default:
+                scheduleDeviceStep(() -> pollDeviceOnce(poll), poll.intervalMillis);
+        }
+    }
+
+    /** Stops polling and reports a terminal outcome other than a grant, if this session is current. */
+    private void finishDeviceLogin(DevicePoll poll, DeviceAuthorizationClient.PollResult.Kind kind,
+            String code, String message) {
+        stopPolling();
+        if (!isCurrent()) {
+            return;
+        }
+        Logger logger = UltiTools.getInstance().getLogger();
+        if (kind == DeviceAuthorizationClient.PollResult.Kind.DENIED) {
+            logger.log(Level.WARNING,
+                "UltiCloud: linking was denied on the confirmation page. Run /ulticloud login to try again.");
+            poll.listener.onDenied();
+        } else if (kind == DeviceAuthorizationClient.PollResult.Kind.REJECTED) {
+            logger.log(Level.WARNING,
+                "UltiCloud: the device code request was rejected (" + code + "): " + message);
+            poll.listener.onRejected(code, message);
+        } else {
+            logger.log(Level.WARNING,
+                "UltiCloud: the device code expired before it was confirmed. Run /ulticloud login to get a new code.");
+            poll.listener.onExpired();
+        }
+    }
+
+    /** @return the device-login REST client: the test override, else this session's own */
+    private DeviceAuthorizationClient deviceClient() {
+        DeviceAuthorizationClient override = deviceClientOverride;
+        return override != null ? override : deviceClient;
+    }
+
+    /** @return the device-login clock in epoch milliseconds: the test override, else the wall clock */
+    private static long now() {
+        LongSupplier override = deviceClockOverride;
+        return override != null ? override.getAsLong() : System.currentTimeMillis();
     }
 
     private void completeDeviceLogin(DevicePoll poll, ServerCredential granted) {
@@ -861,12 +951,20 @@ final class CloudSession {
     }
 
     /**
-     * Test-only: replaces the device-login REST client, step scheduler and clock for every session.
-     * Pass {@code null}s to restore the defaults. (Plan 22-01 Task 2 RED stub -- not yet honoured.)
+     * Test-only: replaces the device-login REST client, step scheduler and clock for every session,
+     * so polling arithmetic is tested without sleeping. Pass {@code null}s to restore the defaults
+     * (this session's own client, its poll executor, {@link System#currentTimeMillis()});
+     * {@link #resetForTesting()} does so too.
+     *
+     * @param client    the client, or {@code null}
+     * @param scheduler the scheduler, or {@code null}
+     * @param clock     the clock in epoch milliseconds, or {@code null}
      */
     static void setDeviceSeamsForTesting(DeviceAuthorizationClient client, DeviceStepScheduler scheduler,
             LongSupplier clock) {
-        // RED stub.
+        deviceClientOverride = client;
+        deviceSchedulerOverride = scheduler;
+        deviceClockOverride = clock;
     }
 
     /** Schedules one device-login step; the test seam of {@link #setDeviceSeamsForTesting}. */
@@ -885,12 +983,16 @@ final class CloudSession {
 
         private final DeviceAuthorizationClient.Grant grant;
         private final CloudAuthManager.DeviceLoginListener listener;
-        private final long intervalMillis;
+        /** Epoch milliseconds after which the code counts as expired. */
+        private final long deadline;
+        /** The current interval; grows by {@link #DEVICE_SLOW_DOWN_INCREMENT_MS} per slow_down. */
+        private long intervalMillis;
 
         DevicePoll(DeviceAuthorizationClient.Grant grant, CloudAuthManager.DeviceLoginListener listener,
-                long intervalMillis) {
+                long deadline, long intervalMillis) {
             this.grant = grant;
             this.listener = listener;
+            this.deadline = deadline;
             this.intervalMillis = intervalMillis;
         }
     }

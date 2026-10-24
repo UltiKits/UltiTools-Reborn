@@ -1,8 +1,11 @@
 package com.ultikits.ultitools.utils;
 
+import java.util.logging.Level;
+
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.ultikits.ultitools.UltiTools;
 
 /**
  * The two REST calls of the RFC 8628 device authorization grant against UltiCloud protocol v2:
@@ -24,6 +27,11 @@ class DeviceAuthorizationClient {
     static final long DEFAULT_INTERVAL_SECONDS = 5;
     /** The device code lifetime to assume when the response names none. */
     static final long DEFAULT_EXPIRES_IN_SECONDS = 600;
+    /** The longest backend-supplied text (message, reason) this class passes on, in characters. */
+    static final int MAX_BACKEND_TEXT = 200;
+    private static final int STATUS_BAD_REQUEST = 400;
+    private static final int STATUS_TOO_MANY_REQUESTS = 429;
+    private static final int STATUS_SERVER_ERROR = 500;
 
     /**
      * Requests a device code.
@@ -53,8 +61,14 @@ class DeviceAuthorizationClient {
         if (response.outcome() == CloudHttp.Outcome.IO_ERROR) {
             return AuthorizeResult.failed("UltiCloud could not be reached", -1);
         }
+        if (response.status() == STATUS_TOO_MANY_REQUESTS) {
+            long wait = response.retryAfterSeconds();
+            return AuthorizeResult.failed(wait >= 0
+                ? "UltiCloud is limiting device-code requests; try again in " + wait + " seconds"
+                : "UltiCloud is limiting device-code requests; try again later", wait);
+        }
         if (response.status() != 200) {
-            return AuthorizeResult.failed("UltiCloud answered HTTP " + response.status(), -1);
+            return AuthorizeResult.failed(describeFailure(response), -1);
         }
         JsonObject data = dataObject(response.body());
         if (data == null) {
@@ -69,8 +83,11 @@ class DeviceAuthorizationClient {
         String complete = string(data, "verificationUriComplete");
         long expiresIn = positiveLong(data, "expiresIn", DEFAULT_EXPIRES_IN_SECONDS);
         long interval = positiveLong(data, "interval", DEFAULT_INTERVAL_SECONDS);
-        return AuthorizeResult.granted(new Grant(deviceCode, userCode, verificationUri,
-                isBlank(complete) ? verificationUri : complete, expiresIn, interval));
+        // The three presentable values go to the console verbatim; strip control characters so a
+        // response cannot rewrite the operator's terminal.
+        String uri = sanitise(verificationUri);
+        return AuthorizeResult.granted(new Grant(deviceCode, sanitise(userCode), uri,
+                isBlank(complete) ? uri : sanitise(complete), expiresIn, interval));
     }
 
     /**
@@ -86,21 +103,104 @@ class DeviceAuthorizationClient {
         if (response.outcome() != CloudHttp.Outcome.OK) {
             return PollResult.transientFailure(-1);
         }
-        if (response.status() == 200) {
-            JsonObject data = dataObject(response.body());
-            String secret = data == null ? null : string(data, "credential");
-            String serverId = data == null ? null : string(data, "serverId");
-            if (secret == null || isBlank(serverId)) {
-                return PollResult.transientFailure(-1);
+        int status = response.status();
+        if (status == 200) {
+            return readGrant(response.body());
+        }
+        if (status == STATUS_TOO_MANY_REQUESTS) {
+            return PollResult.transientFailure(response.retryAfterSeconds());
+        }
+        if (status >= STATUS_SERVER_ERROR) {
+            return PollResult.transientFailure(-1);
+        }
+        JsonObject error = errorObject(response.body());
+        String code = error == null ? null : string(error, "code");
+        if (code == null) {
+            // A 400 without a readable error body (a proxy page, a truncated answer) says nothing
+            // about the grant; another status without one is not the device endpoint answering.
+            return status == STATUS_BAD_REQUEST
+                ? PollResult.transientFailure(-1)
+                : PollResult.rejected("http_" + status, "UltiCloud answered HTTP " + status);
+        }
+        if (status == STATUS_BAD_REQUEST) {
+            switch (code) {
+                case "authorization_pending":
+                    return PollResult.of(PollResult.Kind.PENDING);
+                case "slow_down":
+                    return PollResult.of(PollResult.Kind.SLOW_DOWN);
+                case "expired_token":
+                    return PollResult.of(PollResult.Kind.EXPIRED);
+                case "access_denied":
+                    return PollResult.of(PollResult.Kind.DENIED);
+                default:
+                    break;
             }
-            return PollResult.granted(new ServerCredential(secret, string(data, "credentialId"), serverId,
-                    string(data, "userId"), string(data, "serverName"), System.currentTimeMillis()));
         }
-        String code = errorCode(response.body());
-        if (response.status() == 400 && "authorization_pending".equals(code)) {
-            return PollResult.of(PollResult.Kind.PENDING);
+        String safeCode = sanitise(code);
+        return PollResult.rejected(safeCode == null ? "unknown" : safeCode, sanitise(string(error, "message")));
+    }
+
+    /** Maps a 200 to {@code GRANTED}, or to {@code TRANSIENT} with a WARNING naming what is missing. */
+    private static PollResult readGrant(String responseBody) {
+        JsonObject data = dataObject(responseBody);
+        if (data == null) {
+            warnUnusableGrant("the response is not a {data: {...}} JSON object");
+            return PollResult.transientFailure(-1);
         }
-        return PollResult.transientFailure(-1);
+        String secret = string(data, ServerCredential.FIELD_CREDENTIAL);
+        if (!ServerCredential.isWellFormedSecret(secret)) {
+            warnUnusableGrant("the credential field is missing or lacks the ucs_ prefix");
+            return PollResult.transientFailure(-1);
+        }
+        String serverId = string(data, ServerCredential.FIELD_SERVER_ID);
+        if (isBlank(serverId)) {
+            warnUnusableGrant("the serverId field is missing");
+            return PollResult.transientFailure(-1);
+        }
+        return PollResult.granted(new ServerCredential(secret, string(data, ServerCredential.FIELD_CREDENTIAL_ID),
+            serverId, string(data, ServerCredential.FIELD_USER_ID), string(data, ServerCredential.FIELD_SERVER_NAME),
+            System.currentTimeMillis()));
+    }
+
+    /** Names the defect only -- never a value from the response, which may hold the secret. */
+    private static void warnUnusableGrant(String defect) {
+        UltiTools.getInstance().getLogger().log(Level.WARNING,
+            "UltiCloud: ignored an unusable device-login grant (" + defect + "); polling continues.");
+    }
+
+    /** @return {@code UltiCloud answered HTTP <status>}, plus the backend error code and message */
+    private static String describeFailure(CloudHttp.Response response) {
+        StringBuilder reason = new StringBuilder("UltiCloud answered HTTP ").append(response.status());
+        JsonObject error = errorObject(response.body());
+        if (error != null) {
+            String code = sanitise(string(error, "code"));
+            String message = sanitise(string(error, "message"));
+            if (code != null) {
+                reason.append(" (").append(code).append(')');
+            }
+            if (message != null) {
+                reason.append(": ").append(message);
+            }
+        }
+        return reason.toString();
+    }
+
+    /**
+     * @param text backend-supplied text, or {@code null}
+     * @return the text with control characters replaced by spaces, trimmed and cut to
+     *         {@value #MAX_BACKEND_TEXT} characters; {@code null} when nothing remains
+     */
+    static String sanitise(String text) {
+        if (text == null) {
+            return null;
+        }
+        StringBuilder builder = new StringBuilder(Math.min(text.length(), MAX_BACKEND_TEXT));
+        for (int i = 0; i < text.length() && builder.length() < MAX_BACKEND_TEXT; i++) {
+            char c = text.charAt(i);
+            builder.append(Character.isISOControl(c) ? ' ' : c);
+        }
+        String result = builder.toString().trim();
+        return result.isEmpty() ? null : result;
     }
 
     /** @return the {@code data} object of a {@code {data: {...}}} body, or {@code null} */
@@ -121,11 +221,6 @@ class DeviceAuthorizationClient {
         }
         JsonElement error = root.get("error");
         return error != null && error.isJsonObject() ? error.getAsJsonObject() : null;
-    }
-
-    private static String errorCode(String body) {
-        JsonObject error = errorObject(body);
-        return error == null ? null : string(error, "code");
     }
 
     // Gson's parser throws an unchecked JsonParseException (and IllegalStateException for a

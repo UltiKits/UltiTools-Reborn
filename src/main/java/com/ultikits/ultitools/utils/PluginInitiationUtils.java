@@ -268,13 +268,13 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Login to UltiPanel using an existing token (from magic-link or saved token).
+     * Login to UltiPanel using an existing token (a saved 6.3.0 token).
      * Registers or updates the server without needing username/password.
      * <p>
      * Package-private as of plan 16-09 (D-18) -- a public static method accepting a
      * {@link TokenEntity} is exactly the static bypass D-18's structural invariant forbids. Reached
-     * from a different package only through {@link #resumeSavedCredentialOnStartup()}; within this
-     * package, {@code CloudSession.completeMagicLinkLogin} calls it directly.
+     * only through {@link #resumeSavedCredentialOnStartup()}; the 6.3.0 magic-link login that also
+     * called it was replaced by the protocol v2 device login in 6.3.1 (plan 22-01).
      *
      * @param existingToken the pre-authenticated token
      * @return true if server registration/update succeeded
