@@ -95,7 +95,8 @@ public final class AgentMessageRouter {
         } catch (InvalidFrameException ex) {
             error(channel, envelope.id, ex.code(), "Payload does not match the message schema.", null);
         } catch (RuntimeException ex) {
-            error(channel, envelope.id, "internal_error", "The request could not be processed.", null);
+            error(channel, envelope.id, "internal_error", "The request could not be processed.", null,
+                    "type=" + envelope.type + ", exception=" + ex.getClass().getName());
         }
     }
 
@@ -126,16 +127,21 @@ public final class AgentMessageRouter {
     }
 
     private void error(CloudChannel channel, String id, String code, String message, JsonObject details) {
-        warn(code);
+        error(channel, id, code, message, details, null);
+    }
+
+    private void error(CloudChannel channel, String id, String code, String message, JsonObject details, String diagnostic) {
+        warn(code, diagnostic);
         channel.replyError(id, "error", code, message, details);
     }
 
-    private synchronized void warn(String code) {
+    private synchronized void warn(String code, String diagnostic) {
         long now = clock.getAsLong();
         Long last = lastWarnings.get(code);
         if (last == null || now - last >= 60000L) {
             lastWarnings.put(code, now);
-            LOGGER.warning("UltiCloud: agent request rejected (" + code + ").");
+            LOGGER.warning("UltiCloud: agent request rejected (" + code + ")"
+                    + (diagnostic == null ? "." : "; " + diagnostic + "."));
         }
     }
 }
