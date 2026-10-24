@@ -174,12 +174,27 @@ public final class SensitiveCommandRegistry {
      * Redacts free text, such as a log line, an exception message or a stack trace, before it is
      * sent to UltiCloud.
      * <p>
-     * Each line is handled on its own. Wherever {@code /} followed by a registered command appears
-     * at the start of a line or after whitespace, the command is kept and everything after it on
-     * that line is replaced with {@code ***}, provided something non-blank follows. For example
-     * {@code "Steve issued server command: /login hunter2"} becomes
-     * {@code "Steve issued server command: /login ***"}. Text with no registered command is
-     * returned unchanged.
+     * Each line ({@code \n}, {@code \r\n} or {@code \r} separated; the separators are kept) is
+     * handled on its own. A command starts at a {@code /} that opens the line or follows
+     * whitespace or a quote character ({@code "}, {@code '} or {@code `}), and runs to the next
+     * whitespace or quote character. At the first such command on the line whose
+     * {@link #normalize(String) normalised} form is registered, and that is followed by an
+     * argument (anything other than whitespace and quote characters), the command is kept and the
+     * rest of the line is replaced with {@code ***}. For example, with {@code login} and
+     * {@code register} registered:
+     * <ul>
+     *   <li>{@code Steve issued server command: /register a b} becomes
+     *       {@code Steve issued server command: /register ***};</li>
+     *   <li>{@code said "/login pw"} becomes {@code said "/login ***};</li>
+     *   <li>{@code see http://x/login/y}, {@code //login pw} (a different command) and
+     *       {@code typed "/login"} are unchanged.</li>
+     * </ul>
+     * <b>The redaction is deliberately greedy:</b> everything after the command to the end of the
+     * line goes, not just "the arguments", because where a command's arguments end cannot be known
+     * for arbitrary plugins' log formats. Losing the tail of a line is acceptable; leaking a
+     * password is not. Text with no registered command is returned unchanged (the same instance),
+     * and redacting already-redacted text changes nothing. The cost is one pass over the text; no
+     * pattern is built from the registered names.
      *
      * @param text the text, possibly {@code null}
      * @return the redacted text, or the text itself when nothing needs redacting
@@ -229,14 +244,16 @@ public final class SensitiveCommandRegistry {
     private int findRedactionPoint(String text, int lineStart, int lineEnd) {
         int i = lineStart;
         while (i < lineEnd) {
-            if (text.charAt(i) == '/' && (i == lineStart || Character.isWhitespace(text.charAt(i - 1)))) {
-                int end = i;
-                while (end < lineEnd && !Character.isWhitespace(text.charAt(end))) {
+            if (text.charAt(i) == '/' && (i == lineStart || isBoundary(text.charAt(i - 1)))) {
+                int end = i + 1;
+                while (end < lineEnd && !isBoundary(text.charAt(end))) {
                     end++;
                 }
                 if (names.contains(normalize(text.substring(i, end))) && hasArgument(text, end, lineEnd)) {
                     return end;
                 }
+                // Positions inside the token cannot start a command (none follows a boundary), so
+                // skipping past it keeps the scan linear.
                 i = end;
             } else {
                 i++;
@@ -245,9 +262,22 @@ public final class SensitiveCommandRegistry {
         return -1;
     }
 
-    /** Whether anything non-blank lies in {@code [from, to)}. */
+    /**
+     * Whether an argument lies in {@code [from, to)}: any character other than whitespace and
+     * quote characters, so a closing quote alone is not an argument.
+     */
     private static boolean hasArgument(String text, int from, int to) {
-        return skipWhitespace(text, from, to) < to;
+        for (int i = from; i < to; i++) {
+            if (!isBoundary(text.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whitespace or a quote character: what may precede a command in text and ends its token. */
+    private static boolean isBoundary(char c) {
+        return Character.isWhitespace(c) || c == '"' || c == '\'' || c == '`';
     }
 
     private static int skipWhitespace(String text, int from, int to) {
