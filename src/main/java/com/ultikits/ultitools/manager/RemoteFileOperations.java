@@ -7,14 +7,24 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.utils.ContractPrimitives;
 import com.ultikits.ultitools.utils.PayloadReader;
+import com.ultikits.ultitools.utils.PosixAttributePreserver;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
@@ -40,12 +50,36 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * {@link PayloadReader} as an unchecked {@code invalid_message} that
  * {@link com.ultikits.ultitools.utils.AgentMessageRouter} turns into a correlated protocol error
  * before any filesystem access happens.</p>
+ *
+ * <p><b>Why this path cannot overwrite operator content.</b> {@code files.write} replaces a file
+ * only while the {@code baseVersion} the panel sent still equals the SHA-256 of the bytes on disk,
+ * and that comparison and the replacement happen under one JVM-wide lock. A version that matches
+ * means the panel is writing back exactly the bytes it read, so the operator's content is changed
+ * only by an explicit panel edit of that content. Disabling the write path leaves every file
+ * untouched. A writer outside this framework that changes the file in the window between the
+ * comparison and the atomic move is a niche case (the operator editing server files while the
+ * panel writes the same file) and is not defended further: the next read reports the version the
+ * file then has, and the panel's next write is compared against it again.</p>
  */
 final class RemoteFileOperations implements CloudRequestHandler {
     private static final Logger LOGGER = Logger.getLogger(RemoteFileOperations.class.getName());
 
+    /**
+     * Serializes the version comparison and the replacement of every remote write in this JVM.
+     * One lock for the whole surface, so two writes of the same file — from this connection or any
+     * other — cannot both pass the comparison: the second one reads the winner's bytes and
+     * answers {@code file_changed}.
+     */
+    private static final Object WRITE_LOCK = new Object();
+
+    private static final String FILES_LIST = "files.list";
+    private static final String FILES_LIST_RESULT = "files.list.result";
     private static final String FILES_READ = "files.read";
     private static final String FILES_READ_RESULT = "files.read.result";
+    private static final String FILES_WRITE = "files.write";
+    private static final String FILES_WRITE_RESULT = "files.write.result";
+    private static final String FILES_DELETE = "files.delete";
+    private static final String FILES_DELETE_RESULT = "files.delete.result";
 
     /** The contract's upper bound on a result message, in code points. */
     private static final int MAX_MESSAGE_LENGTH = 500;
@@ -53,8 +87,22 @@ final class RemoteFileOperations implements CloudRequestHandler {
     /** The contract's upper bound on a {@code path} field, in code points. */
     private static final int MAX_PATH_LENGTH = 512;
 
+    /** The contract's upper bound on a {@code content} field, in code points. */
+    private static final int MAX_CONTENT_LENGTH = 393216;
+
+    /** The contract's cap on one directory listing; above it the reply is truncated. */
+    private static final int MAX_LIST_ENTRIES = 2000;
+
+    /** {@code files.list} accepts the empty root path in addition to a {@code ServerPath}. */
+    private static final Pattern LIST_PATH = Pattern.compile("^$|" + ContractPrimitives.SERVER_PATH.pattern());
+
+    private static final Comparator<File> BY_NAME = (left, right) -> left.getName().compareTo(right.getName());
+
     private final FileOperationManager files;
     private final File serverRoot;
+
+    /** Test seam; see {@link #setWriteGate(Runnable)}. */
+    private volatile Runnable writeGate;
 
     /**
      * Creates the handler for one server.
@@ -68,14 +116,36 @@ final class RemoteFileOperations implements CloudRequestHandler {
         this.serverRoot = serverRoot;
     }
 
+    /**
+     * Installs a hook that runs inside the write lock immediately before the version comparison.
+     * It exists so a test can hold one writer inside the critical section while a second writer
+     * waits for the lock; production leaves it null, which costs one null check per write.
+     *
+     * @param gate the hook to run, or null to remove it
+     */
+    void setWriteGate(Runnable gate) {
+        this.writeGate = gate;
+    }
+
     @Override
     public void handle(CloudRequest request, CloudChannel channel) {
-        if (FILES_READ.equals(request.type())) {
+        String type = request.type();
+        if (FILES_READ.equals(type)) {
             read(request, channel);
-            return;
+        } else if (FILES_LIST.equals(type)) {
+            list(request, channel);
+        } else if (FILES_WRITE.equals(type)) {
+            write(request, channel);
+        } else if (FILES_DELETE.equals(type)) {
+            delete(request, channel);
+        } else {
+            throw new IllegalArgumentException("Unhandled files message type");
         }
-        throw new IllegalArgumentException("Unhandled files message type");
     }
+
+    // ---------------------------------------------------------------------------------------
+    // files.read
+    // ---------------------------------------------------------------------------------------
 
     /**
      * Answers {@code files.read}: the file's content decoded as strict UTF-8, its size in bytes and
@@ -93,8 +163,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
                 .keys(new String[]{"path"});
         String path = reader.string("path", 1, MAX_PATH_LENGTH, ContractPrimitives.SERVER_PATH);
 
-        FileOperationManager.ResolvedTarget target =
-                files.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
+        FileOperationManager.ResolvedTarget target = files.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
         if (!target.getDecision().isAllowed()) {
             error(channel, request.id(), FILES_READ_RESULT, "path_not_allowed", target.getDecision().getMessage());
             return;
@@ -140,6 +209,292 @@ final class RemoteFileOperations implements CloudRequestHandler {
         channel.replyOk(request.id(), FILES_READ_RESULT, data);
     }
 
+    // ---------------------------------------------------------------------------------------
+    // files.list
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Answers {@code files.list}: one directory's entries, with the size and modification time of
+     * files ({@code null} for directories), or — for the empty path — the configured editable
+     * roots, which is what the contract means by the server root: the panel may browse no further
+     * up than the operator's grant.
+     *
+     * <p>A child whose own path the guard refuses (a credential file, a {@code .jar}, a link whose
+     * real target lies outside the roots) is left out of the listing rather than marked, because a
+     * v2 listing carries no per-entry refusal marker; the panel therefore never learns that such
+     * a name exists. Above 2000 entries the reply keeps the first 2000 by name and sets
+     * {@code truncated}, so one directory cannot produce an oversized frame.</p>
+     */
+    private void list(CloudRequest request, CloudChannel channel) {
+        PayloadReader reader = new PayloadReader(request.id(), request.payload())
+                .keys(new String[]{"path"});
+        String path = reader.string("path", 0, MAX_PATH_LENGTH, LIST_PATH);
+
+        JsonArray entries = new JsonArray();
+        boolean truncated;
+        if (path.isEmpty()) {
+            truncated = appendEditableRoots(entries);
+        } else {
+            FileOperationManager.ResolvedTarget target =
+                    files.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
+            if (!target.getDecision().isAllowed()) {
+                error(channel, request.id(), FILES_LIST_RESULT, "path_not_allowed",
+                        target.getDecision().getMessage());
+                return;
+            }
+            File dir = target.getOperand();
+            if (!dir.exists()) {
+                error(channel, request.id(), FILES_LIST_RESULT, "not_found", "The requested directory does not exist.");
+                return;
+            }
+            if (!dir.isDirectory()) {
+                error(channel, request.id(), FILES_LIST_RESULT, "not_a_directory",
+                        "The requested path is not a directory.");
+                return;
+            }
+            File[] children = dir.listFiles();
+            if (children == null) {
+                error(channel, request.id(), FILES_LIST_RESULT, "internal_error",
+                        "The requested directory could not be read.");
+                return;
+            }
+            List<File> allowed = allowedChildren(path, children);
+            Collections.sort(allowed, BY_NAME);
+            truncated = allowed.size() > MAX_LIST_ENTRIES;
+            for (int i = 0; i < Math.min(allowed.size(), MAX_LIST_ENTRIES); i++) {
+                entries.add(entryOf(allowed.get(i)));
+            }
+        }
+
+        JsonObject data = new JsonObject();
+        data.addProperty("path", path);
+        data.add("entries", entries);
+        data.addProperty("truncated", truncated);
+        channel.replyOk(request.id(), FILES_LIST_RESULT, data);
+    }
+
+    /**
+     * Lists the configured editable roots as directory entries named by their server-root-relative
+     * path — the very spelling a subsequent {@code files.list} of that name needs. A root that is
+     * outside the server root, or whose name the guard refuses, cannot be addressed by any valid
+     * {@code ServerPath} and is skipped: listing it would offer the panel a name that every later
+     * request refuses.
+     *
+     * @param entries receives one entry per addressable root
+     * @return whether the contract's 2000-entry cap was exceeded
+     */
+    private boolean appendEditableRoots(JsonArray entries) {
+        List<File> roots = files.getEditableRoots();
+        int appended = 0;
+        for (File root : roots) {
+            String name = relativeToServerRoot(root);
+            if (name == null || !ContractPrimitives.SERVER_PATH.matcher(name).matches()) {
+                LOGGER.fine("UltiCloud: an editable root is not addressable from the server root and is not listed.");
+                continue;
+            }
+            if (!files.isPathAllowed(name).isAllowed()) {
+                LOGGER.fine("UltiCloud: an editable root is refused by the guard and is not listed.");
+                continue;
+            }
+            if (appended >= MAX_LIST_ENTRIES) {
+                return true;
+            }
+            JsonObject entry = new JsonObject();
+            entry.addProperty("name", name);
+            entry.addProperty("type", "dir");
+            entry.add("sizeBytes", JsonNull.INSTANCE);
+            entry.add("modifiedAt", JsonNull.INSTANCE);
+            entries.add(entry);
+            appended++;
+        }
+        return false;
+    }
+
+    private String relativeToServerRoot(File root) {
+        Path base = serverRoot.toPath().toAbsolutePath().normalize();
+        Path target = root.toPath().toAbsolutePath().normalize();
+        String relative = base.relativize(target).toString();
+        if (relative.isEmpty()) {
+            return "";
+        }
+        if (relative.startsWith("..")) {
+            return null;
+        }
+        return relative.replace(File.separatorChar, '/');
+    }
+
+    private List<File> allowedChildren(String basePath, File[] children) {
+        List<File> allowed = new ArrayList<>();
+        String prefix = basePath.isEmpty() ? "" : basePath + "/";
+        for (File child : children) {
+            String childPath = prefix + child.getName();
+            if (files.resolveTarget(childPath, FileOperationManager.ResolveMode.FOLLOW)
+                    .getDecision().isAllowed()) {
+                allowed.add(child);
+            }
+        }
+        return allowed;
+    }
+
+    private static JsonObject entryOf(File child) {
+        boolean directory = child.isDirectory();
+        JsonObject entry = new JsonObject();
+        entry.addProperty("name", child.getName());
+        entry.addProperty("type", directory ? "dir" : "file");
+        if (directory) {
+            entry.add("sizeBytes", JsonNull.INSTANCE);
+            entry.add("modifiedAt", JsonNull.INSTANCE);
+        } else {
+            entry.addProperty("sizeBytes", child.length());
+            entry.addProperty("modifiedAt", child.lastModified());
+        }
+        return entry;
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // files.write
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Answers {@code files.write}: replaces an existing file's content when, and only when, the
+     * panel's {@code baseVersion} still equals the SHA-256 of the bytes on disk.
+     *
+     * <p>The comparison and the atomic replacement happen under one JVM-wide lock, so concurrent
+     * writers cannot both succeed. The replacement goes through
+     * {@link PosixAttributePreserver#replaceInPlace}, which keeps the file's POSIX permissions,
+     * owner and group and refuses to write through a symbolic link or over an operator-pinned
+     * read-only file ({@code write_denied}). The write never creates a file.</p>
+     */
+    private void write(CloudRequest request, CloudChannel channel) {
+        PayloadReader reader = new PayloadReader(request.id(), request.payload())
+                .keys(new String[]{"path", "content", "baseVersion"});
+        String path = reader.string("path", 1, MAX_PATH_LENGTH, ContractPrimitives.SERVER_PATH);
+        String content = reader.string("content", 0, MAX_CONTENT_LENGTH, null);
+        String baseVersion = reader.string("baseVersion", 64, 64, ContractPrimitives.SHA256_HEX);
+
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        String refusal = contentRefusal(bytes, channel.limits().fileMaxBytes());
+        if (refusal != null) {
+            error(channel, request.id(), FILES_WRITE_RESULT, "file_not_editable", refusal);
+            return;
+        }
+        if (!decodeUtf8(bytes).equals(content)) {
+            error(channel, request.id(), FILES_WRITE_RESULT, "file_not_editable",
+                    "The content is not representable as UTF-8.");
+            return;
+        }
+
+        FileOperationManager.ResolvedTarget target = files.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
+        if (!target.getDecision().isAllowed()) {
+            error(channel, request.id(), FILES_WRITE_RESULT, "path_not_allowed", target.getDecision().getMessage());
+            return;
+        }
+
+        WriteOutcome outcome = writeLocked(target.getOperand(), bytes, baseVersion);
+        if (outcome.code != null) {
+            error(channel, request.id(), FILES_WRITE_RESULT, outcome.code, outcome.message);
+            return;
+        }
+
+        JsonObject data = new JsonObject();
+        data.addProperty("path", path);
+        data.addProperty("version", sha256Hex(bytes));
+        data.addProperty("sizeBytes", bytes.length);
+        channel.replyOk(request.id(), FILES_WRITE_RESULT, data);
+    }
+
+    /**
+     * The critical section of {@code files.write}: compare the version against the bytes on disk
+     * and replace the file, both under {@link #WRITE_LOCK}.
+     *
+     * @param file        the resolved target the guard allowed
+     * @param content     the exact bytes to write
+     * @param baseVersion the version the panel read
+     * @return an empty outcome when the file now holds {@code content}, otherwise the refusal
+     */
+    private WriteOutcome writeLocked(File file, byte[] content, String baseVersion) {
+        synchronized (WRITE_LOCK) {
+            Runnable gate = writeGate;
+            if (gate != null) {
+                gate.run();
+            }
+            if (!file.exists()) {
+                return new WriteOutcome("not_found", "The requested file does not exist.");
+            }
+            if (file.isDirectory()) {
+                return new WriteOutcome("is_directory", "The requested path is a directory.");
+            }
+            if (!file.isFile()) {
+                return new WriteOutcome("file_not_editable", "The requested path is not a regular file.");
+            }
+            byte[] current;
+            try {
+                current = Files.readAllBytes(file.toPath());
+            } catch (IOException unreadable) {
+                LOGGER.log(Level.WARNING, "UltiCloud: a write target could not be read ("
+                        + unreadable.getClass().getSimpleName() + ").");
+                return new WriteOutcome("internal_error", "The requested file could not be read.");
+            }
+            if (!sha256Hex(current).equals(baseVersion)) {
+                return new WriteOutcome("file_changed",
+                        "The file changed after the panel read it; reload it and try again.");
+            }
+            WriteDenial denial = new WriteDenial();
+            if (!PosixAttributePreserver.replaceInPlace(file, content, denial)) {
+                return new WriteOutcome("write_denied", denial.reason());
+            }
+            return new WriteOutcome(null, null);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // files.delete
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Answers {@code files.delete}: removes one file, or one symbolic link as the link itself. A
+     * directory is refused with {@code is_directory} — the contract has no recursive delete, and a
+     * panel delete must never remove a tree an operator built. The entry is resolved in entry mode
+     * ({@link FileOperationManager.ResolveMode#ENTRY}), so a link to a directory is judged and
+     * removed as the link, never followed.
+     */
+    private void delete(CloudRequest request, CloudChannel channel) {
+        PayloadReader reader = new PayloadReader(request.id(), request.payload())
+                .keys(new String[]{"path"});
+        String path = reader.string("path", 1, MAX_PATH_LENGTH, ContractPrimitives.SERVER_PATH);
+
+        FileOperationManager.ResolvedTarget target = files.resolveTarget(path, FileOperationManager.ResolveMode.ENTRY);
+        if (!target.getDecision().isAllowed()) {
+            error(channel, request.id(), FILES_DELETE_RESULT, "path_not_allowed", target.getDecision().getMessage());
+            return;
+        }
+
+        Path entry = target.getOperand().toPath();
+        if (!Files.exists(entry, LinkOption.NOFOLLOW_LINKS)) {
+            error(channel, request.id(), FILES_DELETE_RESULT, "not_found", "The requested file does not exist.");
+            return;
+        }
+        if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
+            error(channel, request.id(), FILES_DELETE_RESULT, "is_directory",
+                    "The requested path is a directory; directories are never deleted remotely.");
+            return;
+        }
+        try {
+            Files.delete(entry);
+        } catch (IOException notDeleted) {
+            LOGGER.log(Level.WARNING, "UltiCloud: a requested file could not be deleted ("
+                    + notDeleted.getClass().getSimpleName() + ").");
+            error(channel, request.id(), FILES_DELETE_RESULT, "write_denied",
+                    "The requested file could not be deleted.");
+            return;
+        }
+        channel.replyOk(request.id(), FILES_DELETE_RESULT, new JsonObject());
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // shared helpers
+    // ---------------------------------------------------------------------------------------
+
     /**
      * The contract's {@code file-content} rule over raw bytes.
      *
@@ -158,8 +513,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
             return "The file is not valid UTF-8.";
         }
         for (int i = 0; i < text.length(); i++) {
-            char character = text.charAt(i);
-            if (isForbiddenControl(character)) {
+            if (isForbiddenControl(text.charAt(i))) {
                 return "The file contains a control character.";
             }
         }
@@ -207,5 +561,60 @@ final class RemoteFileOperations implements CloudRequestHandler {
             safe = safe.substring(0, safe.offsetByCodePoints(0, MAX_MESSAGE_LENGTH));
         }
         channel.replyError(replyTo, type, code, safe, null);
+    }
+
+    /** One refusal from the locked write section: a contract error code and its message. */
+    private static final class WriteOutcome {
+        private final String code;
+        private final String message;
+
+        private WriteOutcome(String code, String message) {
+            this.code = code;
+            this.message = message;
+        }
+    }
+
+    /**
+     * Collects why {@link PosixAttributePreserver#replaceInPlace} declined the replacement.
+     * A permission-copy failure is not a refusal — the shared operation still proceeds — so it
+     * leaves the reason unset.
+     */
+    private static final class WriteDenial implements PosixAttributePreserver.ReplaceInPlaceListener {
+        private String reason;
+
+        private String reason() {
+            return reason == null ? "The file could not be written." : reason;
+        }
+
+        @Override
+        public void onOperatorPinnedReadOnly() {
+            reason = "The file is read-only by its permissions.";
+        }
+
+        @Override
+        public void onSymbolicLink() {
+            reason = "The path is a symbolic link.";
+        }
+
+        @Override
+        public void onSourceAttributesUnreadable() {
+            reason = "The file's attributes could not be read.";
+        }
+
+        @Override
+        public void onPermissionCopyFailure() {
+            reason = null;
+        }
+
+        @SuppressWarnings("PMD.UnusedFormalParameter") // the account names are not repeated to the panel
+        @Override
+        public void onOwnershipCopyFailure(String ownerName, String groupName) {
+            reason = "The file's owner or group could not be preserved.";
+        }
+
+        @Override
+        public void onWriteFailure(IOException cause) {
+            reason = "The file could not be replaced.";
+        }
     }
 }
