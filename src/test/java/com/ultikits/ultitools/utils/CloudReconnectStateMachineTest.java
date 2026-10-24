@@ -8,6 +8,13 @@ import static org.mockito.Mockito.mock;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Field;
+import java.net.URI;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+import org.junit.jupiter.api.io.TempDir;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -23,7 +30,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
@@ -47,6 +53,9 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // 测试需要反射读写内部状态，与仓库其它测试类一致
 class CloudReconnectStateMachineTest {
 
+    @TempDir
+    Path tempDir;
+    private final AgentRuntime runtime = new AgentRuntime();
     private Logger mockLogger;
     private ServerMonitorManager mockMonitor;
 
@@ -78,12 +87,17 @@ class CloudReconnectStateMachineTest {
         // 从一个全新、未失效、没有任何调度或客户端的会话开始，不依赖上一个用例或上一个测试类
         // 留下的状态。
         CloudSession.resetForTesting();
+        CredentialStore.setTargetPathForTesting(tempDir.resolve("credentials.json"));
+        CredentialStore.setOldLocationForTesting(tempDir.resolve("absent.json"));
+        runtime.install();
     }
 
     @AfterEach
     void tearDown() throws Exception {
         CloudSession.resetForTesting();
         removeLeakedSystemLogHandlers();
+        CredentialStore.clearTargetPathForTesting();
+        CredentialStore.clearOldLocationForTesting();
 
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
@@ -106,110 +120,107 @@ class CloudReconnectStateMachineTest {
     }
 
     @Nested
-    @DisplayName("全局重连预算（#181）")
-    class ReconnectBudget {
-
+    @DisplayName("v2 单一重连所有者")
+    class ReconnectOwner {
         @Test
-        @DisplayName("外层 reinit 有上限，耗尽后进入 disabled 终态而不是无限循环")
-        void reinitLoopIsBounded() {
-            // 客户端自身那 5 次是每实例的上限，而 reinitWebSocket 每次都造新实例，
-            // 所以在加预算之前，这个循环没有任何东西能让它停下来。
-            for (int i = 0; i < 40; i++) {
-                assertThatCode(PluginInitiationUtils::reinitWebSocket).doesNotThrowAnyException();
-            }
-
-            assertThat(PluginInitiationUtils.isCloudEnabled())
-                    .as("预算耗尽之后状态机必须停下来，而不是继续造新客户端")
-                    .isFalse();
-
-            assertThat(loggedAt(Level.WARNING))
-                    .anySatisfy(line -> assertThat(line).contains("gave up after"));
+        void repeatedInitKeepsOneOwnerAndOneRetry() throws Exception {
+            startAgent();
+            for (int i = 0; i < 20; i++) { PluginInitiationUtils.initWebsocket(); }
+            runtime.runDue();
+            assertThat(runtime.attempts).hasSize(1);
+            assertThat(runtime.schedulers).hasSize(1);
+            runtime.last().close(1011);
+            assertThat(runtime.scheduler().pending()).isEqualTo(1);
+            runtime.advance(1000);
+            assertThat(runtime.attempts).hasSize(2);
         }
 
         @Test
-        @DisplayName("预算耗尽进入终态时，拆线动作必须与 logout 一致")
-        void exhaustedBudgetTearsDownCloudResources() {
-            // 先让云侧真正接上线，否则下面断言的是一个空集合，测试等于什么都没测。
-            LogStreamManager manager = LogStreamManager.getInstance();
-            try {
-                manager.initialize(null);
-            } catch (Exception ignored) {
-                // 传 null 客户端时下游可能抛，但 handler 的挂载必须已经发生
-            }
-            assertThat(countFrameworkHandlersOnRootLogger())
-                    .as("前置条件：日志 handler 应当已挂在 root logger 上")
-                    .isEqualTo(1);
-
-            for (int i = 0; i < 15; i++) {
-                PluginInitiationUtils.reinitWebSocket();
-            }
-
-            assertThat(PluginInitiationUtils.isCloudEnabled())
-                    .as("预算耗尽之后必须进入 disabled 终态")
-                    .isFalse();
-
-            // 终态的日志原文是 "Cloud features are now idle"。只让当前会话失效而不清理其它资源的
-            // 话，日志传输器与 root logger handler、玩家事件监听器都会继续跑——那句话就成了谎。
-            assertThat(countFrameworkHandlersOnRootLogger())
-                    .as("既然已宣告 cloud features are now idle，root logger 就不该还挂着框架 handler")
-                    .isZero();
+        void successfulHandshakeResetsAttemptCount() throws Exception {
+            startAgent();
+            runtime.last().close(1011);
+            runtime.advance(1000);
+            assertThat(CloudSession.current().connectionDescription()).isEqualTo("connecting");
+            runtime.last().accept();
+            runtime.last().close(1011);
+            runtime.advance(1000);
+            runtime.last().close(1011);
+            assertThat(CloudSession.current().connectionDescription()).isEqualTo("reconnecting in 1 s (attempt 1)");
         }
 
         @Test
-        @DisplayName("握手成功会把预算清零，使长期运行的服务器不会耗尽额度")
-        void successfulHandshakeResetsBudget() {
-            for (int i = 0; i < 5; i++) {
-                PluginInitiationUtils.reinitWebSocket();
-            }
-            assertThat(PluginInitiationUtils.isCloudEnabled()).isTrue();
-
-            // 一次真正的 onOpen
-            PluginInitiationUtils.onWebSocketConnected();
-
-            // 预算被清零，因此还能再撑满一整轮
-            for (int i = 0; i < 9; i++) {
-                PluginInitiationUtils.reinitWebSocket();
-            }
-            assertThat(PluginInitiationUtils.isCloudEnabled())
-                    .as("清零之后应当还有额度，不该因为之前用掉的 5 次就提前进入终态")
-                    .isTrue();
+        void disableEnableStartsWithFreshCredentialAndAttemptCount() throws Exception {
+            startAgent();
+            CloudSession old = CloudSession.current();
+            runtime.last().close(1011);
+            runtime.advance(1000);
+            PluginInitiationUtils.stopWebsocket();
+            assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
+            PluginInitiationUtils.initWebsocket();
+            runtime.runDue();
+            assertThat(CloudSession.current()).isNotSameAs(old);
+            runtime.last().close(1011);
+            assertThat(CloudSession.current().connectionDescription()).isEqualTo("reconnecting in 1 s (attempt 1)");
         }
 
         @Test
-        @DisplayName("round-12 外部评审：同一 classloader 内先禁用再启用（例如 /reload）时，"
-                + "enableCloud 必须清零退避计数，不能沿用禁用前已经消耗掉的重连次数")
-        void enableCloudResetsBackoffEvenWhenTheSessionSurvivesADisableEnableCycle() {
-            // 复现评审给出的确切场景：onDisable() 只停调度器与 WebSocket（UltiTools.onDisable()
-            // 自己的注释就说明了这是刻意的——JVM/插件即将卸载，没必要做一次完整拆线），
-            // 从不使当前会话失效；本用例直接用 stopCredentialSchedulers() + 手动清空客户端引用
-            // 模拟这一整套动作，而不调用 disableCloud()——调用 disableCloud() 会使会话失效，
-            // 恰恰是这个 bug 之所以存在的原因：会话在禁用前后是同一个对象。
-            CloudSession session = CloudSession.current();
-            UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
-            session.setWebSocketClient(client);
+        void reinitStopsOldSchedulerAndInstallsOnlyOneFreshOwner() throws Exception {
+            startAgent();
+            AgentConnectionTest.ManualScheduler first = runtime.scheduler();
+            AgentRuntime.Attempt old = runtime.last();
+            old.close(1011);
+            PluginInitiationUtils.reinitWebSocket();
+            runtime.runDue();
+            first.advance(60000);
+            assertThat(first.isShutdown()).isTrue();
+            assertThat(runtime.attempts).hasSize(2);
+            runtime.last().close(1011);
+            runtime.advance(1000);
+            assertThat(runtime.attempts).hasSize(3);
+        }
 
-            for (int i = 0; i < 4; i++) {
-                session.getBackoff().getNextDelay();
-            }
-            assertThat(session.getBackoff().getAttemptCount())
-                    .as("前置条件：禁用之前，这个会话的退避额度必须真的被消耗掉一部分")
-                    .isEqualTo(4);
+        @Test
+        void successLineAppearsOnlyOncePerAcceptedConnection() throws Exception {
+            startAgent();
+            assertThat(loggedAt(Level.INFO)).doesNotContain("UltiCloud: connected.");
+            AgentRuntime.Attempt first = runtime.last();
+            first.accept();
+            first.accept();
+            assertThat(loggedAt(Level.INFO).stream().filter("UltiCloud: connected."::equals)).hasSize(1);
+            first.close(1011);
+            runtime.advance(1000);
+            runtime.last().accept();
+            assertThat(loggedAt(Level.INFO).stream().filter("UltiCloud: connected."::equals)).hasSize(2);
+        }
 
-            PluginInitiationUtils.stopCredentialSchedulers();
-            assertThat(session.isCurrent())
-                    .as("前置条件：onDisable() 的既有步骤不会让会话失效——这正是这个 bug 的成因")
-                    .isTrue();
+        @Test
+        void backoffStatusRoundsSecondsUp() throws Exception {
+            startAgent();
+            runtime.last().close(1011);
+            runtime.advance(1);
+            assertThat(CloudAuthManager.status().getConnectionDescription()).isEqualTo("reconnecting in 1 s (attempt 1)");
+            assertThat(CloudAuthManager.status().isConnected()).isFalse();
+        }
 
-            // 重新 onEnable()：round-12 评审要补的正是这一步。
-            PluginInitiationUtils.enableCloud();
+        @Test
+        void planStatusRoundsMinutesUp() throws Exception {
+            startAgent();
+            runtime.last().refuse(402);
+            runtime.advance(1);
+            assertThat(CloudAuthManager.status().getConnectionDescription()).contains("next in 15 min");
+            runtime.advance(60000);
+            assertThat(CloudAuthManager.status().getConnectionDescription()).contains("next in 14 min");
+        }
 
-            assertThat(CloudSession.current())
-                    .as("会话本身不该被替换——它此刻仍然有效，替换会白白丢掉 token 和 WebSocket 客户端")
-                    .isSameAs(session);
-            assertThat(session.getBackoff().getAttemptCount())
-                    .as("round-12：一次 enableCloud() 必须清零退避计数，即便会话本身没被替换——"
-                            + "否则重新启用后的重连预算会被禁用前已经消耗的次数提前耗尽")
-                    .isZero();
+        @Test
+        void rateLimitBacksOffWithoutDeletingCredentialOrLoggingRejection() throws Exception {
+            startAgent();
+            runtime.last().refuse(429);
+            assertThat(CloudSession.current().connectionState()).isEqualTo(AgentConnection.State.BACKOFF);
+            assertThat(ServerCredentialStore.load()).isNotNull();
+            assertThat(loggedAt(Level.WARNING)).isEmpty();
+            runtime.advance(60000);
+            assertThat(runtime.attempts).hasSize(2);
         }
     }
 
@@ -432,198 +443,130 @@ class CloudReconnectStateMachineTest {
         }
     }
 
-    /**
-     * D-16 Task 2: three deterministic behaviours new to this plan, each stated directly on
-     * {@link CloudSession} instances rather than relying on the flag-based tests above to imply
-     * them.
-     */
     @Nested
-    @DisplayName("会话拥有 WebSocket 客户端与退避状态之后的新行为（16-08 Task 2）")
+    @DisplayName("会话身份隔离 v2 传输与回调")
     class SessionOwnsTransportAndBackoff {
-
         @Test
-        @DisplayName("logout 期间正在连接的 WebSocket 会被关闭，此后不会再为这个旧会话重连")
-        void logoutClosesTheActiveConnectionAndSuppressesFurtherReconnectsOnTheOldSession() {
-            CloudSession session = CloudSession.current();
-            UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
-            session.setWebSocketClient(client);
-
-            PluginInitiationUtils.disableCloud();
-
-            Mockito.verify(client).disconnect();
-            assertThat(session.getWebSocketClient())
-                    .as("拆线之后这个会话不应再持有任何客户端引用")
-                    .isNull();
-
-            // 一次针对这个（已失效）旧会话触发的重连尝试——例如客户端自己的重连耗尽回调，
-            // 在 logout 已经发生之后才跑到——必须直接被拒绝，不重建任何东西。
-            assertThatCode(() -> PluginInitiationUtils.reinitWebSocket(session)).doesNotThrowAnyException();
-            assertThat(session.getWebSocketClient())
-                    .as("为一个已失效的会话重连必须是无操作")
-                    .isNull();
+        void logoutClosesTheActiveConnectionAndSuppressesFurtherReconnectsOnTheOldSession() throws Exception {
+            startAgent();
+            CloudSession old = CloudSession.current();
+            AgentRuntime.Attempt attempt = runtime.last();
+            attempt.accept();
+            CloudAuthManager.logout();
+            assertThat(attempt.closedWith).isEqualTo(1000);
+            assertThat(runtime.scheduler().isShutdown()).isTrue();
+            PluginInitiationUtils.reinitWebSocket(old);
+            runtime.advance(60000);
+            assertThat(runtime.attempts).hasSize(1);
+            assertThat(old.connectionState()).isEqualTo(AgentConnection.State.STOPPED);
         }
 
         @Test
-        @DisplayName("在一个已被取代的会话上触发的重连耗尽回调不会重建连接")
-        void reconnectExhaustionOnASupersededSessionDoesNotRebuildAConnection() {
-            CloudSession oldSession = CloudSession.current();
-            UltiPanelWebSocketClient oldClient = mock(UltiPanelWebSocketClient.class);
-            oldSession.setWebSocketClient(oldClient);
-
-            // 模拟：一次新的登录（或另一次 logout）在旧会话的重连仍悬而未决时把它取代掉——
-            // 这正是 initWebsocket(session) 注册的重连耗尽回调捕获的是具体会话对象、而不是
-            // 事后重新读取 CloudSession.current() 的原因（否则这里就会读到新会话，而不是
-            // 触发这次耗尽回调的那个）。
-            CloudSession.startNew();
-            assertThat(CloudSession.current()).isNotSameAs(oldSession);
-
-            PluginInitiationUtils.reinitWebSocket(oldSession);
-
-            Mockito.verify(oldClient, Mockito.never()).connect();
-            assertThat(oldSession.getWebSocketClient())
-                    .as("一个已被取代的会话永远不应该重新获得一个客户端引用")
-                    .isNull();
+        void replacedSessionCannotRebuildAConnection() throws Exception {
+            startAgent();
+            CloudSession old = CloudSession.current();
+            CloudSession replacement = CloudSession.startNew();
+            PluginInitiationUtils.reinitWebSocket(old);
+            runtime.advance(60000);
+            assertThat(runtime.attempts).hasSize(1);
+            assertThat(old.connectionState()).isEqualTo(AgentConnection.State.STOPPED);
+            assertThat(replacement.isCurrent()).isTrue();
         }
 
         @Test
-        @DisplayName("logout 之后紧接着的登录会拿到一个全新的退避状态，不会继承旧会话已消耗的重连次数")
-        void loginAfterLogoutGetsAFreshBackoffNotCarriedOverFromTheOldSession() {
-            CloudSession oldSession = CloudSession.current();
-            for (int i = 0; i < 3; i++) {
-                oldSession.getBackoff().getNextDelay();
-            }
-            assertThat(oldSession.getBackoff().getAttemptCount())
-                    .as("前置条件：旧会话的退避额度必须真的被消耗掉一部分")
-                    .isEqualTo(3);
-
-            PluginInitiationUtils.disableCloud();
-            CloudSession newSession = CloudSession.startNew();
-
-            assertThat(newSession).isNotSameAs(oldSession);
-            assertThat(newSession.getBackoff().getAttemptCount())
-                    .as("新会话的退避状态不应继承旧会话已经消耗掉的重连次数")
-                    .isZero();
+        void lateTerminalCallbackCannotDeleteNewCredentialOrWarn() throws Exception {
+            startAgent();
+            AgentConnection.Listener oldListener = listenerOf(CloudSession.current());
+            CloudSession replacement = CloudSession.startNew();
+            replacement.commitCredential(credential("NEW"));
+            oldListener.onCredentialRejected(4401, "old-request");
+            oldListener.onUpgradeRequired("6.3.2", "old-request");
+            oldListener.onSuperseded();
+            oldListener.onPlanLimited(UpgradeRejection.statusOnly(402));
+            assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo("cred-NEW");
+            assertThat(loggedAt(Level.WARNING)).isEmpty();
+            assertThat(replacement.getCredential().getCredentialId()).isEqualTo("cred-NEW");
         }
 
         @Test
-        @DisplayName("WR-02：重连预算耗尽时，disableCloud 拆的是预算耗尽的那个具体会话，不是事后重新读到的 current()")
-        void budgetExhaustionInvalidatesTheSessionWhoseBudgetRanOutNotWhateverIsCurrent() throws Exception {
-            // 复现 CloudSession.startNew() 内部那道窄缝：current = next 与
-            // previous.invalidate() 之间，previous.isCurrent() 仍然读到 true，而
-            // current() 已经指向 next。reinitWebSocket(session) 的第一道闸门正是在这道
-            // 窄缝里通过的——用反射直接把这个瞬间的状态摆出来，而不用真的开线程去赌时机。
-            CloudSession oldSession = CloudSession.current();
-            buildValidTokenOn(oldSession);
-            for (int i = 0; i < CloudSession.MAX_REINIT_ATTEMPTS; i++) {
-                oldSession.getBackoff().getNextDelay();
-            }
-            assertThat(oldSession.getBackoff().shouldContinue())
-                    .as("前置条件：这个会话的重连预算必须真的耗尽")
-                    .isFalse();
-
-            CloudSession newSession = new CloudSession();
-            Field currentField = CloudSession.class.getDeclaredField("current");
-            currentField.setAccessible(true);
-            currentField.set(null, newSession); // 直接摆出「新会话已装上，旧会话尚未被标记失效」这一刻
-            assertThat(oldSession.isCurrent())
-                    .as("窄缝内：旧会话此刻仍然读到 current（还没被 startNew() 的第二步标记失效）")
-                    .isTrue();
-            UltiPanelWebSocketClient newClient = mock(UltiPanelWebSocketClient.class);
-            newSession.setWebSocketClient(newClient);
-
-            PluginInitiationUtils.reinitWebSocket(oldSession);
-
-            Mockito.verify(newClient, Mockito.never()).disconnect();
-            assertThat(newSession.isCurrent())
-                    .as("一个旧会话的重连预算耗尽绝不能拖累一个与它无关、已经取代它的新会话")
-                    .isTrue();
-            assertThat(oldSession.isCurrent())
-                    .as("耗尽的是这个具体会话，就该由它自己被标记失效")
-                    .isFalse();
-        }
-
-        @Test
-        @DisplayName("Round 1 外部评审（第二轮）：对一个已被取代的会话拆线，不能连带停掉全局管理器——它们可能已经属于新会话")
-        void teardownOfASupersededSessionDoesNotStopGlobalManagersTheCurrentSessionMayAlreadyOwn() {
-            // 全局管理器（server monitor、player-event manager）只有一份，不属于任何具体会话。
-            // 若一次针对已被取代的旧会话的拆线调用无条件停掉它们，就会把新会话已经接好的（或即将
-            // 接好的）全局管理器状态一并拆掉，而没有任何后续回调会把它们重新接上。
-            CloudSession oldSession = CloudSession.current();
-
-            CloudSession newSession = CloudSession.startNew(); // oldSession 从此不再是 current()
-            assertThat(oldSession.isCurrent())
-                    .as("前置条件：oldSession 此刻确实已经被取代")
-                    .isFalse();
-
-            PluginInitiationUtils.disableCloud(oldSession);
-
-            Mockito.verify(mockMonitor, Mockito.never()).stopMonitoring();
-            assertThat(newSession.isCurrent())
-                    .as("newSession 本身完全不该被这次针对 oldSession 的拆线调用影响")
-                    .isTrue();
-        }
-
-        @Test
-        @DisplayName("WR-07：握手成功之后重置的是这次握手自己那个会话的退避额度，不是事后重新读到的 current()")
-        void handshakeSuccessResetsTheHandshakesOwnSessionBackoffNotWhateverIsCurrent() {
-            CloudSession session = CloudSession.current();
-            UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
-            for (int i = 0; i < 3; i++) {
-                session.getBackoff().getNextDelay();
-            }
-            assertThat(session.getBackoff().getAttemptCount()).isEqualTo(3);
-
-            // 模拟：这次握手在途的时候，另一次登出+登录已经把 current() 换掉了。
-            CloudSession newSession = CloudSession.startNew();
-            for (int i = 0; i < 2; i++) {
-                newSession.getBackoff().getNextDelay();
-            }
-            assertThat(newSession.getBackoff().getAttemptCount()).isEqualTo(2);
-
+        void callbackAlsoChecksCurrentIdentityBeforeInvalidationFlagChanges() throws Exception {
+            startAgent();
+            CloudSession old = CloudSession.current();
+            AgentConnection.Listener listener = listenerOf(old);
+            Field current = CloudSession.class.getDeclaredField("current");
+            current.setAccessible(true);
+            CloudSession replacement = new CloudSession();
+            current.set(null, replacement);
             try {
-                PluginInitiationUtils.onWebSocketOpened(session, client);
-            } catch (Exception ignored) {
-                // 本用例环境没有下游依赖（ConfigManager 等），走到 uploadConfig 会失败——
-                // 与本用例要钉住的东西无关。
-            }
-
-            assertThat(session.getBackoff().getAttemptCount())
-                    .as("这次握手成功的是 session，它自己的退避额度必须被清零")
-                    .isZero();
-            assertThat(newSession.getBackoff().getAttemptCount())
-                    .as("newSession 跟这次握手毫无关系，它的退避额度不该被这次握手动到")
-                    .isEqualTo(2);
+                replacement.commitCredential(credential("NEW"));
+                assertThat(old.isCurrent()).isTrue();
+                listener.onCredentialRejected(4401, null);
+                listener.onOpened();
+                assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo("cred-NEW");
+                assertThat(loggedAt(Level.WARNING)).isEmpty();
+                assertThat(loggedAt(Level.INFO)).doesNotContain("UltiCloud: connected.");
+            } finally { old.invalidate(); }
         }
 
         @Test
-        @DisplayName("Round 1 外部评审（第四轮）：会话已经失效之后，一次迟到的 startDevicePolling 调用必须什么都不做")
+        void oldConnectionCallbackCannotActAfterSameSessionReinit() throws Exception {
+            startAgent();
+            AgentConnection.Listener listener = listenerOf(CloudSession.current());
+            PluginInitiationUtils.reinitWebSocket();
+            runtime.runDue();
+            listener.onCredentialRejected(4401, null);
+            assertThat(ServerCredentialStore.load()).isNotNull();
+            assertThat(CloudSession.current().connectionState()).isEqualTo(AgentConnection.State.CONNECTING);
+            assertThat(loggedAt(Level.WARNING)).isEmpty();
+        }
+
+        @Test
+        void teardownOfASupersededSessionDoesNotStopGlobalManagersTheCurrentSessionMayAlreadyOwn() {
+            CloudSession old = CloudSession.current();
+            CloudSession replacement = CloudSession.startNew();
+            PluginInitiationUtils.disableCloud(old);
+            Mockito.verify(mockMonitor, Mockito.never()).stopMonitoring();
+            assertThat(replacement.isCurrent()).isTrue();
+        }
+
+        @Test
         void startPollingOnAnAlreadyInvalidatedSessionSchedulesNothing() throws Exception {
-            // 复现：/ulticloud logout 在设备码申请的阻塞 POST 还在途时就已经跑完，把会话标记为失效；
-            // 随后那次 POST 才返回，走到 startDevicePolling()——如果这里不检查失效标记，就会在一个
-            // 已经没人能再碰到的会话上新建一个执行器，10 分钟内每 5 秒跑一次，永远没人能停。
-            // （协议 v2，plan 22-01：原先针对魔法链接 startPolling(String, Consumer) 的同一性质。）
             CloudSession session = CloudSession.current();
             session.invalidate();
-
             session.startDevicePolling(DeviceLoginTestSupport.grant(600, 5),
                     new DeviceLoginTestSupport.RecordingListener());
-
-            Field pollExecutorField = CloudSession.class.getDeclaredField("pollExecutor");
-            pollExecutorField.setAccessible(true);
-            assertThat(pollExecutorField.get(session))
-                    .as("已失效的会话上调用 startDevicePolling 不该创建任何执行器")
-                    .isNull();
+            Field poll = CloudSession.class.getDeclaredField("pollExecutor");
+            poll.setAccessible(true);
+            assertThat(poll.get(session)).isNull();
         }
 
-        /** Builds a valid, non-expiring token and installs it on {@code session} via reflection. */
-        private TokenEntity buildValidTokenOn(CloudSession session) throws Exception {
-            TokenEntity token = new TokenEntity();
-            token.setAccess_token("dummy.access.token");
-            token.setExp((System.currentTimeMillis() / 1000L) + 3600L);
-            Field tokenField = CloudSession.class.getDeclaredField("token");
-            tokenField.setAccessible(true);
-            tokenField.set(session, token);
-            return token;
+        @Test
+        void invalidateWithoutPluginStillStopsOwnedTransport() throws Exception {
+            startAgent();
+            CloudSession session = CloudSession.current();
+            AgentRuntime.Attempt attempt = runtime.last();
+            Field instance = UltiTools.class.getDeclaredField("ultiTools");
+            instance.setAccessible(true);
+            Object plugin = instance.get(null);
+            instance.set(null, null);
+            try {
+                assertThatCode(session::invalidate).doesNotThrowAnyException();
+                assertThat(attempt.closedWith).isEqualTo(1000);
+                assertThat(runtime.scheduler().isShutdown()).isTrue();
+            } finally { instance.set(null, plugin); }
+        }
+
+        @Test
+        void diskDeleteFailureStillDetachesRejectedCredential() throws Exception {
+            startAgent();
+            CredentialStore.setSimulateWriteFailureForTesting(true);
+            try { runtime.last().refuse(401); }
+            finally { CredentialStore.setSimulateWriteFailureForTesting(false); }
+            assertThat(CloudSession.current().hasCredential()).isFalse();
+            assertThat(CloudSession.current().connectionState()).isEqualTo(AgentConnection.State.CREDENTIAL_REJECTED);
+            assertThat(loggedAt(Level.WARNING)).anyMatch(line -> line.contains("could not be deleted"));
+            runtime.advance(60000);
+            assertThat(runtime.attempts).hasSize(1);
         }
     }
 
@@ -642,14 +585,7 @@ class CloudReconnectStateMachineTest {
         @DisplayName("持有会话监视器期间，reinitWebSocket 的第二次确认到建连整段必须进不去")
         void secondConfirmationThroughConnectIsCoveredBySessionLock() throws Exception {
             CloudSession session = CloudSession.current();
-            TokenEntity token = new TokenEntity();
-            token.setAccess_token("dummy.access.token");
-            token.setExp((System.currentTimeMillis() / 1000L) + 3600L); // valid, non-expiring --
-            // skips the (out-of-lock) refresh branch entirely, landing straight on the second
-            // confirmation this test cares about.
-            Field tokenField = CloudSession.class.getDeclaredField("token");
-            tokenField.setAccessible(true);
-            tokenField.set(session, token);
+            session.commitCredential(credential("OLD"));
 
             java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
             java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
@@ -862,55 +798,27 @@ class CloudReconnectStateMachineTest {
         @Test
         @DisplayName("拆线之后到达的握手回调不得踩空会话已清空的客户端引用")
         void lateHandshakeDoesNotDereferenceClearedClient() {
-            // onOpen 是异步的：跑到回调里时 disableCloud() 可能已经把会话自己的客户端引用清空
-            //（logout，或重连预算耗尽——后者跑在 WebSocket 线程上）。回调若重读会话当前的客户端
-            // 引用，subscribeToServer / uploadConfig / uploadServerProperties 三处都会 NPE；
-            // 只有 initializeManagers 有持锁复查护着，它前后的代码没有。
-            UltiPanelWebSocketClient handshakeClient = mock(UltiPanelWebSocketClient.class);
-            lenient().when(handshakeClient.getServerId()).thenReturn("srv-1");
-
-            PluginInitiationUtils.disableCloud();   // 会话自己的客户端引用变 null
-
             try {
-                PluginInitiationUtils.onWebSocketOpened(handshakeClient);
-            } catch (Exception ignored) {
-                // 本测试环境没有 ConfigManager 之类的下游依赖，走到 uploadConfig 会失败。
-                // 那与本用例无关——要钉住的是引用来源，不是这条链能否跑完。
-            }
-
-            // 关键断言：若回调重读会话当前的客户端引用，第一处解引用
-            // （client.subscribeToServer(client.getServerId())）就已经 NPE，
-            // 根本走不到这里。能验到调用，就说明用的是回调自己那个引用。
-            Mockito.verify(handshakeClient).subscribeToServer("srv-1");
+                startAgent();
+                AgentConnection.Listener listener = listenerOf(CloudSession.current());
+                PluginInitiationUtils.disableCloud();
+                assertThatCode(listener::onOpened).doesNotThrowAnyException();
+                assertThat(loggedAt(Level.INFO)).doesNotContain("UltiCloud: connected.");
+            } catch (Exception e) { throw new AssertionError(e); }
         }
 
         @Test
         @DisplayName("Round 1 外部评审：迟到握手的接线必须查这次握手自己那个会话是否仍然有效，不能查事后重新读到的 current()")
         void lateHandshakeInitializesManagersOnItsOwnSessionNotWhateverIsCurrent() {
-            // 复现评审给出的确切场景：oldSession 的握手迟到了，而在它到达之前，一次登出+重新
-            // 登录已经把 current() 换成了 newSession——一个尚未真正握手成功、自己的客户端引用还是
-            // null 的「待定」会话。若接线动作查的是 current()（newSession）而不是 oldSession 自己，
-            // newSession.isCurrent() 为 true 会放行，用 newSession 自己（null）的客户端引用把全局
-            // 管理器的接线原样覆盖掉——哪怕 newSession 自己那次握手还没有真正完成。
-            CloudSession oldSession = CloudSession.current();
-            UltiPanelWebSocketClient oldClient = mock(UltiPanelWebSocketClient.class);
-            lenient().when(oldClient.getServerId()).thenReturn("srv-old");
-
-            CloudSession newSession = CloudSession.startNew(); // 使 oldSession 失效，装上待定的新会话
-            assertThat(newSession.getWebSocketClient())
-                    .as("前置条件：新会话此刻确实还没有自己的客户端")
-                    .isNull();
-
             try {
-                PluginInitiationUtils.onWebSocketOpened(oldSession, oldClient);
-            } catch (Exception ignored) {
-                // 本测试环境没有 ConfigManager 之类的下游依赖，走到 uploadConfig 会失败，
-                // 与本用例要钉住的东西无关。
-            }
-
-            // 关键断言：oldSession 已经失效，接线动作必须整体不发生——全局管理器的客户端引用
-            // 不该被这次迟到的握手动到，无论是被设成 oldClient 还是被 newSession 自己的 null 覆盖。
-            Mockito.verify(mockMonitor, Mockito.never()).setWebSocketClient(Mockito.any());
+                startAgent();
+                AgentConnection.Listener listener = listenerOf(CloudSession.current());
+                CloudSession replacement = CloudSession.startNew();
+                listener.onOpened();
+                assertThat(replacement.connectionState()).isEqualTo(AgentConnection.State.STOPPED);
+                Mockito.verify(mockMonitor, Mockito.never()).setWebSocketClient(Mockito.any());
+                assertThat(loggedAt(Level.INFO)).doesNotContain("UltiCloud: connected.");
+            } catch (Exception e) { throw new AssertionError(e); }
         }
 
         @Test
@@ -1058,6 +966,74 @@ class CloudReconnectStateMachineTest {
                         .isTrue();
             } finally {
                 pool.shutdownNow();
+            }
+        }
+    }
+
+    private void startAgent() throws Exception {
+        CloudSession.current().commitCredential(credential("OLD"));
+        PluginInitiationUtils.initWebsocket();
+        runtime.runDue();
+        assertThat(runtime.attempts).isNotEmpty();
+    }
+
+    static ServerCredential credential(String suffix) {
+        return new ServerCredential("ucs_" + suffix, "cred-" + suffix,
+                "01JTESTSERVER00000000000000", "test-user", "Survival", 1L);
+    }
+
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    static AgentConnection.Listener listenerOf(CloudSession session) throws Exception {
+        Field agent = CloudSession.class.getDeclaredField("agentConnection");
+        agent.setAccessible(true);
+        Field listener = AgentConnection.class.getDeclaredField("listener");
+        listener.setAccessible(true);
+        return (AgentConnection.Listener) listener.get(agent.get(session));
+    }
+
+    static final class AgentRuntime {
+        final AtomicLong clock = new AtomicLong(1_000_000L);
+        final List<AgentConnectionTest.ManualScheduler> schedulers = new ArrayList<>();
+        final List<Attempt> attempts = new ArrayList<>();
+
+        void install() {
+            CloudSession.setAgentEndpointOverrideForTesting(URI.create("ws://cloud.example.test/v1/agent"));
+            CloudSession.setAgentTimingOverrideForTesting(new ReconnectPolicy(() -> 0), AgentConnection.Timing.defaults());
+            CloudSession.setAgentRuntimeForTesting(() -> {
+                AgentConnectionTest.ManualScheduler scheduler = new AgentConnectionTest.ManualScheduler(clock);
+                schedulers.add(scheduler);
+                return scheduler;
+            }, (uri, headers, events) -> {
+                Attempt attempt = new Attempt(headers, events, scheduler());
+                attempts.add(attempt);
+                return attempt;
+            }, clock::get);
+        }
+
+        AgentConnectionTest.ManualScheduler scheduler() { return schedulers.get(schedulers.size() - 1); }
+        Attempt last() { return attempts.get(attempts.size() - 1); }
+        void runDue() { scheduler().runDue(); }
+        void advance(long millis) { scheduler().advance(millis); }
+
+        static final class Attempt implements AgentConnection.Handle {
+            final Map<String, String> headers;
+            final AgentConnection.SocketEvents events;
+            final AgentConnectionTest.ManualScheduler scheduler;
+            int closedWith;
+
+            Attempt(Map<String, String> headers, AgentConnection.SocketEvents events,
+                    AgentConnectionTest.ManualScheduler scheduler) {
+                this.headers = headers;
+                this.events = events;
+                this.scheduler = scheduler;
+            }
+            @Override public void closeAttempt(int code, String reason) { closedWith = code; }
+            @Override public boolean sendText(String text) { return true; }
+            void accept() { events.onOpen(); scheduler.runDue(); }
+            void close(int code) { events.onClosed(code, "", true); scheduler.runDue(); }
+            void refuse(int status) {
+                events.onUpgradeRefused(status, UpgradeRejection.statusOnly(status));
+                scheduler.runDue();
             }
         }
     }

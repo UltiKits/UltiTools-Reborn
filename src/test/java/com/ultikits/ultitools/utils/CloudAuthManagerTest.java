@@ -1333,38 +1333,18 @@ class CloudAuthManagerTest {
         @DisplayName("round-13 外部评审（P2）：会话已因重连耗尽失效时（例如同一 classloader 内的"
                 + " /reload），必须先换上新会话再加载磁盘凭证，不能加载到即将被替换掉的旧会话上")
         void replacesAnInvalidatedSessionBeforeLoadingTheSavedCredentialOntoIt() throws Exception {
-            // 1. 旧会话真正登录过，磁盘上有它自己的（未过期）凭证。
-            CloudSession sessionBeforeExhaustion = CloudSession.current();
-            sessionBeforeExhaustion.commit(buildTokenWithExp(3600L));
-            CredentialStore.ReadResult saved = CredentialStore.read();
-            assertThat(saved.data())
-                    .as("前置条件：磁盘上得先真的有这份未过期的凭证")
-                    .containsKey("cloud_token");
-
-            // 2. 重连预算耗尽——会话失效，凭证仍留在磁盘上（exhaustion 自己的既定语义）。
-            PluginInitiationUtils.disableCloud(sessionBeforeExhaustion);
-            assertThat(sessionBeforeExhaustion.isCurrent())
-                    .as("前置条件：旧会话此刻确实已经失效——这正是本用例要复现的场景")
-                    .isFalse();
-
-            // 3. 同一 classloader 内再次 onEnable()（例如 /reload，而不是真正重启）——
-            //    round-13 评审之前，这里会把凭证加载到 sessionBeforeExhaustion（已失效）上，
-            //    随后 onEnable() 自己那次 enableCloud() 调用才会换会话，白白扔掉刚加载的凭证。
-            PluginInitiationUtils.resumeSavedCredentialOnStartup();
-
-            CloudSession sessionAfterResume = CloudSession.current();
-            assertThat(sessionAfterResume)
-                    .as("round-13：会话必须先被换成一个全新、未失效的会话，不能还是那个已耗尽的旧会话")
-                    .isNotSameAs(sessionBeforeExhaustion);
-            assertThat(sessionAfterResume.isCurrent())
-                    .as("round-13：加载凭证的目标会话必须是有效的")
-                    .isTrue();
-            assertThat(sessionAfterResume.getToken())
-                    .as("round-13：磁盘上的凭证必须被加载到这个新会话上，不能凭空消失")
-                    .isNotNull();
-            assertThat(sessionAfterResume.getToken().getAccess_token())
-                    .isEqualTo(sessionBeforeExhaustion.getToken().getAccess_token());
+            CloudSession old = CloudSession.current();
+            old.commitCredential(DeviceLoginTestSupport.credential("Survival"));
+            PluginInitiationUtils.disableCloud(old);
+            assertThat(old.isCurrent()).isFalse();
+            assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
+            CloudSession fresh = CloudSession.current();
+            assertThat(fresh).isNotSameAs(old);
+            assertThat(fresh.isCurrent()).isTrue();
+            assertThat(fresh.getCredential().getCredentialId()).isEqualTo(old.getCredential().getCredentialId());
+            assertThat(fresh.getToken()).isNull();
         }
+
     }
 
     // =========================================================================
@@ -1388,31 +1368,35 @@ class CloudAuthManagerTest {
         }
 
         @Test
-        @DisplayName("已连接且有用户名时返回的快照携带该用户名与到期时间")
-        void connectedWithUserNameReportsIt() throws Exception {
-            TokenEntity token = buildTokenWithExp(3600L);
-            token.setUser_name("alice");
-            setSessionField("token", token);
-
+        @DisplayName("已连接快照仅包含服务器身份，不再包含用户令牌信息")
+        void connectedReportsServerIdentityWithoutUserToken() throws Exception {
+            CloudReconnectStateMachineTest.AgentRuntime runtime = new CloudReconnectStateMachineTest.AgentRuntime();
+            runtime.install();
+            CloudSession.current().commitCredential(DeviceLoginTestSupport.credential("Survival"));
+            CloudSession.current().startConnection();
+            runtime.runDue();
+            runtime.last().accept();
             CloudAuthManager.CloudStatus status = CloudAuthManager.status();
-
             assertThat(status.isConnected()).isTrue();
-            assertThat(status.getUserName()).isEqualTo("alice");
-            assertThat(status.getExpirationDate()).isEqualTo(token.getExpirationDate());
+            assertThat(status.isLinked()).isTrue();
+            assertThat(status.getServerName()).isEqualTo("Survival");
+            assertThat(status.getUserName()).isNull();
+            assertThat(status.getExpirationDate()).isNull();
+            assertThat(status.getConnectionDescription()).isEqualTo("connected");
         }
 
         @Test
-        @DisplayName("已连接但用户名为空时返回的快照用户名为 'Unknown'")
-        void connectedWithoutUserNameReportsUnknown() throws Exception {
-            TokenEntity token = buildTokenWithExp(3600L);
-            token.setUser_name(null);
-            setSessionField("token", token);
-
+        @DisplayName("未命名的已绑定服务器不等于已连接")
+        void linkedWithoutServerNameReportsNotConnected() {
+            CloudSession.current().commitCredential(DeviceLoginTestSupport.credential(null));
             CloudAuthManager.CloudStatus status = CloudAuthManager.status();
-
-            assertThat(status.isConnected()).isTrue();
-            assertThat(status.getUserName()).isEqualTo("Unknown");
+            assertThat(status.isLinked()).isTrue();
+            assertThat(status.isConnected()).isFalse();
+            assertThat(status.getServerName()).isNull();
+            assertThat(status.getUserName()).isNull();
+            assertThat(status.getConnectionDescription()).isEqualTo("not connected");
         }
+
     }
 
     // =========================================================================
@@ -1547,6 +1531,7 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("GRANTED commits the credential, stops polling and logs the linked line")
         void grantedCommitsAndStops() {
+            new CloudReconnectStateMachineTest.AgentRuntime().install();
             loginWith(grantedClient(600, 5)
                     .thenPoll(DeviceAuthorizationClient.PollResult.granted(DeviceLoginTestSupport.credential("Survival"))));
 

@@ -32,18 +32,18 @@ class PluginInitiationUtilsWebSocketTest {
         }
 
         @Test
-        @DisplayName("WebSocket 客户端应该是 CloudSession 的实例字段（16-08 Task 2 起，不再是 PluginInitiationUtils 的静态字段）")
+        @DisplayName("v2 连接属于 CloudSession，而非静态全局字段")
         void shouldHavePanelWSField() throws NoSuchFieldException {
-            Field field = CloudSession.class.getDeclaredField("webSocketClient");
+            Field field = CloudSession.class.getDeclaredField("agentConnection");
 
             assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
             assertThat(Modifier.isPrivate(field.getModifiers())).isTrue();
         }
 
         @Test
-        @DisplayName("令牌应该是 CloudSession 的实例字段（16-08 Task 1 起，不再是 PluginInitiationUtils 的静态字段）")
+        @DisplayName("v2 服务器凭据属于 CloudSession")
         void shouldHaveTokenField() throws NoSuchFieldException {
-            Field field = CloudSession.class.getDeclaredField("token");
+            Field field = CloudSession.class.getDeclaredField("credential");
 
             assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
             assertThat(Modifier.isPrivate(field.getModifiers())).isTrue();
@@ -204,14 +204,14 @@ class PluginInitiationUtilsWebSocketTest {
         }
 
         @Test
-        @DisplayName("getPanelWebsocketClient 方法应该存在（16-08 Task 2 起接受一个 TokenEntity 参数，不再读静态字段）")
-        void getPanelWebsocketClientMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                    "getPanelWebsocketClient", com.ultikits.ultitools.entities.TokenEntity.class);
-
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
+        @DisplayName("v2 建连入口为包私有，公开静态方法保持兼容")
+        void sessionStartConnectionIsPackagePrivate() throws NoSuchMethodException {
+            Method method = CloudSession.class.getDeclaredMethod("startConnection");
+            assertThat(Modifier.isStatic(method.getModifiers())).isFalse();
+            assertThat(Modifier.isPublic(method.getModifiers())).isFalse();
+            assertThat(method.getReturnType()).isEqualTo(void.class);
         }
+
     }
 
     @Nested
@@ -267,110 +267,6 @@ class PluginInitiationUtilsWebSocketTest {
     }
 
     @Nested
-    @DisplayName("JSON 消息构建测试")
-    class JsonMessageBuildingTests {
-
-        @Test
-        @DisplayName("应该能构建 pong 响应消息")
-        void shouldBuildPongResponseMessage() {
-            com.google.gson.JsonObject pongResponse = new com.google.gson.JsonObject();
-            pongResponse.addProperty("type", "pong");
-            pongResponse.addProperty("timestamp", System.currentTimeMillis());
-            
-            com.google.gson.JsonObject pongData = new com.google.gson.JsonObject();
-            pongData.addProperty("timestamp", System.currentTimeMillis());
-            pongResponse.add("data", pongData);
-            
-            assertThat(pongResponse.get("type").getAsString()).isEqualTo("pong");
-            assertThat(pongResponse.has("timestamp")).isTrue();
-            assertThat(pongResponse.has("data")).isTrue();
-        }
-
-        @Test
-        @DisplayName("应该能构建错误响应消息")
-        void shouldBuildErrorResponseMessage() {
-            com.google.gson.JsonObject errorResponse = new com.google.gson.JsonObject();
-            errorResponse.addProperty("type", "error");
-            errorResponse.addProperty("message", "Test error message");
-            
-            assertThat(errorResponse.get("type").getAsString()).isEqualTo("error");
-            assertThat(errorResponse.get("message").getAsString()).isEqualTo("Test error message");
-        }
-
-        @Test
-        @DisplayName("应该能解析带 data 字段的消息")
-        void shouldParseMessageWithDataField() {
-            com.google.gson.JsonObject message = new com.google.gson.JsonObject();
-            message.addProperty("type", "server_status");
-            
-            com.google.gson.JsonObject data = new com.google.gson.JsonObject();
-            data.addProperty("players", 10);
-            data.addProperty("tps", 20.0);
-            message.add("data", data);
-            
-            String type = message.get("type").getAsString();
-            com.google.gson.JsonObject extractedData = message.getAsJsonObject("data");
-            
-            assertThat(type).isEqualTo("server_status");
-            assertThat(extractedData.get("players").getAsInt()).isEqualTo(10);
-            assertThat(extractedData.get("tps").getAsDouble()).isEqualTo(20.0);
-        }
-    }
-
-    @Nested
-    @DisplayName("消息类型常量测试")
-    class MessageTypeConstantsTests {
-
-        @Test
-        @DisplayName("应该支持所有基础系统消息类型")
-        void shouldSupportBasicSystemMessageTypes() {
-            List<String> basicTypes = Arrays.asList(
-                "ping", "pong", "subscribe", "unsubscribe", "notification", "error"
-            );
-            
-            for (String type : basicTypes) {
-                assertThat(type).isNotEmpty();
-            }
-        }
-
-        @Test
-        @DisplayName("应该支持所有监控消息类型")
-        void shouldSupportMonitoringMessageTypes() {
-            List<String> monitoringTypes = Arrays.asList(
-                "server_status", "plugin_list", "player_event", "log_stream"
-            );
-            
-            for (String type : monitoringTypes) {
-                assertThat(type).isNotEmpty();
-            }
-        }
-
-        @Test
-        @DisplayName("应该支持所有控制消息类型")
-        void shouldSupportControlMessageTypes() {
-            List<String> controlTypes = Arrays.asList(
-                "execute_command", "command_result", "file_operation"
-            );
-            
-            for (String type : controlTypes) {
-                assertThat(type).isNotEmpty();
-            }
-        }
-
-        @Test
-        @DisplayName("应该支持所有配置管理消息类型")
-        void shouldSupportConfigMessageTypes() {
-            List<String> configTypes = Arrays.asList(
-                "upload_config", "update_config"
-            );
-
-            for (String type : configTypes) {
-                assertThat(type).isNotEmpty();
-            }
-        }
-    }
-
-    @Nested
     @DisplayName("reinitWebSocket 方法测试")
     class ReinitWebSocketTests {
 
@@ -394,22 +290,22 @@ class PluginInitiationUtilsWebSocketTest {
         }
 
         @Test
-        @DisplayName("WebSocket 客户端字段应该可以被 reinitWebSocket(session) 访问（16-08 Task 2 起在 CloudSession 上）")
+        @DisplayName("重新建连使用会话拥有的 v2 连接")
         void panelWSFieldShouldBeAccessibleByReinitWebSocket() throws NoSuchFieldException {
-            Field field = CloudSession.class.getDeclaredField("webSocketClient");
+            Field field = CloudSession.class.getDeclaredField("agentConnection");
 
             assertThat(field.getType().getName())
-                .isEqualTo("com.ultikits.ultitools.websocket.UltiPanelWebSocketClient");
+                .isEqualTo("com.ultikits.ultitools.utils.AgentConnection");
             assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
         }
 
         @Test
-        @DisplayName("令牌字段应该可以被 reinitWebSocket(session) 使用（16-08 Task 1 起在 CloudSession 上）")
+        @DisplayName("重新建连使用会话拥有的 v2 服务器凭据")
         void tokenFieldShouldBeUsableByReinitWebSocket() throws NoSuchFieldException {
-            Field field = CloudSession.class.getDeclaredField("token");
+            Field field = CloudSession.class.getDeclaredField("credential");
 
             assertThat(field.getType().getName())
-                .isEqualTo("com.ultikits.ultitools.entities.TokenEntity");
+                .isEqualTo("com.ultikits.ultitools.utils.ServerCredential");
             assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
         }
     }

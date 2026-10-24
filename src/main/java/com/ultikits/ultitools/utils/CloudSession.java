@@ -208,9 +208,13 @@ final class CloudSession {
 
     private AgentConnection agentConnection;
     private ScheduledExecutorService agentExecutor;
+    private LongSupplier agentClock = System::currentTimeMillis;
     private static volatile URI agentEndpointOverride;
     private static volatile ReconnectPolicy agentPolicyOverride;
     private static volatile AgentConnection.Timing agentTimingOverride;
+    private static volatile java.util.function.Supplier<ScheduledExecutorService> agentExecutorOverride;
+    private static volatile AgentConnection.SocketFactory agentSocketsOverride;
+    private static volatile LongSupplier agentClockOverride;
 
     /** The REST client of the device authorization grant. */
     private final DeviceAuthorizationClient deviceClient = new DeviceAuthorizationClient();
@@ -332,6 +336,7 @@ final class CloudSession {
         setDeviceSeamsForTesting(null, null, null);
         setAgentEndpointOverrideForTesting(null);
         setAgentTimingOverrideForTesting(null, null);
+        setAgentRuntimeForTesting(null, null, null);
         // 16-10 gap-closure addendum: logStreamOwner is a second JVM-wide static this class owns
         // (issue #465) -- left unset, a leftover reference from a previous test class would make
         // shutdownLogStreamManager() wrongly believe a DIFFERENT session still owns the wiring and
@@ -429,6 +434,10 @@ final class CloudSession {
      * NOT clear the record -- the owning session's own eventual teardown is what does that.
      */
     private void shutdownLogStreamManager() {
+        UltiTools plugin = UltiTools.getInstance();
+        if (plugin == null) {
+            return;
+        }
         try {
             synchronized (LOG_WIRING_LOCK) {
                 if (logStreamOwner != null && logStreamOwner != this) {
@@ -437,14 +446,14 @@ final class CloudSession {
                     return;
                 }
                 com.ultikits.ultitools.manager.LogStreamManager logStreamManager =
-                    UltiTools.getInstance().getLogStreamManager();
+                    plugin.getLogStreamManager();
                 if (logStreamManager != null) {
                     logStreamManager.shutdown();
                 }
                 logStreamOwner = null;
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
+            plugin.getLogger().log(Level.FINE,
                 "Error shutting down log stream manager during session invalidation: " + e.getMessage());
         }
     }
@@ -764,7 +773,8 @@ final class CloudSession {
         }
         URI endpoint = agentEndpointOverride != null ? agentEndpointOverride
                 : AgentEndpoint.fromApiUrl(HttpRequestUtils.getBaseUrl());
-        agentExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        agentExecutor = agentExecutorOverride != null ? agentExecutorOverride.get()
+                : Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "UltiTools-Cloud-Agent");
             thread.setDaemon(true);
             return thread;
@@ -774,10 +784,12 @@ final class CloudSession {
                 : new ReconnectPolicy(() -> ThreadLocalRandom.current().nextDouble());
         AgentConnection.Timing timing = agentTimingOverride != null ? agentTimingOverride
                 : AgentConnection.Timing.defaults();
+        agentClock = agentClockOverride != null ? agentClockOverride : System::currentTimeMillis;
+        AgentConnection.SocketFactory sockets = agentSocketsOverride != null ? agentSocketsOverride
+                : AgentConnection.realSockets(AgentConnection.CONNECT_TIMEOUT_MS, PanelConnectionLog::log);
         agentConnection = new AgentConnection(endpoint, listener::readBearer,
                 CloudAuthManager.runningFrameworkVersion(), agentExecutor, listener,
-                AgentConnection.realSockets(AgentConnection.CONNECT_TIMEOUT_MS, PanelConnectionLog::log),
-                policy, System::currentTimeMillis, timing, PanelConnectionLog::log);
+                sockets, policy, agentClock, timing, PanelConnectionLog::log);
         listener.connection = agentConnection;
         agentExecutor.execute(listener.connection::start);
     }
@@ -820,7 +832,7 @@ final class CloudSession {
     }
 
     private long retryDelayUnits(long unitMillis) {
-        long remaining = Math.max(0L, agentConnection.nextRetryAtMillis() - System.currentTimeMillis());
+        long remaining = Math.max(0L, agentConnection.nextRetryAtMillis() - agentClock.getAsLong());
         return (remaining + unitMillis - 1L) / unitMillis;
     }
 
@@ -831,6 +843,13 @@ final class CloudSession {
     static void setAgentTimingOverrideForTesting(ReconnectPolicy policy, AgentConnection.Timing timing) {
         agentPolicyOverride = policy;
         agentTimingOverride = timing;
+    }
+
+    static void setAgentRuntimeForTesting(java.util.function.Supplier<ScheduledExecutorService> executors,
+            AgentConnection.SocketFactory sockets, LongSupplier clock) {
+        agentExecutorOverride = executors;
+        agentSocketsOverride = sockets;
+        agentClockOverride = clock;
     }
 
     private final class SessionAgentListener implements AgentConnection.Listener {
@@ -986,7 +1005,7 @@ final class CloudSession {
      * @throws DataAccessException if the write fails
      */
     synchronized boolean commitCredential(ServerCredential newCredential) {
-        if (invalidated) {
+        if (invalidated || this != current()) {
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 "Discarding a credential result that arrived after this session was invalidated");
             return false;
