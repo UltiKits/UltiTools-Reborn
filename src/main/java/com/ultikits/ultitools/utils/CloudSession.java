@@ -58,11 +58,12 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * that takes more than one of them <b>must</b> acquire them in this fixed order -- outer to inner:
  * <ol>
  * <li>{@code CloudAuthManager.class} -- held for the duration of
- * {@link CloudAuthManager#logout()} only; never nested with any of the three locks below at the
- * same time in the current code (its own call into {@link #invalidate()} and into the
- * {@code synchronized (CloudSession.class)} block inside
- * {@code PluginInitiationUtils#doDisableCloud} run sequentially, not nested), but documented here
- * so a future change that DOES nest it keeps this same relative order rather than inventing one.</li>
+ * {@link CloudAuthManager#logout()} and {@link CloudAuthManager#reconnect()} (both are
+ * {@code synchronized} methods). They DO nest it with the locks below, in this list's order:
+ * logout's own {@code synchronized (CloudSession.class)} block calls {@link #invalidate()} on
+ * the session monitor inside it, and reconnect takes the session monitor inside
+ * {@code CloudSession#reconnectNow()}. No path in this package acquires them the other way
+ * round.</li>
  * <li>{@code CloudSession.class} -- held by {@link #startNew()} and by
  * {@link CloudAuthManager#login} (16-10 gap-closure addendum, issue #466) for its own
  * re-check-through-replacement region.</li>

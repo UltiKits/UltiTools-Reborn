@@ -277,7 +277,7 @@ class CloudLoginCommandTest {
     class Help {
 
         @Test
-        @DisplayName("the header and the three subcommand lines")
+        @DisplayName("the header and the four subcommand lines")
         void helpLines() {
             CommandSender sender = mock(CommandSender.class);
 
@@ -291,6 +291,11 @@ class CloudLoginCommandTest {
                     + " - Unlink this server and revoke its credential");
             order.verify(sender).sendMessage(ChatColor.WHITE + "/ulticloud status" + ChatColor.GRAY
                     + " - Show link and connection status");
+            // Pinned by the plan-22-06 verification: without this line, deleting the
+            // "/ulticloud reconnect" help sentence left the whole suite green.
+            order.verify(sender).sendMessage(ChatColor.WHITE + "/ulticloud reconnect" + ChatColor.GRAY
+                    + " - Retry the UltiCloud connection now");
+            order.verifyNoMoreInteractions();
         }
     }
 }
