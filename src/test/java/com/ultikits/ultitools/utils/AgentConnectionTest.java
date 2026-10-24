@@ -18,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoubleSupplier;
-import java.util.logging.Level;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -826,5 +825,90 @@ class AgentConnectionTest {
         scheduler.advance(3_600_000);
         assertThat(logs).hasSize(beforeStop);
         assertThat(logs).noneMatch(line -> line.contains(BEARER));
+    }
+
+    // ------------------------------------------------------------------ handshake deadline and heartbeat
+
+    @Test
+    @DisplayName("an attempt not OPEN at the 15 s deadline is force-closed and retried with the normal delay")
+    void handshakeDeadlineFires() {
+        connection.start();
+        FakeSocket s = sockets.last();
+        scheduler.advance(14_999);
+        assertThat(connection.state()).isEqualTo(State.CONNECTING);
+        scheduler.advance(1);
+        assertThat(connection.state()).isEqualTo(State.BACKOFF);
+        assertThat(s.closedWith).isEqualTo(1000);
+        assertThat(pendingDelay()).isEqualTo(1000);
+        assertThat(logs).contains("INFO UltiCloud: connection attempt 1 failed (no handshake response within 15 s); "
+                + "retrying in 1 s.");
+        s.close(1006);
+        assertThat(connection.state()).as("the abandoned socket's close is stale").isEqualTo(State.BACKOFF);
+        assertThat(pendingDelay()).isEqualTo(1000);
+    }
+
+    @Test
+    @DisplayName("a deadline for an attempt that already opened or failed changes nothing")
+    void staleDeadlineChangesNothing() {
+        startAndOpen();
+        scheduler.advance(20_000);
+        assertThat(connection.state()).isEqualTo(State.OPEN);
+        sockets.last().close(1011);
+        long retryAt = connection.nextRetryAtMillis();
+        FakeSocket second = fireRetry();
+        second.refuse(500);
+        long secondRetryAt = connection.nextRetryAtMillis();
+        scheduler.advance(secondRetryAt - now.get() - 1);
+        assertThat(connection.nextRetryAtMillis()).isEqualTo(secondRetryAt);
+        assertThat(retryAt).isLessThan(secondRetryAt);
+        assertThat(logs).noneMatch(line -> line.contains("no handshake response"));
+    }
+
+    @Test
+    @DisplayName("heartbeat: no ping before markEstablished, ping every 30 s after, pong consumed and resets the timeout")
+    void heartbeatPingsAndConsumesPong() {
+        FakeSocket s = startAndOpen();
+        scheduler.advance(60_000);
+        assertThat(s.sent).isEmpty();
+        connection.markEstablished();
+        scheduler.advance(30_000);
+        assertThat(s.sent).containsExactly("ping");
+        scheduler.advance(30_000);
+        assertThat(s.sent).containsExactly("ping", "ping");
+        s.text("pong");
+        s.text("hello");
+        assertThat(recorder.events).contains("text hello").doesNotContain("text pong");
+        scheduler.advance(60_000);
+        assertThat(connection.state()).as("the pong at 60 s keeps it alive past 90 s").isEqualTo(State.OPEN);
+        assertThat(s.sent).hasSize(4);
+    }
+
+    @Test
+    @DisplayName("heartbeat: no pong for 90 s closes the socket and retries with the normal delay")
+    void heartbeatTimeout() {
+        FakeSocket s = startAndOpen();
+        connection.markEstablished();
+        scheduler.advance(89_999);
+        assertThat(connection.state()).isEqualTo(State.OPEN);
+        assertThat(s.sent).containsExactly("ping", "ping");
+        scheduler.advance(1);
+        assertThat(connection.state()).isEqualTo(State.BACKOFF);
+        assertThat(s.closedWith).isEqualTo(1000);
+        assertThat(pendingDelay()).isEqualTo(1000);
+        assertThat(logs).contains("INFO UltiCloud: connection attempt 1 failed (no heartbeat reply within 90 s); "
+                + "retrying in 1 s.");
+    }
+
+    @Test
+    @DisplayName("stop cancels the heartbeat")
+    void stopCancelsHeartbeat() {
+        FakeSocket s = startAndOpen();
+        connection.markEstablished();
+        scheduler.advance(30_000);
+        connection.stop();
+        s.open = true;
+        scheduler.advance(300_000);
+        assertThat(s.sent).containsExactly("ping");
+        assertThat(scheduler.pending()).isZero();
     }
 }

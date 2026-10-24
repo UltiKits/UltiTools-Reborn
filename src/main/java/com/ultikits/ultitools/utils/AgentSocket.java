@@ -57,6 +57,11 @@ final class AgentSocket extends WebSocketClient implements AgentConnection.Handl
         setDaemon(true);
     }
 
+    /** @return the upgrade response the draft recorded, or {@code null} before one arrived */
+    UpgradeRejection lastResponse() {
+        return sink.get();
+    }
+
     @Override
     public void onOpen(ServerHandshake handshake) {
         if (abandoned) {

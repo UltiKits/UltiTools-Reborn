@@ -602,4 +602,148 @@ class AgentConnectionLoopbackTest {
                 && line.endsWith("/v1/agent (attempt 2)."));
         assertThat(logs).noneMatch(line -> line.toLowerCase(Locale.ROOT).contains("ucs_"));
     }
+
+    // ---------------------------------------------------------------- refusal-capture edges (Task 3)
+
+    @Test
+    @DisplayName("a 401 whose head arrives in two writes 50 ms apart is still classified 401")
+    void splitHead401() throws Exception {
+        raw = new RawGateway(request -> reply401().splitAt(11));
+        bearer.set("ucs_BAD");
+        connect(endpointFor(raw.port()), "6.3.1").start();
+        await(() -> connection.state() == AgentConnection.State.CREDENTIAL_REJECTED, "CREDENTIAL_REJECTED");
+        assertThat(recorder.events).containsExactly("credentialRejected 401 req-401");
+    }
+
+    @Test
+    @DisplayName("a body-less 426 with a hostile minimum-framework header reports no minimum")
+    void hostileMinFrameworkHeader() throws Exception {
+        for (String value : new String[]{"6.3.1;rm -rf", "1234567890123456789012345678901234567890"}) {
+            recorder.events.clear();
+            raw = new RawGateway(request -> Reply.of("426 Upgrade Required",
+                    "X-UltiCloud-Min-Framework: " + value + "\r\n", null));
+            connect(endpointFor(raw.port()), "6.3.1").start();
+            await(() -> connection.state() == AgentConnection.State.UPGRADE_REQUIRED, "UPGRADE_REQUIRED");
+            assertThat(recorder.events).containsExactly("upgradeRequired null null");
+            connection.stop();
+            raw.close();
+        }
+    }
+
+    @Test
+    @DisplayName("a 426 whose body arrives after its head is UPGRADE_REQUIRED with the header's minimum")
+    void delayedBody426() throws Exception {
+        raw = new RawGateway(request -> reply426().splitAfterHead());
+        connect(endpointFor(raw.port()), "6.3.1").start();
+        await(() -> connection.state() == AgentConnection.State.UPGRADE_REQUIRED, "UPGRADE_REQUIRED");
+        assertThat(recorder.events).containsExactly("upgradeRequired 6.3.1 null");
+    }
+
+    @Test
+    @DisplayName("a 429 with Retry-After 0 backs off without the credential callback")
+    void rateLimited429() throws Exception {
+        raw = new RawGateway(request -> Reply.of("429 Too Many Requests", "Retry-After: 0\r\n", BODY_429));
+        connect(endpointFor(raw.port()), "6.3.1").start();
+        await(() -> recorder.states.contains(AgentConnection.State.BACKOFF), "BACKOFF");
+        await(() -> logs.stream().anyMatch(l -> l.contains("failed (HTTP 429 rate_limited)")), "the retry line");
+        assertThat(recorder.count("credentialRejected")).isZero();
+    }
+
+    @Test
+    @DisplayName("an accepted upgrade leaves the sink at 101 and a later 1011 is a close, not a refusal")
+    void acceptedThenClosedIsAClose() throws Exception {
+        LoopbackServer server = startServer(new LoopbackServer());
+        List<String> seen = new CopyOnWriteArrayList<>();
+        AgentSocket socket = new AgentSocket(endpointFor(server.getPort()),
+                new AgentConnection(endpointFor(server.getPort()), bearer::get, "6.3.1", scheduler, recorder)
+                        .buildHeaders(GOOD_BEARER), 2000, new AgentConnection.SocketEvents() {
+                    @Override
+                    public void onOpen() {
+                        seen.add("open");
+                    }
+
+                    @Override
+                    public void onText(String text) {
+                        seen.add("text");
+                    }
+
+                    @Override
+                    public void onUpgradeRefused(int httpStatus, UpgradeRejection rejection) {
+                        seen.add("refused " + httpStatus);
+                    }
+
+                    @Override
+                    public void onClosed(int code, String reason, boolean remote) {
+                        seen.add("closed " + code);
+                    }
+                }, this::log);
+        socket.connect();
+        await(() -> seen.contains("open"), "open");
+        assertThat(socket.lastResponse().status()).isEqualTo(101);
+        for (WebSocket conn : server.getConnections()) {
+            conn.close(1011, "internal error");
+        }
+        await(() -> seen.size() == 2, "the close");
+        assertThat(seen).containsExactly("open", "closed 1011");
+    }
+
+    @Test
+    @DisplayName("copyInstance returns a StatusCapturingDraft sharing the sink")
+    void copyInstanceSharesTheSink() {
+        AtomicReference<UpgradeRejection> sink = new AtomicReference<>();
+        StatusCapturingDraft draft = new StatusCapturingDraft(sink);
+        assertThat(draft.copyInstance()).isInstanceOf(StatusCapturingDraft.class)
+                .isNotSameAs(draft)
+                .satisfies(copy -> assertThat(((StatusCapturingDraft) copy).sink()).isSameAs(sink));
+    }
+
+    // ---------------------------------------------------------------- deadline and heartbeat (Task 3)
+
+    @Test
+    @DisplayName("a server that never answers the upgrade is closed at the handshake deadline and retried")
+    void handshakeDeadline() throws Exception {
+        raw = new RawGateway(request -> Reply.silent());
+        connect(endpointFor(raw.port()), "6.3.1", fastTiming(300, 60000, 120000, 400)).start();
+        await(() -> raw.requests.size() == 1, "the request");
+        CountDownLatch probe = new CountDownLatch(1);
+        long submitted = System.currentTimeMillis();
+        scheduler.execute(probe::countDown);
+        assertThat(probe.await(250, TimeUnit.MILLISECONDS)).as("the agent scheduler is not blocked").isTrue();
+        assertThat(System.currentTimeMillis() - submitted).isLessThan(250);
+        await(() -> recorder.states.contains(AgentConnection.State.BACKOFF), "BACKOFF");
+        await(() -> logs.stream().anyMatch(l -> l.contains("failed (no handshake response within 1 s)")),
+                "the retry line");
+        await(() -> raw.requests.size() >= 2, "a second attempt");
+    }
+
+    @Test
+    @DisplayName("a server that answers ping with pong keeps one connection across many intervals")
+    void heartbeatAnswered() throws Exception {
+        LoopbackServer server = startServer(new LoopbackServer() {
+            @Override
+            public void onMessage(WebSocket conn, String message) {
+                super.onMessage(conn, message);
+                if ("ping".equals(message)) {
+                    conn.send("pong");
+                }
+            }
+        });
+        recorder.onOpenedHook = () -> connection.markEstablished();
+        connect(endpointFor(server.getPort()), "6.3.1", fastTiming(5000, 50, 200, 400)).start();
+        await(() -> server.received.size() >= 8, "eight pings");
+        assertThat(server.connections()).isEqualTo(1);
+        assertThat(connection.state()).isEqualTo(AgentConnection.State.OPEN);
+        assertThat(server.received).containsOnly("ping");
+        assertThat(recorder.events).doesNotContain("text pong");
+    }
+
+    @Test
+    @DisplayName("a server that never answers ping is closed after the heartbeat timeout and reconnected")
+    void heartbeatUnanswered() throws Exception {
+        LoopbackServer server = startServer(new LoopbackServer());
+        recorder.onOpenedHook = () -> connection.markEstablished();
+        connect(endpointFor(server.getPort()), "6.3.1", fastTiming(5000, 50, 200, 400)).start();
+        await(() -> server.connections() >= 2, "a reconnect");
+        assertThat(logs).anyMatch(l -> l.contains("failed (no heartbeat reply within 1 s)"));
+    }
 }

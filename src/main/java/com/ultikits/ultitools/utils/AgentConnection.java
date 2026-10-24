@@ -372,6 +372,9 @@ final class AgentConnection {
     private int consecutiveSuperseded;
     private long openedAtMillis;
     private ScheduledFuture<?> retryFuture;
+    private ScheduledFuture<?> deadlineFuture;
+    private ScheduledFuture<?> heartbeatFuture;
+    private long lastPongMillis;
     private long retryAtMillis;
     private boolean planEpisode;
     private boolean planNoticeSent;
@@ -476,6 +479,7 @@ final class AgentConnection {
         synchronized (this) {
             generation++;
             cancelRetry();
+            cancelTimers();
             toClose = handle;
             handle = null;
             planEpisode = false;
@@ -557,6 +561,10 @@ final class AgentConnection {
             normalFailures = 0;
             longFailures = 0;
             attemptsSinceEstablished = 0;
+            if (heartbeatFuture == null) {
+                lastPongMillis = clock.getAsLong();
+                scheduleHeartbeat(generation);
+            }
         }
     }
 
@@ -620,6 +628,13 @@ final class AgentConnection {
         currentAttemptNumber = attemptsSinceEstablished;
         handle = null;
         moveTo(State.CONNECTING, out);
+        cancelTimers();
+        try {
+            deadlineFuture = scheduler.schedule(() -> handshakeDeadline(id), timing.handshakeDeadlineMs,
+                    TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException ignored) {
+            // Shutting down: no event of this attempt can be delivered either.
+        }
         Map<String, String> headers = buildHeaders(bearer);
         out.log(silent() ? Level.FINE : Level.INFO,
                 "UltiCloud: connecting to " + endpoint + " (attempt " + currentAttemptNumber + ").");
@@ -654,6 +669,7 @@ final class AgentConnection {
                 return;
             }
             moveTo(State.OPEN, out);
+            cancelDeadline();
             openedAtMillis = clock.getAsLong();
             if (planEpisode) {
                 planEpisode = false;
@@ -670,6 +686,10 @@ final class AgentConnection {
     private void handleText(long id, String text) {
         synchronized (this) {
             if (id != generation || state != State.OPEN) {
+                return;
+            }
+            if (HEARTBEAT_PONG.equals(text)) {
+                lastPongMillis = clock.getAsLong();
                 return;
             }
         }
@@ -827,6 +847,7 @@ final class AgentConnection {
         long token = ++generation;
         handle = null;
         cancelRetry();
+        cancelTimers();
         moveTo(next, out);
         try {
             retryFuture = scheduler.schedule(() -> runRetry(token), delayMs, TimeUnit.MILLISECONDS);
@@ -871,10 +892,89 @@ final class AgentConnection {
         generation++;
         handle = null;
         cancelRetry();
+        cancelTimers();
         planEpisode = false;
         planNoticeSent = false;
         moveTo(terminalState, out);
         out.add(callback);
+    }
+
+    /** On the scheduler: the attempt's handshake deadline. */
+    private void handshakeDeadline(long id) {
+        Effects out = new Effects();
+        Handle toClose;
+        synchronized (this) {
+            if (id != generation || state != State.CONNECTING) {
+                return;
+            }
+            deadlineFuture = null;
+            toClose = handle;
+            retryNormal("no handshake response within " + seconds(timing.handshakeDeadlineMs) + " s", out);
+        }
+        if (toClose != null) {
+            // The attempt id has moved on, so this socket's later onClose is stale. If the socket
+            // was not handed back yet, openSocket closes it when it is.
+            toClose.closeAttempt(CLOSE_NORMAL, "handshake timeout");
+        }
+        out.run();
+    }
+
+    /** Under the monitor: the next heartbeat tick of the established connection {@code id}. */
+    private void scheduleHeartbeat(long id) {
+        try {
+            heartbeatFuture = scheduler.schedule(() -> heartbeatTick(id), timing.heartbeatIntervalMs,
+                    TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            heartbeatFuture = null;
+        }
+    }
+
+    /**
+     * On the scheduler: sends the text frame {@code ping}, or closes and retries when no
+     * {@code pong} arrived within the heartbeat timeout (contract answer 2; the library's ping
+     * control frames are disabled).
+     */
+    private void heartbeatTick(long id) {
+        Effects out = new Effects();
+        Handle target;
+        boolean timedOut;
+        synchronized (this) {
+            if (id != generation || state != State.OPEN) {
+                return;
+            }
+            heartbeatFuture = null;
+            target = handle;
+            timedOut = clock.getAsLong() - lastPongMillis >= timing.heartbeatTimeoutMs;
+            if (timedOut) {
+                handle = null;
+                retryNormal("no heartbeat reply within " + seconds(timing.heartbeatTimeoutMs) + " s", out);
+            } else {
+                scheduleHeartbeat(id);
+            }
+        }
+        if (target != null) {
+            if (timedOut) {
+                target.closeAttempt(CLOSE_NORMAL, "heartbeat timeout");
+            } else {
+                target.sendText(HEARTBEAT_PING);
+            }
+        }
+        out.run();
+    }
+
+    private void cancelDeadline() {
+        if (deadlineFuture != null) {
+            deadlineFuture.cancel(false);
+            deadlineFuture = null;
+        }
+    }
+
+    private void cancelTimers() {
+        cancelDeadline();
+        if (heartbeatFuture != null) {
+            heartbeatFuture.cancel(false);
+            heartbeatFuture = null;
+        }
     }
 
     private void cancelRetry() {
