@@ -267,5 +267,20 @@ public class CloudAuthManager {
         public Date getExpirationDate() {
             return expirationDate;
         }
+
+        /** @return not implemented yet (plan 22-01 Task 1 RED stub) */
+        public boolean isLinked() {
+            return false;
+        }
+
+        /** @return not implemented yet (plan 22-01 Task 1 RED stub) */
+        public String getServerName() {
+            return null;
+        }
+
+        /** @return not implemented yet (plan 22-01 Task 1 RED stub) */
+        public String getServerId() {
+            return null;
+        }
     }
 }
