@@ -84,6 +84,31 @@ final class ServerCredentialStore {
     }
 
     /**
+     * Removes the credential only if its public id still matches the rejected connection's id.
+     * The comparison and removal share one CredentialStore lock acquisition, so a newer login or
+     * rotation cannot be erased by a late rejection. Framework-owned state only; see the class
+     * javadoc for why this cannot overwrite operator content.
+     *
+     * @param credentialId the id used by the rejected connection
+     * @return whether that entry was removed
+     */
+    static boolean deleteIfMatches(String credentialId) {
+        if (credentialId == null) {
+            return false;
+        }
+        AtomicBoolean removed = new AtomicBoolean();
+        CredentialStore.update(document -> {
+            ServerCredential stored = ServerCredential.fromDocument(document.get(KEY));
+            if (stored != null && credentialId.equals(stored.getCredentialId())) {
+                document.remove(KEY);
+                removed.set(true);
+            }
+            return document;
+        });
+        return removed.get();
+    }
+
+    /**
      * Removes only the {@link #KEY} entry. The file is not rewritten when the entry is absent.
      * Framework-owned state only; see the class javadoc.
      *

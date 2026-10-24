@@ -206,45 +206,21 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Attempts to resume a previously-saved UltiCloud credential at startup: loads it from disk on
-     * the current session, and -- unless the startup login is currently rate-limited -- activates
-     * cloud features with it via {@link #loginWithToken(TokenEntity)}. Replaces what used to be
-     * {@code UltiTools.attemptCloudLogin()}'s own inline body; moved here (plan 16-09, D-18) because
-     * {@link #loginWithToken(TokenEntity)} itself had to become package-private (it accepted a
-     * {@link TokenEntity} and was public), and {@code UltiTools} is a different package.
+     * Loads the saved server credential into the current session without any network I/O.
+     * No user token is loaded, refreshed or sent to a legacy registration endpoint.
      *
-     * @return {@code true} if a saved credential was found and successfully activated
+     * @return whether a saved server credential was adopted
      */
     public static boolean resumeSavedCredentialOnStartup() {
         try {
-            // 16-10 gap-closure addendum (round-13 review, PR #464), P2: replace an invalidated
-            // session BEFORE loading the saved credential onto it, not after. UltiTools#onEnable()
-            // used to call enableCloud() only AFTER this method returned -- if CloudSession#current()
-            // was still the session a prior reconnect exhaustion invalidated (reachable in the same
-            // classloader on a /reload rather than a true restart), loadFromDisk() below would load
-            // the token onto that dead session, only for onEnable()'s later enableCloud() call to
-            // replace it with a blank one moments afterward -- discarding the just-loaded token,
-            // breaking the subsequent WebSocket initialization while startup still logged success.
-            // enableCloud() no-ops (and its backoff reset is harmless) when the session is already
-            // current, so calling it here is safe on every other startup path.
             enableCloud();
-            TokenEntity savedToken = CloudSession.current().loadFromDisk();
-            if (savedToken != null) {
-                UltiTools.getInstance().getLogger().log(Level.INFO,
-                    "Found saved UltiCloud token, authenticating...");
-                if (ApiRateLimiter.isAllowed("startup-login")) {
-                    return loginWithToken(savedToken);
-                }
-                UltiTools.getInstance().getLogger().log(Level.INFO, "Skipping UltiCloud login (rate limited)");
-            } else {
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                    "No saved UltiCloud token found. Use /ulticloud login to authenticate.");
-            }
+            return CloudSession.current().loadServerCredential();
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
+                "UltiCloud credential could not be loaded (server will continue without cloud features): "
+                    + e.getClass().getSimpleName());
+            return false;
         }
-        return false;
     }
 
     /**
@@ -339,41 +315,7 @@ public class PluginInitiationUtils {
      * @param session the session this WebSocket client belongs to
      */
     static void initWebsocket(CloudSession session) throws IOException {
-        TokenEntity token = session.getToken();
-        if (token == null || token.getAccess_token() == null) {
-            throw new IOException("Cannot initialize WebSocket: no auth token available");
-        }
-        if (token.isExpired()) {
-            throw new IOException("Cannot initialize WebSocket: auth token has expired");
-        }
-
-        // Deliberately does **not** mark the session enabled here.
-        //
-        // It used to flip the enabled flag on at this point, and that was wrong: reinitWebSocket
-        // also reaches this line, so an in-flight reconnection could resurrect a state machine that
-        // had just been turned off by logout — the two run on different threads, with a
-        // token-refresh network call in between, and that window can be several seconds wide. As of
-        // 16-08 Task 2 there is no separate flag to set: "enabled" is simply "this session is
-        // current and not invalidated," which is already true or it would not have reached this
-        // line's caller (activateCloudIfCurrent's own re-check).
-
-        UltiPanelWebSocketClient client = getPanelWebsocketClient(token);
-        session.setWebSocketClient(client);
-
-        // Set the message handler
-        client.setMessageHandler(PluginInitiationUtils::handleInboundMessage);
-
-        // Set the on-connect-success handler -- captures `session` lexically (WR-07) so the
-        // backoff this callback resets is always the one that owns the client that actually
-        // connected, never whatever CloudSession.current() happens to be by the time onOpen fires.
-        client.setOnConnectHandler(() -> onWebSocketOpened(session, client));
-
-        // Set the reconnect-exhausted handler — attempts to refresh the token and re-establish the
-        // connection, on THIS session specifically (see this method's own javadoc).
-        client.setOnReconnectExhaustedHandler(() -> reinitWebSocket(session));
-
-        // Connect to the WebSocket server
-        client.connect();
+        session.startConnection();
     }
 
     /**

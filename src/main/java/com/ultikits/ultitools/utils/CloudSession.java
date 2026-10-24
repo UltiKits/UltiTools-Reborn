@@ -1,6 +1,10 @@
 package com.ultikits.ultitools.utils;
 
 import java.io.IOException;
+import java.net.URI;
+import java.util.concurrent.ThreadLocalRandom;
+
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -49,7 +53,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * down everything it owns in one call, so no separate teardown-ordering discipline is needed for
  * any of the five timing windows issue #298 named.
  * <p>
- * <b>Global lock order (16-10 gap-closure addendum, issues #465/#466).</b> Four locks are involved
+ * <b>Global lock order (16-10 gap-closure addendum, issues #465/#466).</b> The locks involved
  * across this class, {@link CloudAuthManager} and {@link PluginInitiationUtils}, and every method
  * that takes more than one of them <b>must</b> acquire them in this fixed order -- outer to inner:
  * <ol>
@@ -75,7 +79,15 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * {@code synchronized (this)} region ({@link #invalidate()} and {@link #initializeManagers()}
  * respectively) -- so this lock is never acquired without the session monitor already held, and
  * never used to acquire anything further.</li>
+ * <li>The {@link AgentConnection} monitor and {@code CredentialStore.LOCK}, taken by
+ * {@link ServerCredentialStore}, are siblings of {@code LOG_WIRING_LOCK}: never nested in one
+ * another, always below the session monitor. AgentConnection never calls out while holding its
+ * monitor. Its scheduler callbacks take the session monitor first and reject invalidated or
+ * replaced sessions and replaced connections before acting.</li>
  * </ol>
+ * Teardown under any of these locks uses only non-blocking {@code AgentConnection.stop()} and
+ * executor {@code shutdown()}. It never waits for the agent thread (no awaitTermination, Future.get,
+ * join, connectBlocking or closeBlocking): that thread may itself be waiting for the session monitor.
  * {@link #startNew()}'s own order -- {@code CloudSession.class} outer, the replaced session's
  * monitor inner -- is the anchor every other method's order is chosen to match; inverting it
  * anywhere (acquiring a session monitor first, then trying to enter a {@code synchronized
@@ -194,6 +206,12 @@ final class CloudSession {
      */
     private volatile ServerCredential credential;
 
+    private AgentConnection agentConnection;
+    private ScheduledExecutorService agentExecutor;
+    private static volatile URI agentEndpointOverride;
+    private static volatile ReconnectPolicy agentPolicyOverride;
+    private static volatile AgentConnection.Timing agentTimingOverride;
+
     /** The REST client of the device authorization grant. */
     private final DeviceAuthorizationClient deviceClient = new DeviceAuthorizationClient();
 
@@ -308,8 +326,12 @@ final class CloudSession {
      * every test class that runs afterward in the same JVM.
      */
     static void resetForTesting() {
+        current.stopConnection();
+        current.stopPolling();
         current = new CloudSession();
         setDeviceSeamsForTesting(null, null, null);
+        setAgentEndpointOverrideForTesting(null);
+        setAgentTimingOverrideForTesting(null, null);
         // 16-10 gap-closure addendum: logStreamOwner is a second JVM-wide static this class owns
         // (issue #465) -- left unset, a leftover reference from a previous test class would make
         // shutdownLogStreamManager() wrongly believe a DIFFERENT session still owns the wiring and
@@ -381,6 +403,7 @@ final class CloudSession {
         stopPolling();
         stopTokenRefreshScheduler();
         closeWebSocketClient();
+        stopConnection();
     }
 
     /**
@@ -721,6 +744,197 @@ final class CloudSession {
             pollExecutor.shutdown();
             pollExecutor = null;
         }
+    }
+
+    // ---- Agent connection (protocol v2) ----
+
+    /** Loads framework-owned state without rewriting it or performing any network request. */
+    synchronized boolean loadServerCredential() {
+        if (invalidated || this != current()) {
+            return false;
+        }
+        credential = ServerCredentialStore.load();
+        return credential != null;
+    }
+
+    /** Starts this session's single connection owner; repeated calls never restart a terminal state. */
+    synchronized void startConnection() {
+        if (invalidated || this != current() || credential == null || agentConnection != null) {
+            return;
+        }
+        URI endpoint = agentEndpointOverride != null ? agentEndpointOverride
+                : AgentEndpoint.fromApiUrl(HttpRequestUtils.getBaseUrl());
+        agentExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "UltiTools-Cloud-Agent");
+            thread.setDaemon(true);
+            return thread;
+        });
+        SessionAgentListener listener = new SessionAgentListener();
+        ReconnectPolicy policy = agentPolicyOverride != null ? agentPolicyOverride
+                : new ReconnectPolicy(() -> ThreadLocalRandom.current().nextDouble());
+        AgentConnection.Timing timing = agentTimingOverride != null ? agentTimingOverride
+                : AgentConnection.Timing.defaults();
+        agentConnection = new AgentConnection(endpoint, listener::readBearer,
+                CloudAuthManager.runningFrameworkVersion(), agentExecutor, listener,
+                AgentConnection.realSockets(AgentConnection.CONNECT_TIMEOUT_MS, PanelConnectionLog::log),
+                policy, System::currentTimeMillis, timing, PanelConnectionLog::log);
+        listener.connection = agentConnection;
+        agentExecutor.execute(listener.connection::start);
+    }
+
+    /** Stops and detaches the connection without ever waiting for its scheduler thread. */
+    synchronized void stopConnection() {
+        AgentConnection previous = agentConnection;
+        agentConnection = null;
+        if (previous != null) {
+            previous.stop();
+        }
+        if (agentExecutor != null) {
+            agentExecutor.shutdown();
+            agentExecutor = null;
+        }
+    }
+
+    synchronized AgentConnection.State connectionState() {
+        return agentConnection == null ? AgentConnection.State.STOPPED : agentConnection.state();
+    }
+
+    static void setAgentEndpointOverrideForTesting(URI endpoint) {
+        agentEndpointOverride = endpoint;
+    }
+
+    static void setAgentTimingOverrideForTesting(ReconnectPolicy policy, AgentConnection.Timing timing) {
+        agentPolicyOverride = policy;
+        agentTimingOverride = timing;
+    }
+
+    private final class SessionAgentListener implements AgentConnection.Listener {
+        private AgentConnection connection;
+        private String attemptCredentialId;
+        private boolean rejectionReported;
+        private boolean upgradeReported;
+        private boolean supersededReported;
+
+        private boolean live() {
+            return !invalidated && CloudSession.this == current() && agentConnection == connection;
+        }
+
+        private String readBearer() {
+            synchronized (CloudSession.this) {
+                if (!live()) {
+                    return null;
+                }
+                ServerCredential stored = ServerCredentialStore.load();
+                attemptCredentialId = stored == null ? null : stored.getCredentialId();
+                return stored == null ? null : stored.bearerValue();
+            }
+        }
+
+        @Override
+        public void onOpened() {
+            synchronized (CloudSession.this) {
+                if (!live()) {
+                    return;
+                }
+                connection.markEstablished();
+                PanelConnectionLog.log(Level.INFO, "UltiCloud: connected.");
+            }
+        }
+
+        @Override
+        public void onCredentialRejected(int code, String requestId) {
+            synchronized (CloudSession.this) {
+                if (!live() || rejectionReported) {
+                    return;
+                }
+                rejectionReported = true;
+                try {
+                    ServerCredentialStore.deleteIfMatches(attemptCredentialId);
+                    PanelConnectionLog.log(Level.WARNING,
+                            "UltiCloud rejected this server's credential (it was revoked or is no longer valid). "
+                            + "The saved credential was deleted. Run /ulticloud login to link this server again."
+                            + requestSuffix(requestId));
+                } catch (DataAccessException failure) {
+                    PanelConnectionLog.log(Level.WARNING,
+                            "UltiCloud rejected this server's credential, but the saved credential could not be deleted. "
+                            + "Cloud features are stopped. Check credentials.json and run /ulticloud login again."
+                            + requestSuffix(requestId));
+                } finally {
+                    credential = null;
+                }
+            }
+        }
+
+        @Override
+        public void onUpgradeRequired(String minFramework, String requestId) {
+            synchronized (CloudSession.this) {
+                if (!live() || upgradeReported) {
+                    return;
+                }
+                upgradeReported = true;
+                PanelConnectionLog.log(Level.WARNING,
+                        "UltiCloud refused this UltiTools version's protocol (HTTP 426). "
+                        + "Cloud features are stopped until UltiTools is upgraded; this server stays linked."
+                        + requestSuffix(requestId)
+                        + (minFramework == null ? "" : " UltiCloud requires UltiTools " + minFramework + " or later."));
+            }
+        }
+
+        @Override
+        public void onSuperseded() {
+            synchronized (CloudSession.this) {
+                if (!live() || supersededReported) {
+                    return;
+                }
+                supersededReported = true;
+                PanelConnectionLog.log(Level.WARNING,
+                        "UltiCloud closed this server's connection three times because another connection uses the same credential. "
+                        + "Reconnecting has stopped; make sure only one server uses this credential, then restart the server "
+                        + "or run /ulticloud login.");
+            }
+        }
+
+        @Override
+        public void onPlanLimited(UpgradeRejection notice) {
+            synchronized (CloudSession.this) {
+                if (!live()) {
+                    return;
+                }
+                String reason = "pro_expired_over_limit".equals(notice.planReason())
+                        ? "the Pro plan expired and the account has more servers than its plan allows"
+                        : notice.planReason() == null ? "plan_limit" : notice.planReason();
+                PanelConnectionLog.log(Level.WARNING,
+                        "UltiCloud has paused this server's connection because the account's plan limit was exceeded ("
+                        + reason + "). This server stays linked and UltiTools retries every 15 minutes; renew the plan "
+                        + "or choose this server to keep, then wait for the next retry or run /ulticloud reconnect."
+                        + (notice.graceEndedAt() == null ? "" : " Grace period ended at " + notice.graceEndedAt() + ".")
+                        + (notice.manageUrl() == null ? "" : " Manage the plan: " + notice.manageUrl())
+                        + requestSuffix(notice.requestId()));
+            }
+        }
+
+        @Override
+        public void onStateChanged(AgentConnection.State state) {
+            synchronized (CloudSession.this) {
+                if (!live()) {
+                    return;
+                }
+            }
+        }
+
+        @Override
+        public void onText(String text) {
+            synchronized (CloudSession.this) {
+                if (!live()) {
+                    return;
+                }
+                // Wave A owns only the transport; Wave B installs the v2 envelope router.
+            }
+        }
+    }
+
+    private static String requestSuffix(String requestId) {
+        return requestId == null ? "" : " (UltiCloud request ID " + requestId + ")";
     }
 
     // ---- Device authorization (protocol v2, plan 22-01) ----
