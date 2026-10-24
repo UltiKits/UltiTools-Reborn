@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.manager;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -8,6 +10,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
@@ -252,6 +258,110 @@ public class CommandExecutionManager {
         this.webSocketClient = client;
     }
     
+    /**
+     * Receives one v2 command outcome, independently of the transport framing.
+     * Framework failures propagate to the caller; only dispatch failures call {@link #failed(String)}.
+     *
+     * @since 6.3.1
+     */
+    @ApiStatus.Internal
+    public interface CommandResultSink {
+        /** Reports a blocklist refusal with the normalized matched entry and existing policy message. */
+        void blocked(String matched, String message);
+
+        /** Reports synchronous feedback captured before dispatch returned, and main-thread execution time. */
+        void completed(List<String> lines, boolean truncated, long executionMs);
+
+        /** Reports an empty command, disabled capability or command dispatch failure, without a stack trace. */
+        void failed(String message);
+    }
+
+    /**
+     * Executes a v2 request using Paper's console-permission feedback sender.
+     * The caller owns acknowledgement, deduplication, lifecycle checks and transport byte limits.
+     * The injected executor must enqueue work onto the server main thread in arrival order.
+     * This method only reads operator configuration and never rewrites it.
+     *
+     * @param commandLine command text, optionally prefixed with a slash
+     * @param actor audit actor, or null for the panel
+     * @param mainThread ordered server-main-thread executor
+     * @param sink receives the command outcome
+     * @since 6.3.1
+     */
+    public void execute(String commandLine, String actor, Executor mainThread, CommandResultSink sink) {
+        mainThread.execute(() -> {
+            if (commandLine == null || commandLine.trim().isEmpty()) {
+                sink.failed("Command cannot be empty");
+                return;
+            }
+            AccessDecision decision = isCommandAllowed(commandLine);
+            if (!decision.isAllowed()) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        FrameworkText.format("[远程命令] 已拦截: %s", commandLine));
+                recordCommandDecision(commandLine, actor, decision.getMessage());
+                String name = commandLine.trim();
+                if (name.startsWith("/")) {
+                    name = name.substring(1);
+                }
+                name = name.split("\\s+")[0].toLowerCase(Locale.ROOT);
+                sink.blocked(name.substring(name.indexOf(':') + 1), decision.getMessage());
+                return;
+            }
+            if (!Capability.COMMANDS.isEnabled()) {
+                String refusal = Capability.COMMANDS.refusalMessage();
+                recordCommandDecision(commandLine, actor, refusal);
+                sink.failed(refusal);
+                return;
+            }
+            UltiTools.getInstance().getLogger().log(Level.INFO,
+                    FrameworkText.format("[远程命令] > %s", commandLine));
+            recordCommandDecision(commandLine, actor, null);
+            executeCaptured(commandLine, sink);
+        });
+    }
+
+    private void recordCommandDecision(String command, String actor, String refusal) {
+        RemoteActionLog log = UltiTools.getInstance().getRemoteActionLog();
+        if (log != null) {
+            log.record(refusal == null
+                    ? RemoteActionLog.Entry.allowed(Capability.COMMANDS, ACTION_EXECUTE_COMMAND,
+                            command, resolveActor(actor))
+                    : RemoteActionLog.Entry.denied(Capability.COMMANDS, ACTION_EXECUTE_COMMAND,
+                            command, resolveActor(actor), refusal));
+        }
+    }
+
+    private void executeCaptured(String commandLine, CommandResultSink sink) {
+        List<String> lines = new ArrayList<>();
+        // Paper's feedback sender shares the console's PermissibleBase, so the command runs with
+        // console-equivalent permissions; both sendMessage(String) and sendMessage(Component)
+        // arrive here. A component is split into one entry per printed line.
+        CommandSender sender = Bukkit.getServer().createCommandSender(component -> {
+            String text = PlainTextComponentSerializer.plainText().serialize(component);
+            if (!text.isEmpty()) {
+                Collections.addAll(lines, text.split("\\r\\n|\\r|\\n"));
+            }
+        });
+        String command = commandLine.trim();
+        if (command.startsWith("/")) {
+            command = command.substring(1);
+        }
+        long started = System.nanoTime();
+        boolean accepted;
+        try {
+            accepted = Bukkit.dispatchCommand(sender, command);
+        } catch (Exception ex) {
+            sink.failed(ex.getMessage());
+            return;
+        }
+        long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        if (accepted) {
+            sink.completed(lines, false, elapsed);
+        } else {
+            sink.failed(NOT_ACCEPTED_OUTPUT);
+        }
+    }
+
     /**
      * Executes a command received from the panel.
      */
