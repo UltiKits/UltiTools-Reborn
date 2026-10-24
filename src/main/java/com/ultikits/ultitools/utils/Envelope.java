@@ -17,7 +17,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 final class Envelope {
-    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
     private static final Set<String> KEYS = new HashSet<>(Arrays.asList("v", "id", "type", "ts", "replyTo", "payload"));
     final int v = 2;
     final String id;

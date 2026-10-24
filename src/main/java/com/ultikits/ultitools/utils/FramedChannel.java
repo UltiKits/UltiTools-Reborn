@@ -62,6 +62,12 @@ final class FramedChannel implements CloudChannel {
     }
 
     private boolean frame(String replyTo, String type, JsonObject payload) {
+        AgentMessageTypes.Spec spec = AgentMessageTypes.spec(type);
+        if (spec == null || (spec.replyTo() == AgentMessageTypes.ReplyTo.REQUIRED && replyTo == null)
+                || (spec.replyTo() == AgentMessageTypes.ReplyTo.FORBIDDEN && replyTo != null)
+                || (replyTo != null && !ContractPrimitives.ULID.matcher(replyTo).matches())) {
+            throw new IllegalArgumentException("Invalid outgoing message type or replyTo");
+        }
         if (!isOpen()) { return false; }
         Envelope envelope = new Envelope(ids.get(), type, clock.getAsLong(), replyTo, payload);
         return socketSend.test(envelope.toJson());
