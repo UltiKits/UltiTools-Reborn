@@ -20,6 +20,7 @@ import org.bukkit.plugin.Plugin;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -182,6 +183,10 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-chat event.
+     * <p>
+     * The message is passed through {@link SensitiveCommandRegistry#redactText} before it is sent,
+     * both in the event and in the debug log line, since a player may paste a command into chat.
+     * The chat itself, as other players and the local console see it, is not changed.
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerChat(PlayerChatEvent event) {
@@ -196,11 +201,12 @@ public class PlayerEventManager implements Listener {
         }
 
         Player player = event.getPlayer();
+        String message = redact(event.getMessage());
         JsonObject data = new JsonObject();
         data.addProperty("event_type", "player_chat");
         data.addProperty("player_name", player.getName());
         data.addProperty("player_uuid", player.getUniqueId().toString());
-        data.addProperty("message", event.getMessage());
+        data.addProperty("message", message);
         data.addProperty("format", event.getFormat());
 
         sendPlayerEvent(client, data);
@@ -208,7 +214,7 @@ public class PlayerEventManager implements Listener {
         // Also send a log-stream message (chat messages are usually frequent, use debug level)
         UltiTools.getInstance().getLogStreamManager().sendCustomLog(
             "debug",
-            FrameworkText.format("[聊天] <%s> %s", player.getName(), event.getMessage()),
+            FrameworkText.format("[聊天] <%s> %s", player.getName(), message),
             "plugin:UltiTools"
         );
     }
@@ -272,6 +278,10 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-command event.
+     * <p>
+     * The event carries only the command's normalised name ({@link SensitiveCommandRegistry#commandName}:
+     * first token, leading {@code /} and namespace stripped, lower-cased), never its arguments, for
+     * every command whether or not it is registered as sensitive.
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerCommandPreprocess(PlayerCommandPreprocessEvent event) {
@@ -289,7 +299,7 @@ public class PlayerEventManager implements Listener {
         data.addProperty("event_type", "player_command");
         data.addProperty("player_name", player.getName());
         data.addProperty("player_uuid", player.getUniqueId().toString());
-        data.addProperty("command", event.getMessage());
+        data.addProperty("command", SensitiveCommandRegistry.commandName(event.getMessage()));
         data.addProperty("cancelled", event.isCancelled());
 
         sendPlayerEvent(client, data);
@@ -318,6 +328,16 @@ public class PlayerEventManager implements Listener {
         data.addProperty("to_world", player.getWorld().getName());
 
         sendPlayerEvent(client, data);
+    }
+
+    /**
+     * Redacts registered commands' arguments from text bound for UltiCloud. Without a framework
+     * instance nothing can have been registered, so the text is returned unchanged.
+     */
+    private static String redact(String text) {
+        UltiTools instance = UltiTools.getInstance();
+        SensitiveCommandRegistry registry = instance == null ? null : instance.getSensitiveCommandRegistry();
+        return registry == null ? text : registry.redactText(text);
     }
 
     /**

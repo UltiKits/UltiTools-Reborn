@@ -25,6 +25,7 @@ import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
+import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import lombok.Getter;
@@ -267,6 +268,13 @@ public class UltiPanelLogTransmitter {
 
     /**
      * Builds one log entry as the panel receives it.
+     * <p>
+     * This is the only place a cloud log entry is built, for the live stream ({@link #sendLog}) and
+     * for the start-up replay ({@link #replayLog}) alike, so the message and the stack trace are
+     * passed through {@link SensitiveCommandRegistry#redactText} here and no path can bypass it. The
+     * replay builds its entries when the stream opens, so a command a module registers while it
+     * enables also covers lines captured before it enabled. Only this copy is redacted: the
+     * {@link java.util.logging.LogRecord}, the local console and the log files keep the original.
      *
      * @param level     the log level, {@code info} when blank
      * @param message   the message
@@ -281,7 +289,7 @@ public class UltiPanelLogTransmitter {
         String logSource = source == null || source.trim().isEmpty() ? "server" : source;
         JsonObject logData = new JsonObject();
         logData.addProperty("level", logLevel);
-        logData.addProperty("message", message != null ? message : "");
+        logData.addProperty("message", redact(message != null ? message : ""));
         logData.addProperty("timestamp", timestamp);
         logData.addProperty("source", logSource);
         logData.addProperty("thread", Thread.currentThread().getName());
@@ -291,11 +299,21 @@ public class UltiPanelLogTransmitter {
 
         // If there is an exception, add the stack trace
         if (throwable != null) {
-            logData.addProperty("stackTrace", getStackTrace(throwable));
+            logData.addProperty("stackTrace", redact(getStackTrace(throwable)));
         } else {
             logData.add("stackTrace", null);
         }
         return logData;
+    }
+
+    /**
+     * Redacts registered commands' arguments from text bound for the panel. Without a framework
+     * instance nothing can have been registered, so the text is returned unchanged.
+     */
+    private static String redact(String text) {
+        UltiTools instance = UltiTools.getInstance();
+        SensitiveCommandRegistry registry = instance == null ? null : instance.getSensitiveCommandRegistry();
+        return registry == null ? text : registry.redactText(text);
     }
 
     /**

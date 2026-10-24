@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.exceptions.UltiToolsException;
+import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -413,6 +414,16 @@ public class ErrorReportCollector {
     }
 
     /**
+     * Redacts registered commands' arguments from a field bound for UltiCloud. Without a framework
+     * instance nothing can have been registered, so the text is returned unchanged.
+     */
+    private static String redact(String text) {
+        UltiTools instance = UltiTools.getInstance();
+        SensitiveCommandRegistry registry = instance == null ? null : instance.getSensitiveCommandRegistry();
+        return registry == null ? text : registry.redactText(text);
+    }
+
+    /**
      * Check if error reporting is enabled.
      *
      * @return true if enabled
@@ -473,17 +484,25 @@ public class ErrorReportCollector {
             }
         }
 
+        /**
+         * Serialises the report for UltiCloud. {@code message}, {@code stackTrace} and
+         * {@code triggerDetail} pass through {@link SensitiveCommandRegistry#redactText} here, at
+         * serialisation time only: this report and its fingerprint keep the original text, so
+         * de-duplication groups exactly as before and nothing local changes. A trigger detail may
+         * carry a whole command line ({@link TriggerContext#command}), and an exception message or
+         * stack trace may quote one.
+         */
         JsonObject toJson() {
             JsonObject json = new JsonObject();
             json.addProperty("fingerprint", fingerprint);
             json.addProperty("errorCode", errorCode);
-            json.addProperty("message", message);
-            json.addProperty("stackTrace", stackTrace);
+            json.addProperty("message", redact(message));
+            json.addProperty("stackTrace", redact(stackTrace));
             json.addProperty("moduleName", moduleName);
             json.addProperty("className", className);
             json.addProperty("methodName", methodName);
             json.addProperty("triggerType", triggerType);
-            json.addProperty("triggerDetail", triggerDetail);
+            json.addProperty("triggerDetail", redact(triggerDetail));
             json.addProperty("playerName", playerName);
             json.addProperty("playerUUID", playerUUID);
             json.addProperty("serverTPS", serverTPS);
