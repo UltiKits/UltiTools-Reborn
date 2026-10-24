@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "authorization_pending",
+    "message": "request refused",
+    "requestId": "req_01"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "module.response",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "error",
+    "code": "deadline_exceeded",
+    "message": "responder timed out after 3s"
+  }
+}

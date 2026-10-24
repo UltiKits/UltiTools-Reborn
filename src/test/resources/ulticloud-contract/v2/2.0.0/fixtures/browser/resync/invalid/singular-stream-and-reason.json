@@ -1,0 +1,9 @@
+{
+  "expect": "invalid_message",
+  "why": "第 12 条：resync { streams: [...] }，没有 stream 与 reason",
+  "frame": {
+    "type": "resync",
+    "stream": "logs",
+    "reason": "beyond_retention"
+  }
+}

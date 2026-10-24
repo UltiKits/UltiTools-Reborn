@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "done 是非负整数",
+  "frame": {
+    "type": "op.progress",
+    "stream": "commands",
+    "opId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "done": -1,
+    "total": 9
+  }
+}

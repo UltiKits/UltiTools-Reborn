@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": "upgrade_required",
+    "message": "UltiTools 6.3.1 or later is required",
+    "requestId": "req_01",
+    "details": {
+      "supportedProtocols": [
+        2
+      ],
+      "minFramework": "6.3.1"
+    }
+  }
+}

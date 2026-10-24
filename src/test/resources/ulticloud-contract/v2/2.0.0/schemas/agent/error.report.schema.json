@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent/error.report.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "error.report"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8,64}$"
+        },
+        "exceptionType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "stackTrace": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "moduleName": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "command",
+                "scheduler",
+                "other"
+              ]
+            },
+            "detail": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ],
+          "additionalProperties": false
+        },
+        "playerName": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot": {
+          "type": "object",
+          "properties": {
+            "tps": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "memUsedMb": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "memMaxMb": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "onlinePlayers": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "tps",
+            "memUsedMb",
+            "memMaxMb",
+            "onlinePlayers"
+          ],
+          "additionalProperties": false
+        },
+        "occurrences": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "firstSeenAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8640000000000000
+        },
+        "lastSeenAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8640000000000000
+        }
+      },
+      "required": [
+        "fingerprint",
+        "exceptionType",
+        "message",
+        "stackTrace",
+        "moduleName",
+        "trigger",
+        "playerName",
+        "location",
+        "snapshot",
+        "occurrences",
+        "firstSeenAt",
+        "lastSeenAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "payload"
+  ],
+  "additionalProperties": false
+}

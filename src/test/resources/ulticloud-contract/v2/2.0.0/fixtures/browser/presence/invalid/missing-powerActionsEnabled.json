@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "三个字段都必填（可为 null）",
+  "frame": {
+    "type": "presence",
+    "stream": "status",
+    "online": false,
+    "lastSeenAt": null,
+    "cloudState": "active"
+  }
+}

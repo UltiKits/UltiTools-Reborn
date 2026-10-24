@@ -1,0 +1,10 @@
+{
+  "data": {
+    "deviceCode": "dc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "userCode": "BCDF-GHJK",
+    "verificationUri": "https://panel.ultikits.com/device",
+    "verificationUriComplete": "https://panel.ultikits.com/device?code=BCDF-GHJK",
+    "expiresIn": 600,
+    "interval": 5
+  }
+}

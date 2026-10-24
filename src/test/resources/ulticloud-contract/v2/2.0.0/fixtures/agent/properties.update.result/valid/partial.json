@@ -1,0 +1,25 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "properties.update.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "partial",
+    "data": {
+      "keys": [
+        {
+          "key": "motd",
+          "ok": true,
+          "message": null
+        },
+        {
+          "key": "view-distance",
+          "ok": false,
+          "message": "server refused"
+        }
+      ],
+      "version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

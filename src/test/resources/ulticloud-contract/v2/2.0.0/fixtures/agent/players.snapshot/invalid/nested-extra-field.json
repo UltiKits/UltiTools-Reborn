@@ -1,0 +1,24 @@
+{
+  "expect": "invalid_message",
+  "why": "玩家对象是 strict 的（pingMs 已删除）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "players.snapshot",
+    "ts": 1761274800000,
+    "payload": {
+      "players": [
+        {
+          "uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+          "name": "Steve",
+          "world": "world",
+          "health": 20,
+          "maxHealth": 20,
+          "gameMode": "survival",
+          "op": false,
+          "pingMs": 30
+        }
+      ]
+    }
+  }
+}

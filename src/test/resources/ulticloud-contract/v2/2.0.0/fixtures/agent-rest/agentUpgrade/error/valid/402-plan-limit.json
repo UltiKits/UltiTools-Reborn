@@ -1,0 +1,12 @@
+{
+  "error": {
+    "code": "plan_limit",
+    "message": "This server is paused because the account is over its plan limit. Renew Pro or choose which servers to keep.",
+    "requestId": "req_01",
+    "details": {
+      "reason": "pro_expired_over_limit",
+      "graceEndedAt": "2026-11-01T00:00:00.000Z",
+      "manageUrl": "https://panel.ultikits.com/owner/billing"
+    }
+  }
+}

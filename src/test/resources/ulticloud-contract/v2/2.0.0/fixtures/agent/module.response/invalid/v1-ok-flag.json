@@ -1,0 +1,14 @@
+{
+  "expect": "invalid_message",
+  "why": "v1 的 { ok: true } 形状不再接受",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "module.response",
+    "ts": 1761274800000,
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+    "payload": {
+      "ok": true
+    }
+  }
+}

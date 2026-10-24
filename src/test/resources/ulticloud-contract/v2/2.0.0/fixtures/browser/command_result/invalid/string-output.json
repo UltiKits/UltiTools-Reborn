@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "output 是行数组",
+  "frame": {
+    "type": "command_result",
+    "stream": "commands",
+    "commandId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "success": true,
+    "output": "x"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "expect": "invalid_message",
+  "why": "status 没有 mspt（无消费方）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "status",
+    "ts": 1761274800000,
+    "payload": {
+      "playerCount": 2,
+      "maxPlayers": 20,
+      "tps": 19.9,
+      "cpuPercent": 12.5,
+      "memUsedMb": 2048,
+      "memMaxMb": 8192,
+      "software": "Paper 1.21.4",
+      "ultitoolsVersion": "6.3.1",
+      "uptimeSeconds": 3600,
+      "worldCount": 3,
+      "mspt": 12
+    }
+  }
+}

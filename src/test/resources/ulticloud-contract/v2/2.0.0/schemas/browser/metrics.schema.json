@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/browser/metrics.schema.json",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "metrics"
+    },
+    "stream": {
+      "type": "string",
+      "const": "status"
+    },
+    "point": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+        },
+        "playerCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "tps": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "cpuPercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "memUsedMb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        }
+      },
+      "required": [
+        "at",
+        "playerCount",
+        "tps",
+        "cpuPercent",
+        "memUsedMb"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "type",
+    "stream",
+    "point"
+  ],
+  "additionalProperties": false
+}

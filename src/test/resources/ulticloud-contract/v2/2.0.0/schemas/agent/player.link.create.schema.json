@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent/player.link.create.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "player.link.create"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "player": {
+          "type": "object",
+          "properties": {
+            "uuid": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+            }
+          },
+          "required": [
+            "uuid",
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        "serverOnlineMode": {
+          "type": "boolean"
+        },
+        "gameAuth": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "const": "none"
+                }
+              },
+              "required": [
+                "provider"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "const": "auth_plugin"
+                },
+                "authenticated": {
+                  "type": "boolean"
+                },
+                "accountExists": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "provider",
+                "authenticated",
+                "accountExists"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "offeredProofs": {
+          "minItems": 1,
+          "maxItems": 3,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "in_game_session",
+              "linked_web_account",
+              "web_registration"
+            ]
+          }
+        }
+      },
+      "required": [
+        "player",
+        "serverOnlineMode",
+        "gameAuth",
+        "offeredProofs"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "payload"
+  ],
+  "additionalProperties": false
+}

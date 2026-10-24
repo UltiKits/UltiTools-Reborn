@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "cloudState 必填（用户决定第 30、31 条）",
+  "frame": {
+    "type": "presence",
+    "stream": "status",
+    "online": true,
+    "lastSeenAt": "2026-10-24T03:00:00.000Z",
+    "powerActionsEnabled": true
+  }
+}

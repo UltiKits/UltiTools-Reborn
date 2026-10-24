@@ -1,0 +1,19 @@
+{
+  "expect": "invalid_message",
+  "why": "baseVersion 必填（乐观并发）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "config.update",
+    "ts": 1761274800000,
+    "payload": {
+      "path": "plugins/UltiChat/config.yml",
+      "changes": [
+        {
+          "key": "chat.prefix",
+          "value": "[C]"
+        }
+      ]
+    }
+  }
+}

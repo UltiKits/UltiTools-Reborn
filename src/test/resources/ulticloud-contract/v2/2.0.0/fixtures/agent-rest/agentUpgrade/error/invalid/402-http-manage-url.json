@@ -1,0 +1,16 @@
+{
+  "expect": "invalid",
+  "why": "manageUrl 只能是 https",
+  "body": {
+    "error": {
+      "code": "plan_limit",
+      "message": "request refused",
+      "requestId": "req_01",
+      "details": {
+        "reason": "pro_expired_over_limit",
+        "graceEndedAt": "2026-11-01T00:00:00.000Z",
+        "manageUrl": "http://panel.ultikits.com/owner/billing"
+      }
+    }
+  }
+}

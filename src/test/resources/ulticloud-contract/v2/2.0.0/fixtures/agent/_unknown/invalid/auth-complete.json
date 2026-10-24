@@ -1,0 +1,11 @@
+{
+  "expect": "unsupported_type",
+  "why": "v1 的死消息 auth_complete 在 v2 没有注册",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "auth_complete",
+    "ts": 1761274800000,
+    "payload": {}
+  }
+}

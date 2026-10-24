@@ -1,0 +1,22 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "player.link.create",
+  "ts": 1761274800000,
+  "payload": {
+    "player": {
+      "uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+      "name": "Steve"
+    },
+    "serverOnlineMode": false,
+    "gameAuth": {
+      "provider": "auth_plugin",
+      "authenticated": false,
+      "accountExists": false
+    },
+    "offeredProofs": [
+      "linked_web_account",
+      "web_registration"
+    ]
+  }
+}

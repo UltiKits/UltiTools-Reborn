@@ -1,0 +1,12 @@
+{
+  "expect": "invalid_message",
+  "why": "平铺帧的 type 已是消息类型，FE §B 里叫 type 的事件种类字段改名 event",
+  "frame": {
+    "type": "player_event",
+    "stream": "events",
+    "seq": 7,
+    "playerName": "Steve",
+    "at": "2026-10-24T03:00:00.000Z",
+    "kind": "join"
+  }
+}

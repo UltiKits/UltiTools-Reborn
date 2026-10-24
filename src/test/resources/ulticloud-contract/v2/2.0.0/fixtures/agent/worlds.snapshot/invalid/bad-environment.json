@@ -1,0 +1,27 @@
+{
+  "expect": "invalid_message",
+  "why": "环境只有 normal、nether、the_end、custom",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "worlds.snapshot",
+    "ts": 1761274800000,
+    "payload": {
+      "worlds": [
+        {
+          "name": "world",
+          "environment": "end",
+          "difficulty": "normal",
+          "playerCount": 2,
+          "loadedChunks": 441,
+          "pvp": true,
+          "spawn": {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        }
+      ]
+    }
+  }
+}

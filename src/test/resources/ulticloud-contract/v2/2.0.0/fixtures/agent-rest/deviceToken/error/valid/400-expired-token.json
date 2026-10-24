@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "expired_token",
+    "message": "request refused",
+    "requestId": "req_01"
+  }
+}

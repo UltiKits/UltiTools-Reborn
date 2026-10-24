@@ -1,0 +1,12 @@
+{
+  "expect": "invalid_message",
+  "why": "after 是非负的 seq",
+  "frame": {
+    "type": "subscribe",
+    "streams": {
+      "logs": {
+        "after": -1
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "subscribe",
+  "streams": {
+    "logs": {
+      "after": 40
+    },
+    "events": {
+      "after": null
+    },
+    "status": {},
+    "commands": {}
+  }
+}

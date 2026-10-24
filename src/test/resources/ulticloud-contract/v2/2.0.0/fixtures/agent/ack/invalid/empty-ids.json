@@ -1,0 +1,13 @@
+{
+  "expect": "invalid_message",
+  "why": "ack 至少一个 id",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "ack",
+    "ts": 1761274800000,
+    "payload": {
+      "ids": []
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "expect": "invalid",
+  "why": "cli 请求不带 framework",
+  "body": {
+    "clientKind": "cli",
+    "framework": "6.3.1"
+  }
+}

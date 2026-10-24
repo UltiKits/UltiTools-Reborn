@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent-rest/deviceAuthorize.request.schema.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "clientKind": {
+          "type": "string",
+          "const": "server"
+        },
+        "framework": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+        },
+        "protocol": {
+          "type": "number",
+          "const": 2
+        },
+        "suggestedName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "legacyServerUuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      },
+      "required": [
+        "clientKind",
+        "framework",
+        "protocol"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "clientKind": {
+          "type": "string",
+          "const": "cli"
+        },
+        "suggestedName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "clientKind"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

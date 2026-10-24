@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "file_changed 不在 command.result 允许的错误码里",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "command.result",
+    "ts": 1761274800000,
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+    "payload": {
+      "status": "error",
+      "code": "file_changed",
+      "message": "x"
+    }
+  }
+}

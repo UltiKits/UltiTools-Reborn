@@ -1,0 +1,8 @@
+{
+  "type": "subscribe",
+  "streams": {
+    "logs": {
+      "after": null
+    }
+  }
+}

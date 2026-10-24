@@ -1,0 +1,11 @@
+{
+  "expect": "invalid",
+  "why": "426 必须带 supportedProtocols 与 minFramework",
+  "body": {
+    "error": {
+      "code": "upgrade_required",
+      "message": "request refused",
+      "requestId": "req_01"
+    }
+  }
+}

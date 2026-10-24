@@ -1,0 +1,78 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "config.entries.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "ok",
+    "data": {
+      "path": "plugins/UltiChat/config.yml",
+      "version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "entries": [
+        {
+          "key": "chat.prefix",
+          "label": "Chat prefix",
+          "comment": "# supports {player}",
+          "type": "string",
+          "value": "[Chat]"
+        },
+        {
+          "key": "chat.cooldown",
+          "label": "Cooldown",
+          "comment": null,
+          "type": "integer",
+          "value": 3,
+          "constraints": {
+            "min": 0,
+            "max": 60
+          }
+        },
+        {
+          "key": "chat.ratio",
+          "label": "Ratio",
+          "comment": null,
+          "type": "number",
+          "value": 0.5
+        },
+        {
+          "key": "chat.enabled",
+          "label": "Enabled",
+          "comment": null,
+          "type": "boolean",
+          "value": true
+        },
+        {
+          "key": "chat.words",
+          "label": "Banned words",
+          "comment": null,
+          "type": "string_list",
+          "value": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "key": "chat.mode",
+          "label": "Mode",
+          "comment": null,
+          "type": "enum",
+          "value": "global",
+          "constraints": {
+            "options": [
+              "global",
+              "local"
+            ]
+          }
+        },
+        {
+          "key": "chat.unset",
+          "label": "Unset",
+          "comment": null,
+          "type": "string",
+          "value": null
+        }
+      ]
+    }
+  }
+}

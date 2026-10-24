@@ -1,0 +1,21 @@
+{
+  "expect": "invalid_message",
+  "why": "链接码放在 #ucl_ 片段里，不放查询串（不进服务器日志）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.link.created",
+    "ts": 1761274800000,
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+    "payload": {
+      "status": "ok",
+      "data": {
+        "url": "https://panel.ultikits.com/link?code=ucl_x",
+        "expiresAt": 1761274800000,
+        "acceptedProofs": [
+          "in_game_session"
+        ]
+      }
+    }
+  }
+}

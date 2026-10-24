@@ -1,0 +1,13 @@
+{
+  "expect": "invalid_message",
+  "why": "命令不能含换行（防止一条命令夹带第二条）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "command.execute",
+    "ts": 1761274800000,
+    "payload": {
+      "command": "say hi\nop Steve"
+    }
+  }
+}

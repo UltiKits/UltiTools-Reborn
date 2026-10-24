@@ -1,0 +1,2283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/browser/op_result.schema.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "refresh"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sent": {
+                  "maxItems": 3,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "status",
+                      "plugins",
+                      "worlds"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "sent"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "config.tree"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "plugins": {
+                  "maxItems": 1000,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "files": {
+                        "maxItems": 200,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 512,
+                              "pattern": "^(?:[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.\\.[^/\\\\:\\u0000-\\u001F]+)(?:\\/(?:[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.\\.[^/\\\\:\\u0000-\\u001F]+))*$"
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255
+                            }
+                          },
+                          "required": [
+                            "path",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "files"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "plugins"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "config.entries"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^(?:[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.\\.[^/\\\\:\\u0000-\\u001F]+)(?:\\/(?:[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.\\.[^/\\\\:\\u0000-\\u001F]+))*$"
+                },
+                "entries": {
+                  "maxItems": 2000,
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                            "pattern": "^[^.\\u0000-\\u001F]+(\\.[^.\\u0000-\\u001F]+)*$"
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "comment": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "string"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 8192
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "constraints": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "comment",
+                          "type",
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                            "pattern": "^[^.\\u0000-\\u001F]+(\\.[^.\\u0000-\\u001F]+)*$"
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "comment": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "integer"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "constraints": {
+                            "type": "object",
+                            "properties": {
+                              "min": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "max": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "comment",
+                          "type",
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                            "pattern": "^[^.\\u0000-\\u001F]+(\\.[^.\\u0000-\\u001F]+)*$"
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "comment": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "number"
+                          },
+                          "value": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "constraints": {
+                            "type": "object",
+                            "properties": {
+                              "min": {
+                                "type": "number"
+                              },
+                              "max": {
+                                "type": "number"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "comment",
+                          "type",
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                            "pattern": "^[^.\\u0000-\\u001F]+(\\.[^.\\u0000-\\u001F]+)*$"
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "comment": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "boolean"
+                          },
+                          "value": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "comment",
+                          "type",
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                            "pattern": "^[^.\\u0000-\\u001F]+(\\.[^.\\u0000-\\u001F]+)*$"
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "comment": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "string_list"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "maxItems": 500,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "maxLength": 1024
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "comment",
+                          "type",
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                            "pattern": "^[^.\\u0000-\\u001F]+(\\.[^.\\u0000-\\u001F]+)*$"
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "comment": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "enum"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 256
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "constraints": {
+                            "type": "object",
+                            "properties": {
+                              "options": {
+                                "minItems": 1,
+                                "maxItems": 200,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                }
+                              }
+                            },
+                            "required": [
+                              "options"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "comment",
+                          "type",
+                          "value",
+                          "constraints"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "entries",
+                "version"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "config.update"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "saved",
+                    "partial",
+                    "failed"
+                  ]
+                },
+                "keys": {
+                  "maxItems": 500,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                        "pattern": "^[^.\\u0000-\\u001F]+(\\.[^.\\u0000-\\u001F]+)*$"
+                      },
+                      "ok": {
+                        "type": "boolean"
+                      },
+                      "message": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "ok",
+                      "message"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "outcome",
+                "keys",
+                "version"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "properties.update"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "saved",
+                    "partial",
+                    "failed"
+                  ]
+                },
+                "keys": {
+                  "maxItems": 500,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "enum": [
+                          "motd",
+                          "max-players",
+                          "difficulty",
+                          "gamemode",
+                          "spawn-protection",
+                          "view-distance",
+                          "simulation-distance",
+                          "pvp",
+                          "allow-flight",
+                          "spawn-monsters",
+                          "allow-nether",
+                          "enable-command-block"
+                        ]
+                      },
+                      "ok": {
+                        "type": "boolean"
+                      },
+                      "message": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "ok",
+                      "message"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "outcome",
+                "keys",
+                "version"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "files.list"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": ""
+                    },
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512,
+                      "pattern": "^(?:[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.\\.[^/\\\\:\\u0000-\\u001F]+)(?:\\/(?:[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.\\.[^/\\\\:\\u0000-\\u001F]+))*$"
+                    }
+                  ]
+                },
+                "entries": {
+                  "maxItems": 2000,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "file",
+                          "dir"
+                        ]
+                      },
+                      "sizeBytes": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "modifiedAt": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "type",
+                      "sizeBytes",
+                      "modifiedAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "path",
+                "entries"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "files.read"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^(?:[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.\\.[^/\\\\:\\u0000-\\u001F]+)(?:\\/(?:[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.[^./\\\\:\\u0000-\\u001F][^/\\\\:\\u0000-\\u001F]*|\\.\\.[^/\\\\:\\u0000-\\u001F]+))*$"
+                },
+                "content": {
+                  "type": "string",
+                  "maxLength": 393216
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "sizeBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 393216
+                }
+              },
+              "required": [
+                "path",
+                "content",
+                "version",
+                "sizeBytes"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "files.write"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "version"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "files.delete"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean",
+                  "const": true
+                }
+              },
+              "required": [
+                "ok"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "properties.get"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "type": "object",
+                  "properties": {
+                    "motd": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "max-players": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2147483647
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "peaceful",
+                        "easy",
+                        "normal",
+                        "hard"
+                      ]
+                    },
+                    "gamemode": {
+                      "type": "string",
+                      "enum": [
+                        "survival",
+                        "creative",
+                        "adventure",
+                        "spectator"
+                      ]
+                    },
+                    "spawn-protection": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2147483647
+                    },
+                    "view-distance": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 32
+                    },
+                    "simulation-distance": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 32
+                    },
+                    "pvp": {
+                      "type": "boolean"
+                    },
+                    "allow-flight": {
+                      "type": "boolean"
+                    },
+                    "spawn-monsters": {
+                      "type": "boolean"
+                    },
+                    "allow-nether": {
+                      "type": "boolean"
+                    },
+                    "enable-command-block": {
+                      "type": "boolean"
+                    },
+                    "online-mode": {
+                      "type": "boolean"
+                    },
+                    "white-list": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "writable": {
+                  "maxItems": 12,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "motd",
+                      "max-players",
+                      "difficulty",
+                      "gamemode",
+                      "spawn-protection",
+                      "view-distance",
+                      "simulation-distance",
+                      "pvp",
+                      "allow-flight",
+                      "spawn-monsters",
+                      "allow-nether",
+                      "enable-command-block"
+                    ]
+                  }
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "values",
+                "writable",
+                "version"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "player.action"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean",
+                  "const": true
+                }
+              },
+              "required": [
+                "ok"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "op_result"
+        },
+        "stream": {
+          "type": "string",
+          "const": "commands"
+        },
+        "opId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "credential.rotate"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "succeeded",
+            "partial",
+            "failed",
+            "timeout"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "credentialId": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                }
+              },
+              "required": [
+                "credentialId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "invalid_message",
+                    "unsupported_type",
+                    "capability_not_accepted",
+                    "rate_limited",
+                    "payload_too_large",
+                    "internal_error",
+                    "command_blocked",
+                    "command_failed",
+                    "power_disabled",
+                    "power_unsupported",
+                    "path_not_allowed",
+                    "not_found",
+                    "is_directory",
+                    "not_a_directory",
+                    "file_not_editable",
+                    "file_changed",
+                    "write_denied",
+                    "config_invalid",
+                    "backup_not_found",
+                    "backup_not_restorable",
+                    "backup_in_progress",
+                    "player_not_online",
+                    "world_not_found",
+                    "link_not_permitted",
+                    "module_not_found",
+                    "module_error",
+                    "deadline_exceeded",
+                    "account_exists",
+                    "auth_plugin_unavailable",
+                    "registration_rejected",
+                    "timeout",
+                    "server_offline"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "opId",
+        "kind",
+        "state",
+        "result",
+        "error",
+        "finishedAt"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

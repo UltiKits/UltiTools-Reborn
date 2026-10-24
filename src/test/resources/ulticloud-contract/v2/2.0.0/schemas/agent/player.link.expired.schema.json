@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent/player.link.expired.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "player.link.expired"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "replyTo": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "player": {
+          "type": "object",
+          "properties": {
+            "uuid": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+            }
+          },
+          "required": [
+            "uuid",
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "expired",
+            "cancelled",
+            "denied"
+          ]
+        }
+      },
+      "required": [
+        "player",
+        "reason"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "replyTo",
+    "payload"
+  ],
+  "additionalProperties": false
+}

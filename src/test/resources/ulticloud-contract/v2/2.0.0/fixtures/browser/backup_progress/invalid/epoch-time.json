@@ -1,0 +1,17 @@
+{
+  "expect": "invalid_message",
+  "why": "浏览器对象的时间是 ISO",
+  "frame": {
+    "type": "backup_progress",
+    "stream": "commands",
+    "backup": {
+      "id": "2026-10-24_03-00",
+      "fileName": "backup.zip",
+      "createdAt": 1761274800000,
+      "sizeBytes": null,
+      "status": "in_progress",
+      "progressPercent": 42,
+      "error": null
+    }
+  }
+}

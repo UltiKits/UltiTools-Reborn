@@ -1,0 +1,23 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "config.tree.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "ok",
+    "data": {
+      "plugins": [
+        {
+          "name": "UltiChat",
+          "files": [
+            {
+              "path": "plugins/UltiChat/config.yml",
+              "name": "config.yml"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

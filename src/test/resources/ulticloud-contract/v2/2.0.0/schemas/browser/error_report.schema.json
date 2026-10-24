@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/browser/error_report.schema.json",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "error_report"
+    },
+    "stream": {
+      "type": "string",
+      "const": "status"
+    },
+    "group": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8,64}$"
+        },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8,64}$"
+        },
+        "exceptionType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "moduleName": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "moduleId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serverId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "serverName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "affectedServerCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "firstSeenAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+        },
+        "resolved": {
+          "type": "boolean"
+        },
+        "trigger": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "command",
+                "scheduler",
+                "other"
+              ]
+            },
+            "detail": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ],
+          "additionalProperties": false
+        },
+        "playerName": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "fingerprint",
+        "exceptionType",
+        "title",
+        "moduleName",
+        "moduleId",
+        "serverId",
+        "serverName",
+        "affectedServerCount",
+        "count",
+        "firstSeenAt",
+        "lastSeenAt",
+        "resolved",
+        "trigger",
+        "playerName",
+        "location"
+      ],
+      "additionalProperties": false
+    },
+    "isNew": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "type",
+    "stream",
+    "group",
+    "isNew"
+  ],
+  "additionalProperties": false
+}

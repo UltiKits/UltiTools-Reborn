@@ -2,3 +2,5 @@
 src/test/resources/config-golden/** -text
 # Framework config.yml fixtures (plan 17-66) are released bytes; no checkout may convert their line endings.
 src/test/resources/framework-config/** -text
+# 冻结协议契约逐字节校验，禁止检出时转换换行。
+src/test/resources/ulticloud-contract/** -text

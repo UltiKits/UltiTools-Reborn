@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "只发命令名，参数（可能是密码）结构上不能上云",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.command",
+    "ts": 1761274800000,
+    "payload": {
+      "name": "login",
+      "args": [
+        "pw"
+      ]
+    }
+  }
+}

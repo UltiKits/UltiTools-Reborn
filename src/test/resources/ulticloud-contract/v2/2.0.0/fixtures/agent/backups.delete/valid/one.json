@@ -1,0 +1,9 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "backups.delete",
+  "ts": 1761274800000,
+  "payload": {
+    "backupId": "2026-10-24_03-00"
+  }
+}

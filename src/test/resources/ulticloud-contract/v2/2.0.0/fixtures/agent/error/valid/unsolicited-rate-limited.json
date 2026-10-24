@@ -1,0 +1,10 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "error",
+  "ts": 1761274800000,
+  "payload": {
+    "code": "rate_limited",
+    "message": "log rate exceeded"
+  }
+}

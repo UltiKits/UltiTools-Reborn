@@ -1,0 +1,36 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "worlds.snapshot",
+  "ts": 1761274800000,
+  "payload": {
+    "worlds": [
+      {
+        "name": "world",
+        "environment": "normal",
+        "difficulty": "normal",
+        "playerCount": 2,
+        "loadedChunks": 441,
+        "pvp": true,
+        "spawn": {
+          "x": 0,
+          "y": 64,
+          "z": 0
+        }
+      },
+      {
+        "name": "custom_dim",
+        "environment": "custom",
+        "difficulty": "normal",
+        "playerCount": 2,
+        "loadedChunks": 441,
+        "pvp": true,
+        "spawn": {
+          "x": 0,
+          "y": 64,
+          "z": 0
+        }
+      }
+    ]
+  }
+}

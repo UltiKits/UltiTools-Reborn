@@ -1,0 +1,19 @@
+{
+  "expect": "invalid_message",
+  "why": "模块标识符小写字母开头",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "module.request",
+    "ts": 1761274800000,
+    "payload": {
+      "module": "UltiMail",
+      "action": "x",
+      "params": {},
+      "actor": {
+        "userId": 42,
+        "minecraftUuid": null
+      }
+    }
+  }
+}

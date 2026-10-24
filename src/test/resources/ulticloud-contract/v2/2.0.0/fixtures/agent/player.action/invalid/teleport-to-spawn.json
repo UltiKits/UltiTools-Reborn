@@ -1,0 +1,17 @@
+{
+  "expect": "invalid_message",
+  "why": "目标只有在线玩家与坐标两种（用户决定第 13 条）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.action",
+    "ts": 1761274800000,
+    "payload": {
+      "action": "teleport",
+      "player": "Steve",
+      "target": {
+        "kind": "spawn"
+      }
+    }
+  }
+}

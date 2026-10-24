@@ -1,0 +1,15 @@
+{
+  "expect": "invalid_message",
+  "why": "数据帧必须带 stream",
+  "frame": {
+    "type": "op_result",
+    "opId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "kind": "refresh",
+    "state": "succeeded",
+    "result": {
+      "sent": []
+    },
+    "error": null,
+    "finishedAt": "2026-10-24T03:00:00.000Z"
+  }
+}

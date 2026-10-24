@@ -1,0 +1,15 @@
+{
+  "expect": "invalid_message",
+  "why": "total 至少为 1",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "op.progress",
+    "ts": 1761274800000,
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+    "payload": {
+      "done": 0,
+      "total": 0
+    }
+  }
+}

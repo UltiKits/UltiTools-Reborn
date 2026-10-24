@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "有序流的数据帧必须带 seq",
+  "frame": {
+    "type": "log",
+    "stream": "logs",
+    "lines": [
+      {
+        "seq": 41,
+        "at": "2026-10-24T03:00:00.000Z",
+        "level": "INFO",
+        "message": "Done (3.2s)!"
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "expect": "invalid",
+  "why": "429 的 details.retryAfterSeconds 与 Retry-After 头同值，必填",
+  "body": {
+    "error": {
+      "code": "rate_limited",
+      "message": "request refused",
+      "requestId": "req_01"
+    }
+  }
+}

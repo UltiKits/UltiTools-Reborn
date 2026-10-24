@@ -1,0 +1,8 @@
+{
+  "type": "player_event",
+  "stream": "events",
+  "seq": 7,
+  "event": "join",
+  "playerName": ".Steve",
+  "at": "2026-10-24T03:00:00.000Z"
+}

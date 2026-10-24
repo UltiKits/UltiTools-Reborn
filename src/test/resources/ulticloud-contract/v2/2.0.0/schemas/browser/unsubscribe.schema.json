@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/browser/unsubscribe.schema.json",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "unsubscribe"
+    },
+    "streams": {
+      "minItems": 1,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "logs",
+          "events",
+          "status",
+          "commands"
+        ]
+      }
+    }
+  },
+  "required": [
+    "type",
+    "streams"
+  ],
+  "additionalProperties": false
+}

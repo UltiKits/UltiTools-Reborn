@@ -1,0 +1,7 @@
+{
+  "type": "logs_skipped",
+  "stream": "logs",
+  "fromSeq": 100,
+  "toSeq": 180,
+  "count": 81
+}

@@ -1,0 +1,17 @@
+{
+  "expect": "invalid_message",
+  "why": "没有 TRACE 级别",
+  "frame": {
+    "type": "log",
+    "stream": "logs",
+    "seq": 41,
+    "lines": [
+      {
+        "seq": 41,
+        "at": "2026-10-24T03:00:00.000Z",
+        "level": "TRACE",
+        "message": "Done (3.2s)!"
+      }
+    ]
+  }
+}

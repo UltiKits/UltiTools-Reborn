@@ -1,0 +1,25 @@
+{
+  "type": "op_result",
+  "stream": "commands",
+  "opId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "kind": "config.update",
+  "state": "partial",
+  "result": {
+    "outcome": "partial",
+    "keys": [
+      {
+        "key": "chat.prefix",
+        "ok": true,
+        "message": null
+      },
+      {
+        "key": "chat.cooldown",
+        "ok": false,
+        "message": "too large"
+      }
+    ],
+    "version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "error": null,
+  "finishedAt": "2026-10-24T03:00:00.000Z"
+}

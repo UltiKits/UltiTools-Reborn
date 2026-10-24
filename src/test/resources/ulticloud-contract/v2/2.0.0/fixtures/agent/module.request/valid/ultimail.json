@@ -1,0 +1,20 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "module.request",
+  "ts": 1761274800000,
+  "payload": {
+    "module": "ultimail",
+    "action": "inbox.list",
+    "params": {
+      "page": 1,
+      "filter": {
+        "unread": true
+      }
+    },
+    "actor": {
+      "userId": 42,
+      "minecraftUuid": null
+    }
+  }
+}

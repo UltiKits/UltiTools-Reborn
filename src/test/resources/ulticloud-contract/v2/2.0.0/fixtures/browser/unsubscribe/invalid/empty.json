@@ -1,0 +1,8 @@
+{
+  "expect": "invalid_message",
+  "why": "至少一个流",
+  "frame": {
+    "type": "unsubscribe",
+    "streams": []
+  }
+}

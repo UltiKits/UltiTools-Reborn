@@ -1,0 +1,18 @@
+{
+  "expect": "invalid_message",
+  "why": "该类型的 replyTo 必填",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.link.completed",
+    "ts": 1761274800000,
+    "payload": {
+      "proof": "in_game_session",
+      "player": {
+        "uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+        "name": "Steve"
+      },
+      "provisionGameAccount": false
+    }
+  }
+}

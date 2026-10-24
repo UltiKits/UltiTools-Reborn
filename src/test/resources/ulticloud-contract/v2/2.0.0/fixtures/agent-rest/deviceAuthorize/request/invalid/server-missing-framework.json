@@ -1,0 +1,8 @@
+{
+  "expect": "invalid",
+  "why": "clientKind=server 时 framework 必填",
+  "body": {
+    "clientKind": "server",
+    "protocol": 2
+  }
+}
