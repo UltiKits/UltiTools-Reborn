@@ -596,20 +596,22 @@ class CloudReconnectStateMachineTest {
         }
 
         @Test
-        @DisplayName("Round 1 外部评审（第四轮）：会话已经失效之后，一次迟到的 startPolling 调用必须什么都不做")
+        @DisplayName("Round 1 外部评审（第四轮）：会话已经失效之后，一次迟到的 startDevicePolling 调用必须什么都不做")
         void startPollingOnAnAlreadyInvalidatedSessionSchedulesNothing() throws Exception {
-            // 复现：/ulticloud logout 在魔法链接的阻塞 POST 还在途时就已经跑完，把会话标记为失效；
-            // 随后那次 POST 才返回，requestMagicLink() 走到 startPolling()——如果这里不检查失效标记，
-            // 就会在一个已经没人能再碰到的会话上新建一个执行器，5 分钟内每 3 秒跑一次，永远没人能停。
+            // 复现：/ulticloud logout 在设备码申请的阻塞 POST 还在途时就已经跑完，把会话标记为失效；
+            // 随后那次 POST 才返回，走到 startDevicePolling()——如果这里不检查失效标记，就会在一个
+            // 已经没人能再碰到的会话上新建一个执行器，10 分钟内每 5 秒跑一次，永远没人能停。
+            // （协议 v2，plan 22-01：原先针对魔法链接 startPolling(String, Consumer) 的同一性质。）
             CloudSession session = CloudSession.current();
             session.invalidate();
 
-            session.startPolling("synthetic-request-id", token -> { });
+            session.startDevicePolling(DeviceLoginTestSupport.grant(600, 5),
+                    new DeviceLoginTestSupport.RecordingListener());
 
             Field pollExecutorField = CloudSession.class.getDeclaredField("pollExecutor");
             pollExecutorField.setAccessible(true);
             assertThat(pollExecutorField.get(session))
-                    .as("已失效的会话上调用 startPolling 不该创建任何执行器")
+                    .as("已失效的会话上调用 startDevicePolling 不该创建任何执行器")
                     .isNull();
         }
 

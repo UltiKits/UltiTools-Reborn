@@ -5,7 +5,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -17,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -55,6 +58,9 @@ class CloudAuthManagerTest {
     @TempDir
     File dataFolder;
 
+    /** The plugin logger every test sees; the device-login polling tests verify its lines. */
+    private Logger mockLogger;
+
     // -------------------------------------------------------------------------
     // Helper utilities
     // -------------------------------------------------------------------------
@@ -85,15 +91,6 @@ class CloudAuthManagerTest {
         Field field = CloudSession.class.getDeclaredField(name);
         field.setAccessible(true);
         return field.getLong(null);
-    }
-
-    /**
-     * Read the value of a private static {@code int} field (a constant) on {@link CloudSession}.
-     */
-    private static int getSessionStaticInt(String name) throws Exception {
-        Field field = CloudSession.class.getDeclaredField(name);
-        field.setAccessible(true);
-        return field.getInt(null);
     }
 
     /**
@@ -157,7 +154,7 @@ class CloudAuthManagerTest {
         // LogoutTests' one un-mocked disableCloud() call reaches UltiTools.getInstance().getLogger()
         // from several teardown steps; every manager getter besides that defaults to Mockito's null,
         // which doDisableCloud()'s own null-checks and catch-and-log-at-FINE already tolerate.
-        Logger mockLogger = mock(Logger.class);
+        mockLogger = mock(Logger.class);
         TestHelper.mockUltiToolsInstance(ultiTools -> lenient().when(ultiTools.getLogger()).thenReturn(mockLogger));
     }
 
@@ -244,10 +241,10 @@ class CloudAuthManagerTest {
     class ConstantValidationTests {
 
         @Test
-        @DisplayName("POLL_INTERVAL_MS 常量应该存在且值为 3000 / POLL_INTERVAL_MS should be 3000")
-        void pollIntervalMsShouldBe3000() throws Exception {
-            long value = getSessionStaticLong("POLL_INTERVAL_MS");
-            assertThat(value).isEqualTo(3000L);
+        @DisplayName("DEVICE_SLOW_DOWN_INCREMENT_MS 为 5000（RFC 8628 §3.5）/ slow_down adds 5 s")
+        void deviceSlowDownIncrementIsFiveSeconds() throws Exception {
+            long value = getSessionStaticLong("DEVICE_SLOW_DOWN_INCREMENT_MS");
+            assertThat(value).isEqualTo(5000L);
         }
 
         @Test
@@ -282,13 +279,6 @@ class CloudAuthManagerTest {
             String decoded = new String(decodedBytes, StandardCharsets.UTF_8);
 
             assertThat(decoded).isEqualTo("client:112233");
-        }
-
-        @Test
-        @DisplayName("MAX_POLL_ATTEMPTS 常量应该存在且大于 0 / MAX_POLL_ATTEMPTS should be positive")
-        void maxPollAttemptsShouldBePositive() throws Exception {
-            int value = getSessionStaticInt("MAX_POLL_ATTEMPTS");
-            assertThat(value).isGreaterThan(0);
         }
     }
 
@@ -540,7 +530,7 @@ class CloudAuthManagerTest {
     // =========================================================================
 
     @Nested
-    @DisplayName("魔法链接轮询调度器生命周期测试")
+    @DisplayName("设备码轮询调度器生命周期测试 / device-code poll scheduler lifecycle")
     class PollSchedulerLifecycleTests {
 
         @Test
@@ -713,9 +703,11 @@ class CloudAuthManagerTest {
     class LoginTests {
 
         @Test
-        @DisplayName("已登录时只调用 onAlreadyLoggedIn，不发起请求")
+        @DisplayName("已绑定（会话持有服务器凭据）时只调用 onAlreadyLoggedIn，不发起请求")
         void alreadyLoggedInSkipsEverythingElse() throws Exception {
-            setSessionField("token", buildTokenWithExp(3600L));
+            // Protocol v2 (plan 22-01): "already logged in" is "already linked" -- a server
+            // credential, not the 6.3.0 user token.
+            CloudSession.current().commitCredential(DeviceLoginTestSupport.credential("Survival"));
 
             AtomicBoolean alreadyLoggedInCalled = new AtomicBoolean(false);
             AtomicBoolean anythingElseCalled = new AtomicBoolean(false);
@@ -766,15 +758,22 @@ class CloudAuthManagerTest {
             AtomicBoolean requestingCalled = new AtomicBoolean(false);
             AtomicReference<String> errorMessage = new AtomicReference<>();
             AtomicBoolean successCalled = new AtomicBoolean(false);
+            CountDownLatch errorReported = new CountDownLatch(1);
 
             CloudAuthManager.login(
                 () -> { },
                 remaining -> { },
                 () -> requestingCalled.set(true),
                 url -> successCalled.set(true),
-                errorMessage::set);
+                error -> {
+                    errorMessage.set(error);
+                    errorReported.countDown();
+                });
 
             assertThat(requestingCalled).isTrue();
+            // Protocol v2 (plan 22-01): the device-code request runs on the new session's executor,
+            // so the failure arrives after login() returned.
+            assertThat(errorReported.await(10, TimeUnit.SECONDS)).isTrue();
             assertThat(errorMessage.get()).isEqualTo("API URL not configured");
             assertThat(successCalled).isFalse();
         }
@@ -802,17 +801,17 @@ class CloudAuthManagerTest {
         }
 
         @Test
-        @DisplayName("Round 1 外部评审（第三轮）：两次判断之间若已有一次在途的魔法链接轮询悄悄把令牌落地，login 不能把它撤销掉再开一次新的登录流程")
+        @DisplayName("Round 1 外部评审（第三轮）：两次判断之间若已有一次在途的设备码轮询悄悄把凭据落地，login 不能把它撤销掉再开一次新的登录流程")
         void loginDoesNotTearDownASessionThatBecameValidBetweenItsOwnTwoChecks() throws Exception {
             setSessionField("token", null);
             CloudSession sessionAtCheck = CloudSession.current();
 
             try (MockedStatic<ApiRateLimiter> rate = mockStatic(ApiRateLimiter.class)) {
                 rate.when(ApiRateLimiter::isLoginAllowed).thenAnswer(invocation -> {
-                    // 模拟：正是在「已登录」判断和这次限流判断之间，一个更早发起、仍在轮询的
-                    // 魔法链接完成了，把有效令牌提交到了同一个（此刻仍是 current 的）会话上——
-                    // 轮询能撑 5 分钟，远比这里 1 分钟的登录冷却长。
-                    sessionAtCheck.commit(buildTokenWithExp(3600L));
+                    // 模拟：正是在「已绑定」判断和这次限流判断之间，一个更早发起、仍在轮询的
+                    // 设备码登录完成了，把服务器凭据提交到了同一个（此刻仍是 current 的）会话上——
+                    // 设备码能撑 10 分钟，远比这里 1 分钟的登录冷却长。
+                    sessionAtCheck.commitCredential(DeviceLoginTestSupport.credential("Survival"));
                     return true;
                 });
 
@@ -861,12 +860,13 @@ class CloudAuthManagerTest {
                 init.when(() -> PluginInitiationUtils.disableCloud(sessionAtCheck)).thenAnswer(invocation -> {
                     // 此刻：调用方（login()）自己的复检已经跑完并返回 false，正准备真正拆线。
                     // 一次并发的轮询在这个窗口尝试提交，模拟一次更早发起、仍在轮询、此刻恰好收到
-                    // 「已完成」响应的魔法链接。
+                    // 授权结果的设备码登录（协议 v2，plan 22-01：提交走 commitCredential）。
                     CountDownLatch commitAttempted = new CountDownLatch(1);
                     Thread pollThread = new Thread(() -> {
                         commitAttempted.countDown();
                         try {
-                            commitSucceeded.set(sessionAtCheck.commit(buildTokenWithExp(3600L)));
+                            commitSucceeded.set(sessionAtCheck.commitCredential(
+                                    DeviceLoginTestSupport.credential("Survival")));
                         } catch (Exception ignored) {
                             // 本用例只关心提交成功与否，不关心磁盘写入本身的异常路径
                         }
@@ -1412,6 +1412,219 @@ class CloudAuthManagerTest {
 
             assertThat(status.isConnected()).isTrue();
             assertThat(status.getUserName()).isEqualTo("Unknown");
+        }
+    }
+
+    // =========================================================================
+    // 14. Device login polling (protocol v2, plan 22-01) — RFC 8628 语义与会话身份竞争
+    // =========================================================================
+
+    @Nested
+    @DisplayName("设备码轮询：RFC 8628 语义、截止时间与会话身份竞争（plan 22-01）")
+    class DeviceLoginPollingTests {
+
+        private final DeviceLoginTestSupport.FakeClock clock = new DeviceLoginTestSupport.FakeClock();
+        private final DeviceLoginTestSupport.FakeScheduler scheduler = new DeviceLoginTestSupport.FakeScheduler(clock);
+        private final DeviceLoginTestSupport.RecordingListener listener = new DeviceLoginTestSupport.RecordingListener();
+
+        @AfterEach
+        void clearSeams() {
+            CloudSession.setDeviceSeamsForTesting(null, null, null);
+        }
+
+        /** Installs {@code client}, runs login() and its authorize step; polling is then scheduled. */
+        private void loginWith(DeviceLoginTestSupport.ScriptedClient client) {
+            CloudSession.setDeviceSeamsForTesting(client, scheduler, clock);
+            CloudAuthManager.login(listener);
+            assertThat(scheduler.pending()).as("login() hands the authorize call to the session executor").isEqualTo(1);
+            scheduler.runNext();
+        }
+
+        private DeviceLoginTestSupport.ScriptedClient grantedClient(long expiresIn, long interval) {
+            return new DeviceLoginTestSupport.ScriptedClient(
+                    DeviceAuthorizationClient.AuthorizeResult.granted(DeviceLoginTestSupport.grant(expiresIn, interval)));
+        }
+
+        private boolean credentialOnDisk() {
+            CredentialStore.ReadResult result = CredentialStore.read();
+            return result.isParsed() && result.data().containsKey("cloud_credential");
+        }
+
+        private DeviceAuthorizationClient.PollResult of(DeviceAuthorizationClient.PollResult.Kind kind) {
+            return DeviceAuthorizationClient.PollResult.of(kind);
+        }
+
+        @Test
+        @DisplayName("slow_down twice raises the interval to interval + 10 s, cumulatively")
+        void slowDownTwiceAddsTenSeconds() {
+            loginWith(grantedClient(600, 5)
+                    .thenPoll(of(DeviceAuthorizationClient.PollResult.Kind.SLOW_DOWN))
+                    .thenPoll(of(DeviceAuthorizationClient.PollResult.Kind.SLOW_DOWN)));
+
+            scheduler.runNext();
+            scheduler.runNext();
+
+            assertThat(scheduler.delays()).containsExactly(0L, 5_000L, 10_000L, 15_000L);
+            assertThat(credentialOnDisk()).isFalse();
+        }
+
+        @Test
+        @DisplayName("PENDING until the deadline ends with onExpired, without another poll")
+        void pendingUntilTheDeadlineExpires() {
+            DeviceLoginTestSupport.ScriptedClient client = grantedClient(12, 5);
+            loginWith(client);
+
+            scheduler.runNext(); // t = 5 s, pending
+            scheduler.runNext(); // t = 10 s, pending
+            scheduler.runNext(); // t = 15 s >= 12 s deadline
+
+            assertThat(client.pollCount()).isEqualTo(2);
+            assertThat(listener.events).containsOnlyOnce("expired");
+            assertThat(scheduler.pending()).isZero();
+            verify(mockLogger).log(Level.WARNING,
+                    "UltiCloud: the device code expired before it was confirmed. Run /ulticloud login to get a new code.");
+            assertThat(credentialOnDisk()).isFalse();
+        }
+
+        @Test
+        @DisplayName("EXPIRED from UltiCloud ends polling with onExpired")
+        void expiredTokenEndsPolling() {
+            loginWith(grantedClient(600, 5).thenPoll(of(DeviceAuthorizationClient.PollResult.Kind.EXPIRED)));
+
+            scheduler.runNext();
+
+            assertThat(listener.events).contains("expired");
+            assertThat(scheduler.pending()).isZero();
+            assertThat(credentialOnDisk()).isFalse();
+        }
+
+        @Test
+        @DisplayName("DENIED ends polling with onDenied and the denied line")
+        void deniedEndsPolling() {
+            loginWith(grantedClient(600, 5).thenPoll(of(DeviceAuthorizationClient.PollResult.Kind.DENIED)));
+
+            scheduler.runNext();
+
+            assertThat(listener.events).contains("denied");
+            assertThat(scheduler.pending()).isZero();
+            verify(mockLogger).log(Level.WARNING,
+                    "UltiCloud: linking was denied on the confirmation page. Run /ulticloud login to try again.");
+            assertThat(credentialOnDisk()).isFalse();
+        }
+
+        @Test
+        @DisplayName("REJECTED ends polling with onRejected(code, message) and the rejected line")
+        void rejectedEndsPolling() {
+            loginWith(grantedClient(600, 5)
+                    .thenPoll(DeviceAuthorizationClient.PollResult.rejected("invalid_request", "deviceCode is malformed")));
+
+            scheduler.runNext();
+
+            assertThat(listener.events).contains("rejected:invalid_request:deviceCode is malformed");
+            assertThat(scheduler.pending()).isZero();
+            verify(mockLogger).log(Level.WARNING,
+                    "UltiCloud: the device code request was rejected (invalid_request): deviceCode is malformed");
+            assertThat(credentialOnDisk()).isFalse();
+        }
+
+        @Test
+        @DisplayName("TRANSIENT keeps polling at the current interval; after a 429 it waits max(interval, Retry-After)")
+        void transientKeepsPollingAndHonoursRetryAfter() {
+            loginWith(grantedClient(600, 5)
+                    .thenPoll(DeviceAuthorizationClient.PollResult.transientFailure(-1))
+                    .thenPoll(DeviceAuthorizationClient.PollResult.transientFailure(30))
+                    .thenPoll(DeviceAuthorizationClient.PollResult.transientFailure(2)));
+
+            scheduler.runNext();
+            scheduler.runNext();
+            scheduler.runNext();
+
+            assertThat(scheduler.delays()).containsExactly(0L, 5_000L, 5_000L, 30_000L, 5_000L);
+            assertThat(listener.events).doesNotContain("expired", "denied");
+            assertThat(credentialOnDisk()).isFalse();
+        }
+
+        @Test
+        @DisplayName("GRANTED commits the credential, stops polling and logs the linked line")
+        void grantedCommitsAndStops() {
+            loginWith(grantedClient(600, 5)
+                    .thenPoll(DeviceAuthorizationClient.PollResult.granted(DeviceLoginTestSupport.credential("Survival"))));
+
+            scheduler.runNext();
+
+            assertThat(credentialOnDisk()).isTrue();
+            assertThat(listener.events).contains("linked:Survival");
+            assertThat(scheduler.pending()).isZero();
+            verify(mockLogger).log(Level.INFO,
+                    "UltiCloud: this server is now linked as Survival (server ID 01JTESTSERVERID0000000000).");
+        }
+
+        @Test
+        @DisplayName("a failed device-code request is reported and schedules no poll")
+        void failedAuthorizeIsReported() {
+            loginWith(new DeviceLoginTestSupport.ScriptedClient(
+                    DeviceAuthorizationClient.AuthorizeResult.failed("UltiCloud answered HTTP 503", -1)));
+
+            assertThat(listener.events).containsExactly("requesting", "failed:UltiCloud answered HTTP 503");
+            assertThat(scheduler.pending()).isZero();
+        }
+
+        // ---- the magic-link session-identity races, ported to the device flow ----
+
+        @Test
+        @DisplayName("logout while a poll is in flight cancels it; the grant that poll returns is discarded, not written")
+        void logoutWhilePollingDiscardsTheLateGrant() {
+            AtomicBoolean logoutReported = new AtomicBoolean();
+            loginWith(grantedClient(600, 5).thenPoll(() -> {
+                try {
+                    logoutReported.set(CloudAuthManager.logout());
+                } catch (java.io.IOException e) {
+                    throw new IllegalStateException(e);
+                }
+                return DeviceAuthorizationClient.PollResult.granted(DeviceLoginTestSupport.credential("Survival"));
+            }));
+
+            scheduler.runNext();
+
+            assertThat(logoutReported).as("cancelling a pending authentication is a real logout").isTrue();
+            assertThat(credentialOnDisk()).as("the late grant must not reach credentials.json").isFalse();
+            assertThat(listener.events).noneMatch(event -> event.startsWith("linked:"));
+            assertThat(scheduler.pending()).isZero();
+            verify(mockLogger, never()).log(org.mockito.ArgumentMatchers.eq(Level.INFO),
+                    org.mockito.ArgumentMatchers.startsWith("UltiCloud: this server is now linked"));
+        }
+
+        @Test
+        @DisplayName("a grant that arrives after a second login replaced the session is discarded")
+        void grantAfterANewerLoginIsDiscarded() {
+            DeviceLoginTestSupport.RecordingListener second = new DeviceLoginTestSupport.RecordingListener();
+            AtomicReference<CloudSession> pollingSession = new AtomicReference<>();
+            loginWith(grantedClient(600, 5).thenPoll(() -> {
+                pollingSession.set(CloudSession.current());
+                ApiRateLimiter.resetAll();
+                CloudAuthManager.login(second);
+                return DeviceAuthorizationClient.PollResult.granted(DeviceLoginTestSupport.credential("Survival"));
+            }));
+
+            scheduler.runNext();
+
+            assertThat(CloudSession.current()).isNotSameAs(pollingSession.get());
+            assertThat(pollingSession.get().isCurrent()).isFalse();
+            assertThat(credentialOnDisk()).isFalse();
+            assertThat(listener.events).noneMatch(event -> event.startsWith("linked:"));
+            assertThat(second.events).containsExactly("requesting");
+        }
+
+        @Test
+        @DisplayName("a stored credential makes login report already linked, with nothing requested")
+        void storedCredentialIsAlreadyLinked() {
+            ServerCredentialStore.save(DeviceLoginTestSupport.credential("Survival"));
+            CloudSession.setDeviceSeamsForTesting(grantedClient(600, 5), scheduler, clock);
+
+            CloudAuthManager.login(listener);
+
+            assertThat(listener.events).containsExactly("alreadyLinked:Survival");
+            assertThat(scheduler.pending()).isZero();
         }
     }
 }

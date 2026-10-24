@@ -3,18 +3,15 @@ package com.ultikits.ultitools.utils;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 import java.util.logging.Level;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
@@ -65,8 +62,8 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * {@link CloudAuthManager#login} (16-10 gap-closure addendum, issue #466) for its own
  * re-check-through-replacement region.</li>
  * <li>a specific session's own monitor ({@code synchronized (this)} / {@code synchronized(session)})
- * -- held by {@link #commit(TokenEntity)}, {@link #invalidate()}, {@link #startPolling}, the two
- * scheduler start/stop pairs, (protocol v2, plan 22-01) {@link #commitCredential(ServerCredential)},
+ * -- held by {@link #commit(TokenEntity)}, {@link #invalidate()}, the two scheduler start/stop
+ * pairs, (protocol v2, plan 22-01) {@link #commitCredential(ServerCredential)},
  * {@link #beginDeviceLogin}, {@link #startDevicePolling} and the device-step scheduling they share,
  * and by every caller in {@code PluginInitiationUtils} that needs to
  * read-then-act on a session's currency ({@code reinitWebSocket}'s second confirmation,
@@ -102,8 +99,6 @@ final class CloudSession {
     // moved here in plan 16-10 (Gate 1); no field's own meaning changed, only its position.
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final long POLL_INTERVAL_MS = 3000;
-    private static final int MAX_POLL_ATTEMPTS = 100; // 5 minutes at 3s intervals
     /** How often to check if the access token needs refreshing (1 hour) */
     private static final long TOKEN_REFRESH_CHECK_INTERVAL_MS = 60 * 60 * 1000L;
     /** Refresh the token when it has less than this many seconds remaining (2 hours) */
@@ -154,8 +149,9 @@ final class CloudSession {
     private volatile TokenEntity predecessorToken;
 
     /**
-     * {@code true} if {@link #invalidate()} found -- and cancelled -- a magic-link poll still in
-     * flight on this session, and that fact has not yet been reported and reset by
+     * {@code true} if {@link #invalidate()} found -- and cancelled -- a pending authentication still
+     * in flight on this session (as of 6.3.1 the device-code request or poll; a magic-link poll in
+     * 6.3.0), and that fact has not yet been reported and reset by
      * {@link #clearPersisted()}.
      * <p>
      * <b>Real-machine UAT fix, plan 16-08 ({@code ultitools.ulticloud.logout.neg-mid-poll}).</b>
@@ -703,184 +699,7 @@ final class CloudSession {
         return null;
     }
 
-    // ---- Magic-link login flow ----
-
-    /**
-     * Requests a magic link for server authentication and, on success, starts polling for its
-     * completion on this session's own executor.
-     *
-     * @param errorCallback called with an error message if the request fails
-     * @return the magic link URL, or {@code null} on failure
-     */
-    String requestMagicLink(Consumer<String> errorCallback) {
-        String apiUrl = HttpRequestUtils.getBaseUrl();
-        if (apiUrl == null || apiUrl.trim().isEmpty()) {
-            errorCallback.accept("API URL not configured");
-            return null;
-        }
-        apiUrl = apiUrl.trim();
-
-        String serverUuid;
-        try {
-            serverUuid = CommonUtils.getUltiToolsUUID();
-        } catch (IOException e) {
-            errorCallback.accept("Failed to get server UUID: " + e.getMessage());
-            return null;
-        }
-
-        String requestId = UUID.randomUUID().toString();
-
-        JsonObject body = new JsonObject();
-        body.addProperty("requestId", requestId);
-        body.addProperty("serverUuid", serverUuid);
-        body.addProperty("serverName", org.bukkit.Bukkit.getServer().getName());
-
-        try {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Content-Type", "application/json");
-
-            SimpleHttpClient.Response response = SimpleHttpClient.post(
-                apiUrl + "/auth/server-login",
-                headers,
-                GSON.toJson(body)
-            );
-
-            if (response.isOk()) {
-                JsonObject responseBody = JsonParser.parseString(response.body()).getAsJsonObject();
-                String url = responseBody.has("url") ? responseBody.get("url").getAsString() : null;
-                if (url != null) {
-                    startPolling(requestId, null);
-                    return url;
-                }
-                errorCallback.accept("Invalid response from API (missing url)");
-                return null;
-            } else {
-                errorCallback.accept("API returned HTTP " + response.getStatus() + ": " + response.body());
-                return null;
-            }
-        } catch (Exception e) {
-            errorCallback.accept("Request failed: " + e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * Starts polling for magic-link auth completion on this session's own executor. Stopping this
-     * session's polling (via {@link #invalidate()}, or a direct {@link #stopPolling()}) is enough
-     * to make every subsequent tick a no-op -- no separate credential-generation comparison is
-     * needed, because {@link #pollLoginStatusOnce} below runs as a method on {@code this} instance.
-     * <p>
-     * <b>Round-1 review, fourth pass (16-10, PR #464):</b> this method is called from
-     * {@link #requestMagicLink(Consumer)}, which itself runs after a blocking HTTP POST -- a
-     * multi-second-to-longer round trip during which a {@code /ulticloud logout} can invalidate
-     * this session entirely. Before this fix, this method had no gate of its own: it unconditionally
-     * created a fresh poller even on an already-invalidated session, one nothing will ever stop
-     * again ({@code stopCredentialSchedulers()} only ever acts on {@link #current()}, which by then
-     * points elsewhere), leaking a status-polling task running every three seconds for up to five
-     * minutes. Checking {@link #invalidated} here, inside the same monitor {@link #invalidate()}
-     * itself synchronizes on, closes that: either this method runs to completion before
-     * {@link #invalidate()} can (and its poller is torn down normally, the ordinary case), or
-     * {@link #invalidate()} has already run and this call sees {@link #invalidated} and refuses to
-     * schedule anything at all.
-     *
-     * @param requestId  the magic link request ID
-     * @param onComplete called when auth succeeds (with the token), or {@code null}
-     */
-    synchronized void startPolling(String requestId, Consumer<TokenEntity> onComplete) {
-        if (invalidated) {
-            return;
-        }
-        stopPolling();
-
-        pollExecutor = Executors.newSingleThreadScheduledExecutor();
-        final int[] attempts = {0};
-
-        pollTask = pollExecutor.scheduleWithFixedDelay(() -> {
-            attempts[0]++;
-            if (attempts[0] > MAX_POLL_ATTEMPTS) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Magic link login timed out (5 minutes)");
-                stopPolling();
-                return;
-            }
-            pollLoginStatusOnce(requestId, onComplete);
-        }, POLL_INTERVAL_MS, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
-    }
-
-    /** Check login status once. Any exception is logged at FINE only -- polling must continue until it times out or reaches a terminal state. */
-    private void pollLoginStatusOnce(String requestId, Consumer<TokenEntity> onComplete) {
-        try {
-            String apiUrl = HttpRequestUtils.getBaseUrl().trim();
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Content-Type", "application/json");
-
-            SimpleHttpClient.Response response = SimpleHttpClient.get(
-                apiUrl + "/auth/server-login/status?requestId=" + requestId,
-                headers
-            );
-            if (!response.isOk()) {
-                return;
-            }
-
-            JsonObject responseBody = JsonParser.parseString(response.body()).getAsJsonObject();
-            String status = responseBody.has("status") ? responseBody.get("status").getAsString() : "pending";
-
-            if ("completed".equals(status)) {
-                completeMagicLinkLogin(responseBody, onComplete);
-                stopPolling();
-            } else if ("expired".equals(status) || "error".equals(status)) {
-                String error = responseBody.has("message") ? responseBody.get("message").getAsString() : "Unknown error";
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Magic link login failed: " + error);
-                stopPolling();
-            }
-            // "pending" — keep polling
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE, "Magic link poll failed: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Handles a login that just reached {@code completed}: persists the credential through this
-     * session, then reactivates cloud features -- both steps guard against a logout landing in the
-     * middle by checking this same {@code this} session, so the two can never disagree about
-     * whether the login is still current.
-     *
-     * @throws IOException if persisting the credential fails
-     */
-    private void completeMagicLinkLogin(JsonObject responseBody, Consumer<TokenEntity> onComplete) throws IOException {
-        String tokenJson = responseBody.has("token") ? GSON.toJson(responseBody.getAsJsonObject("token")) : null;
-        if (tokenJson == null) {
-            return;
-        }
-        TokenEntity newToken = GSON.fromJson(tokenJson, TokenEntity.class);
-        if (newToken == null || newToken.getAccess_token() == null) {
-            return;
-        }
-        newToken.decodeJwtPayload();
-
-        if (!commit(newToken)) {
-            return;
-        }
-
-        UltiTools.getInstance().getLogger().log(Level.INFO,
-            "UltiCloud login successful! Welcome, "
-                + (newToken.getUser_name() != null ? newToken.getUser_name() : "user") + "!");
-
-        ApiRateLimiter.reset("login");
-
-        if (onComplete != null) {
-            onComplete.accept(newToken);
-        }
-
-        try {
-            PluginInitiationUtils.loginWithToken(newToken);
-            PluginInitiationUtils.activateCloudIfCurrent(this);
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "Cloud features initialization failed: " + e.getMessage());
-        }
-    }
-
-    /** Stop polling for magic-link completion on this session. */
+    /** Stops this session's device-login steps (the request and the polling) and their executor. */
     synchronized void stopPolling() {
         if (pollTask != null) {
             pollTask.cancel(false);
@@ -969,8 +788,9 @@ final class CloudSession {
 
     /**
      * Polls {@code POST /v1/device/token} for {@code grant} on this session's poll executor until it
-     * reaches a terminal outcome. Like {@link #startPolling}, schedules nothing on an invalidated
-     * session: a late call after {@code /ulticloud logout} creates no executor.
+     * reaches a terminal outcome. Schedules nothing on an invalidated session: a late call after
+     * {@code /ulticloud logout} -- the device-code request returned after the logout -- creates no
+     * executor (the round-1 review property the 6.3.0 magic-link {@code startPolling} carried).
      *
      * @param grant    the device code to poll
      * @param listener receives the outcome; called on the poll executor's thread
@@ -1038,6 +858,26 @@ final class CloudSession {
             "UltiCloud: this server is now linked as " + granted.getServerName() + " (server ID "
                 + granted.getServerId() + ").");
         poll.listener.onLinked(granted.getServerName(), granted.getServerId());
+    }
+
+    /**
+     * Test-only: replaces the device-login REST client, step scheduler and clock for every session.
+     * Pass {@code null}s to restore the defaults. (Plan 22-01 Task 2 RED stub -- not yet honoured.)
+     */
+    static void setDeviceSeamsForTesting(DeviceAuthorizationClient client, DeviceStepScheduler scheduler,
+            LongSupplier clock) {
+        // RED stub.
+    }
+
+    /** Schedules one device-login step; the test seam of {@link #setDeviceSeamsForTesting}. */
+    interface DeviceStepScheduler {
+
+        /**
+         * @param step        the step to run
+         * @param delayMillis the delay before it runs
+         * @return the step's future, which {@link #stopPolling()} cancels
+         */
+        ScheduledFuture<?> schedule(Runnable step, long delayMillis);
     }
 
     /** The mutable state of one device-code poll; touched only by its poll steps, one at a time. */
