@@ -142,6 +142,48 @@ class AgentEventEncodersTest {
     }
 
     @Test
+    void theCollectorsTriggerTypesMapOntoTheContractKinds() {
+        for (TriggerContext.TriggerType type : TriggerContext.TriggerType.values()) {
+            View view = new View();
+            view.triggerKind = type.name();
+            JsonObject payload = AgentEventEncoders.errorReport(view);
+            assertThat(payload).as(type.name()).isNotNull();
+            assertThat(payload.getAsJsonObject("trigger").get("kind").getAsString())
+                    .as(type.name())
+                    .isEqualTo(contractKind(type));
+            RecordingChannel channel = new RecordingChannel();
+            assertThat(channel.send("error.report", payload)).as(type.name()).isTrue();
+        }
+    }
+
+    @Test
+    void theContractKindNamesAreAlsoAcceptedWhateverTheirCase() {
+        for (String[] pair : new String[][] {{"Command", "command"}, {"event", "event"},
+                {"scheduler", "scheduler"}, {"Scheduled", "scheduler"}}) {
+            View view = new View();
+            view.triggerKind = pair[0];
+            JsonObject payload = AgentEventEncoders.errorReport(view);
+            assertThat(payload.getAsJsonObject("trigger").get("kind").getAsString())
+                    .as(pair[0])
+                    .isEqualTo(pair[1]);
+        }
+    }
+
+    /** The contract knows four kinds; the collector's AOP and uncaught have no match of their own. */
+    private static String contractKind(TriggerContext.TriggerType type) {
+        switch (type) {
+            case COMMAND:
+                return "command";
+            case EVENT:
+                return "event";
+            case SCHEDULED:
+                return "scheduler";
+            default:
+                return "other";
+        }
+    }
+
+    @Test
     void unencodableInputReturnsNullAndNeverThrows() {
         View notHex = new View();
         notHex.fingerprint = "xyz";

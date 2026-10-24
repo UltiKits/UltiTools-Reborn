@@ -76,7 +76,10 @@ final class AgentEventEncoders {
         /** @return the owning module's name, or null when the report is not a module's */
         String moduleName();
 
-        /** @return {@code event}, {@code command}, {@code scheduler}, {@code other}, or null */
+        /**
+         * @return the collector's trigger type name ({@code COMMAND}, {@code EVENT},
+         *         {@code SCHEDULED}, {@code AOP} or {@code UNCAUGHT}), or null
+         */
         String triggerKind();
 
         /** @return the already-redacted trigger detail, or null */
@@ -253,16 +256,24 @@ final class AgentEventEncoders {
     }
 
     /**
-     * Maps the collector's trigger type onto the contract's enumeration; anything unknown becomes
-     * {@code other}, because the field cannot be null.
+     * Maps a trigger type onto the contract's enumeration.
+     *
+     * <p>The collector stores {@code TriggerContext.TriggerType#name()}: {@code COMMAND},
+     * {@code EVENT}, {@code SCHEDULED}, {@code AOP} and {@code UNCAUGHT}. The contract knows only
+     * {@code event}, {@code command}, {@code scheduler} and {@code other}, so an AOP interception
+     * and an uncaught exception report as {@code other}, and so does anything else unknown.
+     * Matching ignores case, so the contract's own names pass through as they are.</p>
      *
      * @param raw the collector's trigger type, or null
      * @return one of {@code event}, {@code command}, {@code scheduler}, {@code other}
      */
     private static String triggerKind(String raw) {
-        String value = raw == null ? "" : raw.trim();
-        if ("event".equals(value) || "command".equals(value) || "scheduler".equals(value)) {
+        String value = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+        if ("command".equals(value) || "event".equals(value)) {
             return value;
+        }
+        if ("scheduler".equals(value) || "scheduled".equals(value)) {
+            return "scheduler";
         }
         return "other";
     }
