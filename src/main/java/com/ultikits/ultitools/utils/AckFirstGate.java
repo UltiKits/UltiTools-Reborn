@@ -35,7 +35,8 @@ final class AckFirstGate {
                 try {
                     ledger.persistNow();
                 } catch (IOException ex) {
-                    LOGGER.warning("UltiCloud: could not persist the command id; continuing with in-memory deduplication.");
+                    LOGGER.warning("UltiCloud: could not persist the command id " + request.id()
+                            + "; continuing with in-memory deduplication.");
                 }
             }
         }

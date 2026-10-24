@@ -66,8 +66,11 @@ class AckFirstGateTest {
         try (AgentMessageRouterTest.LogCapture capture = new AgentMessageRouterTest.LogCapture(AckFirstGate.class)) {
             AckFirstGate.handle(request, channel, ledger, execute);
             assertThat(capture.warnings()).hasSize(1);
-            assertThat(capture.warnings().get(0).getMessage()).doesNotContain("private-path-must-not-be-logged");
+            assertThat(capture.warnings().get(0).getMessage()).contains(request.id())
+                    .doesNotContain("private-path-must-not-be-logged", request.payload().get("command").getAsString(),
+                            request.payload().toString(), "\tat ");
             assertThat(capture.warnings().get(0).getThrown()).isNull();
+            assertThat(capture.warnings().get(0).getParameters()).isNull();
         }
         InOrder order = inOrder(ledger, channel, execute);
         order.verify(ledger).firstSeen(request.id());
