@@ -452,13 +452,35 @@ class CloudReconnectStateMachineTest {
             CloudSession old = CloudSession.current();
             AgentRuntime.Attempt attempt = runtime.last();
             attempt.accept();
-            CloudAuthManager.logout();
-            assertThat(attempt.closedWith).isEqualTo(1000);
-            assertThat(runtime.scheduler().isShutdown()).isTrue();
-            PluginInitiationUtils.reinitWebSocket(old);
-            runtime.advance(60000);
-            assertThat(runtime.attempts).hasSize(1);
-            assertThat(old.connectionState()).isEqualTo(AgentConnection.State.STOPPED);
+            org.bukkit.scheduler.BukkitScheduler scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class);
+            List<Runnable> deferred = new ArrayList<>();
+            Mockito.when(scheduler.runTaskAsynchronously(Mockito.any(org.bukkit.plugin.Plugin.class),
+                    Mockito.any(Runnable.class))).thenAnswer(call -> {
+                deferred.add(call.getArgument(1));
+                return null;
+            });
+            CloudHttp.Response response = mock(CloudHttp.Response.class);
+            Mockito.when(response.outcome()).thenReturn(CloudHttp.Outcome.IO_ERROR);
+            try (org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class);
+                    org.mockito.MockedStatic<CloudHttp> http = Mockito.mockStatic(CloudHttp.class)) {
+                bukkit.when(org.bukkit.Bukkit::getScheduler).thenReturn(scheduler);
+                http.when(() -> CloudHttp.postJson("/v1/agent/credential/revoke", null, "ucs_OLD"))
+                        .thenReturn(response);
+                CloudAuthManager.logout();
+                assertThat(deferred).hasSize(1);
+                http.verifyNoInteractions();
+                assertThat(attempt.closedWith).isEqualTo(1000);
+                assertThat(runtime.scheduler().isShutdown()).isTrue();
+                PluginInitiationUtils.reinitWebSocket(old);
+                runtime.advance(60000);
+                assertThat(runtime.attempts).hasSize(1);
+                assertThat(old.connectionState()).isEqualTo(AgentConnection.State.STOPPED);
+                deferred.get(0).run();
+                assertThat(ServerCredentialStore.load()).isNull();
+                assertThat(old.getCredential()).isNull();
+                runtime.advance(60000);
+                assertThat(runtime.attempts).hasSize(1);
+            }
         }
 
         @Test

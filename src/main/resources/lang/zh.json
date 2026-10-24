@@ -1,4 +1,13 @@
 {
+  "Unlinking this server from UltiCloud...": "正在解除此服务器与 UltiCloud 的绑定……",
+  "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.": "已解除此服务器与 UltiCloud 的绑定并吊销其凭据。云功能现已停止。",
+  "Use /ulticloud login to link it again.": "使用 /ulticloud login 重新绑定。",
+  "Unlinked this server locally, but UltiCloud could not be reached to revoke its credential.": "已在本地解除此服务器的绑定，但无法联系 UltiCloud 吊销其凭据。",
+  "The cloud credential may still be valid. Revoke it in the panel: server settings > Revoke credential.": "云端凭据可能仍然有效。请在面板的服务器设置 > 吊销凭据中将其吊销。",
+  "Cancelled the pending UltiCloud link request. Cloud features are stopped.": "已取消等待中的 UltiCloud 绑定请求。云功能已停止。",
+  "This server is not linked to UltiCloud.": "此服务器尚未绑定 UltiCloud。",
+  "Cloud features have been stopped regardless.": "云功能仍已停止。",
+  "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.": "早期 UltiTools 版本保存的账号登录已不再使用，已从 %s 删除。请执行 /ulticloud login 接回此服务器。",
   "更新检查未完成：无法确认 %s 的最新版本。": "更新检查未完成：无法确认 %s 的最新版本。",
   "卸载完成：已删除识别为该模块的 JAR 文件：%s": "卸载完成：已删除识别为该模块的 JAR 文件：%s",
   "（没有需要删除的文件）": "（没有需要删除的文件）",

@@ -137,6 +137,16 @@
     "removedIn": "6.3.0"
   },
   {
+    "key": "com.ultikits.ultitools.entities.TokenEntity",
+    "className": "com.ultikits.ultitools.entities.TokenEntity",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use CloudAuthManager.login(DeviceLoginListener) for server linking; removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.interfaces.DataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin,java.lang.Class)",
     "className": "com.ultikits.ultitools.interfaces.DataStore",
     "memberName": "getOperator",
@@ -684,6 +694,17 @@
     "removedIn": "6.3.0"
   },
   {
+    "key": "com.ultikits.ultitools.utils.CloudAuthManager#login(java.lang.Runnable,java.util.function.Consumer,java.lang.Runnable,java.util.function.Consumer,java.util.function.Consumer)",
+    "className": "com.ultikits.ultitools.utils.CloudAuthManager",
+    "memberName": "login",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use login(DeviceLoginListener) instead; removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.utils.CloudAuthManager#startPolling(java.lang.String,java.util.function.Consumer,long)",
     "className": "com.ultikits.ultitools.utils.CloudAuthManager",
     "memberName": "startPolling",
@@ -696,6 +717,28 @@
     "removedIn": "6.3.0"
   },
   {
+    "key": "com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus#getExpirationDate()",
+    "className": "com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus",
+    "memberName": "getExpirationDate",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use getServerName() or getServerId() for identity instead; removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus#getUserName()",
+    "className": "com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus",
+    "memberName": "getUserName",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use getServerName() or getServerId() instead; removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.utils.PluginInitiationUtils#activateCloudIfCurrent(long)",
     "className": "com.ultikits.ultitools.utils.PluginInitiationUtils",
     "memberName": "activateCloudIfCurrent",
@@ -706,6 +749,17 @@
     "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to activateCloudIfCurrent(CloudSession) against CloudSession#current(); {@code generation} is accepted only so this signature still compiles against any (nonexistent) caller. Removed by plan 16-09 -- within the same 6.3.0 development cycle it was added in; this member never appeared in any released jar (WR-05, 16-REVIEW-cloud.md).",
     "status": "REMOVED",
     "removedIn": "6.3.0"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.PluginInitiationUtils#startTokenRefreshScheduler()",
+    "className": "com.ultikits.ultitools.utils.PluginInitiationUtils",
+    "memberName": "startTokenRefreshScheduler",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "No replacement is needed for non-expiring server credentials; removed in 6.4.0.",
+    "status": "ANNOUNCED"
   },
   {
     "key": "com.ultikits.ultitools.utils.SecurityPolicy#addDangerousClass(java.lang.String)",

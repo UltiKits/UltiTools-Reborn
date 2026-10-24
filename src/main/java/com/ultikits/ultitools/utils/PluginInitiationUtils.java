@@ -38,6 +38,8 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  */
 public class PluginInitiationUtils {
 
+    static final String LEGACY_TOKEN_REMOVED_KEY = "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.";
+
     /** {@code server_properties} is handled by its own dedicated manager — it is not a real config file path. */
     private static final String SERVER_PROPERTIES_FILE = "server_properties";
 
@@ -212,6 +214,17 @@ public class PluginInitiationUtils {
      */
     public static boolean resumeSavedCredentialOnStartup() {
         try {
+            ServerCredentialStore.LegacyTokenRemoval removal;
+            try {
+                removal = ServerCredentialStore.removeLegacyToken();
+            } catch (com.ultikits.ultitools.exceptions.DataAccessException failure) {
+                return false;
+            }
+            if (removal == ServerCredentialStore.LegacyTokenRemoval.REMOVED_UNLINKED) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
+                        UltiTools.getInstance().i18n(LEGACY_TOKEN_REMOVED_KEY),
+                        CredentialStore.stateDirectory().resolve(CredentialStore.CREDENTIAL_FILE_NAME).toAbsolutePath()));
+            }
             enableCloud();
             return CloudSession.current().loadServerCredential();
         } catch (Exception e) {
@@ -222,7 +235,12 @@ public class PluginInitiationUtils {
         }
     }
 
-    /** No-op: the protocol v2 server credential never expires and has no refresh token. */
+    /**
+     * No-op: the protocol v2 server credential never expires and has no refresh token.
+     * @deprecated No replacement is needed for non-expiring server credentials; removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static void startTokenRefreshScheduler() {
     }
 

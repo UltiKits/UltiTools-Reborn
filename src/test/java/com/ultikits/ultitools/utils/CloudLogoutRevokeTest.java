@@ -146,6 +146,81 @@ class CloudLogoutRevokeTest {
         assertThat(records).allSatisfy(r -> assertThat(r.getMessage()).doesNotContain(SECRET));
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {200, 401, 500, 429, 302})
+    void revokeOutcomesDeleteBothCloudEntries(int status) throws Exception {
+        replyStatus = status;
+        ServerCredentialStore.save(credential("LOGOUT_TEST"));
+        assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
+        CredentialStore.update(document -> {
+            document.put("cloud_token", java.util.Collections.singletonMap("access_token", "legacy-test-only"));
+            return document;
+        });
+        List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
+        CloudAuthManager.logoutReporting(outcomes::add);
+        server.getScheduler().performOneTick();
+        server.getScheduler().waitAsyncTasksFinished();
+        assertThat(outcomes).containsExactly(status == 200 || status == 401 ? CloudAuthManager.LogoutOutcome.REVOKED
+                : CloudAuthManager.LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
+        assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid");
+        assertThat(CloudSession.current().getCredential()).isNull();
+        assertThat(events).containsExactly("revoke");
+        assertThat(authorization).isEqualTo("Bearer " + SECRET);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void unavailableOrUnconfiguredEndpointStillDeletesLocally(boolean unconfigured) throws Exception {
+        ServerCredentialStore.save(credential("LOGOUT_TEST"));
+        if (unconfigured) {
+            HttpRequestUtils.setBaseUrlForTesting("");
+        } else {
+            http.stop(0);
+        }
+        List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
+        CloudAuthManager.logoutReporting(outcomes::add);
+        server.getScheduler().performOneTick();
+        server.getScheduler().waitAsyncTasksFinished();
+        assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
+        assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid");
+    }
+
+    @Test
+    void pendingLogoutCancelsWithoutNetworkOrAnyFileWrite() throws Exception {
+        Files.delete(credentialFile);
+        DeviceLoginTestSupport.FakeClock clock = new DeviceLoginTestSupport.FakeClock();
+        DeviceLoginTestSupport.FakeScheduler scheduler = new DeviceLoginTestSupport.FakeScheduler(clock);
+        CloudSession.setDeviceSeamsForTesting(null, scheduler, clock);
+        CloudSession.current().startDevicePolling(DeviceLoginTestSupport.grant(600, 5),
+                new DeviceLoginTestSupport.RecordingListener());
+        List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
+        CloudAuthManager.logoutReporting(outcomes::add);
+        CloudAuthManager.logoutReporting(outcomes::add);
+        assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.CANCELLED_PENDING,
+                CloudAuthManager.LogoutOutcome.NOT_LINKED);
+        assertThat(CloudSession.current().isCurrent()).isFalse();
+        assertThat(credentialFile).doesNotExist();
+        assertThat(events).isEmpty();
+    }
+
+    @Test
+    void lateLogoutCannotDeleteTheNewSessionsCredential() throws Exception {
+        ServerCredentialStore.save(credential("LOGOUT_TEST"));
+        assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
+        CloudSession old = CloudSession.current();
+        pauseReply = true;
+        CloudAuthManager.logoutReporting(outcome -> { });
+        server.getScheduler().performOneTick();
+        assertThat(requestArrived.await(5, TimeUnit.SECONDS)).isTrue();
+        CloudSession fresh = CloudSession.startNew();
+        assertThat(fresh.commitCredential(credential("NEW_TEST"))).isTrue();
+        replyAllowed.countDown();
+        server.getScheduler().waitAsyncTasksFinished();
+        assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo("cred-NEW_TEST");
+        assertThat(fresh.getCredential().getCredentialId()).isEqualTo("cred-NEW_TEST");
+        assertThat(old.getCredential()).isNull();
+    }
+
     ConsoleCommandSender sender() {
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
         doAnswer(call -> { lines.add(call.getArgument(0)); return null; }).when(sender).sendMessage(anyString());

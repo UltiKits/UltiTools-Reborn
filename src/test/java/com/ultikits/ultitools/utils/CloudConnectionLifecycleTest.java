@@ -272,14 +272,13 @@ class CloudConnectionLifecycleTest {
             doc.put("cloud_token", java.util.Collections.singletonMap("refresh_token", "old-test-refresh"));
             return doc;
         });
-        byte[] before = Files.readAllBytes(credentialFile);
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
         PluginInitiationUtils.initWebsocket();
         PluginInitiationUtils.startTokenRefreshScheduler();
         PluginInitiationUtils.stopCredentialSchedulers();
         Thread.sleep(150);
         assertThat(raw.requests).isEmpty();
-        assertThat(Files.readAllBytes(credentialFile)).isEqualTo(before);
+        assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid").containsEntry("uuid", UUID);
         assertThat(CloudSession.current().getToken()).isNull();
     }
 

@@ -223,7 +223,10 @@ public class CloudAuthManager {
      * @param onRequesting      invoked right before the device-code request is made
      * @param onSuccess         invoked with the complete verification URI once a code was issued
      * @param onError           invoked with an error message if the request fails
+     * @deprecated Use {@link #login(DeviceLoginListener)} instead; removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static void login(Runnable onAlreadyLoggedIn, Consumer<Long> onRateLimited,
             Runnable onRequesting, Consumer<String> onSuccess, Consumer<String> onError) {
         login(new DeviceLoginListener() {
@@ -343,10 +346,8 @@ public class CloudAuthManager {
             retiring = linkedCredential(tornDown);
             hadAnything = tornDown.hasAnythingToClear() || retiring != null;
             cancelled = tornDown.consumePendingCancellation();
-            if (retiring == null) {
-                if (hadAnything) {
-                    tornDown.clearPersisted();
-                }
+            if (retiring == null && tornDown.hasAnythingToClear()) {
+                tornDown.clearPersisted();
             }
         }
         if (retiring == null) {
@@ -420,12 +421,22 @@ public class CloudAuthManager {
             return connected;
         }
 
-        /** @return {@code null}; protocol v2 holds no user token */
+        /**
+         * @return {@code null}; protocol v2 holds no user token
+         * @deprecated Use {@link #getServerName()} or {@link #getServerId()} instead; removed in 6.4.0.
+         * @removeIn 6.4.0
+         */
+        @Deprecated(since = "6.3.1", forRemoval = true)
         public String getUserName() {
             return null;
         }
 
-        /** @return {@code null}; the server credential never expires */
+        /**
+         * @return {@code null}; the server credential never expires
+         * @deprecated Use {@link #getServerName()} or {@link #getServerId()} for identity instead; removed in 6.4.0.
+         * @removeIn 6.4.0
+         */
+        @Deprecated(since = "6.3.1", forRemoval = true)
         public Date getExpirationDate() {
             return null;
         }

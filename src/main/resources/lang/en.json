@@ -1,4 +1,13 @@
 {
+  "Unlinking this server from UltiCloud...": "Unlinking this server from UltiCloud...",
+  "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.": "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.",
+  "Use /ulticloud login to link it again.": "Use /ulticloud login to link it again.",
+  "Unlinked this server locally, but UltiCloud could not be reached to revoke its credential.": "Unlinked this server locally, but UltiCloud could not be reached to revoke its credential.",
+  "The cloud credential may still be valid. Revoke it in the panel: server settings > Revoke credential.": "The cloud credential may still be valid. Revoke it in the panel: server settings > Revoke credential.",
+  "Cancelled the pending UltiCloud link request. Cloud features are stopped.": "Cancelled the pending UltiCloud link request. Cloud features are stopped.",
+  "This server is not linked to UltiCloud.": "This server is not linked to UltiCloud.",
+  "Cloud features have been stopped regardless.": "Cloud features have been stopped regardless.",
+  "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.": "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.",
   "更新检查未完成：无法确认 %s 的最新版本。": "Update check incomplete: could not confirm the latest version of %s.",
   "卸载完成：已删除识别为该模块的 JAR 文件：%s": "Uninstall done: the JAR files identified as this module's have been deleted: %s",
   "（没有需要删除的文件）": "(no file needed deleting)",

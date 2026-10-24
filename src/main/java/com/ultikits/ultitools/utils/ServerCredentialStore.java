@@ -101,11 +101,41 @@ final class ServerCredentialStore {
             ServerCredential stored = ServerCredential.fromDocument(document.get(KEY));
             if (stored != null && credentialId.equals(stored.getCredentialId())) {
                 document.remove(KEY);
+                document.remove(LEGACY_TOKEN_KEY);
                 removed.set(true);
             }
             return document;
         });
         return removed.get();
+    }
+
+    /**
+     * Removes the unusable pre-v2 token only when it exists. CredentialStore is the sole owner of
+     * this framework state, not operator configuration; the hard cut retained no old signing key
+     * and supports no token exchange. No token means no update, preserving the file's exact bytes.
+     *
+     * @return whether the token was removed and a server credential was present beside it
+     */
+    static LegacyTokenRemoval removeLegacyToken() {
+        CredentialStore.ReadResult result = CredentialStore.read();
+        if (!result.isParsed() || !result.data().containsKey(LEGACY_TOKEN_KEY)) {
+            return LegacyTokenRemoval.NONE;
+        }
+        java.util.concurrent.atomic.AtomicReference<LegacyTokenRemoval> removal =
+                new java.util.concurrent.atomic.AtomicReference<>(LegacyTokenRemoval.NONE);
+        CredentialStore.update(document -> {
+            if (document.containsKey(LEGACY_TOKEN_KEY)) {
+                removal.set(document.containsKey(KEY) ? LegacyTokenRemoval.REMOVED_BESIDE_CREDENTIAL
+                        : LegacyTokenRemoval.REMOVED_UNLINKED);
+                document.remove(LEGACY_TOKEN_KEY);
+            }
+            return document;
+        });
+        return removal.get();
+    }
+
+    enum LegacyTokenRemoval {
+        NONE, REMOVED_UNLINKED, REMOVED_BESIDE_CREDENTIAL
     }
 
     /**
