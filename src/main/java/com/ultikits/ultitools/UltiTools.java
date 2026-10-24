@@ -76,6 +76,7 @@ import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.Metrics;
+import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.OfficialLanguageFiles;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
@@ -346,12 +347,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
             // down.
             PluginInitiationUtils.enableCloud();
             initWebSocket();
-            PluginInitiationUtils.startTokenRefreshScheduler();
         }
 
         registerCommands();
         Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
-        scheduleStartupMessages(loginSuccess);
+        scheduleStartupMessages();
         releaseEarlyLogCapture(loginSuccess);
     }
 
@@ -772,19 +772,15 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     private boolean attemptCloudLogin() {
-        // Delegated to PluginInitiationUtils.resumeSavedCredentialOnStartup() (plan 16-09, D-18):
-        // loadSavedToken() and loginWithToken(TokenEntity) both had to stop being public statics
-        // that accept/return a TokenEntity across a package boundary, so this method's old inline
-        // body (load, log, rate-limit check, activate) moved to a package-private-reachable seam.
+        // Loads only the per-server credential; the connection starts separately, asynchronously.
         return PluginInitiationUtils.resumeSavedCredentialOnStartup();
     }
 
     private void initWebSocket() {
-        getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
         try {
             PluginInitiationUtils.initWebsocket();
         } catch (Exception e) {
-            getLogger().log(Level.WARNING, i18n("配置编辑Websocket服务初始化失败！") + e.getMessage());
+            getLogger().log(Level.WARNING, "UltiCloud connection could not be started: " + e.getClass().getSimpleName());
         }
     }
 
@@ -802,13 +798,14 @@ public final class UltiTools extends JavaPlugin implements Localized {
         commandManager.registerCoreCommand(new CloudLoginCommand());
     }
 
-    private void scheduleStartupMessages(boolean loginSuccess) {
+    private void scheduleStartupMessages() {
         getServer().getScheduler().scheduleSyncDelayedTask(this, () -> {
-            if (loginSuccess) {
-                getLogger().log(Level.INFO, i18n("UltiCloud: Connected!"));
-                getLogger().log(Level.INFO, i18n("网页编辑器已启动！访问地址：https://panel.ultikits.com/manger"));
+            CloudAuthManager.CloudStatus status = CloudAuthManager.status();
+            if (status.isLinked()) {
+                getLogger().log(Level.INFO, "UltiCloud: linked as " + status.getServerName()
+                        + " (server ID " + status.getServerId() + "); connecting.");
             } else {
-                getLogger().log(Level.INFO, "UltiCloud: Not connected. Use /ulticloud login to authenticate.");
+                getLogger().log(Level.INFO, "UltiCloud: Not linked. Use /ulticloud login to link this server.");
             }
             getLogger().log(Level.INFO, String.format(i18n("数据存储方式：%s"), dataStore.getStoreType()));
             getLogger().log(Level.INFO, String.format(i18n("UltiTools-API已启动，当前版本：%s"), getEnv().getString("version")));

@@ -11,7 +11,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
-import java.util.Date;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.logging.Level;
@@ -221,11 +222,17 @@ class CloudLoginCommandTest {
     @DisplayName("status")
     class StatusBranches {
 
-        @Test
-        @DisplayName("linked: one green line with the server name and ID")
-        void linked() {
+        @ParameterizedTest
+        @ValueSource(strings = {"connected", "connecting", "reconnecting in 5 s (attempt 2)",
+            "stopped — this UltiTools version is no longer accepted; upgrade UltiTools",
+            "stopped — another connection is using this server's credential",
+            "paused — plan limit reached; retrying every 15 minutes (next in 15 min). Run /ulticloud reconnect after renewing.",
+            "not connected"})
+        @DisplayName("linked: link details then the connection description")
+        void linked(String description) {
             CommandSender sender = mock(CommandSender.class);
             CloudAuthManager.CloudStatus status = buildStatus(true, "Survival", "01JTESTSERVERID0000000000");
+            lenient().when(status.getConnectionDescription()).thenReturn(description);
 
             try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class)) {
                 auth.when(CloudAuthManager::status).thenReturn(status);
@@ -233,8 +240,10 @@ class CloudLoginCommandTest {
                 new CloudLoginCommand().status(sender);
             }
 
-            verify(sender).sendMessage(ChatColor.GREEN + "UltiCloud: Linked as Survival (server ID 01JTESTSERVERID0000000000)");
-            verify(sender, times(1)).sendMessage(anyString());
+            InOrder order = inOrder(sender);
+            order.verify(sender).sendMessage(ChatColor.GREEN + "UltiCloud: Linked as Survival (server ID 01JTESTSERVERID0000000000)");
+            order.verify(sender).sendMessage(ChatColor.GRAY + "Connection: " + description);
+            verify(sender, times(2)).sendMessage(anyString());
         }
 
         @Test
@@ -254,21 +263,12 @@ class CloudLoginCommandTest {
             order.verify(sender).sendMessage(ChatColor.GRAY + "Use /ulticloud login to link this server.");
         }
 
-        /**
-         * {@link CloudAuthManager.CloudStatus}'s constructor is private -- reached by reflection rather
-         * than widening a type that deliberately carries no more than {@code /ulticloud status} prints.
-         */
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         private CloudAuthManager.CloudStatus buildStatus(boolean linked, String serverName, String serverId) {
-            try {
-                java.lang.reflect.Constructor<CloudAuthManager.CloudStatus> ctor =
-                        CloudAuthManager.CloudStatus.class.getDeclaredConstructor(
-                                boolean.class, String.class, Date.class, boolean.class, String.class, String.class);
-                ctor.setAccessible(true);
-                return ctor.newInstance(false, null, null, linked, serverName, serverId);
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException("Failed to construct CloudStatus via reflection", e);
-            }
+            CloudAuthManager.CloudStatus status = mock(CloudAuthManager.CloudStatus.class);
+            lenient().when(status.isLinked()).thenReturn(linked);
+            lenient().when(status.getServerName()).thenReturn(serverName);
+            lenient().when(status.getServerId()).thenReturn(serverId);
+            return status;
         }
     }
 

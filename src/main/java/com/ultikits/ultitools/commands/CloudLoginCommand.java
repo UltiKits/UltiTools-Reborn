@@ -82,6 +82,7 @@ public class CloudLoginCommand extends BaseCommandExecutor {
             String name = status.getServerName() != null ? status.getServerName() : "an unnamed server";
             sender.sendMessage(ChatColor.GREEN + "UltiCloud: Linked as " + name + " (server ID "
                 + status.getServerId() + ")");
+            sender.sendMessage(ChatColor.GRAY + "Connection: " + status.getConnectionDescription());
         } else {
             sender.sendMessage(ChatColor.YELLOW + "UltiCloud: Not linked");
             sender.sendMessage(ChatColor.GRAY + "Use /ulticloud login to link this server.");

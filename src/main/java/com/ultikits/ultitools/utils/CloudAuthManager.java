@@ -340,15 +340,13 @@ public class CloudAuthManager {
      */
     public static CloudStatus status() {
         CloudSession session = CloudSession.current();
-        ServerCredential linked = linkedCredential(session);
-        String serverName = linked == null ? null : linked.getServerName();
-        String serverId = linked == null ? null : linked.getServerId();
-        if (!session.hasValidToken()) {
-            return new CloudStatus(false, null, null, linked != null, serverName, serverId);
+        synchronized (session) {
+            ServerCredential linked = linkedCredential(session);
+            String serverName = linked == null ? null : linked.getServerName();
+            String serverId = linked == null ? null : linked.getServerId();
+            String connection = session.connectionDescription();
+            return new CloudStatus("connected".equals(connection), linked != null, serverName, serverId, connection);
         }
-        TokenEntity token = session.getToken();
-        String userName = token.getUser_name() != null ? token.getUser_name() : "Unknown";
-        return new CloudStatus(true, userName, token.getExpirationDate(), linked != null, serverName, serverId);
     }
 
     /**
@@ -359,35 +357,40 @@ public class CloudAuthManager {
     public static final class CloudStatus {
 
         private final boolean connected;
-        private final String userName;
-        private final Date expirationDate;
         private final boolean linked;
         private final String serverName;
         private final String serverId;
+        private final String connectionDescription;
 
-        private CloudStatus(boolean connected, String userName, Date expirationDate, boolean linked,
-                String serverName, String serverId) {
+        private CloudStatus(boolean connected, boolean linked, String serverName, String serverId,
+                String connectionDescription) {
             this.connected = connected;
-            this.userName = userName;
-            this.expirationDate = expirationDate;
             this.linked = linked;
             this.serverName = serverName;
             this.serverId = serverId;
+            this.connectionDescription = connectionDescription;
         }
 
-        /** @return {@code true} if the current session holds a valid (non-expired) token */
+        /** @return a description of the current connection for the operator
+         * @since 6.3.1
+         */
+        public String getConnectionDescription() {
+            return connectionDescription;
+        }
+
+        /** @return {@code true} only while the current agent connection is open */
         public boolean isConnected() {
             return connected;
         }
 
-        /** @return the connected user's display name, or {@code null} if not connected */
+        /** @return {@code null}; protocol v2 holds no user token */
         public String getUserName() {
-            return userName;
+            return null;
         }
 
-        /** @return the current token's expiration date, or {@code null} if not connected or unset */
+        /** @return {@code null}; the server credential never expires */
         public Date getExpirationDate() {
-            return expirationDate;
+            return null;
         }
 
         /**

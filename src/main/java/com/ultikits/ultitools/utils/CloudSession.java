@@ -799,6 +799,31 @@ final class CloudSession {
         return agentConnection == null ? AgentConnection.State.STOPPED : agentConnection.state();
     }
 
+    synchronized String connectionDescription() {
+        switch (connectionState()) {
+            case OPEN:
+                return "connected";
+            case CONNECTING:
+                return "connecting";
+            case BACKOFF:
+                return "reconnecting in " + retryDelayUnits(1000L) + " s (attempt " + agentConnection.attempt() + ")";
+            case UPGRADE_REQUIRED:
+                return "stopped — this UltiTools version is no longer accepted; upgrade UltiTools";
+            case SUPERSEDED:
+                return "stopped — another connection is using this server's credential";
+            case PLAN_LIMITED:
+                return "paused — plan limit reached; retrying every 15 minutes (next in "
+                        + retryDelayUnits(60000L) + " min). Run /ulticloud reconnect after renewing.";
+            default:
+                return "not connected";
+        }
+    }
+
+    private long retryDelayUnits(long unitMillis) {
+        long remaining = Math.max(0L, agentConnection.nextRetryAtMillis() - System.currentTimeMillis());
+        return (remaining + unitMillis - 1L) / unitMillis;
+    }
+
     static void setAgentEndpointOverrideForTesting(URI endpoint) {
         agentEndpointOverride = endpoint;
     }
@@ -1161,6 +1186,7 @@ final class CloudSession {
         UltiTools.getInstance().getLogger().log(Level.INFO,
             "UltiCloud: this server is now linked as " + granted.getServerName() + " (server ID "
                 + granted.getServerId() + ").");
+        startConnection();
         poll.listener.onLinked(granted.getServerName(), granted.getServerId());
     }
 
