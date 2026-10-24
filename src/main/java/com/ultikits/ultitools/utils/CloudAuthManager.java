@@ -365,10 +365,6 @@ public class CloudAuthManager {
         private final String serverName;
         private final String serverId;
 
-        private CloudStatus(boolean connected, String userName, Date expirationDate) {
-            this(connected, userName, expirationDate, false, null, null);
-        }
-
         private CloudStatus(boolean connected, String userName, Date expirationDate, boolean linked,
                 String serverName, String serverId) {
             this.connected = connected;
