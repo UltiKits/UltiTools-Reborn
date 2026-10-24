@@ -123,6 +123,12 @@ class CloudLogoutRevokeTest {
         new CloudLoginCommand().logout(sender());
         assertThat(lines).containsExactly(ChatColor.AQUA + "Unlinking this server from UltiCloud...");
         assertThat(CloudSession.current().isCurrent()).isFalse();
+        // The gateway observes the socket close on its own thread, while logout() only *schedules*
+        // the revoke on a tick; plan 22-07 also deletes the buffered state file before the teardown
+        // (S-32), which widens that window without changing the product order. Awaiting the close
+        // keeps the assertion below pinning that order -- close, then revoke -- rather than which
+        // thread won a millisecond race.
+        AgentConnectionLoopbackTest.await(() -> events.contains("closed"), "gateway saw the close");
         server.getScheduler().performOneTick();
         assertThat(requestArrived.await(5, TimeUnit.SECONDS)).as("revoke POST arrived").isTrue();
         assertThat(events).containsExactly("closed", "revoke");
