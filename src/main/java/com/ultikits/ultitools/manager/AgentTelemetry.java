@@ -13,6 +13,7 @@ import java.lang.management.ManagementFactory;
 import java.util.Locale;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -98,12 +99,9 @@ final class AgentTelemetry {
     private final LongSupplier clock;
 
     private long lastStatusAt;
-    private long lastPlayersAt;
-    private long lastPluginsAt;
-    private long lastWorldsAt;
-    private String lastPlayers;
-    private String lastPlugins;
-    private String lastWorlds;
+    private final Tracked playerTrack = new Tracked();
+    private final Tracked pluginTrack = new Tracked();
+    private final Tracked worldTrack = new Tracked();
 
     /**
      * Creates the encoder over the monitor's main-thread sample.
@@ -133,21 +131,9 @@ final class AgentTelemetry {
         if (send(channel, STATUS, statusPayload())) {
             lastStatusAt = now;
         }
-        JsonObject players = playersPayload();
-        if (send(channel, PLAYERS_SNAPSHOT, players)) {
-            lastPlayers = players.toString();
-            lastPlayersAt = now;
-        }
-        JsonObject plugins = pluginsPayload();
-        if (send(channel, PLUGINS_SNAPSHOT, plugins)) {
-            lastPlugins = plugins.toString();
-            lastPluginsAt = now;
-        }
-        JsonObject worlds = worldsPayload();
-        if (send(channel, WORLDS_SNAPSHOT, worlds)) {
-            lastWorlds = worlds.toString();
-            lastWorldsAt = now;
-        }
+        sendForced(channel, PLAYERS_SNAPSHOT, this::playersPayload, playerTrack, now);
+        sendForced(channel, PLUGINS_SNAPSHOT, this::pluginsPayload, pluginTrack, now);
+        sendForced(channel, WORLDS_SNAPSHOT, this::worldsPayload, worldTrack, now);
     }
 
     /**
@@ -156,12 +142,9 @@ final class AgentTelemetry {
      */
     void onClose() {
         lastStatusAt = 0L;
-        lastPlayersAt = 0L;
-        lastPluginsAt = 0L;
-        lastWorldsAt = 0L;
-        lastPlayers = null;
-        lastPlugins = null;
-        lastWorlds = null;
+        playerTrack.clear();
+        pluginTrack.clear();
+        worldTrack.clear();
     }
 
     /**
@@ -172,6 +155,61 @@ final class AgentTelemetry {
     void tick(CloudChannel channel) {
         if (!enabled(channel)) {
             return;
+        }
+        long now = clock.getAsLong();
+        if (now - lastStatusAt >= STATUS_INTERVAL_MS && send(channel, STATUS, statusPayload())) {
+            lastStatusAt = now;
+        }
+        sendChanged(channel, PLAYERS_SNAPSHOT, this::playersPayload, playerTrack, now);
+        sendChanged(channel, PLUGINS_SNAPSHOT, this::pluginsPayload, pluginTrack, now);
+        sendChanged(channel, WORLDS_SNAPSHOT, this::worldsPayload, worldTrack, now);
+    }
+
+    /**
+     * Sends one snapshot regardless of the coalescing window, because the panel asked for it, and
+     * restarts that snapshot's window from now.
+     */
+    private static void sendForced(CloudChannel channel, String type, Supplier<JsonObject> payload,
+            Tracked track, long now) {
+        JsonObject built = payload.get();
+        if (send(channel, type, built)) {
+            track.remember(built.toString(), now);
+        }
+    }
+
+    /**
+     * Sends one snapshot when its mapped payload differs from the last one sent and at least
+     * {@value #SNAPSHOT_MIN_INTERVAL_MS} ms have passed since that send. Comparison is on the
+     * payload that would go on the wire, so a value the contract does not carry cannot wake it.
+     */
+    private static void sendChanged(CloudChannel channel, String type, Supplier<JsonObject> payload,
+            Tracked track, long now) {
+        if (now - track.lastAt < SNAPSHOT_MIN_INTERVAL_MS) {
+            return;
+        }
+        JsonObject built = payload.get();
+        String json = built.toString();
+        if (json.equals(track.lastPayload)) {
+            return;
+        }
+        if (send(channel, type, built)) {
+            track.remember(json, now);
+        }
+    }
+
+    /** The last successful send of one snapshot type: how recently, and what went on the wire. */
+    private static final class Tracked {
+        private long lastAt;
+        private String lastPayload;
+
+        private void remember(String payload, long now) {
+            lastPayload = payload;
+            lastAt = now;
+        }
+
+        private void clear() {
+            lastAt = 0L;
+            lastPayload = null;
         }
     }
 
