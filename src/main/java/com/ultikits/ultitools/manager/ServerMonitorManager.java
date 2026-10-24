@@ -674,6 +674,28 @@ public class ServerMonitorManager {
     }
 
     /**
+     * Runs one TPS and CPU sample on the main thread, without starting the v1 sender, the log
+     * drain or either sampling task {@link #startMonitoring()} owns.
+     * <p>
+     * The v2 telemetry session (plan 22-22) schedules this once per second in place of the v1
+     * {@code tpsTask}: {@link #getCurrentTPS()} and {@link #sampledCpuPercent()} read what it
+     * records. It deliberately does not call {@link #startMonitoring()}, which would also start
+     * the v1 {@code batch_update} sender and the log drain.
+     * <p>
+     * <b>May only be called on the Bukkit main thread</b>, like every other sample this class
+     * takes; any other thread is refused and logged as SEVERE.
+     *
+     * @return {@code true} when the sample ran, {@code false} off the main thread
+     */
+    boolean sampleTpsAndCpu() {
+        if (!isOnPrimaryThreadOrComplain()) {
+            return false;
+        }
+        updateTpsAndCpu();
+        return true;
+    }
+
+    /**
      * Reads the published main-thread sample for the v2 telemetry encoders
      * ({@link AgentTelemetry}). Package-private: internal cross-class reading, not a public API,
      * and the v1 send paths keep using {@link #currentSnapshot()}.

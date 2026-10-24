@@ -559,6 +559,52 @@ class ServerMonitorManagerTest {
     }
 
     @Nested
+    @DisplayName("sampleTpsAndCpu 测试")
+    class SampleTpsAndCpuTests {
+
+        @Test
+        @DisplayName("应该在不启动 v1 监控的情况下采样一次 TPS 与 CPU")
+        void shouldSampleWithoutStartingV1Monitoring() throws Exception {
+            // Arrange
+            Field indexField = ServerMonitorManager.class.getDeclaredField("historyIndex");
+            indexField.setAccessible(true);
+            Field isMonitoringField = ServerMonitorManager.class.getDeclaredField("isMonitoring");
+            isMonitoringField.setAccessible(true);
+            int initialIndex = indexField.getInt(serverMonitorManager);
+
+            // Act
+            boolean sampled = serverMonitorManager.sampleTpsAndCpu();
+
+            // Assert
+            assertThat(sampled).isTrue();
+            assertThat(indexField.getInt(serverMonitorManager)).isEqualTo(initialIndex + 1);
+            assertThat(isMonitoringField.getBoolean(serverMonitorManager)).isFalse();
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("非主线程调用应该被拒绝且不记录新的 TPS")
+        void shouldRefuseOffTheMainThread() throws Exception {
+            // Arrange
+            Field indexField = ServerMonitorManager.class.getDeclaredField("historyIndex");
+            indexField.setAccessible(true);
+            int initialIndex = indexField.getInt(serverMonitorManager);
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+
+            try {
+                // Act
+                Future<Boolean> sampled = executor.submit(serverMonitorManager::sampleTpsAndCpu);
+
+                // Assert
+                assertThat(sampled.get(10, TimeUnit.SECONDS)).isFalse();
+            } finally {
+                executor.shutdownNow();
+            }
+            assertThat(indexField.getInt(serverMonitorManager)).isEqualTo(initialIndex);
+        }
+    }
+
+    @Nested
     @DisplayName("sendPlayerEvent 测试")
     class SendPlayerEventTests {
 
