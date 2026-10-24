@@ -5,12 +5,15 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudLimits;
 import java.util.Objects;
+import java.nio.charset.StandardCharsets;
+import java.util.logging.Logger;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 final class FramedChannel implements CloudChannel {
+    private static final Logger LOGGER = Logger.getLogger(FramedChannel.class.getName());
     private final Predicate<String> socketSend;
     private final BooleanSupplier established;
     private final Supplier<CloudLimits> limits;
@@ -70,6 +73,22 @@ final class FramedChannel implements CloudChannel {
         }
         if (!isOpen()) { return false; }
         Envelope envelope = new Envelope(ids.get(), type, clock.getAsLong(), replyTo, payload);
-        return socketSend.test(envelope.toJson());
+        String text = envelope.toJson();
+        int maxBytes = limits().maxFrameBytes();
+        if (text.getBytes(StandardCharsets.UTF_8).length > maxBytes) {
+            if (replyTo == null) {
+                LOGGER.fine("UltiCloud: dropped an outgoing frame exceeding maxFrameBytes.");
+            } else {
+                JsonObject error = new JsonObject();
+                error.addProperty("code", "payload_too_large");
+                error.addProperty("message", "The reply exceeds maxFrameBytes.");
+                String replacement = new Envelope(ids.get(), "error", clock.getAsLong(), replyTo, error).toJson();
+                if (isOpen() && replacement.getBytes(StandardCharsets.UTF_8).length <= maxBytes) {
+                    socketSend.test(replacement);
+                }
+            }
+            return false;
+        }
+        return isOpen() && socketSend.test(text);
     }
 }
