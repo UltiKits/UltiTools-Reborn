@@ -26,6 +26,13 @@ import org.bukkit.entity.Player;
  * {@code internal_error}. A payload that does not match the frozen schema is rejected before
  * anything is scheduled, so an invalid frame never reaches a player.</p>
  *
+ * <p>None of the three Bukkit calls reports whether it took effect: a game mode change and a kick
+ * are both cancellable by other plugins, and the platform discards that answer. Each action is
+ * therefore answered {@code ok} only after its post-condition was observed — the game mode now
+ * equals the requested one, or the player is no longer online — and as a cancelled action
+ * otherwise. A throwing call is answered {@code internal_error} with one fixed message; the
+ * exception class and stack stay in the local log, never on the wire.</p>
+ *
  * <p>Teleports use {@link Player#teleportAsync(Location)} and are answered when the returned future
  * completes; that answer may therefore come from a thread other than the main thread, which
  * {@link CloudChannel} permits. Every executed or refused action is reported once through the
@@ -56,10 +63,19 @@ final class PlayerActionHandler implements CloudRequestHandler {
     static final String CODE_PLAYER_NOT_ONLINE = "player_not_online";
     /** The contract result code for coordinates whose world does not exist. */
     static final String CODE_WORLD_NOT_FOUND = "world_not_found";
-    /** The contract result code for a cancelled teleport or a throwing call. */
+    /** The contract result code for a cancelled action or a throwing call. */
     static final String CODE_INTERNAL_ERROR = "internal_error";
     /** The result message used when another plugin cancels the teleport. */
     static final String TELEPORT_CANCELLED = "teleport was cancelled";
+    /** The result message used when another plugin cancels the game mode change. */
+    static final String GAME_MODE_CANCELLED = "game mode change was cancelled";
+    /** The result message used when another plugin cancels the kick. */
+    static final String KICK_CANCELLED = "kick was cancelled";
+    /**
+     * The one message a throwing call is answered with; the same fixed text the agent router uses
+     * for {@code internal_error}, so no exception text ever reaches the wire.
+     */
+    static final String INTERNAL_ERROR_MESSAGE = "The request could not be processed.";
 
     private static final String[] GAME_MODES = {"survival", "creative", "adventure", "spectator"};
     private static final int NAME_MIN = 1;
@@ -70,10 +86,8 @@ final class PlayerActionHandler implements CloudRequestHandler {
     private static final double HORIZONTAL_LIMIT = 30000000.0D;
     private static final double LOWEST_Y = -2048.0D;
     private static final double HIGHEST_Y = 4096.0D;
-    private static final int MESSAGE_MAX = 500;
     private static final String OFFLINE_SUFFIX = " is not online";
     private static final String MISSING_WORLD_SUFFIX = " does not exist";
-    private static final String FALLBACK_MESSAGE = "the action failed";
 
     private static final Logger LOGGER = Logger.getLogger(PlayerActionHandler.class.getName());
 
@@ -172,30 +186,47 @@ final class PlayerActionHandler implements CloudRequestHandler {
 
     /**
      * Kicks with the reason as one plain-text component, or with the server's own default message
-     * when the panel sent no reason.
+     * when the panel sent no reason. The kick is reported as done only when the player is no longer
+     * online: another plugin may cancel the {@code PlayerKickEvent}, and the platform returns no
+     * answer either way.
      */
     private void runKick(CloudChannel channel, CloudRequest request, Action action, Player subject) {
+        boolean performed;
         try {
             if (action.reason == null) {
                 subject.kick();
             } else {
                 subject.kick(Component.text(action.reason));
             }
+            performed = !subject.isOnline();
         } catch (RuntimeException ex) {
             fail(channel, request, action, ex);
+            return;
+        }
+        if (!performed) {
+            deny(channel, request, action, CODE_INTERNAL_ERROR, KICK_CANCELLED);
             return;
         }
         succeed(channel, request, action);
     }
 
     /**
-     * Applies the requested game mode; the mode value was validated against the contract enum.
+     * Applies the requested game mode and reports it as done only when the player's mode now equals
+     * the requested one: another plugin may cancel the {@code PlayerGameModeChangeEvent}, and the
+     * platform discards that answer.
      */
     private void runGameMode(CloudChannel channel, CloudRequest request, Action action, Player subject) {
+        boolean performed;
         try {
-            subject.setGameMode(GameMode.valueOf(action.mode.toUpperCase(Locale.ROOT)));
+            GameMode requested = GameMode.valueOf(action.mode.toUpperCase(Locale.ROOT));
+            subject.setGameMode(requested);
+            performed = subject.getGameMode() == requested;
         } catch (RuntimeException ex) {
             fail(channel, request, action, ex);
+            return;
+        }
+        if (!performed) {
+            deny(channel, request, action, CODE_INTERNAL_ERROR, GAME_MODE_CANCELLED);
             return;
         }
         succeed(channel, request, action);
@@ -273,12 +304,14 @@ final class PlayerActionHandler implements CloudRequestHandler {
     }
 
     /**
-     * Maps a throwing call to the contract's {@code internal_error}, carrying only the exception
-     * message (never a class name prefix, payload or stack trace) on the wire.
+     * Maps a throwing call to the contract's {@code internal_error} with one fixed message: the
+     * exception class and stack stay in the local log and never reach the wire, as in the agent
+     * router (22-08).
      */
     private void fail(CloudChannel channel, CloudRequest request, Action action, Throwable error) {
-        LOGGER.log(Level.WARNING, "UltiCloud: the player action " + action.action + " failed.", error);
-        deny(channel, request, action, CODE_INTERNAL_ERROR, safeMessage(error));
+        LOGGER.log(Level.WARNING, "UltiCloud: the player action " + action.action
+                + " failed (exception=" + error.getClass().getName() + ").", error);
+        deny(channel, request, action, CODE_INTERNAL_ERROR, INTERNAL_ERROR_MESSAGE);
     }
 
     private void record(Action action, String refusal) {
@@ -295,22 +328,6 @@ final class PlayerActionHandler implements CloudRequestHandler {
     private static Player onlinePlayer(String name) {
         Player player = Bukkit.getPlayerExact(name);
         return player != null && player.isOnline() ? player : null;
-    }
-
-    /**
-     * Returns the exception's own message, bounded to the result schema's 500 code points and
-     * replaced by the exception type only when the message is absent or empty.
-     */
-    private static String safeMessage(Throwable error) {
-        String text = error.getMessage();
-        if (text == null || text.isEmpty()) {
-            text = error.getClass().getSimpleName();
-        }
-        if (text == null || text.isEmpty()) {
-            return FALLBACK_MESSAGE;
-        }
-        int count = text.codePointCount(0, text.length());
-        return count <= MESSAGE_MAX ? text : text.substring(0, text.offsetByCodePoints(0, MESSAGE_MAX));
     }
 
     /**

@@ -6,6 +6,7 @@ import com.ultikits.ultitools.contract.ContractSchemas;
 import com.ultikits.ultitools.contract.RecordingChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
 import io.papermc.paper.entity.TeleportFlag;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -14,7 +15,11 @@ import java.util.concurrent.TimeUnit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,25 +35,23 @@ import static org.assertj.core.api.Assertions.within;
 
 /**
  * Game mode and teleport, including every failure the contract maps: an offline subject or target,
- * an unknown world, a cancelled teleport and a throwing call.
+ * an unknown world, a cancelled action and a throwing call.
  */
 @DisplayName("player.action gamemode and teleport")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PlayerActionHandlerTest {
 
     private final RecordingAudit audit = new RecordingAudit();
+    private final QueuedMainThread mainThread = new QueuedMainThread();
     private ServerMock server;
-
-    private final Executor mainThread = task -> {
-        assertThat(server.isPrimaryThread()).as("the handler is scheduled on the main thread").isTrue();
-        task.run();
-    };
+    private Plugin plugin;
 
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
-        MockBukkit.createMockPlugin();
+        plugin = MockBukkit.createMockPlugin();
+        mainThread.clear();
     }
 
     @AfterEach
@@ -63,12 +66,45 @@ class PlayerActionHandlerTest {
         JsonObject frame = fixture("gamemode");
         RecordingChannel channel = new RecordingChannel();
 
-        handle(frame, channel);
+        dispatch(frame, channel);
+
+        assertThat(mainThread.isEmpty()).as("the action waits for the main thread").isFalse();
+        assertThat(subject.getGameMode()).as("no Bukkit call happens before the queue drains")
+                .isEqualTo(GameMode.SURVIVAL);
+        assertThat(channel.frames()).as("no answer before the queue drains").isEmpty();
+
+        drain();
 
         assertThat(subject.getGameMode()).isEqualTo(GameMode.CREATIVE);
         assertOk(channel, id(frame));
         assertThat(audit.allowed).containsExactly("gamemode:Alex");
         assertThat(audit.denied).isEmpty();
+    }
+
+    /**
+     * MockBukkit honours the cancellation of {@code PlayerGameModeChangeEvent} exactly as Paper
+     * does, so the mode stays unchanged and the post-condition check can see it.
+     */
+    @Test
+    void cancelledGameModeChangeIsReportedAsInternalError() {
+        PlayerMock subject = addPlayer("Alex");
+        server.getPluginManager().registerEvents(new Listener() {
+            @EventHandler
+            public void onGameModeChange(PlayerGameModeChangeEvent event) {
+                event.setCancelled(true);
+            }
+        }, plugin);
+        JsonObject frame = fixture("gamemode");
+        RecordingChannel channel = new RecordingChannel();
+
+        handle(frame, channel);
+
+        assertThat(subject.getGameMode()).as("the cancelled change left the mode alone")
+                .isEqualTo(GameMode.SURVIVAL);
+        assertError(channel, id(frame), "internal_error");
+        assertThat(message(channel)).isEqualTo("game mode change was cancelled");
+        assertThat(audit.denied).singleElement().asString().startsWith("gamemode:Alex:");
+        assertThat(audit.allowed).as("a cancelled action is not an allowed one").isEmpty();
     }
 
     @Test
@@ -172,7 +208,7 @@ class PlayerActionHandlerTest {
     }
 
     @Test
-    void exceptionallyCompletedTeleportReportsTheExceptionMessageOnly() {
+    void exceptionallyCompletedTeleportReportsTheFixedMessageWithoutTheExceptionText() {
         ActionPlayer subject = addPlayer("Steve");
         CompletableFuture<Boolean> pending = new CompletableFuture<>();
         pending.completeExceptionally(new IllegalStateException("stuck in a wall"));
@@ -184,11 +220,15 @@ class PlayerActionHandlerTest {
         handle(frame, channel);
 
         assertError(channel, id(frame), "internal_error");
-        assertThat(message(channel)).isEqualTo("stuck in a wall");
+        assertThat(message(channel)).isEqualTo("The request could not be processed.");
+        assertThat(rawFrame(channel))
+                .as("no exception text or class name reaches the wire")
+                .doesNotContain("stuck in a wall")
+                .doesNotContain("IllegalStateException");
     }
 
     @Test
-    void aThrowingTeleportCallReportsTheExceptionMessageOnly() {
+    void aThrowingTeleportCallReportsTheFixedMessageWithoutTheExceptionText() {
         ActionPlayer subject = addPlayer("Steve");
         subject.failWith(new IllegalStateException("unloaded chunk"));
         JsonObject frame = fixture("teleport-to-player");
@@ -198,7 +238,11 @@ class PlayerActionHandlerTest {
         handle(frame, channel);
 
         assertError(channel, id(frame), "internal_error");
-        assertThat(message(channel)).isEqualTo("unloaded chunk");
+        assertThat(message(channel)).isEqualTo("The request could not be processed.");
+        assertThat(rawFrame(channel))
+                .as("no exception text or class name reaches the wire")
+                .doesNotContain("unloaded chunk")
+                .doesNotContain("IllegalStateException");
         assertThat(subject.getLocation().getWorld()).as("nothing moved").isNotNull();
     }
 
@@ -211,7 +255,9 @@ class PlayerActionHandlerTest {
         addPlayer(".Steve");
         RecordingChannel channel = new RecordingChannel();
 
-        handle(frame, channel);
+        dispatch(frame, channel);
+        drain();
+
         assertThat(channel.frames()).as("the main thread does not wait for the teleport").isEmpty();
 
         Thread completer = new Thread(() -> pending.complete(Boolean.TRUE));
@@ -223,7 +269,16 @@ class PlayerActionHandlerTest {
     }
 
     private void handle(JsonObject frame, RecordingChannel channel) {
+        dispatch(frame, channel);
+        drain();
+    }
+
+    private void dispatch(JsonObject frame, RecordingChannel channel) {
         new PlayerActionHandler(mainThread, audit).handle(request(frame), channel);
+    }
+
+    private void drain() {
+        mainThread.drain(server);
     }
 
     private static CloudRequest request(JsonObject frame) {
@@ -267,6 +322,11 @@ class PlayerActionHandlerTest {
         return single(channel).getAsJsonObject("payload").get("message").getAsString();
     }
 
+    /** The whole result frame as text, so a test can pin what must never appear in it. */
+    private static String rawFrame(RecordingChannel channel) {
+        return single(channel).toString();
+    }
+
     private static JsonObject single(RecordingChannel channel) {
         List<JsonObject> frames = channel.frames();
         assertThat(frames).hasSize(1);
@@ -303,6 +363,40 @@ class PlayerActionHandlerTest {
                 return answer;
             }
             return CompletableFuture.completedFuture(teleport(location, cause, flags));
+        }
+    }
+
+    /**
+     * Stands in for the server's main thread: {@code handle} only queues its work, and nothing runs
+     * until a test drains the queue on the primary thread. A handler that skipped the executor
+     * would touch Bukkit before the drain and break the pre-drain assertions.
+     */
+    static final class QueuedMainThread implements Executor {
+        private final List<Runnable> tasks = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void execute(Runnable task) {
+            tasks.add(task);
+        }
+
+        void drain(ServerMock server) {
+            assertThat(server.isPrimaryThread()).as("the tests drain on the main thread").isTrue();
+            for (int round = 0; round < 10 && !tasks.isEmpty(); round++) {
+                List<Runnable> pending = new ArrayList<>(tasks);
+                tasks.clear();
+                for (Runnable task : pending) {
+                    task.run();
+                }
+            }
+            assertThat(tasks).as("no work is left queued after draining").isEmpty();
+        }
+
+        boolean isEmpty() {
+            return tasks.isEmpty();
+        }
+
+        void clear() {
+            tasks.clear();
         }
     }
 
