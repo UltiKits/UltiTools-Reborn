@@ -26,26 +26,58 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     @CmdMapping(format = "login")
     @RunAsync
     public void login(@CmdSender CommandSender sender) {
-        // Decision logic (already-logged-in / rate-limit / request / poll) lives behind
-        // CloudAuthManager.login() as of plan 16-09 (D-17/D-18) -- this method now only supplies
-        // the exact same message strings as callbacks, so /ulticloud login's console output is
-        // byte-for-byte unchanged.
-        CloudAuthManager.login(
-            () -> sender.sendMessage(ChatColor.YELLOW
-                + "Already logged in to UltiCloud. Use /ulticloud logout first to re-login."),
-            remaining -> sender.sendMessage(ChatColor.RED
-                + "Please wait " + remaining + " seconds before trying again."),
-            () -> sender.sendMessage(ChatColor.AQUA + "Requesting login link from UltiCloud..."),
-            url -> {
-                sender.sendMessage(ChatColor.GREEN + "========================================");
-                sender.sendMessage(ChatColor.GREEN + " Open this URL in your browser to login:");
-                sender.sendMessage(ChatColor.AQUA + " " + url);
-                sender.sendMessage(ChatColor.GREEN + "========================================");
-                sender.sendMessage(ChatColor.GRAY + "The link will expire in 5 minutes.");
-                sender.sendMessage(ChatColor.GRAY + "Waiting for authentication...");
-            },
-            error -> sender.sendMessage(ChatColor.RED + "Failed to get login link: " + error)
-        );
+        // The decisions (already linked / rate limit / device-code request / polling) live behind
+        // CloudAuthManager.login(DeviceLoginListener); this method only renders their outcomes.
+        CloudAuthManager.login(new LoginOutput(sender));
+    }
+
+    /** Renders the device login's outcomes to the sender that ran {@code /ulticloud login}. */
+    private static final class LoginOutput implements CloudAuthManager.DeviceLoginListener {
+
+        private final CommandSender sender;
+
+        LoginOutput(CommandSender sender) {
+            this.sender = sender;
+        }
+
+        @Override
+        public void onAlreadyLinked(String serverName) {
+            sender.sendMessage(ChatColor.YELLOW + "This server is already linked to UltiCloud as " + serverName
+                + ". Use /ulticloud logout first to link it again.");
+        }
+
+        @Override
+        public void onRateLimited(long seconds) {
+            sender.sendMessage(ChatColor.RED + "Please wait " + seconds + " seconds before trying again.");
+        }
+
+        @Override
+        public void onRequesting() {
+            sender.sendMessage(ChatColor.AQUA + "Requesting a device code from UltiCloud...");
+        }
+
+        @Override
+        public void onCode(String verificationUri, String userCode, String verificationUriComplete,
+                long expiresInSeconds) {
+            sender.sendMessage(ChatColor.GREEN + "========================================");
+            sender.sendMessage(ChatColor.GREEN + " To link this server to UltiCloud, open:");
+            sender.sendMessage(ChatColor.AQUA + " " + verificationUri);
+            sender.sendMessage(ChatColor.GREEN + " and enter the code:");
+            sender.sendMessage(ChatColor.AQUA + " " + userCode);
+            sender.sendMessage(ChatColor.GRAY + " Or open this link directly: " + verificationUriComplete);
+            sender.sendMessage(ChatColor.GREEN + "========================================");
+            sender.sendMessage(ChatColor.GRAY + "The code expires in " + minutes(expiresInSeconds)
+                + " minutes. Waiting for confirmation...");
+        }
+
+        @Override
+        public void onRequestFailed(String reason) {
+            sender.sendMessage(ChatColor.RED + "Failed to get a device code: " + reason);
+        }
+
+        private static long minutes(long seconds) {
+            return Math.max(1L, (seconds + 59L) / 60L);
+        }
     }
 
     @CmdMapping(format = "logout")

@@ -18,6 +18,7 @@ import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.manager.EarlyLogCapture;
 import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
@@ -65,7 +66,9 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * re-check-through-replacement region.</li>
  * <li>a specific session's own monitor ({@code synchronized (this)} / {@code synchronized(session)})
  * -- held by {@link #commit(TokenEntity)}, {@link #invalidate()}, {@link #startPolling}, the two
- * scheduler start/stop pairs, and by every caller in {@code PluginInitiationUtils} that needs to
+ * scheduler start/stop pairs, (protocol v2, plan 22-01) {@link #commitCredential(ServerCredential)},
+ * {@link #beginDeviceLogin}, {@link #startDevicePolling} and the device-step scheduling they share,
+ * and by every caller in {@code PluginInitiationUtils} that needs to
  * read-then-act on a session's currency ({@code reinitWebSocket}'s second confirmation,
  * {@code activateCloudIfCurrent}, {@code doDisableCloud}'s two global-manager steps).</li>
  * <li>{@link #LOG_WIRING_LOCK} (16-10 gap-closure addendum, issue #465) -- the innermost lock,
@@ -80,7 +83,16 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * anywhere (acquiring a session monitor first, then trying to enter a {@code synchronized
  * (CloudSession.class)} block while still holding it) is exactly the AB-BA deadlock issue #466
  * fixed. No method in this package acquires a session monitor and then blocks trying to acquire
- * {@code CloudSession.class} it does not already hold.
+ * {@code CloudSession.class} it does not already hold. {@link #commitCredential(ServerCredential)}
+ * writes through {@link ServerCredentialStore}, so {@code CredentialStore}'s own lock is taken inside
+ * the session monitor -- never the other way round.
+ * <p>
+ * <b>Protocol v2 device login (plan 22-01).</b> A session also owns one RFC 8628 device
+ * authorization: {@link #beginDeviceLogin} requests the device code and {@link #startDevicePolling}
+ * polls for the owner's confirmation, both as steps on this session's own poll executor, so a
+ * replaced or logged-out session's late steps lapse by the same {@link #invalidated} check
+ * {@link #commit(TokenEntity)} uses. The granted {@code ucs_} credential is persisted only through
+ * {@link #commitCredential(ServerCredential)}.
  *
  * @since 6.3.0
  */
@@ -168,6 +180,15 @@ final class CloudSession {
      * success for a poll this session already reported cancelling once.
      */
     private volatile boolean pendingAuthenticationCancelled;
+
+    /**
+     * The protocol v2 server credential this session committed, or {@code null}. Written only by
+     * {@link #commitCredential(ServerCredential)}.
+     */
+    private volatile ServerCredential credential;
+
+    /** The REST client of the device authorization grant. */
+    private final DeviceAuthorizationClient deviceClient = new DeviceAuthorizationClient();
 
     private ScheduledExecutorService pollExecutor;
     private ScheduledFuture<?> pollTask;
@@ -868,6 +889,169 @@ final class CloudSession {
         if (pollExecutor != null) {
             pollExecutor.shutdown();
             pollExecutor = null;
+        }
+    }
+
+    // ---- Device authorization (protocol v2, plan 22-01) ----
+
+    /** @return {@code true} if this session committed a server credential */
+    boolean hasCredential() {
+        return credential != null;
+    }
+
+    /** @return the server credential this session committed, or {@code null} */
+    ServerCredential getCredential() {
+        return credential;
+    }
+
+    /**
+     * Persists {@code newCredential} through {@link ServerCredentialStore}, but only if this session
+     * has not been invalidated -- the same guard as {@link #commit(TokenEntity)}, so a grant that
+     * arrives after {@code /ulticloud logout} or after a newer login replaced this session is
+     * discarded and never written.
+     *
+     * @param newCredential the credential the device authorization granted
+     * @return {@code true} if committed; {@code false} if this session was already invalidated, in
+     *         which case nothing was written
+     * @throws DataAccessException if the write fails
+     */
+    synchronized boolean commitCredential(ServerCredential newCredential) {
+        if (invalidated) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Discarding a credential result that arrived after this session was invalidated");
+            return false;
+        }
+        ServerCredentialStore.save(newCredential);
+        this.credential = newCredential;
+        return true;
+    }
+
+    /**
+     * Requests a device code on this session's poll executor and, once UltiCloud answers, reports it
+     * through {@code listener} and starts polling. Schedules nothing on an invalidated session.
+     *
+     * @param listener receives the code or the failure; called on the poll executor's thread
+     */
+    synchronized void beginDeviceLogin(CloudAuthManager.DeviceLoginListener listener) {
+        scheduleDeviceStep(() -> requestDeviceCode(listener), 0L);
+    }
+
+    // Every failure of a step must reach the operator: an exception thrown inside a
+    // ScheduledExecutorService task is otherwise kept silently in its Future.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void requestDeviceCode(CloudAuthManager.DeviceLoginListener listener) {
+        if (!isCurrent()) {
+            return;
+        }
+        DeviceAuthorizationClient.AuthorizeResult result;
+        try {
+            result = deviceClient.authorize(CloudAuthManager.runningFrameworkVersion(),
+                CloudAuthManager.suggestedServerName(), CloudAuthManager.storedAttachToServerId());
+        } catch (RuntimeException e) {
+            result = DeviceAuthorizationClient.AuthorizeResult.failed(
+                "unexpected " + e.getClass().getSimpleName(), -1);
+        }
+        if (!result.isGranted()) {
+            stopPolling();
+            if (isCurrent()) {
+                listener.onRequestFailed(result.failureReason());
+            }
+            return;
+        }
+        DeviceAuthorizationClient.Grant grant = result.grant();
+        if (!isCurrent()) {
+            return;
+        }
+        listener.onCode(grant.verificationUri(), grant.userCode(), grant.verificationUriComplete(),
+            grant.expiresInSeconds());
+        startDevicePolling(grant, listener);
+    }
+
+    /**
+     * Polls {@code POST /v1/device/token} for {@code grant} on this session's poll executor until it
+     * reaches a terminal outcome. Like {@link #startPolling}, schedules nothing on an invalidated
+     * session: a late call after {@code /ulticloud logout} creates no executor.
+     *
+     * @param grant    the device code to poll
+     * @param listener receives the outcome; called on the poll executor's thread
+     */
+    synchronized void startDevicePolling(DeviceAuthorizationClient.Grant grant,
+            CloudAuthManager.DeviceLoginListener listener) {
+        if (invalidated) {
+            return;
+        }
+        DevicePoll poll = new DevicePoll(grant, listener, grant.intervalSeconds() * 1000L);
+        scheduleDeviceStep(() -> pollDeviceOnce(poll), poll.intervalMillis);
+    }
+
+    /**
+     * Schedules one device-login step on this session's poll executor, creating it on first use.
+     * The step becomes {@link #pollTask}, so {@link #invalidate()} both cancels it and records that a
+     * pending authentication was cancelled.
+     *
+     * @return {@code false} if this session is invalidated and nothing was scheduled
+     */
+    private synchronized boolean scheduleDeviceStep(Runnable step, long delayMillis) {
+        if (invalidated) {
+            return false;
+        }
+        if (pollExecutor == null) {
+            pollExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "UltiCloud-device-login");
+                thread.setDaemon(true);
+                return thread;
+            });
+        }
+        pollTask = pollExecutor.schedule(step, delayMillis, TimeUnit.MILLISECONDS);
+        return true;
+    }
+
+    private void pollDeviceOnce(DevicePoll poll) {
+        if (!isCurrent()) {
+            return;
+        }
+        DeviceAuthorizationClient.PollResult result = deviceClient.pollToken(poll.grant.deviceCode());
+        if (result.kind() == DeviceAuthorizationClient.PollResult.Kind.GRANTED) {
+            completeDeviceLogin(poll, result.credential());
+            return;
+        }
+        scheduleDeviceStep(() -> pollDeviceOnce(poll), poll.intervalMillis);
+    }
+
+    private void completeDeviceLogin(DevicePoll poll, ServerCredential granted) {
+        boolean committed;
+        try {
+            committed = commitCredential(granted);
+        } catch (DataAccessException e) {
+            stopPolling();
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "UltiCloud: the server was linked, but its credential could not be saved ("
+                    + e.getMessage() + "). Revoke it in the panel and run /ulticloud login again.");
+            return;
+        }
+        stopPolling();
+        if (!committed) {
+            return;
+        }
+        ApiRateLimiter.reset("login");
+        UltiTools.getInstance().getLogger().log(Level.INFO,
+            "UltiCloud: this server is now linked as " + granted.getServerName() + " (server ID "
+                + granted.getServerId() + ").");
+        poll.listener.onLinked(granted.getServerName(), granted.getServerId());
+    }
+
+    /** The mutable state of one device-code poll; touched only by its poll steps, one at a time. */
+    private static final class DevicePoll {
+
+        private final DeviceAuthorizationClient.Grant grant;
+        private final CloudAuthManager.DeviceLoginListener listener;
+        private final long intervalMillis;
+
+        DevicePoll(DeviceAuthorizationClient.Grant grant, CloudAuthManager.DeviceLoginListener listener,
+                long intervalMillis) {
+            this.grant = grant;
+            this.listener = listener;
+            this.intervalMillis = intervalMillis;
         }
     }
 

@@ -2,10 +2,16 @@ package com.ultikits.ultitools.utils;
 
 import java.io.IOException;
 import java.util.Date;
+import java.util.Objects;
 import java.util.function.Consumer;
 
+import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.Server;
+import org.bukkit.plugin.PluginDescriptionFile;
 import org.jetbrains.annotations.ApiStatus;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
 
 /**
@@ -32,115 +38,221 @@ import com.ultikits.ultitools.entities.TokenEntity;
 @ApiStatus.Internal
 public class CloudAuthManager {
 
+    /** The longest {@code suggestedName} UltiCloud accepts, in code points (contract answer 13). */
+    static final int MAX_SUGGESTED_NAME_CODE_POINTS = 64;
+    /** The message a login reports when an overlapping login already replaced its session. */
+    static final String LOGIN_IN_PROGRESS = "Another login attempt is already in progress; please try again";
+
     private CloudAuthManager() {
     }
 
     /**
-     * Attempts a magic-link login on a fresh session, covering the already-logged-in check, the
-     * rate-limit check, the magic-link request and starting the poll -- exactly the sequence
-     * {@code /ulticloud login} performed before this plan, just no longer expressed through
-     * separate public statics on this class. Every branch is reported back through the callback
-     * that names it, so {@code CloudLoginCommand.login(CommandSender)} prints the exact same
-     * messages it always has; only where the decision is made moved.
+     * Links this server to UltiCloud with the RFC 8628 device authorization grant (protocol v2).
+     * <p>
+     * Runs the already-linked check (a credential held by the current session or stored in
+     * {@code credentials.json}), the rate-limit check, then replaces the current session and returns.
+     * The device-code request and the polling run on the new session's own poll executor, so a
+     * caller on the server's primary thread is never blocked on the network; their outcome reaches
+     * {@code listener} on that executor's thread.
+     * <p>
+     * The lock structure is the one the 6.3.0 magic-link login used, unchanged: {@code CloudSession.class},
+     * then the captured session's monitor, the re-check, the
+     * {@code sessionAtCheck != CloudSession.current()} guard, {@code disableCloud(sessionAtCheck)},
+     * {@code startNew()} -- the documented lock order of {@link CloudSession}'s class javadoc.
      *
-     * @param onAlreadyLoggedIn invoked, with nothing else attempted, if a valid token already exists
-     * @param onRateLimited     invoked with the remaining cooldown in seconds if the login attempt
-     *                          is currently rate-limited
-     * @param onRequesting      invoked right before the magic-link HTTP request is made
-     * @param onSuccess         invoked with the magic-link URL once the request succeeds
-     * @param onError           invoked with an error message if the magic-link request fails
+     * @param listener receives every outcome; must not be {@code null}
+     * @since 6.3.1
      */
-    public static void login(Runnable onAlreadyLoggedIn, Consumer<Long> onRateLimited,
-            Runnable onRequesting, Consumer<String> onSuccess, Consumer<String> onError) {
-        // Captured once, at the very top, and used consistently below -- see the round-1 review's
-        // third finding on this method for why a second, independent read of CloudSession.current()
-        // further down is unsafe here.
+    public static void login(DeviceLoginListener listener) {
+        Objects.requireNonNull(listener, "listener");
         CloudSession sessionAtCheck = CloudSession.current();
-        if (sessionAtCheck.hasValidToken()) {
-            onAlreadyLoggedIn.run();
+        ServerCredential linked = linkedCredential(sessionAtCheck);
+        if (linked != null) {
+            listener.onAlreadyLinked(linked.getServerName());
             return;
         }
         if (!ApiRateLimiter.isLoginAllowed()) {
-            onRateLimited.accept(ApiRateLimiter.getRemainingCooldown("login", 60_000));
+            listener.onRateLimited(ApiRateLimiter.getRemainingCooldown("login", 60_000));
             return;
         }
-
-        // 16-10 gap-closure addendum, issue #466: everything from the final re-check through
-        // replacing the session is one atomic region against CloudSession#commit(TokenEntity),
-        // acquiring CloudSession.class BEFORE sessionAtCheck's own monitor -- the SAME order
-        // CloudSession#startNew() itself already uses (see CloudSession's own class javadoc for the
-        // full documented lock order). The naive fix here -- synchronizing on sessionAtCheck alone,
-        // then letting disableCloud()'s own synchronized(CloudSession.class) block execute while
-        // still holding it -- inverts that order (session monitor outer, class lock inner) and is a
-        // genuine AB-BA deadlock against a concurrent startNew() (class lock outer, session monitor
-        // inner): reachable in production via a racing /ulticloud login or /ulticloud logout.
-        // Acquiring CloudSession.class first here closes the window WITHOUT that risk: a magic-link
-        // poll from an EARLIER login attempt (see the round-1 review's third finding, which the
-        // re-check below still exists to catch) either completes its own commit() BEFORE this region
-        // starts -- in which case the re-check below sees it and reports "already logged in" -- or it
-        // cannot even enter commit()'s own synchronized(this) until this ENTIRE region has finished
-        // and released sessionAtCheck's monitor, by which point disableCloud() has already set
-        // invalidated, so commit() correctly rejects it instead of silently writing a credential that
-        // then gets orphaned by the replacement already in progress.
+        // Issue #466: everything from the re-check through replacing the session is one atomic
+        // region against CloudSession#commitCredential, acquiring CloudSession.class BEFORE
+        // sessionAtCheck's own monitor -- the same order CloudSession#startNew() uses. Synchronizing
+        // on sessionAtCheck alone and letting disableCloud()'s own synchronized(CloudSession.class)
+        // block run inside it would invert that order: an AB-BA deadlock against a concurrent
+        // startNew(). Holding both here means a grant from an earlier login attempt either commits
+        // before this region (and the re-check sees it) or cannot enter commitCredential() until
+        // disableCloud() has invalidated the session, so it is discarded instead of orphaned.
         CloudSession newSession;
         synchronized (CloudSession.class) {
             synchronized (sessionAtCheck) {
-                // Round-1 external review finding, third pass (PR #464), re-verified atomic by this
-                // addendum: a magic-link poll from an EARLIER login attempt can still be in flight
-                // here -- polling lasts up to 5 minutes, well past the 1-minute login cooldown
-                // ApiRateLimiter.isLoginAllowed() just cleared above -- and could commit a valid
-                // token onto sessionAtCheck in the gap between the hasValidToken() check above and
-                // this line. Re-checking sessionAtCheck itself (never a fresh CloudSession.current()
-                // read, which could by now point somewhere else entirely) catches that: a session
-                // that became validly authenticated while this method was mid-flight is reported as
-                // "already logged in," not torn down and replaced by a redundant second login.
-                if (sessionAtCheck.hasValidToken()) {
-                    onAlreadyLoggedIn.run();
+                // A grant from an earlier login attempt can still commit onto sessionAtCheck between
+                // the check above and this line; it is reported as already linked, not replaced.
+                linked = linkedCredential(sessionAtCheck);
+                if (linked != null) {
+                    listener.onAlreadyLinked(linked.getServerName());
                     return;
                 }
-                // 16-10 gap-closure addendum (round-14 review, PR #464), P2: make the replacement
-                // conditional on sessionAtCheck still being CloudSession.current() -- reachable
-                // because ApiRateLimiter#isAllowed's own check-then-set is a separate
-                // ConcurrentHashMap get() and put(), not atomic, so two overlapping @RunAsync
-                // login() invocations can both pass the rate-limit check against the SAME captured
-                // sessionAtCheck before either reaches this lock. Without this check, the SECOND
-                // thread to acquire the lock would still act on ITS OWN (now stale) sessionAtCheck
-                // reference and call CloudSession#startNew() unconditionally -- which reads
-                // CloudSession.current() fresh, finds the FIRST thread's brand-new (already
-                // requesting/about-to-poll) session installed there, and invalidates THAT instead of
-                // the intended target. The first thread's magic-link URL would then be printed to
-                // the operator, but startPolling() silently refuses to poll an invalidated session,
-                // producing a link that can never complete. This read is stable for the rest of this
-                // block: only startNew() can change current(), and it is also synchronized on
-                // CloudSession.class, which this thread already holds.
+                // Round-14 review (PR #464): ApiRateLimiter#isAllowed's check-then-set is not atomic,
+                // so two overlapping logins can both pass it against the same sessionAtCheck. The
+                // second must not call startNew() -- that would invalidate the FIRST login's fresh
+                // session, whose code is already on its way to the operator. This read is stable:
+                // only startNew() changes current(), and it also holds CloudSession.class.
                 if (sessionAtCheck != CloudSession.current()) {
-                    onError.accept("Another login attempt is already in progress; please try again");
+                    listener.onRequestFailed(LOGIN_IN_PROGRESS);
                     return;
                 }
-                onRequesting.run();
-                // Round-1 external review finding, first pass (PR #464): CloudSession#startNew()
-                // alone only tears down the session's OWN resources (schedulers, WebSocket client)
-                // -- it does not stop the global server monitor or player-event manager, which live
-                // outside any session and are only ever stopped by
-                // PluginInitiationUtils#disableCloud(CloudSession)'s own two session-independent
-                // teardown steps. Reaching this line means sessionAtCheck's token is missing or
-                // expired (both checks above already failed), so its cloud lifecycle -- if one is
-                // still running -- is stale by definition. Tearing it down completely before
-                // replacing it means a magic-link request that then fails, or never resolves, never
-                // leaves those global managers wired to a socket that already closed with no
-                // successor connection to ever rewire them. Acts on sessionAtCheck specifically, not
-                // a fresh current() read, for the same reason the re-check above does.
+                listener.onRequesting();
+                // Round-1 review (PR #464): startNew() tears down only the session's own resources;
+                // the global server monitor and player-event manager are stopped only by
+                // disableCloud(session). Tearing the stale session down completely first means a
+                // failed or abandoned device login never leaves them wired to a closed socket.
                 PluginInitiationUtils.disableCloud(sessionAtCheck);
                 newSession = CloudSession.startNew();
             }
         }
-        // The multi-second magic-link HTTP POST deliberately stays OUTSIDE both locks -- holding
-        // either for the duration of a network call would let one login attempt stall every other
-        // session-lifecycle operation on the whole plugin.
-        String url = newSession.requestMagicLink(onError);
-        if (url != null) {
-            onSuccess.accept(url);
+        // The device-code request is a network call: it stays outside both locks and off the
+        // caller's thread, on the new session's own executor.
+        newSession.beginDeviceLogin(listener);
+    }
+
+    /**
+     * @return the credential {@code session} committed, else the one stored in
+     *         {@code credentials.json}, else {@code null}
+     */
+    static ServerCredential linkedCredential(CloudSession session) {
+        ServerCredential held = session.getCredential();
+        return held != null ? held : ServerCredentialStore.load();
+    }
+
+    /**
+     * @return the running framework version, sent verbatim (a {@code -SNAPSHOT} suffix included):
+     *         the plugin description's version, else {@code env.yml}'s, else {@code unknown}
+     */
+    // UltiTools.getEnv() throws an unchecked ConfigurationException when env.yml is missing; the
+    // version is then simply unknown.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    static String runningFrameworkVersion() {
+        UltiTools plugin = UltiTools.getInstance();
+        PluginDescriptionFile description = plugin == null ? null : plugin.getDescription();
+        if (description != null && description.getVersion() != null && !description.getVersion().trim().isEmpty()) {
+            return description.getVersion();
         }
+        try {
+            String version = UltiTools.getEnv().getString("version");
+            if (version != null && !version.trim().isEmpty()) {
+                return version;
+            }
+        } catch (RuntimeException e) {
+            // Fall through to "unknown".
+        }
+        return "unknown";
+    }
+
+    /**
+     * @return the server's MOTD as plain text, at most {@value #MAX_SUGGESTED_NAME_CODE_POINTS} code
+     *         points, or {@code null} when there is no server or the MOTD is blank (the field is then
+     *         omitted; the owner names the server on the confirmation page either way)
+     */
+    @SuppressWarnings("deprecation") // Server#getMotd(): the legacy-text form is what is wanted here
+    static String suggestedServerName() {
+        Server server = Bukkit.getServer();
+        return server == null ? null : normaliseSuggestedName(server.getMotd());
+    }
+
+    /**
+     * @param motd a legacy-formatted MOTD, or {@code null}
+     * @return the MOTD without colour codes, with every run of whitespace or control characters
+     *         collapsed to one space, trimmed and cut to {@value #MAX_SUGGESTED_NAME_CODE_POINTS}
+     *         code points without splitting a surrogate pair; {@code null} when nothing remains
+     */
+    static String normaliseSuggestedName(String motd) {
+        if (motd == null) {
+            return null;
+        }
+        String plain = ChatColor.stripColor(motd);
+        StringBuilder builder = new StringBuilder(plain.length());
+        boolean pendingSpace = false;
+        int index = 0;
+        while (index < plain.length()) {
+            int codePoint = plain.codePointAt(index);
+            index += Character.charCount(codePoint);
+            if (Character.isWhitespace(codePoint) || Character.isISOControl(codePoint)
+                    || Character.isSpaceChar(codePoint)) {
+                pendingSpace = builder.length() > 0;
+                continue;
+            }
+            if (pendingSpace) {
+                builder.append(' ');
+                pendingSpace = false;
+            }
+            builder.appendCodePoint(codePoint);
+        }
+        String name = builder.toString();
+        if (name.isEmpty()) {
+            return null;
+        }
+        if (name.codePointCount(0, name.length()) > MAX_SUGGESTED_NAME_CODE_POINTS) {
+            name = name.substring(0, name.offsetByCodePoints(0, MAX_SUGGESTED_NAME_CODE_POINTS)).trim();
+        }
+        return name;
+    }
+
+    /**
+     * @return this server's stored install id ({@code uuid} in {@code credentials.json}) normalised by
+     *         {@link LegacyServerId#canonical(String)}, or {@code null}; reads only, never writes
+     */
+    static String storedAttachToServerId() {
+        CredentialStore.ReadResult result = CredentialStore.read();
+        if (!result.isParsed()) {
+            return null;
+        }
+        Object uuid = result.data().get("uuid");
+        return uuid instanceof String ? LegacyServerId.canonical((String) uuid) : null;
+    }
+
+    /**
+     * The 6.3.0 callback form of {@link #login(DeviceLoginListener)}, kept with its signature for
+     * compatibility. It now runs the device authorization: {@code onSuccess} receives the
+     * verification URI with the code filled in ({@code verificationUriComplete}); the later outcome
+     * (linked, denied, expired) is reported only in the server log.
+     *
+     * @param onAlreadyLoggedIn invoked, with nothing else attempted, if this server is already linked
+     * @param onRateLimited     invoked with the remaining cooldown in seconds if the login attempt
+     *                          is currently rate-limited
+     * @param onRequesting      invoked right before the device-code request is made
+     * @param onSuccess         invoked with the complete verification URI once a code was issued
+     * @param onError           invoked with an error message if the request fails
+     */
+    public static void login(Runnable onAlreadyLoggedIn, Consumer<Long> onRateLimited,
+            Runnable onRequesting, Consumer<String> onSuccess, Consumer<String> onError) {
+        login(new DeviceLoginListener() {
+            @Override
+            public void onAlreadyLinked(String serverName) {
+                onAlreadyLoggedIn.run();
+            }
+
+            @Override
+            public void onRateLimited(long seconds) {
+                onRateLimited.accept(seconds);
+            }
+
+            @Override
+            public void onRequesting() {
+                onRequesting.run();
+            }
+
+            @Override
+            public void onCode(String verificationUri, String userCode, String verificationUriComplete,
+                    long expiresInSeconds) {
+                onSuccess.accept(verificationUriComplete);
+            }
+
+            @Override
+            public void onRequestFailed(String reason) {
+                onError.accept(reason);
+            }
+        });
     }
 
     /**
@@ -228,12 +340,15 @@ public class CloudAuthManager {
      */
     public static CloudStatus status() {
         CloudSession session = CloudSession.current();
+        ServerCredential linked = linkedCredential(session);
+        String serverName = linked == null ? null : linked.getServerName();
+        String serverId = linked == null ? null : linked.getServerId();
         if (!session.hasValidToken()) {
-            return new CloudStatus(false, null, null);
+            return new CloudStatus(false, null, null, linked != null, serverName, serverId);
         }
         TokenEntity token = session.getToken();
         String userName = token.getUser_name() != null ? token.getUser_name() : "Unknown";
-        return new CloudStatus(true, userName, token.getExpirationDate());
+        return new CloudStatus(true, userName, token.getExpirationDate(), linked != null, serverName, serverId);
     }
 
     /**
@@ -246,11 +361,22 @@ public class CloudAuthManager {
         private final boolean connected;
         private final String userName;
         private final Date expirationDate;
+        private final boolean linked;
+        private final String serverName;
+        private final String serverId;
 
         private CloudStatus(boolean connected, String userName, Date expirationDate) {
+            this(connected, userName, expirationDate, false, null, null);
+        }
+
+        private CloudStatus(boolean connected, String userName, Date expirationDate, boolean linked,
+                String serverName, String serverId) {
             this.connected = connected;
             this.userName = userName;
             this.expirationDate = expirationDate;
+            this.linked = linked;
+            this.serverName = serverName;
+            this.serverId = serverId;
         }
 
         /** @return {@code true} if the current session holds a valid (non-expired) token */
@@ -268,19 +394,92 @@ public class CloudAuthManager {
             return expirationDate;
         }
 
-        /** @return not implemented yet (plan 22-01 Task 1 RED stub) */
+        /**
+         * @return {@code true} if this server holds a protocol v2 server credential
+         * @since 6.3.1
+         */
         public boolean isLinked() {
-            return false;
+            return linked;
         }
 
-        /** @return not implemented yet (plan 22-01 Task 1 RED stub) */
+        /**
+         * @return the linked server's name as chosen on the confirmation page, or {@code null} if not
+         *         linked or no name was returned
+         * @since 6.3.1
+         */
         public String getServerName() {
-            return null;
+            return serverName;
         }
 
-        /** @return not implemented yet (plan 22-01 Task 1 RED stub) */
+        /**
+         * @return the linked server's public id, or {@code null} if not linked
+         * @since 6.3.1
+         */
         public String getServerId() {
-            return null;
+            return serverId;
+        }
+    }
+
+    /**
+     * The outcomes of {@link #login(DeviceLoginListener)}. {@link #onAlreadyLinked},
+     * {@link #onRateLimited}, {@link #onRequesting} and an overlapping-login
+     * {@link #onRequestFailed} are called on the caller's thread before {@code login} returns; every
+     * other callback arrives later on the login session's poll executor thread.
+     *
+     * @since 6.3.1
+     */
+    public interface DeviceLoginListener {
+
+        /** @param serverName the name this server is linked under, or {@code null} */
+        void onAlreadyLinked(String serverName);
+
+        /** @param seconds the remaining cooldown before another login attempt is allowed */
+        void onRateLimited(long seconds);
+
+        /** The device-code request is about to be made. */
+        void onRequesting();
+
+        /**
+         * A device code was issued; show it to the operator.
+         *
+         * @param verificationUri         the page where the owner enters the code
+         * @param userCode                the {@code XXXX-XXXX} code
+         * @param verificationUriComplete the page with the code filled in
+         * @param expiresInSeconds        how long the code stays valid
+         */
+        void onCode(String verificationUri, String userCode, String verificationUriComplete, long expiresInSeconds);
+
+        /** @param reason why no device code could be obtained */
+        void onRequestFailed(String reason);
+
+        /**
+         * The owner confirmed and the credential was saved.
+         *
+         * @param serverName the name chosen on the confirmation page, or {@code null}
+         * @param serverId   the server's public id
+         */
+        default void onLinked(String serverName, String serverId) {
+            // The session logs the linked line itself.
+        }
+
+        /** The owner refused on the confirmation page. */
+        default void onDenied() {
+            // The session logs the denied line itself.
+        }
+
+        /** The code expired before it was confirmed. */
+        default void onExpired() {
+            // The session logs the expired line itself.
+        }
+
+        /**
+         * UltiCloud rejected the request.
+         *
+         * @param code    the backend error code
+         * @param message the backend message, sanitised
+         */
+        default void onRejected(String code, String message) {
+            // The session logs the rejected line itself.
         }
     }
 }
