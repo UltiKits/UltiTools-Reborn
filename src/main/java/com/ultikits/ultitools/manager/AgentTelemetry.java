@@ -224,8 +224,9 @@ final class AgentTelemetry implements CloudRequestHandler {
      * answers {@code snapshot.request.result} with what was sent (SEMANTICS item 4, checker B-W3).
      *
      * <p>The target list is validated here, on the dispatching thread, so a payload the schema
-     * rejects fails exactly like any other invalid message. The push itself is handed to the
-     * injected main-thread executor, because the sampling it triggers reads Bukkit state.</p>
+     * rejects fails exactly like any other invalid message. The push itself, including the fresh
+     * sample it takes before encoding, runs on the injected main-thread executor, because
+     * sampling reads Bukkit state.</p>
      *
      * @param request the parsed request
      * @param channel the reply channel
@@ -266,10 +267,17 @@ final class AgentTelemetry implements CloudRequestHandler {
     }
 
     /**
-     * Pushes the requested snapshots whether or not their content changed -- the panel asked for
-     * them -- and restarts each one's coalescing window from now, then answers the request.
+     * Takes a fresh main-thread sample, then pushes the requested snapshots whether or not their
+     * content changed -- the panel asked for them -- and restarts each one's coalescing window
+     * from now, then answers the request.
+     *
+     * <p>The sample is what makes a refresh useful: the encoders read the last published sample,
+     * which may be up to one sampling period old, so without this a refresh would resend stale
+     * values. A sample that fails (off the main thread, or a sampling error) leaves the last
+     * published state in place and the request is still answered.</p>
      */
     private void sendRequested(String replyTo, List<String> targets, CloudChannel channel) {
+        monitor.sampleAndPublishState();
         long now = clock.getAsLong();
         JsonArray sent = new JsonArray();
         for (String target : targets) {

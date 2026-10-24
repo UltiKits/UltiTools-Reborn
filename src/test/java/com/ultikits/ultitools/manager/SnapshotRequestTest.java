@@ -101,6 +101,26 @@ class SnapshotRequestTest {
     }
 
     @Test
+    @DisplayName("a request takes a fresh sample, so it reports a change made since the last publish")
+    void requestTakesAFreshSample() {
+        final ServerMonitorManager.ServerStateSnapshot[] published = {snapshot("world")};
+        when(monitor.currentStateSnapshot()).thenAnswer(invocation -> published[0]);
+        when(monitor.sampleAndPublishState()).thenAnswer(invocation -> {
+            published[0] = snapshot("world", "world_nether");
+            return true;
+        });
+
+        router.dispatch(ContractFixtures.text("fixtures/agent/snapshot.request/valid/worlds.json"), channel);
+
+        List<String> names = new ArrayList<>();
+        for (JsonElement element : payload(channel.frames(), "worlds.snapshot").getAsJsonArray("worlds")) {
+            names.add(element.getAsJsonObject().get("name").getAsString());
+        }
+        assertThat(names).as("the refresh must show the world that was added after the last publish")
+                .containsExactly("world", "world_nether");
+    }
+
+    @Test
     @DisplayName("a request is answered even when nothing changed, and the forced send restarts the window")
     void forcedSendResetsTheBaseline() {
         telemetry.onWelcome(channel);
@@ -150,6 +170,10 @@ class SnapshotRequestTest {
     }
 
     private void publish(String... worldNames) {
+        when(monitor.currentStateSnapshot()).thenReturn(snapshot(worldNames));
+    }
+
+    private ServerMonitorManager.ServerStateSnapshot snapshot(String... worldNames) {
         JsonArray players = new JsonArray();
         JsonObject player = new JsonObject();
         player.addProperty("uuid", "00000000-0000-0000-0000-000000000001");
@@ -185,8 +209,17 @@ class SnapshotRequestTest {
             world.add("spawnLocation", spawn);
             worlds.add(world);
         }
-        when(monitor.currentStateSnapshot()).thenReturn(new ServerMonitorManager.ServerStateSnapshot(
-                players.size(), 20, true, "1.21.11", worlds.size(), plugins.size(), worlds, players, plugins));
+        return new ServerMonitorManager.ServerStateSnapshot(
+                players.size(), 20, true, "1.21.11", worlds.size(), plugins.size(), worlds, players, plugins);
+    }
+
+    private static JsonObject payload(List<JsonObject> frames, String type) {
+        for (JsonObject frame : frames) {
+            if (type.equals(frame.get("type").getAsString())) {
+                return frame.getAsJsonObject("payload");
+            }
+        }
+        throw new AssertionError("No " + type + " frame was recorded");
     }
 
     private static List<String> types(List<JsonObject> frames) {
