@@ -168,7 +168,7 @@ final class DeviceLoginTestSupport {
         }
 
         @Override
-        AuthorizeResult authorize(String frameworkVersion, String suggestedNameOrNull, String attachToServerIdOrNull) {
+        AuthorizeResult authorize(String frameworkVersion, String suggestedNameOrNull, String legacyServerUuidOrNull) {
             return authorizeResult;
         }
 

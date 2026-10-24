@@ -392,11 +392,11 @@ class DeviceAuthorizationClientTest {
         assertThat(body.get("framework").getAsString()).isEqualTo("6.3.1-SNAPSHOT");
         assertThat(body.get("protocol").getAsInt()).isEqualTo(2);
         assertThat(body.has("suggestedName")).isFalse();
-        assertThat(body.has("attachToServerId")).isFalse();
+        assertThat(body.has("legacyServerUuid")).isFalse();
     }
 
     @Test
-    @DisplayName("a stored uuid the rule rejects sends no attachToServerId key at all")
+    @DisplayName("a stored uuid the rule rejects sends no legacyServerUuid key at all")
     void rejectedStoredUuidSendsNoAttachKey() throws IOException {
         Files.write(tempDir.resolve("credentials.json"), "{\"uuid\":\"0123456789abc\"}".getBytes(StandardCharsets.UTF_8));
         responder.set(answer(500, "{}"));
@@ -404,7 +404,7 @@ class DeviceAuthorizationClientTest {
         client.authorize("6.3.1", null, CloudAuthManager.storedAttachToServerId());
 
         JsonObject body = JsonParser.parseString(cloudRequests.get(0).text()).getAsJsonObject();
-        assertThat(body.has("attachToServerId")).isFalse();
+        assertThat(body.has("legacyServerUuid")).isFalse();
     }
 
     @Test
@@ -417,7 +417,10 @@ class DeviceAuthorizationClientTest {
         client.authorize("6.3.1", null, CloudAuthManager.storedAttachToServerId());
 
         JsonObject body = JsonParser.parseString(cloudRequests.get(0).text()).getAsJsonObject();
-        assertThat(body.get("attachToServerId").getAsString()).isEqualTo("0123456789abcdef0123456789abcdef");
+        assertThat(body.has("legacyServerUuid")).as("the authorize body names the install id legacyServerUuid").isTrue();
+        assertThat(body.get("legacyServerUuid").getAsString()).isEqualTo("0123456789abcdef0123456789abcdef");
+        // attachToServerId is the panel's field on /v1/device/approve, never the plugin's.
+        assertThat(body.has("attachToServerId")).isFalse();
     }
 
     @Test

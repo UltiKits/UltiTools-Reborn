@@ -232,7 +232,9 @@ class DeviceLoginEndToEndTest {
         assertThat(authorize.get("clientKind").getAsString()).isEqualTo("server");
         assertThat(authorize.get("protocol").getAsInt()).isEqualTo(2);
         assertThat(authorize.get("framework").getAsString()).isNotEmpty();
-        assertThat(authorize.get("attachToServerId").getAsString()).isEqualTo(STORED_UUID);
+        assertThat(authorize.has("legacyServerUuid")).as("authorize body %s", authorize).isTrue();
+        assertThat(authorize.get("legacyServerUuid").getAsString()).isEqualTo(STORED_UUID);
+        assertThat(authorize.has("attachToServerId")).isFalse();
 
         assertThat(await(this::credentialWritten, 10_000))
                 .as("the granted credential must reach credentials.json; requests seen: %s", requestLines())

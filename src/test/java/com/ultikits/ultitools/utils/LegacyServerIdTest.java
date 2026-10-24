@@ -26,16 +26,16 @@ import com.google.gson.JsonParser;
  * {@link LegacyServerId#canonical(String)} must equal the backend's {@code canonicalLegacyUuid}
  * (backend schema decision 22) case for case.
  * <p>
- * The cases live in one JSON table, {@link #FIXTURE}, read as {@code {cases: [{name, input,
- * expected}]}} or as a bare array of the same objects. Plan 22-08 points {@link #FIXTURE} at the
- * backend's vendored {@code legacy-uuid-canonicalization.json} and deletes the provisional copy; if
- * that file names its members differently, only {@link #cases()} changes.
+ * The cases are the backend's own golden table, {@link #FIXTURE}: a pre-freeze copy of contract
+ * 2.0.0's {@code legacy-uuid-canonicalization.json} (provenance in that directory's
+ * {@code PROVENANCE.md}), read as {@code {cases: [{name, input, expected}]}} or as a bare array of the
+ * same objects. Plan 22-08 points {@link #FIXTURE} at the frozen, vendored copy.
  */
-@DisplayName("LegacyServerId: the attachToServerId rule equals the backend's canonicalLegacyUuid")
+@DisplayName("LegacyServerId: the legacyServerUuid rule equals the backend's canonicalLegacyUuid")
 class LegacyServerIdTest {
 
-    /** The case table; repointed at the backend fixture by plan 22-08. */
-    static final String FIXTURE = "/ulticloud-provisional/legacy-uuid-canonicalization.json";
+    /** The backend's case table; repointed at the frozen contract copy by plan 22-08. */
+    static final String FIXTURE = "/ulticloud-contract-prerelease/legacy-uuid-canonicalization.json";
 
     static Stream<Arguments> cases() throws IOException {
         JsonElement root;
@@ -67,10 +67,10 @@ class LegacyServerIdTest {
     }
 
     @Test
-    @DisplayName("the case table covers both accepted and rejected inputs")
+    @DisplayName("the backend table is complete (26 cases) and covers accepted and rejected inputs")
     void theTableIsNotEmpty() throws IOException {
         List<Arguments> all = new ArrayList<>();
         cases().forEach(all::add);
-        assertThat(all).anyMatch(a -> a.get()[2] == null).anyMatch(a -> a.get()[2] != null);
+        assertThat(all).hasSize(26).anyMatch(a -> a.get()[2] == null).anyMatch(a -> a.get()[2] != null);
     }
 }

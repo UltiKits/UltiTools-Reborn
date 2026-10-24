@@ -1,0 +1,143 @@
+{
+  "$comment": "Golden cases for canonicalLegacyUuid (packages/contracts/src/agent-rest/legacy-uuid.ts). The framework (Java) and the backend (TS: ETL and API) must both pass every case. Inputs are synthetic; none is a real server UUID.",
+  "rule": [
+    "1. Not a string (null) -> null.",
+    "2. Strip leading and trailing characters U+0000..U+0020 (exactly Java String.trim(); other Unicode whitespace such as U+00A0 is not stripped).",
+    "3. If the result is longer than 36 characters and its first 36 characters are a hyphenated UUID (8-4-4-4-12 hex digits, either case), keep only those 36 characters.",
+    "4. Remove every '-'.",
+    "5. Lower-case ASCII A-F.",
+    "6. The result must be exactly 32 characters [0-9a-f]; otherwise -> null (the owner re-attaches the server by hand in the panel)."
+  ],
+  "cases": [
+    {
+      "name": "hyphenated-lower",
+      "input": "123e4567-e89b-12d3-a456-426614174000",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "hyphenated-upper",
+      "input": "123E4567-E89B-12D3-A456-426614174000",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "hyphenated-mixed-case",
+      "input": "123E4567-e89B-12d3-A456-426614174000",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "compact-lower",
+      "input": "123e4567e89b12d3a456426614174000",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "compact-upper",
+      "input": "123E4567E89B12D3A456426614174000",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "surrounding-spaces",
+      "input": "  123e4567-e89b-12d3-a456-426614174000  ",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "trailing-newline",
+      "input": "123e4567-e89b-12d3-a456-426614174000\n",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "tab-and-crlf",
+      "input": "\t123e4567e89b12d3a456426614174000\r\n",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "hyphenated-plus-one-trailing-char",
+      "input": "123e4567-e89b-12d3-a456-426614174000x",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "hyphenated-plus-one-trailing-hex-digit",
+      "input": "123e4567-e89b-12d3-a456-4266141740000",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "hyphenated-upper-plus-one-trailing-char",
+      "input": "123E4567-E89B-12D3-A456-426614174000Z",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "hyphenated-plus-trailing-nbsp",
+      "input": "123e4567-e89b-12d3-a456-426614174000\u00a0",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "hyphenated-plus-two-trailing-chars",
+      "input": "123e4567-e89b-12d3-a456-426614174000xy",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "hyphens-in-other-positions",
+      "input": "123e4567e89b-12d3-a456-4266-14174000",
+      "expected": "123e4567e89b12d3a456426614174000"
+    },
+    {
+      "name": "thirteen-hex-digits",
+      "input": "123e4567e89b1",
+      "expected": null
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "expected": null
+    },
+    {
+      "name": "whitespace-only",
+      "input": "   ",
+      "expected": null
+    },
+    {
+      "name": "null",
+      "input": null,
+      "expected": null
+    },
+    {
+      "name": "thirty-one-hex-digits",
+      "input": "123e4567e89b12d3a45642661417400",
+      "expected": null
+    },
+    {
+      "name": "compact-plus-one-trailing-char",
+      "input": "123e4567e89b12d3a456426614174000x",
+      "expected": null
+    },
+    {
+      "name": "non-hex-character",
+      "input": "123e4567-e89b-12d3-a456-42661417400g",
+      "expected": null
+    },
+    {
+      "name": "braced",
+      "input": "{123e4567-e89b-12d3-a456-426614174000}",
+      "expected": null
+    },
+    {
+      "name": "urn-prefix",
+      "input": "urn:uuid:123e4567-e89b-12d3-a456-426614174000",
+      "expected": null
+    },
+    {
+      "name": "inner-space",
+      "input": "123e4567 e89b-12d3-a456-426614174000",
+      "expected": null
+    },
+    {
+      "name": "leading-nbsp-compact",
+      "input": "\u00a0123e4567e89b12d3a456426614174000",
+      "expected": null
+    },
+    {
+      "name": "hyphenated-with-short-group",
+      "input": "123e4567-e89b-12d3-a456-42661417400",
+      "expected": null
+    }
+  ]
+}
