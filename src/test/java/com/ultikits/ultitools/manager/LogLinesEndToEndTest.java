@@ -35,16 +35,19 @@ class LogLinesEndToEndTest {
         batcher.offer(SAMPLE_TS + 1, Level.WARNING, "Can't keep up!");
         batcher.offer(SAMPLE_TS + 2, Level.FINE, "Trace note");
         batcher.offer(SAMPLE_TS, Level.INFO, REDACTED_LOGIN);
+        // Level.CONFIG is 700, exactly the INFO threshold: it must not fall through to DEBUG.
+        batcher.offer(SAMPLE_TS + 3, Level.CONFIG, "Config noted");
         batcher.flush(channel);
 
         List<JsonObject> frames = channel.frames();
         assertThat(frames).hasSize(1);
         assertThat(frames.get(0).get("type").getAsString()).isEqualTo("log.lines");
         JsonArray lines = frames.get(0).getAsJsonObject("payload").getAsJsonArray("lines");
-        assertThat(levels(lines)).containsExactly("ERROR", "WARN", "DEBUG", "INFO");
+        assertThat(levels(lines)).containsExactly("ERROR", "WARN", "DEBUG", "INFO", "INFO");
         assertThat(lines.get(0).getAsJsonObject().get("ts").getAsLong()).isEqualTo(SAMPLE_TS);
         assertThat(lines.get(1).getAsJsonObject().get("message").getAsString()).isEqualTo("Can't keep up!");
         assertThat(lines.get(2).getAsJsonObject().get("message").getAsString()).isEqualTo("Trace note");
+        assertThat(lines.get(4).getAsJsonObject().get("message").getAsString()).isEqualTo("Config noted");
     }
 
     @Test

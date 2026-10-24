@@ -335,7 +335,8 @@ class AgentLogBatcherTest {
 
         private LogCapture(Class<?> type) {
             assertThat(type).isEqualTo(AgentLogBatcher.class);
-            logger.setUseParentHandlers(false);            logger.setLevel(Level.ALL);
+            logger.setUseParentHandlers(false);
+            logger.setLevel(Level.ALL);
             setLevel(Level.ALL);
             logger.addHandler(this);
         }
