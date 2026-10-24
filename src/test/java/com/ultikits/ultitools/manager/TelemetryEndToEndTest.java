@@ -115,6 +115,24 @@ class TelemetryEndToEndTest {
     }
 
     @Test
+    @DisplayName("a welcome arriving on the socket thread samples on the main thread, not with an empty sample")
+    void welcomeFromTheSocketThreadSamplesOnTheMainThread() throws Exception {
+        TestMainThread mainThread = new TestMainThread();
+        RecordingChannel channel = new RecordingChannel();
+        AgentTelemetry telemetry = new AgentTelemetry(monitor, () -> true, () -> 1000L, mainThread);
+
+        TestMainThread.runOffTheMainThread(() -> telemetry.onWelcome(channel));
+
+        assertThat(channel.frames()).as("the socket thread may neither sample nor send").isEmpty();
+        mainThread.drain();
+
+        List<JsonObject> frames = channel.frames();
+        assertThat(payload(frames, "status").get("playerCount").getAsInt()).isEqualTo(2);
+        assertThat(payload(frames, "status").get("worldCount").getAsInt()).isEqualTo(2);
+        assertThat(payload(frames, "players.snapshot").getAsJsonArray("players")).hasSize(2);
+    }
+
+    @Test
     @DisplayName("a disabled telemetry capability records nothing on welcome or tick")
     void disabledTelemetryRecordsNothing() {
         RecordingChannel channel = new RecordingChannel();

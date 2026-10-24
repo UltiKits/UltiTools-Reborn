@@ -167,6 +167,34 @@ class AgentTelemetryTest {
     }
 
     @Test
+    @DisplayName("welcome and close hop to the main-thread executor even when called from the socket thread")
+    void welcomeAndCloseHopToTheMainThread() throws Exception {
+        TestMainThread mainThread = new TestMainThread();
+        AgentTelemetry telemetry = new AgentTelemetry(monitor, () -> true, clock::get, mainThread);
+        RecordingChannel channel = new RecordingChannel();
+
+        TestMainThread.runOffTheMainThread(() -> telemetry.onWelcome(channel));
+
+        assertThat(channel.frames()).as("the socket thread may neither sample nor send").isEmpty();
+        assertThat(mainThread.pending()).as("the welcome is waiting for the main thread").isEqualTo(1);
+
+        mainThread.drain();
+        assertThat(types(channel)).containsExactly("status", "players.snapshot", "plugins.snapshot",
+                "worlds.snapshot");
+        channel.clear();
+
+        TestMainThread.runOffTheMainThread(telemetry::onClose);
+        assertThat(mainThread.pending()).as("the close is waiting for the main thread").isEqualTo(1);
+        mainThread.drain();
+
+        clock.set(20000L);
+        telemetry.onWelcome(channel);
+        mainThread.drain();
+        assertThat(types(channel)).containsExactly("status", "players.snapshot", "plugins.snapshot",
+                "worlds.snapshot");
+    }
+
+    @Test
     @DisplayName("out-of-schema values are clamped or cut and the frame stays valid")
     void outOfBoundsValuesAreClamped() {
         when(monitor.getCurrentTPS()).thenReturn(150.0);

@@ -31,7 +31,9 @@ import java.util.regex.Pattern;
  * <p>The class is passive: the session wiring (plan 22-22) calls {@link #onWelcome(CloudChannel)}
  * when a connection is accepted, {@link #tick(CloudChannel)} roughly once a second, and
  * {@link #onClose()} when the connection ends. All timing goes through the injected clock, so the
- * cadence is testable without a socket and without sleeping.</p>
+ * cadence is testable without a socket and without sleeping. {@code onWelcome} and {@code onClose}
+ * may be called from any thread and hand their work to the injected main-thread executor;
+ * {@code tick} must already run on the main thread.</p>
  *
  * <p>Cadence follows the frozen contract's SEMANTICS item 6: {@code status} every
  * {@value #STATUS_INTERVAL_MS} ms; {@code players.snapshot}, {@code plugins.snapshot} and
@@ -137,9 +139,19 @@ final class AgentTelemetry implements CloudRequestHandler {
      * {@code players.snapshot}, {@code plugins.snapshot} and {@code worlds.snapshot}, in that
      * order. Nothing is sent while the telemetry capability is off or the channel is closed.
      *
+     * <p><b>Thread rule:</b> a welcome arrives on the WebSocket thread, but the sample and the
+     * cadence bookkeeping belong to the Bukkit main thread, so the work is handed to the injected
+     * main-thread executor and every {@link Tracked} is only touched there. Callers may invoke
+     * this from any thread; a welcome that ran on the socket thread would send the empty sample
+     * (before the first main-thread sample) and race {@link #tick(CloudChannel)}.</p>
+     *
      * @param channel the accepted connection
      */
     void onWelcome(CloudChannel channel) {
+        mainThread.execute(() -> sendWelcome(channel));
+    }
+
+    private void sendWelcome(CloudChannel channel) {
         if (!enabled(channel)) {
             return;
         }
@@ -153,8 +165,18 @@ final class AgentTelemetry implements CloudRequestHandler {
     /**
      * Forgets what was last sent, so the next welcome sends every snapshot again. The next
      * connection may well be a different gateway with a different view.
+     *
+     * <p><b>Thread rule:</b> the bookkeeping is only touched on the Bukkit main thread, so the
+     * clear is handed to the injected main-thread executor, exactly like {@link
+     * #onWelcome(CloudChannel)}. Callers may invoke this from any thread (a close arrives on the
+     * WebSocket thread); going through the same executor keeps the clear ordered after any
+     * welcome still queued ahead of it.</p>
      */
     void onClose() {
+        mainThread.execute(this::forgetSentState);
+    }
+
+    private void forgetSentState() {
         statusTrack.clear();
         playerTrack.clear();
         pluginTrack.clear();
@@ -162,7 +184,11 @@ final class AgentTelemetry implements CloudRequestHandler {
     }
 
     /**
-     * Advances the cadence; the session wiring calls this about once a second on the main thread.
+     * Advances the cadence; the session wiring calls this about once a second.
+     *
+     * <p><b>Thread rule: the Bukkit main thread only.</b> Unlike {@link #onWelcome(CloudChannel)}
+     * and {@link #onClose()}, which defer their work here, this method mutates the bookkeeping
+     * directly and therefore must already be on that thread.</p>
      *
      * @param channel the accepted connection
      */
@@ -307,7 +333,14 @@ final class AgentTelemetry implements CloudRequestHandler {
         }
     }
 
-    /** The last successful send of one snapshot type: how recently, and what went on the wire. */
+    /**
+     * The last successful send of one snapshot type: how recently, and what went on the wire.
+     *
+     * <p>Not synchronised on purpose: every read and write happens on the Bukkit main thread,
+     * because {@link #onWelcome(CloudChannel)} and {@link #onClose()} hand their work to the
+     * main-thread executor and {@link #tick(CloudChannel)} and the {@code snapshot.request} push
+     * already run there.</p>
+     */
     private static final class Tracked {
         private long lastAt;
         private String lastPayload;
