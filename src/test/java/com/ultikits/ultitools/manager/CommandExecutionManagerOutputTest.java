@@ -133,14 +133,46 @@ class CommandExecutionManagerOutputTest {
     }
 
     @Test
-    void aRejectedDispatchIsAFailureCarryingTheExistingWording() {
+    void aRejectedDispatchCarriesTheReplyTheServerPrinted() {
+        register("usagefail", (sender, args) -> {
+            sender.sendMessage(Component.text("Usage: /usagefail <player>"));
+            return false;
+        });
+
+        RecordingSink sink = execute("usagefail");
+
+        assertThat(sink.completedCalls).isZero();
+        assertThat(sink.failedCalls).isEqualTo(1);
+        assertThat(sink.failedMessage).contains("Usage: /usagefail <player>")
+                .doesNotContain("server log stream");
+    }
+
+    @Test
+    void aRejectedDispatchCutsItsCapturedReplyToTheMessageBound() {
+        StringBuilder reply = new StringBuilder();
+        while (reply.length() < 900) {
+            reply.append("-detail");
+        }
+        register("loudfail", (sender, args) -> {
+            sender.sendMessage(Component.text(reply.toString()));
+            return false;
+        });
+
+        RecordingSink sink = execute("loudfail");
+
+        assertThat(sink.failedCalls).isEqualTo(1);
+        assertThat(sink.failedMessage).hasSize(500).isEqualTo(reply.substring(0, 500));
+    }
+
+    @Test
+    void aRejectedDispatchWithoutAnyReplySaysOnlyThatItWasNotAccepted() {
         register("rejected", (sender, args) -> false);
 
         RecordingSink sink = execute("rejected");
 
         assertThat(sink.completedCalls).isZero();
         assertThat(sink.failedCalls).isEqualTo(1);
-        assertThat(sink.failedMessage).isEqualTo(CommandExecutionManager.NOT_ACCEPTED_OUTPUT);
+        assertThat(sink.failedMessage).isEqualTo(CommandExecutionManager.NOT_ACCEPTED_WITHOUT_REPLY);
     }
 
     @Test

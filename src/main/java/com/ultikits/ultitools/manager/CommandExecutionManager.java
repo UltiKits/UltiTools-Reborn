@@ -84,12 +84,23 @@ public class CommandExecutionManager {
             + "Its output appears in the server log stream.";
 
     /**
-     * The {@code command_result} text for a command the server console did not accept
+     * The v1 {@code command_result} text for a command the server console did not accept
      * ({@code Bukkit.dispatchCommand} returned {@code false}: an unknown command, or a command
-     * whose executor reported a usage error).
+     * whose executor reported a usage error). The v1 path still dispatches as the real console, so
+     * Paper writes the reply to the console and this sentence stays true there. The v2 path
+     * captures that reply instead and sends it — see {@link #executeCaptured} and
+     * {@link #NOT_ACCEPTED_WITHOUT_REPLY}.
      */
     static final String NOT_ACCEPTED_OUTPUT = "The server console did not accept the command. "
             + "Any message it printed appears in the server log stream.";
+
+    /**
+     * The v2 {@code command_result} text for a command the server did not accept while printing
+     * nothing the capturing sender could read — an unknown command whose refusal goes elsewhere,
+     * or an executor that reports a usage error silently. When the server did print something,
+     * {@link #rejectionMessage} sends those lines instead of this sentence.
+     */
+    static final String NOT_ACCEPTED_WITHOUT_REPLY = "The server console did not accept the command.";
 
     /**
      * Blocklist of dangerous commands that should not be executed remotely. This is the shipped
@@ -406,23 +417,64 @@ public class CommandExecutionManager {
         }
         long elapsed = Math.min(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), MAX_EXECUTION_MS);
         if (!accepted) {
-            sink.failed(NOT_ACCEPTED_OUTPUT);
+            sink.failed(rejectionMessage(lines));
             return;
         }
+        BoundedLines bounded = boundLines(lines);
+        sink.completed(bounded.lines, bounded.truncated, elapsed);
+    }
+
+    /**
+     * Turns the feedback a refused command printed into the failure message.
+     * <p>
+     * With the capturing sender the server's own reply — Paper's unknown-command line, a Bukkit
+     * command's usage text — arrives here instead of reaching the console, so it is the only reply
+     * the panel can get and it must not be dropped. The lines are bounded exactly as successful
+     * output is ({@value #MAX_OUTPUT_LINE_CHARS} code points per line, at most
+     * {@value #MAX_OUTPUT_LINES} lines) and then cut to the message bound, which is the schema
+     * slot they travel in.
+     *
+     * @param lines feedback captured before {@code dispatchCommand} returned
+     * @return the joined reply, or {@link #NOT_ACCEPTED_WITHOUT_REPLY} when nothing was printed
+     */
+    private static String rejectionMessage(List<String> lines) {
+        if (lines.isEmpty()) {
+            return NOT_ACCEPTED_WITHOUT_REPLY;
+        }
+        return resultMessage(String.join("\n", boundLines(lines).lines));
+    }
+
+    /**
+     * Copies {@code lines} under the {@code command.result} output caps: every line cut to
+     * {@value #MAX_OUTPUT_LINE_CHARS} code points and the list to {@value #MAX_OUTPUT_LINES}
+     * entries, reporting whether anything was cut.
+     */
+    private static BoundedLines boundLines(List<String> lines) {
         boolean truncated = false;
-        for (int i = 0; i < lines.size(); i++) {
-            String line = lines.get(i);
+        List<String> bounded = new ArrayList<>(lines.size());
+        for (String line : lines) {
             if (line.codePointCount(0, line.length()) > MAX_OUTPUT_LINE_CHARS) {
-                lines.set(i, line.substring(0, line.offsetByCodePoints(0, MAX_OUTPUT_LINE_CHARS)));
+                bounded.add(line.substring(0, line.offsetByCodePoints(0, MAX_OUTPUT_LINE_CHARS)));
                 truncated = true;
+            } else {
+                bounded.add(line);
             }
         }
-        List<String> kept = lines;
-        if (kept.size() > MAX_OUTPUT_LINES) {
-            kept = new ArrayList<>(kept.subList(0, MAX_OUTPUT_LINES));
-            truncated = true;
+        if (bounded.size() > MAX_OUTPUT_LINES) {
+            return new BoundedLines(new ArrayList<>(bounded.subList(0, MAX_OUTPUT_LINES)), true);
         }
-        sink.completed(kept, truncated, elapsed);
+        return new BoundedLines(bounded, truncated);
+    }
+
+    /** Output lines inside the schema caps, plus whether the caps forced a cut. */
+    private static final class BoundedLines {
+        private final List<String> lines;
+        private final boolean truncated;
+
+        private BoundedLines(List<String> lines, boolean truncated) {
+            this.lines = lines;
+            this.truncated = truncated;
+        }
     }
 
     /**

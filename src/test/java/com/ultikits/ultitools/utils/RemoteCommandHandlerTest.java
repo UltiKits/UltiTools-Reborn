@@ -120,9 +120,26 @@ class RemoteCommandHandlerTest {
         JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
         assertThat(payload.get("status").getAsString()).isEqualTo("error");
         assertThat(payload.get("code").getAsString()).isEqualTo("command_failed");
-        // Mirrors CommandExecutionManager.NOT_ACCEPTED_OUTPUT, which is package-private to the
-        // manager package; the wording itself is pinned by CommandExecutionManagerTest.
+        // Mirrors CommandExecutionManager.NOT_ACCEPTED_WITHOUT_REPLY, which is package-private to
+        // the manager package; the wording itself is pinned by CommandExecutionManagerOutputTest.
         assertThat(payload.get("message").getAsString()).startsWith("The server console did not accept the command.");
+    }
+
+    @Test
+    void theServerReplyOfARejectedCommandReachesThePanel() {
+        register("usagefail", (sender, args) -> {
+            sender.sendMessage(Component.text("Usage: /usagefail <player>"));
+            return false;
+        });
+        RemoteCommandHandler handler = handler(new CommandExecutionManager(), () -> false);
+
+        handler.handle(request("usagefail"), channel);
+        drainMainThread();
+
+        JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
+        assertThat(payload.get("code").getAsString()).isEqualTo("command_failed");
+        // RecordingChannel validates every frame against the vendored command.result schema.
+        assertThat(payload.get("message").getAsString()).contains("Usage: /usagefail <player>");
     }
 
     @Test
