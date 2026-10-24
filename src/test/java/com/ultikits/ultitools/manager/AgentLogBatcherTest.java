@@ -140,6 +140,48 @@ class AgentLogBatcherTest {
     }
 
     @Test
+    void aFullBatchIsReportedSoTheCallerCanFlushWithoutWaitingForTheTick() {
+        AtomicLong clock = new AtomicLong(START);
+        AgentLogBatcher batcher = new AgentLogBatcher(clock::get);
+        RecordingChannel channel = new RecordingChannel();
+        channel.setLimits(limits(1000, 200, 8192, 10, 1048576));
+        // A flush with nothing buffered is how the batcher learns a connection's limits.
+        batcher.flush(channel);
+        clock.addAndGet(1000L);
+
+        for (int i = 0; i < 9; i++) {
+            assertThat(batcher.offer(START, Level.INFO, "line " + i)).as("line %d", i).isFalse();
+        }
+        assertThat(batcher.offer(START, Level.INFO, "line 9")).as("the tenth line fills the batch").isTrue();
+
+        batcher.flush(channel);
+        assertThat(sizes(channel.frames())).containsExactly(10);
+        assertThat(batcher.offer(START, Level.INFO, "line 10")).as("a flush empties the batch").isFalse();
+    }
+
+    @Test
+    void aBurstAboveOneBatchPerSecondIsNotDroppedWhenTheCallerFlushesOnAFullBatch() {
+        AtomicLong clock = new AtomicLong(START);
+        AgentLogBatcher batcher = new AgentLogBatcher(clock::get);
+        RecordingChannel channel = new RecordingChannel();
+        // Ten batches a second: anything held back for a whole tick overflows the burst-sized buffer.
+        channel.setLimits(limits(1000, 200, 8192, 100, 1048576));
+        batcher.flush(channel);
+
+        for (int i = 0; i < 1000; i++) {
+            clock.addAndGet(1L);
+            if (batcher.offer(START + i, Level.INFO, "line " + i)) {
+                batcher.flush(channel);
+            }
+        }
+        batcher.flush(channel);
+
+        assertThat(batcher.droppedByRateLimit()).as("the bucket admitted every line").isZero();
+        assertThat(totalLines(channel.frames())).isEqualTo(1000);
+        assertThat(sizes(channel.frames())).hasSize(10).containsOnly(100);
+    }
+
+    @Test
     void aClosedChannelBuffersAtMostOneBurstAndDropsTheOldest() {
         AtomicLong clock = new AtomicLong(START);
         AgentLogBatcher batcher = new AgentLogBatcher(clock::get);

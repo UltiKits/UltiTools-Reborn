@@ -32,8 +32,9 @@ import java.util.logging.Logger;
  * a local FINE line summarises what was dropped, at most once a minute.</p>
  *
  * <p><b>Threading.</b> {@link #offer} may be called from any thread, {@link #flush} from the
- * connection's scheduler and {@link #reset} from the session's close path; every method is safe to
- * call concurrently and nothing blocks on I/O beyond the channel's own send.</p>
+ * connection's scheduler and from the caller that saw {@link #offer} report a full batch, and
+ * {@link #reset} from the session's close path; every method is safe to call concurrently and
+ * nothing blocks on I/O beyond the channel's own send.</p>
  *
  * <p>Package-private: wired by the session plan (22-22), not part of the public API.</p>
  */
@@ -100,12 +101,22 @@ final class AgentLogBatcher {
      * line when the buffer would exceed one burst (a closed channel that keeps receiving lines must
      * not grow the heap).</p>
      *
+     * <p><b>The full-batch signal.</b> The contract asks for a flush every second <em>and</em>
+     * whenever a batch is full, so the caller must flush as soon as this method reports one:
+     * a gateway that admits more than {@code log.batchMaxLines} lines a second would otherwise
+     * fill the burst-sized buffer within one tick and lose lines the token bucket had accepted.
+     * The signal describes the buffer, not this line, so it also stays {@code true} for a line the
+     * token bucket dropped while a full batch was already waiting.</p>
+     *
      * @param ts              the line's timestamp in milliseconds
      * @param level           the JUL level; {@code null} counts as {@link Level#INFO}
      * @param redactedMessage the text with sensitive command arguments already replaced by
      *                        {@code ***}; {@code null} counts as an empty message
+     * @return {@code true} while at least {@code log.batchMaxLines} lines are buffered, so the
+     *         caller can flush now instead of waiting for the next tick; a flush that sends (or
+     *         drops) them clears it
      */
-    void offer(long ts, Level level, String redactedMessage) {
+    boolean offer(long ts, Level level, String redactedMessage) {
         Level effective = level == null ? Level.INFO : level;
         String message = redactedMessage == null ? "" : redactedMessage;
         long now = clock.getAsLong();
@@ -118,6 +129,7 @@ final class AgentLogBatcher {
                 buffered.addLast(new Line(ts, effective, message));
                 trimToCapacity();
             }
+            return buffered.size() >= limits.logBatchMaxLines();
         }
     }
 
