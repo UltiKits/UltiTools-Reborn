@@ -519,7 +519,23 @@ final class CloudSession {
      *         logout occurred.
      */
     boolean hasAnythingToClear() {
-        return token != null || predecessorToken != null || pendingAuthenticationCancelled;
+        return credential != null || token != null || predecessorToken != null || pendingAuthenticationCancelled;
+    }
+
+    synchronized boolean consumePendingCancellation() {
+        boolean cancelled = pendingAuthenticationCancelled;
+        pendingAuthenticationCancelled = false;
+        return cancelled;
+    }
+
+    synchronized void completeCredentialLogout(ServerCredential retiring) {
+        try {
+            ServerCredentialStore.deleteIfMatches(retiring.getCredentialId());
+        } finally {
+            credential = null;
+            token = null;
+            predecessorToken = null;
+        }
     }
 
     /** @return this session's WebSocket client, or {@code null} if none is connected */

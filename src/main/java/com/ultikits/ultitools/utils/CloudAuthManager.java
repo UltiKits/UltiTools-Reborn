@@ -256,8 +256,10 @@ public class CloudAuthManager {
     }
 
     /**
-     * Tears down cloud features unconditionally, then clears the persisted credential if one
-     * existed. Mirrors {@code /ulticloud logout}'s pre-16-09 sequence exactly: teardown must run
+     * Tears down cloud features unconditionally, then asynchronously revokes and deletes the
+     * protocol v2 credential. The revoke and delete finish after this method returns; use
+     * {@link #logoutReporting(Consumer)} to observe their outcome. The token-era cleanup remains
+     * synchronous while that internal code is retained. In both forms teardown must run
      * even when there is nothing to clear (an expired-but-still-connected session is the case that
      * most needs logout to take effect), and the credential is read only <b>after</b> teardown so an
      * in-flight login that commits mid-teardown is still caught and cleared -- see
@@ -304,34 +306,69 @@ public class CloudAuthManager {
      * shared document before this method's clear does, the clear cannot remove a value the
      * torn-down session never itself wrote.
      *
-     * @return {@code true} if a credential existed and was cleared, or a pending authentication
+     * @return {@code true} if a credential existed and cleanup was started, or a pending authentication
      *         attempt was cancelled (real-machine UAT fix, plan 16-08 -- see
      *         {@link CloudSession#hasAnythingToClear()}); {@code false} if there was nothing to
      *         clear and nothing pending (teardown still ran regardless)
      * @throws IOException if clearing the persisted credential fails
      */
     public static synchronized boolean logout() throws IOException {
-        CloudSession tornDown = PluginInitiationUtils.disableCloud(CloudSession.current());
+        return beginLogout(outcome -> { });
+    }
 
-        // 16-10 gap-closure addendum (round-13 review, PR #464), P1: gate on
-        // hasAnythingToClear(), not getToken() == null alone -- see CloudSession#predecessorToken's
-        // own javadoc. A session that never itself held a token but replaced one that did
-        // (reconnect exhaustion followed by /ulticloud login, before any logout ran) must still
-        // reach clearPersisted() below, or the predecessor's still-valid, still-persisted
-        // credential survives on disk despite this explicit logout, and a later restart reloads
-        // and reconnects with it.
-        //
-        // Real-machine UAT fix, plan 16-08 (ultitools.ulticloud.logout.neg-mid-poll): the same
-        // hasAnythingToClear() gate ALSO now covers a magic-link poll that was still in flight when
-        // disableCloud() above cancelled it (CloudSession#pendingAuthenticationCancelled) -- so
-        // cancelling a real, in-progress authentication attempt reports a genuine logout even though
-        // it never reached commit() and therefore never set token or predecessorToken.
-        if (!tornDown.hasAnythingToClear()) {
-            return false;
+    /**
+     * Stops the captured session synchronously, then revokes and deletes its credential on a Bukkit
+     * asynchronous task. The callback runs on that task, or inline when no credential is held.
+     * A local storage failure is propagated or reported by the scheduler, never reported as deletion.
+     *
+     * @param onDone receives the completed outcome
+     * @since 6.3.1
+     */
+    public static synchronized void logoutReporting(Consumer<LogoutOutcome> onDone) {
+        Objects.requireNonNull(onDone, "onDone");
+        try {
+            beginLogout(onDone);
+        } catch (IOException failure) {
+            throw new com.ultikits.ultitools.exceptions.DataAccessException("Could not clear the saved cloud credential");
         }
+    }
 
-        tornDown.clearPersisted();
-        return true;
+    private static boolean beginLogout(Consumer<LogoutOutcome> onDone) throws IOException {
+        CloudSession tornDown;
+        ServerCredential retiring;
+        boolean hadAnything;
+        boolean cancelled;
+        synchronized (CloudSession.class) {
+            tornDown = PluginInitiationUtils.disableCloud(CloudSession.current());
+            retiring = linkedCredential(tornDown);
+            hadAnything = tornDown.hasAnythingToClear() || retiring != null;
+            cancelled = tornDown.consumePendingCancellation();
+            if (retiring == null) {
+                if (hadAnything) {
+                    tornDown.clearPersisted();
+                }
+            }
+        }
+        if (retiring == null) {
+            onDone.accept(cancelled ? LogoutOutcome.CANCELLED_PENDING : LogoutOutcome.NOT_LINKED);
+        } else {
+            final CloudSession owner = tornDown;
+            final ServerCredential credential = retiring;
+            Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+                CloudHttp.Response response = CloudHttp.postJson("/v1/agent/credential/revoke", null,
+                        credential.bearerValue());
+                owner.completeCredentialLogout(credential);
+                onDone.accept(response.outcome() == CloudHttp.Outcome.OK
+                        && (response.status() == 200 || response.status() == 401)
+                        ? LogoutOutcome.REVOKED : LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
+            });
+        }
+        return hadAnything;
+    }
+
+    /** Completed unlink outcomes; none contains a credential. @since 6.3.1 */
+    public enum LogoutOutcome {
+        NOT_LINKED, REVOKED, DELETED_LOCALLY_REVOKE_FAILED, CANCELLED_PENDING
     }
 
     /**

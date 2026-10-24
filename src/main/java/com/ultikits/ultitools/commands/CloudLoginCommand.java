@@ -28,6 +28,15 @@ import com.ultikits.ultitools.utils.CloudAuthManager;
 @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
 public class CloudLoginCommand extends BaseCommandExecutor {
 
+    static final String UNLINKING_KEY = "Unlinking this server from UltiCloud...";
+    static final String REVOKED_KEY = "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.";
+    static final String LINK_AGAIN_KEY = "Use /ulticloud login to link it again.";
+    static final String REVOKE_FAILED_KEY = "Unlinked this server locally, but UltiCloud could not be reached to revoke its credential.";
+    static final String REVOKE_IN_PANEL_KEY = "The cloud credential may still be valid. Revoke it in the panel: server settings > Revoke credential.";
+    static final String CANCELLED_KEY = "Cancelled the pending UltiCloud link request. Cloud features are stopped.";
+    static final String NOT_LINKED_KEY = "This server is not linked to UltiCloud.";
+    static final String STOPPED_KEY = "Cloud features have been stopped regardless.";
+
     /**
      * Starts the device login. Deliberately <b>not</b> {@code @RunAsync} (#740): since 6.3.0 a
      * synchronous body on the primary thread runs inside the dispatch ({@code BaseCommandExecutor},
@@ -45,34 +54,27 @@ public class CloudLoginCommand extends BaseCommandExecutor {
 
     @CmdMapping(format = "logout")
     public void logout(@CmdSender CommandSender sender) {
-        // This deliberately does **not** use hasValidToken() as the gate.
-        //
-        // It requires the token to be unexpired, but "the access token has expired while
-        // everything else is still running" is exactly the scenario that most needs logout to
-        // take effect: after repeated refresh failures, the socket, the monitor task, the log
-        // handler on the root logger, the player event listener and the refresh schedule can
-        // all still be alive, and logout is the operator's only way to stop them. The previous
-        // implementation replied "Not currently logged in" at this point and exited, leaving the
-        // operator with no option but a restart.
-        //
-        // Credential validity cannot gate lifecycle teardown. CloudAuthManager.logout() (plan
-        // 16-09) performs the "tear down unconditionally, then clear only if a credential
-        // existed" sequence and reports which branch to print -- see its own javadoc for why
-        // teardown must run first and the credential is read only afterward. See issue #223.
-        try {
-            boolean hadCredential = CloudAuthManager.logout();
-
-            if (!hadCredential) {
-                sender.sendMessage(ChatColor.YELLOW + "Not currently logged in to UltiCloud.");
-                sender.sendMessage(ChatColor.GRAY + "Cloud features have been stopped regardless.");
-                return;
+        say(sender, ChatColor.AQUA, UNLINKING_KEY);
+        CloudAuthManager.logoutReporting(outcome -> {
+            switch (outcome) {
+                case REVOKED:
+                    say(sender, ChatColor.GREEN, REVOKED_KEY);
+                    say(sender, ChatColor.GRAY, LINK_AGAIN_KEY);
+                    break;
+                case DELETED_LOCALLY_REVOKE_FAILED:
+                    say(sender, ChatColor.YELLOW, REVOKE_FAILED_KEY);
+                    say(sender, ChatColor.YELLOW, REVOKE_IN_PANEL_KEY);
+                    say(sender, ChatColor.GRAY, LINK_AGAIN_KEY);
+                    break;
+                case CANCELLED_PENDING:
+                    say(sender, ChatColor.GREEN, CANCELLED_KEY);
+                    break;
+                case NOT_LINKED:
+                default:
+                    say(sender, ChatColor.YELLOW, NOT_LINKED_KEY);
+                    say(sender, ChatColor.GRAY, STOPPED_KEY);
             }
-
-            sender.sendMessage(ChatColor.GREEN + "Successfully logged out of UltiCloud. Cloud features are now disabled.");
-            sender.sendMessage(ChatColor.GRAY + "Use /ulticloud login to re-authenticate.");
-        } catch (Exception e) {
-            sender.sendMessage(ChatColor.RED + "Failed to logout: " + e.getMessage());
-        }
+        });
     }
 
     @CmdMapping(format = "status")
@@ -108,6 +110,17 @@ public class CloudLoginCommand extends BaseCommandExecutor {
             || !(sender instanceof ConsoleCommandSender) && !(sender instanceof Player);
     }
 
+    private static void say(CommandSender sender, ChatColor colour, String key, Object... values) {
+        sendLine(sender, colour + String.format(UltiTools.getInstance().i18n(key), values));
+    }
+
+    private static void sendLine(CommandSender sender, String line) {
+        sender.sendMessage(line);
+        if (isRemoteSender(sender)) {
+            UltiTools.getInstance().getLogger().log(Level.INFO, ChatColor.stripColor(line));
+        }
+    }
+
     /**
      * Renders the device login's outcomes to the sender that ran {@code /ulticloud login}. For a
      * remote sender every line is also logged to the server console, colour codes stripped, because
@@ -130,10 +143,7 @@ public class CloudLoginCommand extends BaseCommandExecutor {
 
         /** Sends {@code line}; for a remote sender also logs it to the console at INFO. */
         private void say(String line) {
-            sender.sendMessage(line);
-            if (remote) {
-                logToConsole(line);
-            }
+            sendLine(sender, line);
         }
 
         private static void logToConsole(String line) {
