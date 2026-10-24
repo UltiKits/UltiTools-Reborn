@@ -81,6 +81,26 @@ class SnapshotRequestTest {
     }
 
     @Test
+    @DisplayName("a request is deferred to the main-thread executor, which sends the snapshots and the result")
+    void requestWaitsForTheMainThreadExecutor() {
+        TestMainThread mainThread = new TestMainThread();
+        AgentTelemetry deferred = new AgentTelemetry(monitor, () -> true, clock::get, mainThread);
+        AgentMessageRouter deferredRouter = new AgentMessageRouter(capability -> true, capability -> "disabled",
+                () -> 0L);
+        deferredRouter.register("snapshot.request", deferred);
+
+        deferredRouter.dispatch(ContractFixtures.text("fixtures/agent/snapshot.request/valid/all.json"), channel);
+
+        assertThat(channel.frames()).as("nothing may be sampled or sent on the dispatching thread").isEmpty();
+        assertThat(mainThread.pending()).as("the push is waiting for the main thread").isEqualTo(1);
+
+        mainThread.drain();
+        assertThat(types(channel.frames())).containsExactly("status", "plugins.snapshot", "worlds.snapshot",
+                "snapshot.request.result");
+        assertThat(sent(channel.frames())).containsExactly("status", "plugins", "worlds");
+    }
+
+    @Test
     @DisplayName("a request is answered even when nothing changed, and the forced send restarts the window")
     void forcedSendResetsTheBaseline() {
         telemetry.onWelcome(channel);
