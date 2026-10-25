@@ -11,6 +11,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * The HTTP the module catalogue is asked with (plan 22-18, S-27, S-61).
@@ -34,8 +36,21 @@ final class CatalogueHttp {
 
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final int READ_TIMEOUT_MS = 15_000;
-    private static final int MAX_JSON_BYTES = 64 * 1024;
+    /**
+     * The most bytes of a JSON answer that is read, derived from the catalogue contract rather than
+     * picked: the largest answer this client asks for is one page of versions. The contract caps a
+     * page at 100 entries ({@code pageSize} 1..100, default 20) and a version's {@code changelog} at
+     * 5,000 characters, so one page carries at most 500,000 characters of changelog. UTF-8 spends up
+     * to four bytes on one character, and a JSON serializer up to six (a four-hex-digit escape), so
+     * that page is at most 3,000,000 bytes; the envelope and the hundred versions' other fields stay
+     * well inside the remaining megabyte. A module's own answer is smaller: its {@code description}
+     * is capped at 50,000 characters and its {@code latest} version's changelog at 5,000. The bound
+     * is rounded up to 4 MiB. An answer beyond it is refused as too large, never cut and read as
+     * malformed.
+     */
+    private static final int MAX_JSON_BYTES = 4 * 1024 * 1024;
     private static final int CHUNK = 8192;
+    private static final Logger LOGGER = Logger.getLogger(CatalogueHttp.class.getName());
 
     private CatalogueHttp() {
     }
@@ -50,7 +65,10 @@ final class CatalogueHttp {
         IO_ERROR,
         /** A 3xx answer; it was not followed and nothing else was requested. */
         REDIRECT,
-        /** The body was longer than the caller's limit and was cut at it. */
+        /**
+         * The answer was longer than the limit. A download keeps the first {@code maxBytes} and
+         * stops reading; a JSON answer is discarded rather than kept in part.
+         */
         OVERSIZE
     }
 
@@ -144,7 +162,16 @@ final class CatalogueHttp {
             if (isRedirect(status)) {
                 return new Json(Kind.REDIRECT, status, null);
             }
-            return new Json(Kind.OK, status, readBody(connection, status));
+            String body = readBody(connection, status);
+            if (body == null) {
+                // A defined failure, not a parse error: the answer is longer than the contract's
+                // largest one, so none of it is used. The line names the limit and nothing the
+                // answer carried.
+                LOGGER.log(Level.WARNING, "Catalogue answer exceeded the " + MAX_JSON_BYTES
+                        + "-byte limit and was discarded.");
+                return new Json(Kind.OVERSIZE, status, null);
+            }
+            return new Json(Kind.OK, status, body);
         } catch (IOException | RuntimeException e) {
             // Deliberately dropped: no exception message can carry a request header.
             return new Json(Kind.IO_ERROR, -1, null);
@@ -268,6 +295,13 @@ final class CatalogueHttp {
         return status >= 300 && status <= 399;
     }
 
+    /**
+     * @param connection the open connection
+     * @param status     its status
+     * @return the body as UTF-8 text, or {@code null} when it is longer than
+     *         {@link #MAX_JSON_BYTES} (nothing of it is then kept)
+     * @throws IOException when the body cannot be read
+     */
     private static String readBody(HttpURLConnection connection, int status) throws IOException {
         InputStream in = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
         if (in == null) {
@@ -277,8 +311,12 @@ final class CatalogueHttp {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buffer = new byte[CHUNK];
             int read;
-            while (out.size() < MAX_JSON_BYTES && (read = stream.read(buffer)) != -1) {
-                out.write(buffer, 0, Math.min(read, MAX_JSON_BYTES - out.size()));
+            while ((read = stream.read(buffer)) != -1) {
+                if (out.size() + read > MAX_JSON_BYTES) {
+                    // Refused whole: a cut body would read as malformed instead of as too large.
+                    return null;
+                }
+                out.write(buffer, 0, read);
             }
             return new String(out.toByteArray(), StandardCharsets.UTF_8);
         }

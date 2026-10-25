@@ -84,6 +84,8 @@ public final class StubCatalogue implements AutoCloseable {
     public static final int HUGE_DECLARED_BYTES = 1024 * 1024;
     private static final int BROKEN_STREAM_CHUNK = 1024;
     private static final int CHUNK = 8192;
+    /** One supplementary character: four bytes in UTF-8, the widest one character can be. */
+    private static final String WIDE_CHARACTER = "😀";
 
     private final HttpServer server;
     private final List<Request> requests = Collections.synchronizedList(new ArrayList<>());
@@ -91,6 +93,9 @@ public final class StubCatalogue implements AutoCloseable {
     private volatile byte[] jar = moduleJar("Demo", VERSION, MODULE, "630");
     private volatile int servedBytes;
     private volatile boolean clientAborted;
+    private volatile int longDescriptionChars;
+    private volatile int versionCount;
+    private volatile int changelogChars;
 
     private StubCatalogue(HttpServer server) {
         this.server = server;
@@ -128,6 +133,38 @@ public final class StubCatalogue implements AutoCloseable {
     /** @return the mode in effect */
     public Mode mode() {
         return mode;
+    }
+
+    /**
+     * Makes the module card carry a description of the given length, in four-byte characters.
+     *
+     * <p>The catalogue contract lets a module's {@code description} be 50,000 characters long, so a
+     * card can be far larger than a 64 KiB answer. {@code 0} restores the pending sample.
+     *
+     * @param characters the number of characters, each four bytes in UTF-8
+     * @return this stub
+     */
+    public StubCatalogue longDescription(int characters) {
+        this.longDescriptionChars = characters;
+        return this;
+    }
+
+    /**
+     * Makes the versions page carry the given number of versions, each with a changelog of the
+     * given length in four-byte characters.
+     *
+     * <p>The contract caps a page at 100 versions and a changelog at 5,000 characters. The first
+     * version is the pending sample's {@link #VERSION} and the one marked {@code isLatest}; the
+     * others are {@code 1.0.<i>}. {@code 0} restores the pending sample.
+     *
+     * @param versions       how many versions the page carries
+     * @param changelogChars the changelog length of each, in characters (four bytes each)
+     * @return this stub
+     */
+    public StubCatalogue versionChangelogs(int versions, int changelogChars) {
+        this.versionCount = versions;
+        this.changelogChars = changelogChars;
+        return this;
     }
 
     /**
@@ -204,7 +241,7 @@ public final class StubCatalogue implements AutoCloseable {
         } else if (modules.equals(path)) {
             send(exchange, 200, fixture("modules-list.json"));
         } else if ((modules + "/" + MODULE).equals(path)) {
-            send(exchange, 200, fixture("module.json"));
+            send(exchange, 200, moduleBody());
         } else if ((modules + "/" + MODULE + "/versions").equals(path)) {
             send(exchange, 200, versionsPage(query));
         } else if (path.startsWith(modules + "/" + MODULE + "/versions/")) {
@@ -355,6 +392,16 @@ public final class StubCatalogue implements AutoCloseable {
         return root.toString();
     }
 
+    private String moduleBody() {
+        String sample = fixture("module.json");
+        if (longDescriptionChars <= 0) {
+            return sample;
+        }
+        JsonObject root = JsonParser.parseString(sample).getAsJsonObject();
+        root.getAsJsonObject("data").addProperty("description", repeat(WIDE_CHARACTER, longDescriptionChars));
+        return root.toString();
+    }
+
     private String versionsPage(String query) {
         JsonObject root = JsonParser.parseString(fixture("versions-list.json")).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
@@ -362,6 +409,12 @@ public final class StubCatalogue implements AutoCloseable {
         if (mode == Mode.NO_COMPATIBLE_VERSION) {
             data.add("items", items);
             data.addProperty("total", 0);
+            return root.toString();
+        }
+        if (versionCount > 0) {
+            JsonArray longPage = longVersionsPageItems();
+            data.add("items", longPage);
+            data.addProperty("total", longPage.size());
             return root.toString();
         }
         JsonArray all = data.getAsJsonArray("items");
@@ -388,8 +441,28 @@ public final class StubCatalogue implements AutoCloseable {
         return root.toString();
     }
 
-    private static boolean within(JsonObject version, Integer apiLevel, Integer minApiLevel) {
-        if (apiLevel == null && minApiLevel == null) {
+    private JsonArray longVersionsPageItems() {
+        JsonObject template = JsonParser.parseString(fixture("version-public.json")).getAsJsonObject()
+                .getAsJsonObject("data");
+        JsonArray items = new JsonArray();
+        for (int i = 0; i < versionCount; i++) {
+            JsonObject item = template.deepCopy();
+            String version = i == 0 ? VERSION : "1.0." + i;
+            item.addProperty("version", version);
+            item.addProperty("isLatest", i == 0);
+            item.addProperty("changelog", repeat(WIDE_CHARACTER, changelogChars));
+            item.addProperty("sizeBytes", (long) jar.length);
+            item.addProperty("sha256", sha256(jar));
+            JsonObject download = new JsonObject();
+            download.addProperty("kind", "public");
+            download.addProperty("url", "/v1/catalogue/modules/" + MODULE + "/versions/" + version + "/download");
+            item.add("download", download);
+            items.add(item);
+        }
+        return items;
+    }
+
+    private static boolean within(JsonObject version, Integer apiLevel, Integer minApiLevel) {        if (apiLevel == null && minApiLevel == null) {
             return true;
         }
         JsonElement level = version.get("apiLevel");
@@ -487,6 +560,14 @@ public final class StubCatalogue implements AutoCloseable {
 
     private static String repeat(char value, int count) {
         StringBuilder text = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            text.append(value);
+        }
+        return text.toString();
+    }
+
+    private static String repeat(String value, int count) {
+        StringBuilder text = new StringBuilder(value.length() * count);
         for (int i = 0; i < count; i++) {
             text.append(value);
         }

@@ -20,6 +20,7 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -156,5 +157,83 @@ class CatalogueInstallEndToEndTest {
             assertThat(request.authorization()).as(request.toString()).isNull();
         }
         assertThat(paths).noneMatch(path -> path.startsWith("/plugin/"));
+    }
+
+    /**
+     * Answers as long as the catalogue contract allows must be read whole (plan 22-18 fix round,
+     * gap 1): a client that cuts every answer at 64 KiB turns a module with a long description, or a
+     * version page with long changelogs, into an unreadable answer -- an operator sees "Install
+     * failed!" and the update lookup reports FAILED. The bound is therefore derived from the
+     * contract, and an answer beyond it is a refused answer with its own line, never a parse error.
+     */
+    @Nested
+    @DisplayName("answers the contract allows are read whole; one beyond the bound is a refused answer")
+    class LongAnswers {
+
+        @Test
+        @DisplayName("a module describing 25,000 four-byte characters is read, installed and looked up")
+        void longDescription_isRead() {
+            catalogue.longDescription(25_000);
+
+            PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1");
+
+            assertThat(result.isInstalled()).isTrue();
+            assertThat(PluginInstallUtils.getPlugin("demo").getDescription()).hasSize(50_000);
+            assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
+                    .isEqualTo(VersionLookup.Outcome.FOUND);
+        }
+
+        @Test
+        @DisplayName("a page of 20 versions with 4,000-character changelogs is read and the latest installed")
+        void longChangelogs_areRead() {
+            catalogue.versionChangelogs(20, 4_000);
+
+            assertThat(PluginInstallUtils.getPluginVersions("demo")).hasSize(20);
+            assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
+                    .isEqualTo(VersionLookup.Outcome.FOUND);
+            assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("an answer beyond the bound is 'response too large' with one value-free line, never a parse error")
+        void answerBeyondTheBound_isRefusedAsTooLarge() {
+            // 2,000,000 four-byte characters: about 8 MB, above any bound the contract needs.
+            catalogue.longDescription(2_000_000);
+            List<LogRecord> lines = new ArrayList<>();
+            Handler captureHttp = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    synchronized (lines) {
+                        lines.add(record);
+                    }
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            Logger http = Logger.getLogger(CatalogueHttp.class.getName());
+            http.setUseParentHandlers(false);
+            http.addHandler(captureHttp);
+            try {
+                VersionLookup lookup = PluginInstallUtils.lookUpPluginLatestVersion("demo");
+
+                assertThat(lookup.getOutcome()).isEqualTo(VersionLookup.Outcome.FAILED);
+                assertThat(lookup.getFailure()).isEqualTo("response too large");
+                synchronized (lines) {
+                    assertThat(lines).anySatisfy(record -> assertThat(record.getMessage())
+                            .contains("byte limit")
+                            .doesNotContain("Demo"));
+                }
+            } finally {
+                http.removeHandler(captureHttp);
+            }
+        }
     }
 }

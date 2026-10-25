@@ -202,6 +202,9 @@ final class CatalogueClient {
             return VersionLookup.none();
         }
         CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref);
+        if (answer.kind() == CatalogueHttp.Kind.OVERSIZE) {
+            return VersionLookup.failed(VersionLookup.TOO_LARGE);
+        }
         if (answer.kind() != CatalogueHttp.Kind.OK) {
             return VersionLookup.failed("not reached");
         }
@@ -233,6 +236,9 @@ final class CatalogueClient {
             return VersionLookup.none();
         }
         CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref + "/versions" + levelQuery(level));
+        if (answer.kind() == CatalogueHttp.Kind.OVERSIZE) {
+            return VersionLookup.failed(VersionLookup.TOO_LARGE);
+        }
         if (answer.kind() != CatalogueHttp.Kind.OK) {
             return VersionLookup.failed("not reached");
         }
@@ -288,6 +294,9 @@ final class CatalogueClient {
      */
     static VersionLookup frameworkNewest() {
         CatalogueHttp.Json answer = CatalogueHttp.getJson(FRAMEWORK);
+        if (answer.kind() == CatalogueHttp.Kind.OVERSIZE) {
+            return VersionLookup.failed(VersionLookup.TOO_LARGE);
+        }
         if (answer.kind() != CatalogueHttp.Kind.OK) {
             return VersionLookup.failed("not reached");
         }
