@@ -39,6 +39,25 @@ public interface CloudChannel {
     boolean send(String type, JsonObject payload);
 
     /**
+     * Sends a message with a fresh id and timestamp, without a replyTo field, and reports
+     * the envelope id it used so the caller can correlate a later reply to this frame.
+     *
+     * <p>The default implementation cannot report the id and refuses; channels used by the
+     * framework implement it so the id and the send path cannot diverge from {@link #send}.</p>
+     *
+     * @param type a registered message type that does not require replyTo
+     * @param payload the schema-valid message payload
+     * @return the envelope id of the frame handed to the socket, or null when nothing was
+     *         handed off, including a closed channel or an oversized frame
+     * @throws IllegalArgumentException if the type is unknown or requires replyTo
+     * @throws UnsupportedOperationException if the channel cannot report the id it used
+     * @since 6.3.1
+     */
+    default String sendTracked(String type, JsonObject payload) {
+        throw new UnsupportedOperationException("This channel cannot report the envelope id it used.");
+    }
+
+    /**
      * Sends a correlated reply with a fresh id and timestamp.
      * @param replyTo the request's ULID, never null
      * @param type a registered message type that allows replyTo
