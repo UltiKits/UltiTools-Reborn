@@ -56,10 +56,14 @@ public final class StubCatalogue implements AutoCloseable {
         REDIRECT,
         /** The download route answers 403. */
         FORBIDDEN,
-        /** The body is 10 MiB while the metadata names 1 MiB. */
+        /** The body is {@value #HUGE_BODY_BYTES} bytes while the metadata names {@value #HUGE_DECLARED_BYTES}. */
         HUGE_BODY,
         /** The download route announces the body but closes the connection after a few bytes. */
-        BROKEN_STREAM
+        BROKEN_STREAM,
+        /** The download answers no {@code X-Content-SHA256} header at all. */
+        NO_HEADER,
+        /** The download answers the hash in upper-case hex. */
+        UPPER_HEADER
     }
 
     /** The module identifier every generated route uses. */
@@ -72,8 +76,10 @@ public final class StubCatalogue implements AutoCloseable {
     private static final String FIXTURES = "ulticloud-contract/pending/catalogue/";
     private static final String VERSION_PATH = "/v1/catalogue/modules/" + MODULE + "/versions/" + VERSION;
     private static final String HASH_OF_ONE_MIB = repeat('d', 64);
-    private static final int HUGE_BODY_BYTES = 10 * 1024 * 1024;
-    private static final int HUGE_DECLARED_BYTES = 1024 * 1024;
+    /** The byte count the {@link Mode#HUGE_BODY} answer announces. */
+    public static final int HUGE_BODY_BYTES = 10 * 1024 * 1024;
+    /** The byte count the {@link Mode#HUGE_BODY} metadata claims. */
+    public static final int HUGE_DECLARED_BYTES = 1024 * 1024;
     private static final int BROKEN_STREAM_CHUNK = 1024;
     private static final int CHUNK = 8192;
 
@@ -82,6 +88,7 @@ public final class StubCatalogue implements AutoCloseable {
     private volatile Mode mode = Mode.NORMAL;
     private volatile byte[] jar = moduleJar("Demo", VERSION, MODULE, "630");
     private volatile int servedBytes;
+    private volatile boolean clientAborted;
 
     private StubCatalogue(HttpServer server) {
         this.server = server;
@@ -157,6 +164,11 @@ public final class StubCatalogue implements AutoCloseable {
     /** @return the response-body bytes the download route managed to write, for the abort checks */
     public int servedBytes() {
         return servedBytes;
+    }
+
+    /** @return whether a client closed a download before the stub finished writing it */
+    public boolean clientAborted() {
+        return clientAborted;
     }
 
     /** @return the {@code sha256} the stub reports for the bytes it serves */
@@ -237,7 +249,7 @@ public final class StubCatalogue implements AutoCloseable {
                 brokenStream(exchange);
                 return;
             default:
-                stream(exchange, servedBody(), headerFor(jar));
+                stream(exchange, servedBody(), mode == Mode.NO_HEADER ? null : headerFor(jar));
         }
     }
 
@@ -250,12 +262,18 @@ public final class StubCatalogue implements AutoCloseable {
     }
 
     private String headerFor(byte[] body) {
-        return mode == Mode.WRONG_HEADER ? repeat('e', 64) : sha256(body);
+        if (mode == Mode.WRONG_HEADER) {
+            return repeat('e', 64);
+        }
+        String hash = sha256(body);
+        return mode == Mode.UPPER_HEADER ? hash.toUpperCase(Locale.ROOT) : hash;
     }
 
     private void stream(HttpExchange exchange, byte[] body, String sha256Header) throws IOException {
         exchange.getResponseHeaders().add("Content-Type", "application/java-archive");
-        exchange.getResponseHeaders().add("X-Content-SHA256", sha256Header);
+        if (sha256Header != null) {
+            exchange.getResponseHeaders().add("X-Content-SHA256", sha256Header);
+        }
         exchange.sendResponseHeaders(200, body.length);
         OutputStream out = exchange.getResponseBody();
         int written = 0;
@@ -269,6 +287,7 @@ public final class StubCatalogue implements AutoCloseable {
             out.flush();
         } catch (IOException closedByClient) {
             // The client aborted the download on purpose (an oversized or tampered body).
+            clientAborted = true;
         }
     }
 
@@ -289,6 +308,7 @@ public final class StubCatalogue implements AutoCloseable {
             out.flush();
         } catch (IOException closedByClient) {
             // The client stopped after the declared size, which is what the test proves.
+            clientAborted = true;
         }
     }
 
@@ -296,7 +316,7 @@ public final class StubCatalogue implements AutoCloseable {
         exchange.getResponseHeaders().add("Content-Type", "application/java-archive");
         exchange.sendResponseHeaders(200, jar.length);
         OutputStream out = exchange.getResponseBody();
-        int length = Math.min(BROKEN_STREAM_CHUNK, jar.length);
+        int length = Math.max(1, Math.min(BROKEN_STREAM_CHUNK, jar.length / 4));
         out.write(jar, 0, length);
         out.flush();
         servedBytes = length;

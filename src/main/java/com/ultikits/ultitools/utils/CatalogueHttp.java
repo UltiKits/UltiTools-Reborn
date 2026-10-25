@@ -177,7 +177,8 @@ final class CatalogueHttp {
                 drain(connection, status);
                 return new Download(Kind.OK, status, 0, null, sha256Header);
             }
-            return copy(connection, target, maxBytes, sha256Header);
+            long declared = connection.getContentLengthLong();
+            return copy(connection, target, maxBytes, sha256Header, declared);
         } catch (IOException | RuntimeException e) {
             // Deliberately dropped: no exception message can carry a request header.
             return new Download(Kind.IO_ERROR, -1, 0, null, null);
@@ -195,8 +196,8 @@ final class CatalogueHttp {
         return hex(digest.digest(bytes));
     }
 
-    private static Download copy(HttpURLConnection connection, Path target, long maxBytes, String sha256Header)
-            throws IOException {
+    private static Download copy(HttpURLConnection connection, Path target, long maxBytes, String sha256Header,
+                                 long declared) throws IOException {
         MessageDigest digest = digest();
         long total = 0;
         boolean oversize = false;
@@ -221,6 +222,11 @@ final class CatalogueHttp {
             }
         }
         String hex = hex(digest.digest());
+        if (!oversize && declared > 0 && total < declared) {
+            // The body ended before the length it announced: a transport failure, not a size claim
+            // the catalogue made, so it is not reported as a metadata mismatch.
+            return new Download(Kind.IO_ERROR, 200, total, hex, sha256Header);
+        }
         return new Download(oversize ? Kind.OVERSIZE : Kind.OK, 200, total, hex, sha256Header);
     }
 
