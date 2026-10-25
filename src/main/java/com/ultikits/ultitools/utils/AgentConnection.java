@@ -29,12 +29,15 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  *   <caption>Transitions</caption>
  *   <tr><th>From</th><th>Event</th><th>To</th></tr>
  *   <tr><td>IDLE, STOPPED, terminal</td><td>{@link #start()} with a credential</td><td>CONNECTING (fresh cycle)</td></tr>
- *   <tr><td>CONNECTING</td><td>upgrade accepted</td><td>OPEN</td></tr>
+ *   <tr><td>CONNECTING</td><td>upgrade accepted</td><td>OPEN (not yet established)</td></tr>
+ *   <tr><td>OPEN</td><td>{@link #markEstablished()} (a valid {@code welcome})</td><td>OPEN, established:
+ *   counters reset, heartbeat started</td></tr>
  *   <tr><td>CONNECTING</td><td>refused 401</td><td>CREDENTIAL_REJECTED</td></tr>
  *   <tr><td>CONNECTING</td><td>refused 426</td><td>UPGRADE_REQUIRED</td></tr>
  *   <tr><td>CONNECTING</td><td>refused 402</td><td>PLAN_LIMITED (fixed plan-limit interval)</td></tr>
  *   <tr><td>CONNECTING</td><td>refused 429</td><td>BACKOFF (long, at least {@code Retry-After})</td></tr>
  *   <tr><td>CONNECTING</td><td>other refusal, close, handshake deadline</td><td>BACKOFF (normal)</td></tr>
+ *   <tr><td>OPEN, not established</td><td>handshake deadline (no {@code welcome})</td><td>BACKOFF (normal)</td></tr>
  *   <tr><td>OPEN, CONNECTING</td><td>close 4401 / 4426</td><td>CREDENTIAL_REJECTED / UPGRADE_REQUIRED</td></tr>
  *   <tr><td>OPEN, CONNECTING</td><td>close 4402</td><td>PLAN_LIMITED (one probe after the attempt-0 delay)</td></tr>
  *   <tr><td>OPEN, CONNECTING</td><td>close 4400, 4429</td><td>BACKOFF (long)</td></tr>
@@ -110,7 +113,7 @@ final class AgentConnection {
     static final long RETRY_AFTER_MAX_SECONDS = 3600L;
     /** A connection open at least this long resets the consecutive-4000 count. */
     static final long SUPERSEDED_RESET_MS = 600000L;
-    /** Deadline for an attempt to reach OPEN. */
+    /** Deadline for an attempt to be established: upgraded and answered with a valid {@code welcome}. */
     static final long HANDSHAKE_DEADLINE_MS = 15000L;
     /** TCP connect timeout handed to the socket's constructor. */
     static final int CONNECT_TIMEOUT_MS = 10000;
@@ -371,6 +374,8 @@ final class AgentConnection {
     private int longFailures;
     private int consecutiveSuperseded;
     private long openedAtMillis;
+    /** Whether the open attempt was answered with a valid {@code welcome} ({@link #markEstablished()}). */
+    private boolean established;
     private ScheduledFuture<?> retryFuture;
     private ScheduledFuture<?> deadlineFuture;
     private ScheduledFuture<?> heartbeatFuture;
@@ -549,15 +554,19 @@ final class AgentConnection {
     }
 
     /**
-     * Marks the open connection as established (Wave A: by the owner once open; plan 22-08 moves
-     * the call to {@code welcome}): resets the normal and long backoff counters and the attempt
-     * number. A no-op unless OPEN.
+     * Marks the open connection as established, called by the protocol layer when a valid
+     * {@code welcome} answers the {@code hello} (D-12, contract SEMANTICS 10): resets the normal and
+     * long backoff counters and the attempt number, cancels the handshake deadline and starts the
+     * text heartbeat. A {@code ping} before {@code welcome} would be closed with 4400, so nothing
+     * here runs at the upgrade itself. A no-op unless OPEN; never calls out.
      */
     void markEstablished() {
         synchronized (this) {
             if (state != State.OPEN) {
                 return;
             }
+            established = true;
+            cancelDeadline();
             normalFailures = 0;
             longFailures = 0;
             attemptsSinceEstablished = 0;
@@ -566,6 +575,16 @@ final class AgentConnection {
                 scheduleHeartbeat(generation);
             }
         }
+    }
+
+    /** @return the running framework version this connection sends in its upgrade headers */
+    String frameworkVersion() {
+        return frameworkVersion;
+    }
+
+    /** @return whether the open connection was answered with a valid {@code welcome} */
+    synchronized boolean isEstablished() {
+        return state == State.OPEN && established;
     }
 
     /**
@@ -627,6 +646,7 @@ final class AgentConnection {
         attemptsSinceEstablished++;
         currentAttemptNumber = attemptsSinceEstablished;
         handle = null;
+        established = false;
         moveTo(State.CONNECTING, out);
         cancelTimers();
         try {
@@ -669,7 +689,9 @@ final class AgentConnection {
                 return;
             }
             moveTo(State.OPEN, out);
-            cancelDeadline();
+            // The deadline keeps running until welcome (markEstablished): an upgraded socket that
+            // never answers the hello must not stay open forever without a heartbeat.
+            established = false;
             openedAtMillis = clock.getAsLong();
             if (planEpisode) {
                 planEpisode = false;
@@ -899,17 +921,20 @@ final class AgentConnection {
         out.add(callback);
     }
 
-    /** On the scheduler: the attempt's handshake deadline. */
+    /** On the scheduler: the attempt's handshake deadline, covering the upgrade and the welcome. */
     private void handshakeDeadline(long id) {
         Effects out = new Effects();
         Handle toClose;
         synchronized (this) {
-            if (id != generation || state != State.CONNECTING) {
+            boolean awaitingWelcome = state == State.OPEN && !established;
+            if (id != generation || (state != State.CONNECTING && !awaitingWelcome)) {
                 return;
             }
             deadlineFuture = null;
             toClose = handle;
-            retryNormal("no handshake response within " + seconds(timing.handshakeDeadlineMs) + " s", out);
+            handle = null;
+            retryNormal((awaitingWelcome ? "no welcome within " : "no handshake response within ")
+                    + seconds(timing.handshakeDeadlineMs) + " s", out);
         }
         if (toClose != null) {
             // The attempt id has moved on, so this socket's later onClose is stale. If the socket

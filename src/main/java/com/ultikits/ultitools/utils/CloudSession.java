@@ -5,7 +5,10 @@ import java.net.URI;
 import java.util.concurrent.ThreadLocalRandom;
 
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -93,6 +96,13 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * another, always below the session monitor. AgentConnection never calls out while holding its
  * monitor. Its scheduler callbacks take the session monitor first and reject invalidated or
  * replaced sessions and replaced connections before acting.</li>
+ * <li>(plan 22-20) The private lock of the connection's {@link AgentProtocol} -- below the session
+ * monitor (taken inside it by {@link #offerReliableEvent} and {@link #stopConnection()}) and above the
+ * {@link AgentConnection} monitor and the {@link CloudOutbox} and {@link CommandDedupeSet} leaf
+ * monitors, which it takes while handing a frame to the socket or applying the welcome's limits. It
+ * is never held while calling a listener or this session, so the inbound path -- which reads the
+ * current protocol under the session monitor, then releases it before {@link AgentProtocol#onText}
+ * -- cannot invert it.</li>
  * </ol>
  * Teardown under any of these locks uses only non-blocking {@code AgentConnection.stop()} and
  * executor {@code shutdown()}. It never waits for the agent thread (no awaitTermination, Future.get,
@@ -246,6 +256,12 @@ final class CloudSession {
     private volatile boolean stateFlushFailureLogged;
 
     private AgentConnection agentConnection;
+    /**
+     * The protocol layer of the current connection's open attempt (plan 22-20), or {@code null}
+     * between attempts. One per upgraded socket: created when the upgrade is accepted, closed when
+     * the connection leaves OPEN. Written under this session's monitor.
+     */
+    private volatile AgentProtocol agentProtocol;
     private ScheduledExecutorService agentExecutor;
     private LongSupplier agentClock = System::currentTimeMillis;
     private static volatile URI agentEndpointOverride;
@@ -875,6 +891,11 @@ final class CloudSession {
         cancelStateFlushTask();
         AgentConnection previous = agentConnection;
         agentConnection = null;
+        AgentProtocol protocol = agentProtocol;
+        agentProtocol = null;
+        if (protocol != null) {
+            protocol.onClose();
+        }
         if (previous != null) {
             previous.stop();
         }
@@ -901,7 +922,73 @@ final class CloudSession {
         if (buffer == null || !Capability.PLAYER_EVENTS.isEnabled()) {
             return;
         }
-        buffer.enqueue(type, payload);
+        CloudOutbox.Entry entry = buffer.enqueue(type, payload);
+        // Established: send it now with its own id; it stays in the outbox until acked (D-11).
+        AgentProtocol protocol = agentProtocol;
+        if (protocol != null) {
+            protocol.sendReliable(entry);
+        }
+    }
+
+    /**
+     * @return the protocol layer of the current connection's open attempt, or {@code null} between
+     *         attempts (plan 22-20; 22-21 registers the track handlers on its router)
+     */
+    AgentProtocol agentProtocol() {
+        return agentProtocol;
+    }
+
+    /**
+     * Builds the protocol layer of one upgraded attempt of {@code connection} (plan 22-20). Until
+     * plan 22-21 supplies the real capability mapping and operator switches, the hello declares the
+     * framework capabilities derived from the {@link Capability} switches and reports power actions
+     * as off, and the operator gate admits every capability the welcome accepted.
+     *
+     * @param connection the attempt's connection
+     * @return the protocol, not yet opened
+     */
+    private AgentProtocol newProtocol(AgentConnection connection) {
+        ServerCredential linked = credential;
+        return new AgentProtocol(connection, cloudOutbox, commandDedupe,
+                linked == null ? null : linked.getServerId(), CloudSession::frameworkCapabilities,
+                CloudSession::frameworkSettings, capability -> true,
+                capability -> "This capability is not available on this server.", agentClock);
+    }
+
+    /**
+     * The hello's capabilities from the operator's {@link Capability} switches (S-65, without the
+     * error-report and module entries 22-21 adds): {@code power} and {@code link} are always
+     * declared, {@code backups} never.
+     *
+     * @return the capability names, in a stable order
+     */
+    static List<String> frameworkCapabilities() {
+        List<String> names = new ArrayList<>();
+        addIf(names, Capability.MONITORING, "telemetry");
+        addIf(names, Capability.LOGS, "logs");
+        addIf(names, Capability.PLAYER_EVENTS, "events:players", "events:commands");
+        addIf(names, Capability.COMMANDS, "commands");
+        addIf(names, Capability.PLAYER_ACTIONS, "players:actions");
+        addIf(names, Capability.FILE_READ, "files:read", "config:read");
+        addIf(names, Capability.FILE_WRITE, "files:write", "config:write");
+        addIf(names, Capability.FILE_DELETE, "files:delete");
+        addIf(names, Capability.SERVER_PROPERTIES, "properties:read", "properties:write");
+        names.add("power");
+        names.add("link");
+        return names;
+    }
+
+    private static void addIf(List<String> names, Capability capability, String... contractNames) {
+        if (capability.isEnabled()) {
+            names.addAll(Arrays.asList(contractNames));
+        }
+    }
+
+    /** @return the hello's operator settings until 22-21: power actions reported as off */
+    static JsonObject frameworkSettings() {
+        JsonObject settings = new JsonObject();
+        settings.addProperty("powerActionsEnabled", false);
+        return settings;
     }
 
     /**
@@ -1097,7 +1184,8 @@ final class CloudSession {
         AgentConnection.State state = captured == null ? AgentConnection.State.IDLE : captured.state();
         switch (state) {
             case OPEN:
-                return CloudAuthManager.ReconnectResult.Kind.ALREADY_CONNECTED;
+                return captured.isEstablished() ? CloudAuthManager.ReconnectResult.Kind.ALREADY_CONNECTED
+                        : CloudAuthManager.ReconnectResult.Kind.ALREADY_CONNECTING;
             case CONNECTING:
                 return CloudAuthManager.ReconnectResult.Kind.ALREADY_CONNECTING;
             case UPGRADE_REQUIRED:
@@ -1134,7 +1222,8 @@ final class CloudSession {
     synchronized String connectionDescription() {
         switch (connectionState()) {
             case OPEN:
-                return "connected";
+                // Upgraded is not connected: only a valid welcome establishes the connection (D-12).
+                return agentConnection.isEstablished() ? "connected" : "connecting";
             case CONNECTING:
                 return "connecting";
             case BACKOFF:
@@ -1194,15 +1283,22 @@ final class CloudSession {
             }
         }
 
+        /**
+         * The upgrade was accepted: a fresh protocol layer sends {@code hello}. The connection is
+         * established -- counters reset, heartbeat started, "connected" -- only when the protocol
+         * accepts the welcome (plan 22-20, D-12), not here.
+         */
         @Override
         public void onOpened() {
+            AgentProtocol protocol;
             synchronized (CloudSession.this) {
                 if (!live()) {
                     return;
                 }
-                connection.markEstablished();
-                PanelConnectionLog.log(Level.INFO, "UltiCloud: connected.");
+                protocol = newProtocol(connection);
+                agentProtocol = protocol;
             }
+            protocol.onOpen();
         }
 
         @Override
@@ -1281,20 +1377,33 @@ final class CloudSession {
 
         @Override
         public void onStateChanged(AgentConnection.State state) {
+            AgentProtocol ended = null;
             synchronized (CloudSession.this) {
                 if (!live()) {
                     return;
                 }
+                if (state != AgentConnection.State.OPEN && agentProtocol != null) {
+                    ended = agentProtocol;
+                    agentProtocol = null;
+                }
+            }
+            if (ended != null) {
+                ended.onClose();
             }
         }
 
+        /** Hands the frame to the current protocol layer, outside the session monitor. */
         @Override
         public void onText(String text) {
+            AgentProtocol protocol;
             synchronized (CloudSession.this) {
                 if (!live()) {
                     return;
                 }
-                // Wave A owns only the transport; Wave B installs the v2 envelope router.
+                protocol = agentProtocol;
+            }
+            if (protocol != null) {
+                protocol.onText(text);
             }
         }
     }

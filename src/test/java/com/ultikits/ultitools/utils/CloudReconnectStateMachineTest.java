@@ -145,6 +145,8 @@ class CloudReconnectStateMachineTest {
             runtime.advance(1000);
             assertThat(CloudSession.current().connectionDescription()).isEqualTo("connecting");
             runtime.last().accept();
+            // Plan 22-20: the counters reset at welcome, not at the upgrade.
+            runtime.last().welcome();
             runtime.last().close(1011);
             runtime.advance(1000);
             runtime.last().close(1011);
@@ -188,11 +190,14 @@ class CloudReconnectStateMachineTest {
             assertThat(loggedAt(Level.INFO)).doesNotContain("UltiCloud: connected.");
             AgentRuntime.Attempt first = runtime.last();
             first.accept();
+            assertThat(loggedAt(Level.INFO)).as("upgraded is not connected (plan 22-20)").doesNotContain("UltiCloud: connected.");
+            first.welcome();
             first.accept();
             assertThat(loggedAt(Level.INFO).stream().filter("UltiCloud: connected."::equals)).hasSize(1);
             first.close(1011);
             runtime.advance(1000);
             runtime.last().accept();
+            runtime.last().welcome();
             assertThat(loggedAt(Level.INFO).stream().filter("UltiCloud: connected."::equals)).hasSize(2);
         }
 
@@ -1004,7 +1009,7 @@ class CloudReconnectStateMachineTest {
 
     static ServerCredential credential(String suffix) {
         return new ServerCredential("ucs_" + suffix, "cred-" + suffix,
-                "01JTESTSERVER00000000000000", "test-user", "Survival", 1L);
+                HandshakeEndToEndTest.SERVER_ID, "test-user", "Survival", 1L);
     }
 
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
@@ -1052,9 +1057,17 @@ class CloudReconnectStateMachineTest {
                 this.events = events;
                 this.scheduler = scheduler;
             }
+            /** Every text frame handed to this attempt, in order (plan 22-20: the hello comes first). */
+            final List<String> sent = new ArrayList<>();
             @Override public void closeAttempt(int code, String reason) { closedWith = code; }
-            @Override public boolean sendText(String text) { return true; }
+            @Override public boolean sendText(String text) { sent.add(text); return true; }
             void accept() { events.onOpen(); scheduler.runDue(); }
+            /** Answers this attempt's hello with the vendored welcome (plan 22-20: established only then). */
+            void welcome() { welcome(HandshakeEndToEndTest.SERVER_ID); }
+            void welcome(String serverId) {
+                events.onText(HandshakeEndToEndTest.welcomeFor(sent.get(0), serverId).toString());
+                scheduler.runDue();
+            }
             void close(int code) { events.onClosed(code, "", true); scheduler.runDue(); }
             void refuse(int status) {
                 events.onUpgradeRefused(status, UpgradeRejection.statusOnly(status));

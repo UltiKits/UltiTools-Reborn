@@ -329,7 +329,7 @@ class CloudConnectionLifecycleTest {
             }
             task.getValue().run();
             assertThat(records.stream().map(LogRecord::getMessage)).contains(stillLinked
-                    ? "UltiCloud: linked as Survival (server ID 01JTESTSERVER00000000000000); connecting."
+                    ? "UltiCloud: linked as Survival (server ID " + HandshakeEndToEndTest.SERVER_ID + "); connecting."
                     : "UltiCloud: Not linked. Use /ulticloud login to link this server.");
             assertThat(records.stream().map(LogRecord::getMessage)).noneMatch(line -> line.contains("linked as null"));
             assertThat(records.stream().map(LogRecord::getMessage)).anyMatch(line -> line.endsWith(UUID));
@@ -361,7 +361,7 @@ class CloudConnectionLifecycleTest {
 
     private static ServerCredential credential(String suffix) {
         return new ServerCredential("ucs_" + suffix, "cred-" + suffix,
-                "01JTESTSERVER00000000000000", "test-user", "Survival", 1L);
+                HandshakeEndToEndTest.SERVER_ID, "test-user", "Survival", 1L);
     }
 
     private void openGateway() throws Exception {
@@ -402,7 +402,7 @@ class CloudConnectionLifecycleTest {
         }
         @Override public void onClose(WebSocket conn, int code, String reason, boolean remote) { }
         @Override public void onMessage(WebSocket conn, String message) {
-            if ("ping".equals(message)) { conn.send("pong"); }
+            if ("ping".equals(message)) { conn.send("pong"); } else { HandshakeEndToEndTest.answerHello(conn, message); }
         }
         @Override public void onError(WebSocket conn, Exception error) { }
         @Override public void onStart() { started.countDown(); }

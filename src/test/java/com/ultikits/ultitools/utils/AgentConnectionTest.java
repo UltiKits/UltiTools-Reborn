@@ -848,9 +848,26 @@ class AgentConnectionTest {
     }
 
     @Test
-    @DisplayName("a deadline for an attempt that already opened or failed changes nothing")
+    @DisplayName("an upgraded attempt without welcome at the 15 s deadline is closed and retried normally (22-20)")
+    void welcomeDeadlineFires() {
+        FakeSocket s = startAndOpen();
+        scheduler.advance(14_999);
+        assertThat(connection.state()).isEqualTo(State.OPEN);
+        assertThat(connection.isEstablished()).isFalse();
+        scheduler.advance(1);
+        assertThat(connection.state()).isEqualTo(State.BACKOFF);
+        assertThat(s.closedWith).isEqualTo(1000);
+        assertThat(pendingDelay()).isEqualTo(1000);
+        assertThat(logs).contains("INFO UltiCloud: connection attempt 1 failed (no welcome within 15 s); "
+                + "retrying in 1 s.");
+    }
+
+    @Test
+    @DisplayName("a deadline for an attempt that was already established or failed changes nothing")
     void staleDeadlineChangesNothing() {
         startAndOpen();
+        connection.markEstablished();
+        assertThat(connection.isEstablished()).isTrue();
         scheduler.advance(20_000);
         assertThat(connection.state()).isEqualTo(State.OPEN);
         sockets.last().close(1011);
@@ -868,8 +885,8 @@ class AgentConnectionTest {
     @DisplayName("heartbeat: no ping before markEstablished, ping every 30 s after, pong consumed and resets the timeout")
     void heartbeatPingsAndConsumesPong() {
         FakeSocket s = startAndOpen();
-        scheduler.advance(60_000);
-        assertThat(s.sent).isEmpty();
+        scheduler.advance(14_000);
+        assertThat(s.sent).as("no heartbeat before welcome").isEmpty();
         connection.markEstablished();
         scheduler.advance(30_000);
         assertThat(s.sent).containsExactly("ping");
