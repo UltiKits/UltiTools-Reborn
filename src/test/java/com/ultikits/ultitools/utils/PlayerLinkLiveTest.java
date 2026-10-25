@@ -151,6 +151,43 @@ class PlayerLinkLiveTest {
     }
 
     @Test
+    @DisplayName("a result the module completes on the server thread is persisted on the link thread, not there")
+    void resultCompletedOnTheServerThreadIsPersistedOffIt() throws Exception {
+        UltiToolsPlugin module = startServer();
+        CloudPlayerLinks links = UltiTools.getInstance().getCloudPlayerLinks();
+        links.removeHandler(module);
+        UltiToolsPlugin login = mock(UltiToolsPlugin.class);
+        links.setHandler(login, completion -> {
+            final CompletableFuture<CloudPlayerLinks.GameAccountResult> answer = new CompletableFuture<>();
+            // Like a module that hands the account work to the server thread and completes the future there,
+            // after the framework attached its callback (an already completed future would run it inline).
+            Thread server = new Thread(() -> {
+                try {
+                    Thread.sleep(300);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                answer.complete(CloudPlayerLinks.GameAccountResult.CREATED);
+            }, "Server thread");
+            server.start();
+            return answer;
+        });
+        String completedId = UltiCloudStub.Contract.newUlid();
+        CommandDedupeSet dedupe = CloudSession.current().commandDedupe();
+        java.util.concurrent.atomic.AtomicReference<String> writer = new java.util.concurrent.atomic.AtomicReference<>();
+        CloudSession.current().cloudStateStore().setBeforeMoveHookForTesting(() -> {
+            if (dedupe.receiptFor(completedId) != null) {
+                writer.compareAndSet(null, Thread.currentThread().getName());
+            }
+        });
+        stub.gateway().send("player.link.completed", "web-registration", null, completedId,
+                UltiCloudStub.Contract.newUlid());
+        JsonObject result = stub.gateway().awaitReceived("player.link.completed.result", 1, 10_000).get(0);
+        assertThat(result.get("replyTo").getAsString()).isEqualTo(completedId);
+        assertThat(writer.get()).as("the thread that wrote the receipt").isEqualTo(CloudFeatures.HANDLER_THREAD_NAME);
+    }
+
+    @Test
     @DisplayName("after the module removed its handler, a completion follows the no-handler rule (R4)")
     void removedHandlerFollowsTheNoHandlerRule() throws Exception {
         UltiToolsPlugin module = startServer();

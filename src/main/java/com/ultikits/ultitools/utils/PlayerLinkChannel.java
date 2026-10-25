@@ -336,11 +336,25 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
                             + "; no result is sent and the gateway will redeliver.");
                     return;
                 }
+                // The module may complete its future on any thread, the server thread included. The result is
+                // persisted (an fsync) and sent on the handler thread, never on the completing thread.
+                final JsonObject outcome = resultOf(result);
                 try {
-                    CloudChannel live = channel.get();
-                    answer(live != null && live.isOpen() ? live : connection, id, resultOf(result));
-                } finally {
+                    handlerThread.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                CloudChannel live = channel.get();
+                                answer(live != null && live.isOpen() ? live : connection, id, outcome);
+                            } finally {
+                                busyCompletions.remove(id);
+                            }
+                        }
+                    });
+                } catch (java.util.concurrent.RejectedExecutionException stopped) {
                     busyCompletions.remove(id);
+                    LOGGER.warning("UltiCloud: the player-link result for completion " + id
+                            + " was not sent because cloud features are stopping; the gateway will redeliver.");
                 }
             }
         });

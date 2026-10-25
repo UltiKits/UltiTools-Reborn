@@ -23,7 +23,9 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  * <b>Locks.</b> Callers hold this ledger's monitor around a mutation and its persistence. {@link #persistNow()} then
  * takes the store's JVM-wide write lock and, inside it, the dedupe set's leaf monitor; it never takes a session
  * monitor, so it cannot invert the lock order of {@link CloudSession} (S-32, S-37). It is synchronous and runs on the
- * thread that handles the request -- the agent thread or the player-link handler thread, never the server thread.
+ * thread that handles the request -- the agent thread or the player-link handler thread, never the server thread. A
+ * module may complete its player-link result on any thread, the server thread included; {@link PlayerLinkChannel}
+ * moves the persistence of that result onto the player-link handler thread first.
  */
 final class SessionDedupeLedger implements DedupeLedger {
 
