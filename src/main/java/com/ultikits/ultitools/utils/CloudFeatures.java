@@ -9,10 +9,14 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -24,12 +28,14 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.manager.AgentOutboundFeeds;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.RemoteRequestHandlers;
+import com.ultikits.ultitools.manager.ServerMonitorManager;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 import com.ultikits.ultitools.websocket.CloudRequest;
@@ -67,6 +73,13 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * (S-65, S-66). A {@code module.request} is also filtered by the module capabilities the gateway accepted: a request
  * for a module whose {@code modules:<id>@<X.Y.Z>} name was not accepted is answered {@code capability_not_accepted}
  * (contract SEMANTICS 8) and never reaches the module.
+ * <p>
+ * <b>Outbound (plan 22-22).</b> One {@link AgentOutboundFeeds} lives as long as the plugin is enabled. On every
+ * established connection it gets the live channel; the connection's agent scheduler then runs its once-a-second send
+ * (log lines) until the close, and a main-thread task every 20 ticks, started at the first connection, samples TPS,
+ * CPU and the server state and advances the telemetry cadence. {@code snapshot.request} is registered on every
+ * connection. A {@code /ul reload} that changes an operator setting sends {@code settings.changed} once
+ * ({@link #onReload()}).
  *
  * @since 6.3.1
  */
@@ -79,6 +92,9 @@ public final class CloudFeatures {
     private static final String PANEL_ACTOR = "panel";
     private static final String MODULE_REQUEST = "module.request";
     private static final String MODULE_PREFIX = "modules:";
+
+    /** How often the agent thread sends the buffered log lines (contract: every second, or when a batch is full). */
+    static final long SEND_PERIOD_MS = 1000L;
 
     private static volatile CloudFeatures installed;
 
@@ -97,6 +113,11 @@ public final class CloudFeatures {
     /** The file-request worker of the current connection, or {@code null}. */
     private volatile SerialRequestWorker fileWorker;
 
+    private final AgentOutboundFeeds outbound;
+
+    /** Cancels the main-thread sampling task, or {@code null} before the first connection. Guarded by {@code this}. */
+    private Runnable mainTimerCancel;
+
     private CloudFeatures(Bindings bindings) {
         this.bindings = Objects.requireNonNull(bindings, "bindings");
         this.handlerThread = Executors.newSingleThreadExecutor(daemon(HANDLER_THREAD_NAME));
@@ -107,6 +128,9 @@ public final class CloudFeatures {
         this.playerLinks = new CloudPlayerLinks(playerLinkChannel);
         this.capabilities = new AgentCapabilities(bindings.switches, bindings.errorReporting, this::moduleNames);
         this.settings = new AgentSettings(bindings.powerEnabled);
+        ServerMonitorManager monitor = bindings.monitor == null ? null : bindings.monitor.get();
+        this.outbound = new AgentOutboundFeeds(monitor, () -> capabilities.enabled("telemetry"),
+                () -> capabilities.enabled("logs"), bindings.clock, bindings.mainThread);
     }
 
     /**
@@ -157,6 +181,15 @@ public final class CloudFeatures {
         playerLinkChannel.onChannelClosed();
         handlerThread.shutdown();
         timers.shutdown();
+        Runnable cancel;
+        synchronized (this) {
+            cancel = mainTimerCancel;
+            mainTimerCancel = null;
+        }
+        if (cancel != null) {
+            cancel.run();
+        }
+        outbound.shutdown();
     }
 
     /**
@@ -167,13 +200,15 @@ public final class CloudFeatures {
      * @param channel  the connection's live channel (open between welcome and close)
      * @param protocol the connection's protocol layer
      * @param rotation persists a {@code credential.rotate} through the session that owns this connection
+     * @param agent    the connection's agent scheduler: runs the once-a-second send while it is established
      */
     void register(AgentMessageRouter router, CloudChannel channel, final AgentProtocol protocol,
-                  CredentialRotationHandler.CredentialPersister rotation) {
+                  CredentialRotationHandler.CredentialPersister rotation, final ScheduledExecutorService agent) {
         Objects.requireNonNull(router, "router");
         Objects.requireNonNull(channel, "channel");
         Objects.requireNonNull(protocol, "protocol");
         Objects.requireNonNull(rotation, "rotation");
+        Objects.requireNonNull(agent, "agent");
         this.protocol = protocol;
         final SerialRequestWorker worker = new SerialRequestWorker(bindings.fileQueueCapacity);
         SerialRequestWorker previous = fileWorker;
@@ -190,17 +225,57 @@ public final class CloudFeatures {
         registerModules(router, protocol);
         router.register("credential.rotate", new CredentialRotationHandler(rotation));
         playerLinkChannel.register(router);
+        CloudRequestHandler snapshots = outbound.snapshotRequests();
+        if (snapshots != null) {
+            router.register(AgentOutboundFeeds.SNAPSHOT_REQUEST, snapshots);
+        }
         // The protocol layer consumes inbound error frames itself; the link channel hears them as reply listener.
         protocol.addReplyListener(playerLinkChannel::onErrorReply);
         protocol.addLifecycleListener(new AgentProtocol.Listener() {
+            private ScheduledFuture<?> sending;
+
+            @Override
+            public void established(CloudChannel live) {
+                if (CloudFeatures.this.protocol != protocol) {
+                    return;
+                }
+                outbound.established(live, agent);
+                startMainTimer();
+                try {
+                    sending = agent.scheduleAtFixedRate(outbound::agentSecond, SEND_PERIOD_MS, SEND_PERIOD_MS,
+                            TimeUnit.MILLISECONDS);
+                } catch (RejectedExecutionException stopping) {
+                    sending = null;
+                }
+            }
+
             @Override
             public void closed() {
                 worker.close();
+                ScheduledFuture<?> task = sending;
+                sending = null;
+                if (task != null) {
+                    task.cancel(false);
+                }
+                outbound.closed(channel);
                 if (CloudFeatures.this.protocol == protocol) {
                     playerLinkChannel.onChannelClosed();
                 }
             }
         });
+    }
+
+    /** Starts the main-thread sampling task once; it runs until {@link #shutdown()}, so TPS history has no gaps. */
+    private void startMainTimer() {
+        if (bindings.mainTimer == null) {
+            return;
+        }
+        synchronized (this) {
+            if (mainTimerCancel != null || installed != this) {
+                return;
+            }
+            mainTimerCancel = bindings.mainTimer.apply(outbound::mainThreadSecond);
+        }
     }
 
     /** @return the hello list and the per-request switch check of every connection */
@@ -430,6 +505,15 @@ public final class CloudFeatures {
         Supplier<PanelResponderRegistry> responders;
         /** A loaded module's {@code plugin.yml} version by module name, for its capability name. */
         Function<String, String> moduleVersion;
+        /** The server sampler of the telemetry; {@code null} sends no telemetry. */
+        Supplier<ServerMonitorManager> monitor;
+        /**
+         * Starts a task on the server thread every 20 ticks and returns what cancels it; {@code null} starts none.
+         * Ticks, not a wall-clock hop, so the TPS sample measures the server.
+         */
+        Function<Runnable, Runnable> mainTimer;
+        /** Epoch milliseconds for the telemetry cadence and the log rate bucket. */
+        LongSupplier clock = System::currentTimeMillis;
 
         /** @return bindings with no server behind them: only the switches, the credential rotation and links */
         static Bindings forTesting() {
@@ -447,6 +531,16 @@ public final class CloudFeatures {
             bindings.mainThread = runnable -> PluginInitiationUtils.scheduleUnlessDisabling("UltiCloud request",
                     () -> Bukkit.getScheduler().runTask(plugin, runnable));
             bindings.disabling = () -> !PluginInitiationUtils.isAcceptingPanelMessages();
+            bindings.monitor = plugin::getServerMonitorManager;
+            bindings.mainTimer = task -> {
+                final org.bukkit.scheduler.BukkitTask started = PluginInitiationUtils.scheduleUnlessDisabling(
+                        "UltiCloud telemetry", () -> Bukkit.getScheduler().runTaskTimer(plugin, task, 20L, 20L));
+                return () -> {
+                    if (started != null) {
+                        started.cancel();
+                    }
+                };
+            };
             bindings.power = BukkitPowerExecutor::create;
             bindings.actionLog = entry -> {
                 try {

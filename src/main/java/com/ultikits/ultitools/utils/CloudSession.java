@@ -986,7 +986,7 @@ final class CloudSession {
                 capabilities::refusal, agentClock);
         // The inbound handlers of this connection, registered before its hello is sent. A rotation goes through
         // this session, the one owner of the current credential (plan 22-21 fix).
-        features.register(protocol.router(), protocol.channel(), protocol, this::rotateCredential);
+        features.register(protocol.router(), protocol.channel(), protocol, this::rotateCredential, agentExecutor);
         return protocol;
     }
 

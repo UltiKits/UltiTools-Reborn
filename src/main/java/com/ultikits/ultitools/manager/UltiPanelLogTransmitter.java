@@ -63,6 +63,13 @@ public class UltiPanelLogTransmitter {
 
     private final UltiPanelWebSocketClient webSocketClient;
     private final String serverId;
+
+    /**
+     * Where the v2 connection takes each redacted line (plan 22-22), or {@code null} for the v1 transmitter. When set,
+     * {@link #sendLog} and {@link #replayLog} hand every entry {@link #buildLogData} built to this sink and nothing
+     * else: no v1 queue, batch or frame is ever built.
+     */
+    private final AgentLineSink agentSink;
     private final AtomicBoolean logTransmissionEnabled = new AtomicBoolean(true);
 
     /**
@@ -214,8 +221,23 @@ public class UltiPanelLogTransmitter {
      * @param serverId the server ID
      */
     public UltiPanelLogTransmitter(UltiPanelWebSocketClient webSocketClient, String serverId) {
+        this(webSocketClient, serverId != null ? serverId : getDefaultServerId(), null);
+    }
+
+    /**
+     * The transmitter of the v2 connection (plan 22-22): every entry goes to {@code sink}, already redacted by
+     * {@link #buildLogData}. No batch sender is started and no v1 client is held.
+     *
+     * @param sink receives each line; called on the logging thread, so it must not block
+     */
+    UltiPanelLogTransmitter(AgentLineSink sink) {
+        this(null, "", java.util.Objects.requireNonNull(sink, "sink"));
+    }
+
+    private UltiPanelLogTransmitter(UltiPanelWebSocketClient webSocketClient, String serverId, AgentLineSink sink) {
         this.webSocketClient = webSocketClient;
-        this.serverId = serverId != null ? serverId : getDefaultServerId();
+        this.serverId = serverId;
+        this.agentSink = sink;
         this.logQueue = new ConcurrentLinkedQueue<>();
         this.batchScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "UltiPanel-LogTransmitter");
@@ -223,8 +245,22 @@ public class UltiPanelLogTransmitter {
             return thread;
         });
 
-        // Start the batch-send task
-        startBatchSender();
+        if (sink == null) {
+            // Start the batch-send task (v1 only; a v2 transmitter never schedules, so its executor has no thread)
+            startBatchSender();
+        }
+    }
+
+    /**
+     * Receives one redacted console line for the v2 {@code log.lines} stream (plan 22-22).
+     */
+    interface AgentLineSink {
+        /**
+         * @param timestamp the line's time in milliseconds since the epoch
+         * @param level     the line's level
+         * @param message   the redacted message, with the redacted stack trace appended on the following lines
+         */
+        void offer(long timestamp, Level level, String message);
     }
 
     /**
@@ -236,6 +272,10 @@ public class UltiPanelLogTransmitter {
      * @param throwable the exception object (optional)
      */
     public void sendLog(String level, String message, String source, Throwable throwable) {
+        if (agentSink != null) {
+            offerToAgent(level, message, source, throwable, System.currentTimeMillis());
+            return;
+        }
         if (!logTransmissionEnabled.get() || webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
@@ -307,6 +347,45 @@ public class UltiPanelLogTransmitter {
     }
 
     /**
+     * Hands one line to the v2 sink: the message and stack trace {@link #buildLogData} redacted, the stack trace
+     * appended to the message because {@code log.lines} has no stack-trace field. Never throws: a log line must not
+     * break the logging call that produced it.
+     */
+    private void offerToAgent(String level, String message, String source, Throwable throwable, long timestamp) {
+        if (!logTransmissionEnabled.get()) {
+            return;
+        }
+        try {
+            JsonObject entry = buildLogData(level, message, source, throwable, timestamp);
+            String text = entry.get("message").getAsString();
+            JsonElement stackTrace = entry.get("stackTrace");
+            if (stackTrace != null && !stackTrace.isJsonNull()) {
+                text = text + "\n" + stackTrace.getAsString();
+            }
+            agentSink.offer(timestamp, julLevel(entry.get("level").getAsString()), text);
+        } catch (RuntimeException failure) {
+            PanelConnectionLog.log(Level.FINE, "[UltiPanel] A log line could not be handed to UltiCloud: "
+                    + failure.getClass().getSimpleName());
+        }
+    }
+
+    /** The JUL level of a panel level name, as {@code SystemLogHandler#mapLogLevel} produced it. */
+    private static Level julLevel(String level) {
+        switch (level.toLowerCase(java.util.Locale.ROOT)) {
+            case "error":
+            case "severe":
+                return Level.SEVERE;
+            case "warning":
+            case "warn":
+                return Level.WARNING;
+            case "debug":
+                return Level.FINE;
+            default:
+                return Level.INFO;
+        }
+    }
+
+    /**
      * Redacts registered commands' arguments from text bound for the panel. Without a framework
      * instance nothing can have been registered, so the text is returned unchanged.
      */
@@ -337,6 +416,10 @@ public class UltiPanelLogTransmitter {
      *                  among the live ones that may arrive while the replay is still being sent
      */
     public void replayLog(String level, String message, String source, Throwable throwable, long timestamp) {
+        if (agentSink != null) {
+            offerToAgent(level, message, source, throwable, timestamp);
+            return;
+        }
         if (holdsExternalDrainLock()) {
             return;
         }
@@ -1004,7 +1087,7 @@ public class UltiPanelLogTransmitter {
     /**
      * Gets the default server ID.
      */
-    private String getDefaultServerId() {
+    private static String getDefaultServerId() {
         try {
             return CommonUtils.getUltiToolsUUID();
         } catch (Exception e) {
