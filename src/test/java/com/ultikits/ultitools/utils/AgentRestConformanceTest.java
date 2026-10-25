@@ -30,7 +30,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
-import org.mockbukkit.mockbukkit.ServerMock;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -348,16 +347,16 @@ class AgentRestConformanceTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("revokeAnswers")
     @DisplayName("every valid revoke answer counts as revoked; the revoke request has no body")
-    void revokeAnswerOutcome(Fixture fixture) {
-        ServerMock server = MockBukkit.mock();
+    void revokeAnswerOutcome(Fixture fixture) throws InterruptedException {
+        MockBukkit.mock();
         reply.set(new Reply(statusOf(fixture), fixture.body().toString(), null));
         CloudTestAccess.storeLinkedCredential("Survival", HandshakeEndToEndTest.SERVER_ID);
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
 
         List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
         CloudAuthManager.logoutReporting(outcomes::add);
-        server.getScheduler().performOneTick();
-        server.getScheduler().waitAsyncTasksFinished();
+        // The revoke runs on a Bukkit async task; MockBukkit's waitAsyncTasksFinished() can return before it starts.
+        CloudLogoutRevokeTest.awaitOutcome(outcomes);
 
         assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.REVOKED);
         assertThat(requests).hasSize(1);

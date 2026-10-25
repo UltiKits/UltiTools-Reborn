@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
@@ -35,6 +36,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.scheduler.BukkitSchedulerMock;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -171,8 +173,7 @@ class CloudLogoutRevokeTest {
         });
         List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
         CloudAuthManager.logoutReporting(outcomes::add);
-        server.getScheduler().performOneTick();
-        server.getScheduler().waitAsyncTasksFinished();
+        awaitOutcome(outcomes);
         assertThat(outcomes).containsExactly(status == 200 || status == 401 ? CloudAuthManager.LogoutOutcome.REVOKED
                 : CloudAuthManager.LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
         assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid");
@@ -192,8 +193,31 @@ class CloudLogoutRevokeTest {
         }
         List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
         CloudAuthManager.logoutReporting(outcomes::add);
-        server.getScheduler().performOneTick();
+        awaitOutcome(outcomes);
+        assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
+        assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid");
+    }
+
+    /**
+     * The revoke and the outcome callback run on a Bukkit asynchronous task. MockBukkit's
+     * {@code waitAsyncTasksFinished()} counts only pool workers that hold a task
+     * ({@code ThreadPoolExecutor#getActiveCount}), so a task that has been handed to the pool but not yet
+     * taken by a worker -- for example one offered to an idle worker that has not locked it yet -- is
+     * invisible to it, and the wait returns before the callback. This widens that hand-off on purpose: the
+     * scheduler's wait returns with no outcome, and {@link #awaitOutcome(List)} still observes it.
+     */
+    @Test
+    void logoutOutcomeIsAwaitedEvenWhenTheAsyncHandOffIsLate() throws Exception {
+        ServerCredentialStore.save(credential("LOGOUT_TEST"));
+        http.stop(0);
+        CountDownLatch workerMayStart = new CountDownLatch(1);
+        delayAsyncHandOff(workerMayStart);
+        List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
+        CloudAuthManager.logoutReporting(outcomes::add);
         server.getScheduler().waitAsyncTasksFinished();
+        assertThat(outcomes).as("the scheduler's wait returned before the held revoke task ran").isEmpty();
+        workerMayStart.countDown();
+        awaitOutcome(outcomes);
         assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
         assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid");
     }
@@ -232,6 +256,50 @@ class CloudLogoutRevokeTest {
         assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo("cred-NEW_TEST");
         assertThat(fresh.getCredential().getCredentialId()).isEqualTo("cred-NEW_TEST");
         assertThat(old.getCredential()).isNull();
+    }
+
+    /**
+     * Waits for the logout outcome itself. Do not replace this with {@code waitAsyncTasksFinished()}: that wait
+     * can return before the revoke task has started (see
+     * {@link #logoutOutcomeIsAwaitedEvenWhenTheAsyncHandOffIsLate()}).
+     */
+    static void awaitOutcome(List<CloudAuthManager.LogoutOutcome> outcomes) throws InterruptedException {
+        awaitWithin(10_000, () -> !outcomes.isEmpty(), "the logout outcome");
+    }
+
+    /**
+     * Replaces MockBukkit's async pool with one that hands each submitted task to its workers only after
+     * {@code gate} opens (or after ten seconds), so no task is lost. Same pool shape as MockBukkit's.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    void delayAsyncHandOff(CountDownLatch gate) throws ReflectiveOperationException {
+        Field field = BukkitSchedulerMock.class.getDeclaredField("pool");
+        field.setAccessible(true);
+        field.set(server.getScheduler(), new HandOffDelayingPool(gate));
+    }
+
+    /** A cached pool whose hand-off of a submitted task to a worker waits for a gate. */
+    static final class HandOffDelayingPool extends ThreadPoolExecutor {
+        private final CountDownLatch gate;
+
+        HandOffDelayingPool(CountDownLatch gate) {
+            super(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS, new java.util.concurrent.SynchronousQueue<>());
+            this.gate = gate;
+        }
+
+        @Override
+        public void execute(Runnable task) {
+            Thread handOff = new Thread(() -> {
+                try {
+                    gate.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                super.execute(task);
+            }, "async-hand-off");
+            handOff.setDaemon(true);
+            handOff.start();
+        }
     }
 
     /** Polls {@code condition} until it holds or {@code millis} pass; fails on the deadline. */
