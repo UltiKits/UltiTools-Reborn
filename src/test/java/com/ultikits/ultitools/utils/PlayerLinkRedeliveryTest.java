@@ -5,6 +5,7 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.contract.ContractSchemas;
 import com.ultikits.ultitools.contract.RecordingChannel;
+import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks.ExpiryReason;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks.Failure;
@@ -127,6 +128,81 @@ class PlayerLinkRedeliveryTest {
 
         running.complete(GameAccountResult.CREATED);
         assertThat(results()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("a completion the handler answers after a reconnect is sent on the live connection, exactly once")
+    void lateCompletionIsAnsweredOnTheLiveConnection() {
+        RecordingChannel first = new RecordingChannel();
+        RecordingChannel second = new RecordingChannel();
+        AtomicReference<CloudChannel> live = new AtomicReference<CloudChannel>(first);
+        PlayerLinkChannel reconnecting = new PlayerLinkChannel(live::get, ledger, () -> false, () -> 0L,
+                timers.service(), Runnable::run);
+        AgentMessageRouter reconnectingRouter = new AgentMessageRouter(capability -> true,
+                capability -> "not available");
+        reconnecting.register(reconnectingRouter);
+        final CompletableFuture<GameAccountResult> running = new CompletableFuture<>();
+        final List<String> calls = new CopyOnWriteArrayList<>();
+        new CloudPlayerLinks(reconnecting).setHandler(plugin, new Handler() {
+            @Override
+            public CompletableFuture<GameAccountResult> onCompleted(LinkCompletion completion) {
+                calls.add(completion.completionId());
+                return running;
+            }
+        });
+
+        reconnectingRouter.dispatch(completedFrame(COMPLETED, PlayerLinkEndToEndTest.CREATE_ID).toString(), first);
+        first.setOpen(false);
+        reconnecting.onChannelClosed();
+        live.set(second);
+        reconnectingRouter.dispatch(completedFrame(COMPLETED, PlayerLinkEndToEndTest.CREATE_ID).toString(), second);
+        assertThat(calls).as("the redelivery is a duplicate of the call in flight").hasSize(1);
+
+        running.complete(GameAccountResult.CREATED);
+
+        assertThat(PlayerLinkEndToEndTest.Frames.ofType(first, "player.link.completed.result"))
+                .as("the closed connection gets nothing").isEmpty();
+        assertThat(PlayerLinkEndToEndTest.Frames.ofType(second, "player.link.completed.result"))
+                .as("the live connection gets the result").hasSize(1);
+        assertThat(ledger.receiptFor(COMPLETED)).as("the result is persisted for the next redelivery").isNotNull();
+    }
+
+    @Test
+    @DisplayName("a result answered with no live connection is kept and replayed by the next redelivery")
+    void resultWithNoLiveConnectionIsReplayedOnRedelivery() {
+        AtomicReference<CloudChannel> live = new AtomicReference<CloudChannel>(recording);
+        PlayerLinkChannel reconnecting = new PlayerLinkChannel(live::get, ledger, () -> false, () -> 0L,
+                timers.service(), Runnable::run);
+        AgentMessageRouter reconnectingRouter = new AgentMessageRouter(capability -> true,
+                capability -> "not available");
+        reconnecting.register(reconnectingRouter);
+        final CompletableFuture<GameAccountResult> running = new CompletableFuture<>();
+        final List<String> calls = new CopyOnWriteArrayList<>();
+        new CloudPlayerLinks(reconnecting).setHandler(plugin, new Handler() {
+            @Override
+            public CompletableFuture<GameAccountResult> onCompleted(LinkCompletion completion) {
+                calls.add(completion.completionId());
+                return running;
+            }
+        });
+
+        reconnectingRouter.dispatch(completedFrame(COMPLETED, PlayerLinkEndToEndTest.CREATE_ID).toString(), recording);
+        recording.setOpen(false);
+        live.set(null);
+        reconnecting.onChannelClosed();
+        running.complete(GameAccountResult.CREATED);
+
+        assertThat(results()).as("nothing can be sent while no connection is open").isEmpty();
+        assertThat(ledger.receiptFor(COMPLETED)).as("the receipt outlives the connection").isNotNull();
+
+        RecordingChannel afterReconnect = new RecordingChannel();
+        live.set(afterReconnect);
+        reconnectingRouter.dispatch(completedFrame(COMPLETED, PlayerLinkEndToEndTest.CREATE_ID).toString(),
+                afterReconnect);
+
+        assertThat(calls).as("the recorded result is replayed, the handler is not asked again").hasSize(1);
+        assertThat(PlayerLinkEndToEndTest.Frames.ofType(afterReconnect, "player.link.completed.result"))
+                .as("the live connection gets the recorded result").hasSize(1);
     }
 
     @Test

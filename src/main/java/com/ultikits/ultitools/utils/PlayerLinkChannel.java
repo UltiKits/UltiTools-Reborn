@@ -49,6 +49,11 @@ import java.util.regex.Pattern;
  * completion's envelope id before the {@code player.link.completed.result} frame is handed to the
  * socket. A redelivery of that id finds the recorded result and re-sends it without calling the
  * handler again. A handler that does not answer in time sends nothing, so the gateway redelivers.</p>
+ *
+ * <p>The result of a handler call is sent on the connection that is live when the handler finishes,
+ * not on the one the completion arrived on: the module may work for seconds, long enough for the
+ * socket to be replaced. If no connection is open at that moment, nothing is sent and the persisted
+ * receipt answers the next redelivery.</p>
  */
 final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
     private static final Logger LOGGER = Logger.getLogger(PlayerLinkChannel.class.getName());
@@ -332,7 +337,8 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
                     return;
                 }
                 try {
-                    answer(connection, id, resultOf(result));
+                    CloudChannel live = channel.get();
+                    answer(live != null && live.isOpen() ? live : connection, id, resultOf(result));
                 } finally {
                     busyCompletions.remove(id);
                 }
