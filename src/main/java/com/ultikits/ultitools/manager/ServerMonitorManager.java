@@ -227,7 +227,7 @@ public class ServerMonitorManager {
      * read-only, so sharing the instance is safe; the moment anyone calls {@code add} on one
      * after publication, that precondition no longer holds.
      */
-    private static final class ServerStateSnapshot {
+    static final class ServerStateSnapshot {
         static final ServerStateSnapshot EMPTY = new ServerStateSnapshot(
                 0, 0, false, "Unknown", 0, 0, new JsonArray(), new JsonArray(), new JsonArray());
 
@@ -640,10 +640,29 @@ public class ServerMonitorManager {
         if (webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
+        sampleAndPublishState();
+    }
+
+    /**
+     * Samples and publishes one state snapshot without the v1 connection gate
+     * {@link #refreshStateSnapshot()} applies, so the v2 telemetry path and its tests can publish
+     * a fresh sample while no v1 socket exists.
+     * <p>
+     * <b>May only be called on the Bukkit main thread</b>; {@link #sampleServerState()} refuses
+     * any other thread and logs it as SEVERE.
+     *
+     * @return {@code true} when a fresh snapshot was published, {@code false} off the main thread
+     *         or when sampling failed
+     */
+    boolean sampleAndPublishState() {
+        if (!isOnPrimaryThreadOrComplain()) {
+            return false;
+        }
         try {
             ServerStateSnapshot snapshot = sampleServerState();
             if (snapshot != null) {
                 stateSnapshot = snapshot;
+                return true;
             }
         } catch (Exception e) {
             // Same convention as cancelTask: hand the exception itself to the logger instead of
@@ -651,6 +670,52 @@ public class ServerMonitorManager {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 FrameworkText.text("[ServerMonitor] 采样服务器状态失败"), e);
         }
+        return false;
+    }
+
+    /**
+     * Runs one TPS and CPU sample on the main thread, without starting the v1 sender, the log
+     * drain or either sampling task {@link #startMonitoring()} owns.
+     * <p>
+     * The v2 telemetry session (plan 22-22) schedules this once per second in place of the v1
+     * {@code tpsTask}: {@link #getCurrentTPS()} and {@link #sampledCpuPercent()} read what it
+     * records. It deliberately does not call {@link #startMonitoring()}, which would also start
+     * the v1 {@code batch_update} sender and the log drain.
+     * <p>
+     * <b>May only be called on the Bukkit main thread</b>, like every other sample this class
+     * takes; any other thread is refused and logged as SEVERE.
+     *
+     * @return {@code true} when the sample ran, {@code false} off the main thread
+     */
+    boolean sampleTpsAndCpu() {
+        if (!isOnPrimaryThreadOrComplain()) {
+            return false;
+        }
+        updateTpsAndCpu();
+        return true;
+    }
+
+    /**
+     * Reads the published main-thread sample for the v2 telemetry encoders
+     * ({@link AgentTelemetry}). Package-private: internal cross-class reading, not a public API,
+     * and the v1 send paths keep using {@link #currentSnapshot()}.
+     * <p>
+     * Samples once here when nothing has been published yet and the caller is on the main thread,
+     * exactly like {@link #currentSnapshot()}; otherwise it returns the last publication, which
+     * may be up to one sampling period old.
+     *
+     * @return the latest sampled state, or the empty snapshot before the first sample
+     */
+    ServerStateSnapshot currentStateSnapshot() {
+        return currentSnapshot();
+    }
+
+    /**
+     * @return the process CPU load percentage measured by the 1 Hz main-thread task, unclamped
+     *         (the contract's encoder applies its own bounds)
+     */
+    double sampledCpuPercent() {
+        return lastCpuUsage;
     }
 
     /** Lets tests assert whether sampling has actually happened yet -- more direct than observing the emitted JSON externally. */
