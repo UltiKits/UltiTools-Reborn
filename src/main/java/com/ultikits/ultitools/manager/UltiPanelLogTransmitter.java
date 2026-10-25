@@ -261,6 +261,16 @@ public class UltiPanelLogTransmitter {
          * @param message   the redacted message, with the redacted stack trace appended on the following lines
          */
         void offer(long timestamp, Level level, String message);
+
+        /**
+         * Asked before a line is built: while it answers {@code false} the transmitter neither redacts nor hands over
+         * anything, so a connection that does not take lines costs a logging thread nothing (22-22 fix).
+         *
+         * @return whether a line offered now would be sent
+         */
+        default boolean accepting() {
+            return true;
+        }
     }
 
     /**
@@ -352,7 +362,7 @@ public class UltiPanelLogTransmitter {
      * break the logging call that produced it.
      */
     private void offerToAgent(String level, String message, String source, Throwable throwable, long timestamp) {
-        if (!logTransmissionEnabled.get()) {
+        if (!logTransmissionEnabled.get() || !agentSink.accepting()) {
             return;
         }
         try {

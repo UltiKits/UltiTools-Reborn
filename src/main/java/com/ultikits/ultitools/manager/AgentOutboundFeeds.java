@@ -84,6 +84,8 @@ public final class AgentOutboundFeeds {
     private volatile CloudChannel live;
     /** The agent thread of the live connection, for an immediate flush of a full batch. */
     private volatile Executor agentThread;
+    /** Whether the gateway accepted {@code logs} on the live connection; {@code false} while none is live. */
+    private volatile boolean logsAccepted;
     /** The handler this object attached to the root logger, or {@code null}. Guarded by {@code this}. */
     private SystemLogHandler capture;
     /** Main thread only. */
@@ -112,7 +114,17 @@ public final class AgentOutboundFeeds {
         this.logsEnabled = logsEnabled;
         this.errorsEnabled = errorsEnabled;
         this.errors = errors;
-        this.transmitter = new UltiPanelLogTransmitter(this::offerLine);
+        this.transmitter = new UltiPanelLogTransmitter(new UltiPanelLogTransmitter.AgentLineSink() {
+            @Override
+            public void offer(long timestamp, Level level, String message) {
+                offerLine(timestamp, level, message);
+            }
+
+            @Override
+            public boolean accepting() {
+                return linesWanted();
+            }
+        });
     }
 
     /** @return the {@code snapshot.request} handler, or {@code null} while there is no telemetry */
@@ -156,13 +168,19 @@ public final class AgentOutboundFeeds {
     /**
      * A connection was established: its channel becomes the live one, the telemetry sends its opening snapshots, and
      * the log capture is attached when the {@code logs} switch is on (again, if a logout detached it).
+     * <p>
+     * When the gateway did not accept {@code logs}, the line stream is inert for this connection (22-22 fix): no line
+     * is built, batched or flushed, so a refused {@code log.lines} never turns every following line into a flush
+     * attempt. The handler itself may stay attached, because it also feeds the error collector.
      *
-     * @param channel     the connection's live channel
-     * @param agentThread the connection's agent thread
+     * @param channel      the connection's live channel
+     * @param agentThread  the connection's agent thread
+     * @param logsAccepted whether the welcome accepted {@code logs}
      */
-    public void established(CloudChannel channel, Executor agentThread) {
+    public void established(CloudChannel channel, Executor agentThread, boolean logsAccepted) {
         logs.reset();
         this.agentThread = agentThread;
+        this.logsAccepted = logsAccepted;
         this.live = channel;
         AgentTelemetry current = telemetry();
         if (current != null) {
@@ -182,6 +200,7 @@ public final class AgentOutboundFeeds {
         if (live == channel) {
             live = null;
             agentThread = null;
+            logsAccepted = false;
         }
         logs.reset();
         AgentTelemetry current = telemetry;
@@ -238,6 +257,7 @@ public final class AgentOutboundFeeds {
     public void shutdown() {
         live = null;
         agentThread = null;
+        logsAccepted = false;
         logs.reset();
         synchronized (this) {
             SystemLogHandler attached = capture;
@@ -281,14 +301,22 @@ public final class AgentOutboundFeeds {
         return AgentEventEncoders.playerCommand(SensitiveCommandRegistry.commandName(commandLine));
     }
 
-    /** One redacted line from the transmitter; dropped while offline or with the logs switch off. */
+    /**
+     * One redacted line from the transmitter; dropped while offline, with the logs switch off, or when the gateway did
+     * not accept {@code logs} on this connection.
+     */
     void offerLine(long timestamp, Level level, String message) {
-        if (live == null || !logsEnabled.getAsBoolean()) {
+        if (!linesWanted()) {
             return;
         }
         if (logs.offer(timestamp, level, message)) {
             requestFlush();
         }
+    }
+
+    /** @return whether a line would be sent: a connection is live, accepted {@code logs}, and the switch is on */
+    private boolean linesWanted() {
+        return live != null && logsAccepted && logsEnabled.getAsBoolean();
     }
 
     /** A full batch leaves at once, on the agent thread, never inline on the logging thread (22-13). */

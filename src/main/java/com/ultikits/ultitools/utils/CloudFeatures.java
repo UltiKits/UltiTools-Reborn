@@ -242,7 +242,7 @@ public final class CloudFeatures {
                 if (CloudFeatures.this.protocol != protocol) {
                     return;
                 }
-                outbound.established(live, agent);
+                outbound.established(live, agent, protocol.acceptedCapabilities().contains("logs"));
                 reportSettingsIfChanged(live);
                 startMainTimer();
                 try {

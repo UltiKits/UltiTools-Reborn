@@ -87,7 +87,7 @@ class AgentOutboundFeedsTest {
         final AtomicBoolean logs = new AtomicBoolean(false); // off while established: no root-logger handler
         AgentOutboundFeeds feeds = new AgentOutboundFeeds(() -> null, () -> false, logs::get, () -> false,
                 () -> null, System::currentTimeMillis, null);
-        feeds.established(channel, agentTasks::add);
+        feeds.established(channel, agentTasks::add, true);
         logs.set(true);
         for (int i = 0; i < 150; i++) {
             feeds.offerLine(System.currentTimeMillis(), Level.INFO, "line " + i);
@@ -97,6 +97,67 @@ class AgentOutboundFeedsTest {
         agentTasks.get(0).run();
         assertThat(sends.get()).isPositive();
         feeds.shutdown();
+    }
+
+    @Test
+    @DisplayName("logs declared but not accepted: no line is batched and no flush is attempted")
+    void logsNotAcceptedMakesTheStreamInert() {
+        final AtomicInteger sends = new AtomicInteger();
+        CloudChannel channel = new RecordingChannel() {
+            @Override
+            public boolean send(String type, JsonObject payload) {
+                sends.incrementAndGet();
+                return false; // the channel refuses a type the gateway did not accept
+            }
+        };
+        final List<Runnable> agentTasks = new ArrayList<>();
+        // The root-logger handler may stay attached (it also feeds the error collector); its lines must go nowhere.
+        // The switch is off while established only so this unit test attaches no handler; it is on for every line.
+        final AtomicBoolean logs = new AtomicBoolean(false);
+        AgentOutboundFeeds feeds = new AgentOutboundFeeds(() -> null, () -> false, logs::get, () -> false,
+                () -> null, System::currentTimeMillis, null);
+        feeds.established(channel, agentTasks::add, false);
+        logs.set(true);
+        for (int i = 0; i < 2000; i++) {
+            feeds.offerLine(System.currentTimeMillis(), Level.INFO, "flood line " + i);
+        }
+        feeds.agentSecond();
+        assertThat(agentTasks).as("no flush queued").isEmpty();
+        assertThat(sends.get()).as("no log.lines attempted").isZero();
+        final AtomicInteger buffered = new AtomicInteger();
+        feeds.logBatcher().flush(new RecordingChannel() {
+            @Override
+            public boolean send(String type, JsonObject payload) {
+                buffered.incrementAndGet();
+                return true;
+            }
+        });
+        assertThat(buffered.get()).as("nothing batched").isZero();
+        feeds.shutdown();
+    }
+
+    @Test
+    @DisplayName("a v2 transmitter whose sink is not accepting builds and hands over nothing")
+    void aTransmitterIsInertWhileItsSinkIsNotAccepting() {
+        final AtomicBoolean accepting = new AtomicBoolean(false);
+        final List<String> offered = new ArrayList<>();
+        UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(new UltiPanelLogTransmitter.AgentLineSink() {
+            @Override
+            public void offer(long timestamp, Level level, String message) {
+                offered.add(message);
+            }
+
+            @Override
+            public boolean accepting() {
+                return accepting.get();
+            }
+        });
+        transmitter.sendLog("info", "while inert", "server", null);
+        assertThat(offered).isEmpty();
+        accepting.set(true);
+        transmitter.sendLog("info", "while accepting", "server", null);
+        assertThat(offered).hasSize(1);
+        assertThat(offered.get(0)).contains("while accepting");
     }
 
     /** A channel that accepts everything and records nothing; tests override what they observe. */
