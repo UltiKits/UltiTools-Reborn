@@ -1,8 +1,0 @@
-{
-  "error": {
-    "code": 426,
-    "message": {"text": "m"},
-    "requestId": ["req_01"],
-    "details": "6.3.1"
-  }
-}
