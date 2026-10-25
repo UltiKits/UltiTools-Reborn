@@ -10,6 +10,7 @@ import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
@@ -24,6 +25,7 @@ import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,7 +43,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
- * The three mutating and listing operations of the protocol 2.0.0 file surface, driven through
+ * The listing, reading, writing and deleting operations of the protocol 2.0.0 file surface, driven through
  * {@link AgentMessageRouter} into {@link RemoteFileOperations}.
  *
  * <p>Every assertion is a real filesystem effect plus the reply the panel receives; every reply is
@@ -85,6 +87,7 @@ class RemoteFileOperationsTest {
         handler = new RemoteFileOperations(files, tmp.toFile(), audit::add);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("files.list", handler);
+        router.register("files.read", handler);
         router.register("files.write", handler);
         router.register("files.delete", handler);
         channel = new RecordingChannel();
@@ -352,6 +355,80 @@ class RemoteFileOperationsTest {
     }
 
     // --------------------------------------------------------------------------------------
+    // symbolic links
+    // --------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a read through a link to a refused file is refused and the target's bytes never leak")
+    void readThroughALinkToARefusedFileIsRefused() throws IOException {
+        Files.createDirectories(tmp.resolve(".ultikits"));
+        Path credential = tmp.resolve(".ultikits/credentials.json");
+        Files.write(credential, "SENTINEL-CREDENTIAL".getBytes(StandardCharsets.UTF_8));
+        symlink(tmp.resolve("plugins/notes.txt"), credential);
+
+        router.dispatch(readRequest("plugins/notes.txt").toString(), channel);
+
+        JsonObject payload = only(channel).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).isEqualTo("path_not_allowed");
+        assertThat(only(channel).toString()).doesNotContain("SENTINEL-CREDENTIAL");
+    }
+
+    @Test
+    @DisplayName("a read through a link to a file outside the editable roots is refused")
+    void readThroughALinkToAnOutsideFileIsRefused() throws IOException {
+        Path outside = tmp.resolve("outside.txt");
+        Files.write(outside, "OUTSIDE-SENTINEL".getBytes(StandardCharsets.UTF_8));
+        symlink(tmp.resolve("plugins/escape.txt"), outside);
+
+        router.dispatch(readRequest("plugins/escape.txt").toString(), channel);
+
+        JsonObject payload = only(channel).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).isEqualTo("path_not_allowed");
+        assertThat(only(channel).toString()).doesNotContain("OUTSIDE-SENTINEL");
+    }
+
+    @Test
+    @DisplayName("deleting a link removes only the link: its target, refused or in-root, survives")
+    void deletingALinkRemovesOnlyTheLinkAndNeverItsTarget() throws IOException {
+        Path target = write("plugins/real.yml", "keep: me\n");
+        byte[] targetBytes = Files.readAllBytes(target);
+        symlink(tmp.resolve("plugins/alias.yml"), target);
+
+        router.dispatch(deleteRequest("plugins/alias.yml").toString(), channel);
+
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(Files.exists(tmp.resolve("plugins/alias.yml"), LinkOption.NOFOLLOW_LINKS)).isFalse();
+        assertThat(Files.exists(target)).isTrue();
+        assertThat(Files.readAllBytes(target)).isEqualTo(targetBytes);
+
+        Files.createDirectories(tmp.resolve(".ultikits"));
+        Path credential = tmp.resolve(".ultikits/credentials.json");
+        Files.write(credential, "SENTINEL-CREDENTIAL".getBytes(StandardCharsets.UTF_8));
+        byte[] credentialBytes = Files.readAllBytes(credential);
+        symlink(tmp.resolve("plugins/notes.txt"), credential);
+        channel.clear();
+
+        router.dispatch(deleteRequest("plugins/notes.txt").toString(), channel);
+
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(Files.exists(tmp.resolve("plugins/notes.txt"), LinkOption.NOFOLLOW_LINKS)).isFalse();
+        assertThat(Files.readAllBytes(credential)).isEqualTo(credentialBytes);
+
+        Path outside = tmp.resolve("outside.txt");
+        Files.write(outside, "OUTSIDE-SENTINEL".getBytes(StandardCharsets.UTF_8));
+        symlink(tmp.resolve("plugins/escape.txt"), outside);
+        channel.clear();
+
+        router.dispatch(deleteRequest("plugins/escape.txt").toString(), channel);
+
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(Files.exists(tmp.resolve("plugins/escape.txt"), LinkOption.NOFOLLOW_LINKS)).isFalse();
+        assertThat(Files.exists(outside)).isTrue();
+    }
+
+    // --------------------------------------------------------------------------------------
     // the action log
     // --------------------------------------------------------------------------------------
 
@@ -540,6 +617,20 @@ class RemoteFileOperationsTest {
         JsonObject frame = ContractFixtures.object("fixtures/agent/files.delete/valid/file.json");
         frame.getAsJsonObject("payload").addProperty("path", path);
         return frame;
+    }
+
+    private static JsonObject readRequest(String path) {
+        JsonObject frame = ContractFixtures.object("fixtures/agent/files.read/valid/config.json");
+        frame.getAsJsonObject("payload").addProperty("path", path);
+        return frame;
+    }
+
+    private static void symlink(Path link, Path target) throws IOException {
+        try {
+            Files.createSymbolicLink(link, target);
+        } catch (UnsupportedOperationException | IOException cannotLink) {
+            Assumptions.assumeTrue(false, "This filesystem cannot create symbolic links: " + cannotLink);
+        }
     }
 
     private static String repeat(char character, int count) {
