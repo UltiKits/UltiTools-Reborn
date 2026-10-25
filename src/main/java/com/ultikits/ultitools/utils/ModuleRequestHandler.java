@@ -1,17 +1,23 @@
 package com.ultikits.ultitools.utils;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.stream.JsonWriter;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.UltiToolsException;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.io.IOException;
+import java.io.StringWriter;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.logging.Level;
 import java.util.regex.Pattern;
 
 /**
@@ -38,7 +44,13 @@ import java.util.regex.Pattern;
  *   <li>the registry's deadline passing becomes {@code deadline_exceeded};</li>
  *   <li>every other failure — a responder that throws, completes exceptionally, returns null, or is
  *       refused because the registry's queue is full or the registry shut down — becomes
- *       {@code module_error} carrying only the root cause's message, cut to the schema's limit.</li>
+ *       {@code module_error} carrying only the root cause's message, cut to the schema's limit;</li>
+ *   <li>a result that cannot be written as strict JSON — a {@code NaN} or infinite number, which
+ *       Gson writes as a bare token no strict parser accepts — becomes {@code module_error} with a
+ *       fixed message, because the gateway would drop such a frame and the panel would wait for
+ *       its own deadline;</li>
+ *   <li>a reply that cannot be built at all becomes one {@code internal_error}, so the single reply
+ *       is never lost to a channel or serialiser failure inside the completion callback.</li>
  * </ul>
  * <p>The contract also allows the {@code ok} shape with {@code data: null}. The 6.3.0 extension
  * point is typed {@code Function<JsonObject, CompletableFuture<JsonObject>>} and always treats a
@@ -61,6 +73,18 @@ final class ModuleRequestHandler implements CloudRequestHandler {
     private static final String RESPONSE_TYPE = "module.response";
     private static final String NO_RESPONDER_MESSAGE = "No module responder is registered for this request.";
     private static final String DEADLINE_MESSAGE = "The module responder did not complete in time.";
+    private static final String NON_JSON_MESSAGE = "The module's result is not valid JSON (NaN or Infinity).";
+    private static final String INTERNAL_ERROR_MESSAGE =
+            "The plugin could not build a reply for this request.";
+
+    /**
+     * Shared Gson used only to hand a result to a non-lenient {@link JsonWriter}, which is the one
+     * check that both walks the whole value and refuses a non-finite number: {@code
+     * Gson#toJson(JsonElement)} always writes leniently, and Gson's strict <em>reader</em> accepts
+     * a bare {@code NaN} as the string {@code "NaN"}, so serialising and reparsing would prove
+     * nothing.
+     */
+    private static final Gson RESULT_GSON = new Gson();
 
     private final PanelResponderRegistry registry;
 
@@ -119,12 +143,60 @@ final class ModuleRequestHandler implements CloudRequestHandler {
 
     /** Produces the request's single reply from the registry's outcome. */
     private static void reply(CloudChannel channel, String replyTo, JsonObject result, Throwable failure) {
-        if (failure == null) {
-            channel.replyOk(replyTo, RESPONSE_TYPE, result);
-        } else if (isDeadline(failure)) {
-            channel.replyError(replyTo, RESPONSE_TYPE, "deadline_exceeded", DEADLINE_MESSAGE, null);
-        } else {
-            channel.replyError(replyTo, RESPONSE_TYPE, "module_error", rootCauseMessage(failure), null);
+        try {
+            if (failure == null && isStrictJson(result)) {
+                channel.replyOk(replyTo, RESPONSE_TYPE, result);
+            } else if (failure == null) {
+                // The registry settled successfully, but what the module returned cannot be put in
+                // a frame: Gson writes NaN and Infinity as bare tokens, no strict parser accepts
+                // them, and the gateway would silently drop the frame the panel is waiting for.
+                channel.replyError(replyTo, RESPONSE_TYPE, "module_error", NON_JSON_MESSAGE, null);
+            } else if (isDeadline(failure)) {
+                channel.replyError(replyTo, RESPONSE_TYPE, "deadline_exceeded", DEADLINE_MESSAGE, null);
+            } else {
+                channel.replyError(replyTo, RESPONSE_TYPE, "module_error", rootCauseMessage(failure), null);
+            }
+        } catch (RuntimeException replyFailed) {
+            // The registry settles this future exactly once, so a reply that cannot be built would
+            // otherwise be lost and the panel would wait for its own deadline: answer the request
+            // once with the contract's own fallback code instead. The failure's text is not logged
+            // or sent — it can quote module code or payload content.
+            sendInternalError(channel, replyTo);
+        }
+    }
+
+    /** Answers {@code internal_error} once, and gives up quietly if the channel refuses that too. */
+    private static void sendInternalError(CloudChannel channel, String replyTo) {
+        PanelConnectionLog.log(Level.WARNING,
+                "UltiCloud: could not build a module.response for a module request; answering internal_error.");
+        try {
+            channel.replyError(replyTo, RESPONSE_TYPE, "internal_error", INTERNAL_ERROR_MESSAGE, null);
+        } catch (RuntimeException channelRefused) {
+            PanelConnectionLog.log(Level.FINE,
+                    "UltiCloud: the connection refused the module.response for a module request.");
+        }
+    }
+
+    /**
+     * Whether {@code result} can be written as strict JSON. A non-lenient {@link JsonWriter}
+     * refuses a non-finite {@code double} or {@code float} with {@link IllegalArgumentException},
+     * which is exactly the value the gateway's parser rejects and Gson would otherwise write as the
+     * bare token {@code NaN} or {@code Infinity}.
+     */
+    // PMD.AvoidCatchingGenericException: the Gson adapter reports an unserialisable value through
+    // IllegalArgumentException; any runtime failure means "not strict JSON".
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static boolean isStrictJson(JsonElement result) {
+        if (result == null) {
+            return false;
+        }
+        try (JsonWriter writer = new JsonWriter(new StringWriter())) {
+            writer.setLenient(false);
+            writer.setSerializeNulls(true);
+            RESULT_GSON.getAdapter(JsonElement.class).write(writer, result);
+            return true;
+        } catch (IOException | RuntimeException notStrictJson) {
+            return false;
         }
     }
 
