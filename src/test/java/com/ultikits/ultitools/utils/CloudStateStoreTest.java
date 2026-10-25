@@ -488,4 +488,58 @@ class CloudStateStoreTest {
         assertThat(written.detachAndDelete()).isTrue();
         assertThat(Files.exists(file)).isFalse();
     }
+    @Test
+    @DisplayName("a receipt round-trips through the file beside its id; the file stays version 1")
+    void receiptRoundTrips() throws IOException {
+        CloudStateStore store = newStore();
+        store.load(S1);
+        JsonObject receipt = new JsonObject();
+        receipt.addProperty("status", "ok");
+        store.dedupe().firstSeen("01ARYZ6S41TSV4RRFFQ69G5FAW");
+        store.dedupe().recordReceipt(VALID_ID, receipt);
+        store.flush(S1);
+        JsonObject written = readFile();
+        assertThat(written.get("version").getAsInt()).isEqualTo(1);
+        JsonArray ids = written.getAsJsonArray("commandIds");
+        assertThat(ids).hasSize(2);
+        assertThat(ids.get(0).getAsJsonObject().has("receipt")).as("no receipt, no field").isFalse();
+        assertThat(ids.get(1).getAsJsonObject().getAsJsonObject("receipt")).isEqualTo(receipt);
+
+        CloudStateStore reloaded = newStore();
+        reloaded.load(S1);
+        assertThat(reloaded.dedupe().receiptFor(VALID_ID)).isEqualTo(receipt);
+    }
+
+    @Test
+    @DisplayName("a file written before receipts existed loads every id and no receipt")
+    void fileWithoutReceiptsLoads() throws IOException {
+        writeFile(document(1, S1, "[]", "[{\"id\":\"" + VALID_ID + "\",\"seenAt\":" + clock.get() + "}]"));
+        CloudStateStore store = newStore();
+        store.load(S1);
+        assertThat(store.dedupe().snapshot()).singleElement().satisfies(seen -> {
+            assertThat(seen.id()).isEqualTo(VALID_ID);
+            assertThat(seen.receipt()).isNull();
+        });
+        assertThat(at(Level.WARNING)).isEmpty();
+        assertThat(Files.exists(unreadablePath())).isFalse();
+    }
+
+    @Test
+    @DisplayName("a receipt that is not a JSON object, or over 4 KiB, is dropped with one WARNING and its id kept")
+    void badReceiptIsDroppedAndItsIdKept() throws IOException {
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < CommandDedupeSet.MAX_RECEIPT_BYTES; i++) {
+            big.append('x');
+        }
+        String ids = "[{\"id\":\"" + VALID_ID + "\",\"seenAt\":" + clock.get() + ",\"receipt\":\"ok\"},"
+                + "{\"id\":\"01ARYZ6S41TSV4RRFFQ69G5FAW\",\"seenAt\":" + clock.get()
+                + ",\"receipt\":{\"message\":\"" + big + "\"}}]";
+        writeFile(document(1, S1, "[]", ids));
+        CloudStateStore store = newStore();
+        store.load(S1);
+        assertThat(store.dedupe().snapshot()).hasSize(2).allSatisfy(seen -> assertThat(seen.receipt()).isNull());
+        assertThat(store.dedupe().firstSeen(VALID_ID)).as("the id is kept").isFalse();
+        assertThat(at(Level.WARNING)).hasSize(1);
+        assertThat(Files.exists(unreadablePath())).isFalse();
+    }
 }

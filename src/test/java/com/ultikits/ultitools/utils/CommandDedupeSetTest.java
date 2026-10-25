@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
+import com.google.gson.JsonObject;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -164,5 +166,73 @@ class CommandDedupeSetTest {
 
     private static List<String> ids(List<CommandDedupeSet.Seen> seen) {
         return seen.stream().map(CommandDedupeSet.Seen::id).collect(Collectors.toList());
+    }
+    private static JsonObject receipt(String status) {
+        JsonObject receipt = new JsonObject();
+        receipt.addProperty("status", status);
+        return receipt;
+    }
+
+    @Test
+    @DisplayName("a receipt is recorded with its id, replayed, and the id counts as seen")
+    void receiptIsRecordedWithItsId() {
+        CommandDedupeSet set = new CommandDedupeSet(1000, 24 * HOUR, clock::get);
+        assertThat(set.recordReceipt("a", receipt("ok"))).isTrue();
+        assertThat(set.receiptFor("a")).isEqualTo(receipt("ok"));
+        assertThat(set.firstSeen("a")).as("recording a receipt remembers the id").isFalse();
+        assertThat(set.snapshot()).singleElement().satisfies(seen -> assertThat(seen.receipt()).isNotNull());
+    }
+
+    @Test
+    @DisplayName("the 1001st id evicts the oldest id together with its receipt")
+    void evictionTakesTheReceipt() {
+        CommandDedupeSet set = new CommandDedupeSet(1000, 24 * HOUR, clock::get);
+        set.recordReceipt("id0", receipt("ok"));
+        for (int i = 1; i < 1000; i++) {
+            set.firstSeen("id" + i);
+        }
+        assertThat(set.receiptFor("id0")).isNotNull();
+        set.firstSeen("id1000");
+        assertThat(set.receiptFor("id0")).as("evicted with its id").isNull();
+        assertThat(set.firstSeen("id0")).isTrue();
+    }
+
+    @Test
+    @DisplayName("an id older than 24 h is first-seen again and has no receipt")
+    void expiryTakesTheReceipt() {
+        CommandDedupeSet set = new CommandDedupeSet(1000, 24 * HOUR, clock::get);
+        set.recordReceipt("a", receipt("ok"));
+        clock.addAndGet(24 * HOUR + 1);
+        assertThat(set.receiptFor("a")).isNull();
+        assertThat(set.firstSeen("a")).isTrue();
+    }
+
+    @Test
+    @DisplayName("a receipt over 4 KiB is not recorded and changes nothing")
+    void oversizedReceiptIsRefused() {
+        CommandDedupeSet set = new CommandDedupeSet(1000, 24 * HOUR, clock::get);
+        JsonObject big = new JsonObject();
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < CommandDedupeSet.MAX_RECEIPT_BYTES; i++) {
+            text.append('x');
+        }
+        big.addProperty("message", text.toString());
+        long before = set.modCount();
+        assertThat(set.recordReceipt("a", big)).isFalse();
+        assertThat(set.receiptFor("a")).isNull();
+        assertThat(set.modCount()).isEqualTo(before);
+        assertThat(set.firstSeen("a")).isTrue();
+    }
+
+    @Test
+    @DisplayName("restore keeps loaded receipts, clear forgets them")
+    void restoreAndClear() {
+        CommandDedupeSet set = new CommandDedupeSet(1000, 24 * HOUR, clock::get);
+        set.restore(Arrays.asList(new CommandDedupeSet.Seen("a", clock.get(), receipt("ok")),
+                new CommandDedupeSet.Seen("b", clock.get())));
+        assertThat(set.receiptFor("a")).isEqualTo(receipt("ok"));
+        assertThat(set.receiptFor("b")).isNull();
+        set.clear();
+        assertThat(set.receiptFor("a")).isNull();
     }
 }

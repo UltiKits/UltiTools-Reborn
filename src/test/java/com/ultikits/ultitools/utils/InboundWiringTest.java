@@ -77,6 +77,7 @@ class InboundWiringTest {
     private final YamlConfiguration config = new YamlConfiguration();
     private final List<RemoteActionLog.Entry> actions = new CopyOnWriteArrayList<>();
     private final List<String> powerCalls = new CopyOnWriteArrayList<>();
+    private final AtomicInteger executions = new AtomicInteger();
     /** The server thread's queue: MockBukkit treats the test thread as the server thread, so it drains this. */
     private final java.util.concurrent.BlockingQueue<Runnable> mainQueue =
             new java.util.concurrent.LinkedBlockingQueue<>();
@@ -133,6 +134,7 @@ class InboundWiringTest {
         CloudFeatures.Bindings bindings = CloudFeatures.Bindings.forTesting();
         CommandExecutionManager commands = mock(CommandExecutionManager.class);
         doAnswer(invocation -> {
+            executions.incrementAndGet();
             CommandExecutionManager.CommandResultSink sink = invocation.getArgument(3);
             sink.completed(Collections.singletonList("Done"), false, 3L);
             return null;
@@ -229,6 +231,30 @@ class InboundWiringTest {
                 .isEqualTo("ok");
         assertThat(stub.accessLog().count("WS-INVALID")).isZero();
         assertThat(stub.accessLog().count("unsupported_type")).isZero();
+    }
+
+    @Test
+    @DisplayName("ack-first after a restart: a redelivered command is acknowledged again and not run again")
+    void redeliveredCommandAfterRestartIsNotRunAgain() throws Exception {
+        connect();
+        String id = UltiCloudStub.Contract.newUlid();
+        stub.gateway().send("command.execute", "say", null, id, null);
+        reply("command.result", 1);
+        assertThat(reply("command.ack", 1).get("replyTo").getAsString()).isEqualTo(id);
+
+        // Restart: the session flushes and stops, a fresh session loads the state file and reconnects.
+        CloudSession.current().invalidate();
+        features.shutdown();
+        CloudSession.resetForTesting();
+        CloudSession.setAgentEndpointOverrideForTesting(new URI("ws://127.0.0.1:" + stub.httpPort() + "/v1/agent"));
+        int executedBefore = executions.get();
+        connect();
+        await(() -> stub.gateway().openConnections() == 1, "one live connection");
+        stub.gateway().send("command.execute", "say", null, id, null);
+        assertThat(reply("command.ack", 2).get("replyTo").getAsString()).isEqualTo(id);
+        Thread.sleep(300);
+        assertThat(executions.get()).as("the command is not executed again").isEqualTo(executedBefore);
+        assertThat(stub.gateway().received("command.result")).hasSize(1);
     }
 
     @Test

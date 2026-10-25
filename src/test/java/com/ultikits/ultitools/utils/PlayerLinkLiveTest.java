@@ -136,6 +136,20 @@ class PlayerLinkLiveTest {
     }
 
     @Test
+    @DisplayName("after the module removed its handler, a completion follows the no-handler rule (R4)")
+    void removedHandlerFollowsTheNoHandlerRule() throws Exception {
+        UltiToolsPlugin module = startServer();
+        UltiTools.getInstance().getCloudPlayerLinks().removeHandler(module);
+        String completedId = UltiCloudStub.Contract.newUlid();
+        stub.gateway().send("player.link.completed", "web-registration", null, completedId,
+                UltiCloudStub.Contract.newUlid());
+        JsonObject result = stub.gateway().awaitReceived("player.link.completed.result", 1, 10_000).get(0);
+        assertThat(result.get("replyTo").getAsString()).isEqualTo(completedId);
+        assertThat(result.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("auth_plugin_unavailable");
+        assertThat(handlerCalls.get()).isZero();
+    }
+
+    @Test
     @DisplayName("the API exists before any connection and answers NOT_CONNECTED while offline")
     void offlineCreateIsNotConnected() throws Exception {
         UltiTools plugin = publishUltiTools();
