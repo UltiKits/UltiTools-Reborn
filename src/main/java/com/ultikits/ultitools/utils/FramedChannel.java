@@ -44,9 +44,15 @@ final class FramedChannel implements CloudChannel {
 
     @Override public boolean isOpen() { return established.getAsBoolean(); }
     @Override public CloudLimits limits() { return limits.get(); }
-    @Override public boolean send(String type, JsonObject payload) { return frame(null, type, payload); }
+    @Override public boolean send(String type, JsonObject payload) { return sendTracked(type, payload) != null; }
+
+    @Override
+    public String sendTracked(String type, JsonObject payload) {
+        return frameTracked(null, type, payload);
+    }
+
     @Override public boolean reply(String replyTo, String type, JsonObject payload) {
-        return frame(Objects.requireNonNull(replyTo, "replyTo"), type, payload);
+        return frameTracked(Objects.requireNonNull(replyTo, "replyTo"), type, payload) != null;
     }
 
     @Override
@@ -83,15 +89,16 @@ final class FramedChannel implements CloudChannel {
         return reply(replyTo, type, payload);
     }
 
-    private boolean frame(String replyTo, String type, JsonObject payload) {
+    private String frameTracked(String replyTo, String type, JsonObject payload) {
         AgentMessageTypes.Spec spec = AgentMessageTypes.spec(type);
         if (spec == null || (spec.replyTo() == AgentMessageTypes.ReplyTo.REQUIRED && replyTo == null)
                 || (spec.replyTo() == AgentMessageTypes.ReplyTo.FORBIDDEN && replyTo != null)
                 || (replyTo != null && !ContractPrimitives.ULID.matcher(replyTo).matches())) {
             throw new IllegalArgumentException("Invalid outgoing message type or replyTo");
         }
-        if (!isOpen()) { return false; }
-        Envelope envelope = new Envelope(ids.get(), type, clock.getAsLong(), replyTo, payload);
+        if (!isOpen()) { return null; }
+        String id = ids.get();
+        Envelope envelope = new Envelope(id, type, clock.getAsLong(), replyTo, payload);
         String text = envelope.toJson();
         int maxBytes = limits().maxFrameBytes();
         if (text.getBytes(StandardCharsets.UTF_8).length > maxBytes) {
@@ -106,8 +113,9 @@ final class FramedChannel implements CloudChannel {
                     socketSend.test(replacement);
                 }
             }
-            return false;
+            return null;
         }
-        return isOpen() && socketSend.test(text);
+        if (!isOpen() || !socketSend.test(text)) { return null; }
+        return id;
     }
 }

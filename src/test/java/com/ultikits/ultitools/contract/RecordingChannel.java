@@ -35,8 +35,9 @@ public final class RecordingChannel implements CloudChannel {
         return true;
     }
 
-    @Override public boolean send(String type, JsonObject payload) { return record(null, type, payload); }
-    @Override public boolean reply(String replyTo, String type, JsonObject payload) { return record(replyTo, type, payload); }
+    @Override public boolean send(String type, JsonObject payload) { return sendTracked(type, payload) != null; }
+    @Override public String sendTracked(String type, JsonObject payload) { return recordTracked(null, type, payload); }
+    @Override public boolean reply(String replyTo, String type, JsonObject payload) { return recordTracked(replyTo, type, payload) != null; }
 
     @Override
     public boolean replyOk(String replyTo, String type, JsonElement data) {
@@ -67,14 +68,15 @@ public final class RecordingChannel implements CloudChannel {
         return reply(replyTo, type, payload);
     }
 
-    private synchronized boolean record(String replyTo, String type, JsonObject payload) {
-        if (!open) { return false; }
+    private synchronized String recordTracked(String replyTo, String type, JsonObject payload) {
+        if (!open) { return null; }
+        String id = String.format(Locale.ROOT, "%026d", ++sequence);
         JsonObject frame = new JsonObject();
         frame.addProperty("v", 2);
-        frame.addProperty("id", String.format(Locale.ROOT, "%026d", ++sequence));
+        frame.addProperty("id", id);
         frame.addProperty("type", type); frame.addProperty("ts", 1000);
         if (replyTo != null) { frame.addProperty("replyTo", replyTo); }
         frame.add("payload", payload);
-        return accept(frame.toString());
+        return accept(frame.toString()) ? id : null;
     }
 }
