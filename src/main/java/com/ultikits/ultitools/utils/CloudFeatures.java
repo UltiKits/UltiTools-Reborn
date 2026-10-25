@@ -50,7 +50,8 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * {@link CloudPlayerLinks} API and the {@link PlayerLinkChannel} behind it (so a handler a module set at startup
  * survives every reconnect), and the one {@link SessionDedupeLedger} every handler shares (so the ledger monitor is
  * the same across connections). Each upgraded connection gets its own {@link AgentProtocol}; {@link CloudSession}
- * calls {@link #register(AgentMessageRouter, CloudChannel, AgentProtocol, CredentialRotationHandler.CredentialPersister)}
+ * calls {@link #register(AgentMessageRouter, CloudChannel, AgentProtocol, CredentialRotationHandler.CredentialPersister,
+ * ScheduledExecutorService)}
  * once for it, which registers the request handlers on that connection's router and points the lifetime objects at
  * that connection. A {@code credential.rotate} is persisted through the session that owns the connection, never
  * through the store directly, because that session is the one owner of the current credential.
