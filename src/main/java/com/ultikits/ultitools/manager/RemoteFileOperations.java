@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.manager;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -96,6 +98,10 @@ final class RemoteFileOperations implements CloudRequestHandler {
     /** {@code files.list} accepts the empty root path in addition to a {@code ServerPath}. */
     private static final Pattern LIST_PATH = Pattern.compile("^$|" + ContractPrimitives.SERVER_PATH.pattern());
 
+    /** The refusal text every {@code file_changed} answer carries. */
+    private static final String CHANGED_MESSAGE =
+            "The file changed after the panel read it; reload it and try again.";
+
     private static final Comparator<File> BY_NAME = (left, right) -> left.getName().compareTo(right.getName());
 
     private final FileOperationManager files;
@@ -184,9 +190,26 @@ final class RemoteFileOperations implements CloudRequestHandler {
             return;
         }
 
+        int maxBytes = channel.limits().fileMaxBytes();
+        long size;
+        try {
+            size = Files.size(file.toPath());
+        } catch (IOException unreadable) {
+            LOGGER.log(Level.WARNING, "UltiCloud: a requested file could not be stat'ed ("
+                    + unreadable.getClass().getSimpleName() + ").");
+            error(channel, request.id(), FILES_READ_RESULT, "internal_error",
+                    "The requested file could not be read.");
+            return;
+        }
+        if (size > maxBytes) {
+            error(channel, request.id(), FILES_READ_RESULT, "file_not_editable",
+                    "The file is larger than this connection's file limit.");
+            return;
+        }
+
         byte[] bytes;
         try {
-            bytes = Files.readAllBytes(file.toPath());
+            bytes = readAtMost(file, maxBytes);
         } catch (IOException unreadable) {
             LOGGER.log(Level.WARNING, "UltiCloud: a requested file could not be read ("
                     + unreadable.getClass().getSimpleName() + ").");
@@ -195,7 +218,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
             return;
         }
 
-        String refusal = contentRefusal(bytes, channel.limits().fileMaxBytes());
+        String refusal = contentRefusal(bytes, maxBytes);
         if (refusal != null) {
             error(channel, request.id(), FILES_READ_RESULT, "file_not_editable", refusal);
             return;
@@ -390,7 +413,8 @@ final class RemoteFileOperations implements CloudRequestHandler {
             return;
         }
 
-        WriteOutcome outcome = writeLocked(target.getOperand(), bytes, baseVersion);
+        WriteOutcome outcome = writeLocked(target.getOperand(), bytes, baseVersion,
+                channel.limits().fileMaxBytes());
         if (outcome.code != null) {
             error(channel, request.id(), FILES_WRITE_RESULT, outcome.code, outcome.message);
             return;
@@ -407,12 +431,18 @@ final class RemoteFileOperations implements CloudRequestHandler {
      * The critical section of {@code files.write}: compare the version against the bytes on disk
      * and replace the file, both under {@link #WRITE_LOCK}.
      *
+     * <p>A current file above the connection's {@code fileMaxBytes} is answered {@code file_changed}
+     * without being read: the panel can never have received such a file's content, so no
+     * {@code baseVersion} it holds can equal that file's bytes. Refusing it here also keeps a large
+     * log or plugin database from being loaded into the heap merely to compare a hash.</p>
+     *
      * @param file        the resolved target the guard allowed
      * @param content     the exact bytes to write
      * @param baseVersion the version the panel read
+     * @param maxBytes    the connection's {@code fileMaxBytes}
      * @return an empty outcome when the file now holds {@code content}, otherwise the refusal
      */
-    private WriteOutcome writeLocked(File file, byte[] content, String baseVersion) {
+    private WriteOutcome writeLocked(File file, byte[] content, String baseVersion, int maxBytes) {
         synchronized (WRITE_LOCK) {
             Runnable gate = writeGate;
             if (gate != null) {
@@ -429,15 +459,20 @@ final class RemoteFileOperations implements CloudRequestHandler {
             }
             byte[] current;
             try {
-                current = Files.readAllBytes(file.toPath());
+                if (Files.size(file.toPath()) > maxBytes) {
+                    return new WriteOutcome("file_changed", CHANGED_MESSAGE);
+                }
+                current = readAtMost(file, maxBytes);
             } catch (IOException unreadable) {
                 LOGGER.log(Level.WARNING, "UltiCloud: a write target could not be read ("
                         + unreadable.getClass().getSimpleName() + ").");
                 return new WriteOutcome("internal_error", "The requested file could not be read.");
             }
+            if (current.length > maxBytes) {
+                return new WriteOutcome("file_changed", CHANGED_MESSAGE);
+            }
             if (!sha256Hex(current).equals(baseVersion)) {
-                return new WriteOutcome("file_changed",
-                        "The file changed after the panel read it; reload it and try again.");
+                return new WriteOutcome("file_changed", CHANGED_MESSAGE);
             }
             WriteDenial denial = new WriteDenial();
             if (!PosixAttributePreserver.replaceInPlace(file, content, denial)) {
@@ -494,6 +529,39 @@ final class RemoteFileOperations implements CloudRequestHandler {
     // ---------------------------------------------------------------------------------------
     // shared helpers
     // ---------------------------------------------------------------------------------------
+
+    /**
+     * Reads a file through a stream capped at {@code maxBytes + 1} bytes.
+     *
+     * <p>The extra byte is how a file that grew between the caller's size check and this read is
+     * still detected: the result is then one byte longer than the limit and the caller's existing
+     * content rule refuses it. Without the cap a file of any size would be loaded into the heap
+     * before the limit could be applied — the reason this helper exists at all.</p>
+     *
+     * @param file     the file to read
+     * @param maxBytes the connection's {@code fileMaxBytes}
+     * @return the file's bytes, or {@code maxBytes + 1} of them when the file is larger
+     * @throws IOException if the file cannot be opened or read
+     */
+    private static byte[] readAtMost(File file, int maxBytes) throws IOException {
+        long cap = (long) maxBytes + 1L;
+        ByteArrayOutputStream collected =
+                new ByteArrayOutputStream((int) Math.min(cap, 8192L));
+        try (InputStream input = Files.newInputStream(file.toPath())) {
+            byte[] buffer = new byte[8192];
+            long total = 0L;
+            while (total < cap) {
+                int wanted = (int) Math.min(buffer.length, cap - total);
+                int read = input.read(buffer, 0, wanted);
+                if (read == -1) {
+                    break;
+                }
+                collected.write(buffer, 0, read);
+                total += read;
+            }
+        }
+        return collected.toByteArray();
+    }
 
     /**
      * The contract's {@code file-content} rule over raw bytes.

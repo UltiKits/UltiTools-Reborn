@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -263,6 +264,45 @@ class RemoteFileOperationsTest {
     }
 
     @Test
+    @DisplayName("a write target far above the limit is file_changed and is never loaded into the heap")
+    void hugeWriteTargetIsRefusedWithoutBeingRead() throws IOException {
+        Path huge = tmp.resolve("logs/huge.log");
+        try (RandomAccessFile file = new RandomAccessFile(huge.toFile(), "rw")) {
+            file.setLength(3L << 30);
+        }
+        String any = RemoteFilesEndToEndTest.sha256(new byte[0]);
+
+        Throwable thrown = null;
+        try {
+            router.dispatch(writeRequest("logs/huge.log", "x", any).toString(), channel);
+        } catch (Throwable dispatchFailure) {
+            thrown = dispatchFailure;
+        }
+
+        assertThat(thrown).as("dispatch threw %s", thrown).isNull();
+        JsonObject payload = only(channel).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).isEqualTo("file_changed");
+    }
+
+    @Test
+    @DisplayName("a write target one byte above the limit is file_changed and stays untouched")
+    void writeTargetAboveTheLimitIsFileChanged() throws IOException {
+        RecordingChannel small = new RecordingChannel();
+        small.setLimits(com.ultikits.ultitools.websocket.CloudLimits.fromWelcome(RemoteFilesEndToEndTest.welcome(1024)));
+        Path config = write("plugins/UltiTools/exact.yml", repeat('a', 1025));
+        byte[] untouched = Files.readAllBytes(config);
+
+        router.dispatch(writeRequest("plugins/UltiTools/exact.yml", "b", RemoteFilesEndToEndTest.sha256(untouched))
+                .toString(), small);
+
+        JsonObject payload = only(small).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).isEqualTo("file_changed");
+        assertThat(Files.readAllBytes(config)).isEqualTo(untouched);
+    }
+
+    @Test
     @DisplayName("two concurrent writes with the same version: exactly one wins, the other is file_changed")
     void concurrentWritesWithTheSameVersionHaveOneWinner() throws Exception {
         Path config = write("plugins/UltiTools/config.yml", "enabled: true\n");
@@ -416,6 +456,14 @@ class RemoteFileOperationsTest {
         JsonObject frame = ContractFixtures.object("fixtures/agent/files.delete/valid/file.json");
         frame.getAsJsonObject("payload").addProperty("path", path);
         return frame;
+    }
+
+    private static String repeat(char character, int count) {
+        StringBuilder text = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            text.append(character);
+        }
+        return text.toString();
     }
 
     private Path write(String relative, String content) throws IOException {

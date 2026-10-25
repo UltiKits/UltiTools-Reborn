@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -163,6 +164,46 @@ class RemoteFilesEndToEndTest {
     }
 
     @Test
+    @DisplayName("a file far above the limit is file_not_editable and is never loaded into the heap")
+    void fileFarAboveTheLimitIsRefusedWithoutBeingRead() throws IOException {
+        Files.createDirectories(tmp.resolve("logs"));
+        Path huge = tmp.resolve("logs/huge.log");
+        try (RandomAccessFile file = new RandomAccessFile(huge.toFile(), "rw")) {
+            file.setLength(3L << 30);
+        }
+
+        Throwable thrown = null;
+        try {
+            router.dispatch(readRequest("logs/huge.log").toString(), channel);
+        } catch (Throwable dispatchFailure) {
+            thrown = dispatchFailure;
+        }
+
+        assertThat(thrown).as("dispatch threw %s", thrown).isNull();
+        JsonObject payload = only(channel).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).isEqualTo("file_not_editable");
+    }
+
+    @Test
+    @DisplayName("a file exactly at the negotiated limit is readable and one byte above it is not")
+    void theLimitBoundaryItselfIsInclusive() throws IOException {
+        RecordingChannel exact = new RecordingChannel();
+        exact.setLimits(com.ultikits.ultitools.websocket.CloudLimits.fromWelcome(welcome(1024)));
+        Files.createDirectories(tmp.resolve("plugins/UltiTools"));
+        Files.write(tmp.resolve("plugins/UltiTools/exact.yml"), repeat('a', 1024).getBytes(StandardCharsets.UTF_8));
+
+        router.dispatch(readRequest("plugins/UltiTools/exact.yml").toString(), exact);
+        assertThat(only(exact).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+
+        Files.write(tmp.resolve("plugins/UltiTools/over.yml"), repeat('a', 1025).getBytes(StandardCharsets.UTF_8));
+        exact.clear();
+        router.dispatch(readRequest("plugins/UltiTools/over.yml").toString(), exact);
+        assertThat(only(exact).getAsJsonObject("payload").get("code").getAsString())
+                .isEqualTo("file_not_editable");
+    }
+
+    @Test
     @DisplayName("every invalid files.read fixture is answered invalid_message and nothing is read")
     void invalidFixturesAreRejectedBeforeAnyFilesystemAccess() throws IOException {
         write("secret.txt", "OUTSIDE-SENTINEL\n");
@@ -216,7 +257,7 @@ class RemoteFilesEndToEndTest {
         return frame;
     }
 
-    private static JsonObject welcome(int fileMaxBytes) {
+    static JsonObject welcome(int fileMaxBytes) {
         JsonObject limits = new JsonObject();
         limits.addProperty("maxFrameBytes", 1048576);
         JsonObject log = new JsonObject();
