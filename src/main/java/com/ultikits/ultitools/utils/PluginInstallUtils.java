@@ -364,6 +364,16 @@ public class PluginInstallUtils {
         if (version == null || version.trim().isEmpty()) {
             return InstallResult.failed();
         }
+        return installVersion(metadata, idString, requested, version, level);
+    }
+
+    /**
+     * The second half of {@link #installReporting}: the version is known. A version the catalogue
+     * does not offer for public download is refused here, before any request, and every other
+     * version goes through the verified download.
+     */
+    private static InstallResult installVersion(CatalogueClient.Version metadata, String idString, String requested,
+                                                String version, int level) {
         String fileName = installedJarName(idString, version);
         if (fileName == null) {
             return InstallResult.failed();
@@ -668,7 +678,7 @@ public class PluginInstallUtils {
      * @param folder   the folder to write it into
      * @throws IOException when the catalogue offers no readable metadata or the file does not verify
      */
-    private static void downloadVerified(String link, String fileName, File folder) throws IOException {
+    static void downloadVerified(String link, String fileName, File folder) throws IOException {
         String metadataPath = CatalogueClient.metadataPathOf(link);
         CatalogueClient.Version metadata = metadataPath == null ? null : CatalogueClient.versionAt(metadataPath);
         if (metadata == null) {

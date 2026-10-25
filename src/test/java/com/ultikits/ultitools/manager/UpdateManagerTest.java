@@ -341,8 +341,8 @@ class UpdateManagerTest {
     class ApiLevelUpdateCheck {
 
         private com.sun.net.httpserver.HttpServer server;
-        private final List<String> latestRequests = Collections.synchronizedList(new ArrayList<>());
-        private int latestStatus;
+        private final List<String> versionQueries = Collections.synchronizedList(new ArrayList<>());
+        private boolean noCompatibleVersion;
 
         @BeforeEach
         void startCatalogue() throws java.io.IOException {
@@ -352,16 +352,22 @@ class UpdateManagerTest {
                 String query = exchange.getRequestURI().getRawQuery();
                 int status = 200;
                 String body;
-                if ("/plugin/get".equals(path)) {
-                    body = "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"id\":7,\"identifyString\":\"demo\"}}";
-                } else if ("/plugin/7/latest".equals(path)) {
-                    latestRequests.add(query);
-                    status = latestStatus;
-                    body = status == 200 ? "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"1.1\"}"
-                            : "{\"code\":\"409\",\"msg\":\"No version of this module is compatible\"}";
+                if ("/v1/catalogue/modules/demo".equals(path)) {
+                    body = "{\"data\":{\"id\":\"01JCAT0000000000000000000\",\"identifier\":\"demo\","
+                            + "\"name\":\"Demo\"}}";
+                } else if ("/v1/catalogue/modules/demo/versions".equals(path)) {
+                    versionQueries.add(query);
+                    body = noCompatibleVersion
+                            ? "{\"data\":{\"items\":[],\"total\":0,\"page\":1,\"pageSize\":20}}"
+                            : "{\"data\":{\"items\":[{\"version\":\"1.1\",\"isLatest\":true,"
+                            + "\"sizeBytes\":1234,\"sha256\":"
+                            + "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+                            + "\"apiLevel\":630,\"download\":{\"kind\":\"public\",\"url\":"
+                            + "\"/v1/catalogue/modules/demo/versions/1.1/download\"}}],\"total\":1,"
+                            + "\"page\":1,\"pageSize\":20}}";
                 } else {
                     status = 404;
-                    body = "{\"code\":\"404\",\"msg\":\"Not found\"}";
+                    body = "{\"error\":{\"code\":\"not_found\"}}";
                 }
                 byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 exchange.sendResponseHeaders(status, bytes.length);
@@ -403,26 +409,24 @@ class UpdateManagerTest {
         }
 
         @Test
-        @DisplayName("the latest request carries apiLevel=630 and minApiLevel=630, and a compatible newer version is offered")
+        @DisplayName("the versions request carries apiLevel=630 and minApiLevel=630, and a compatible newer version is offered")
         void compatibleNewerVersion_isOfferedAndTheRequestCarriesTheLevel() {
-            latestStatus = 200;
-
             check();
 
-            assertThat(latestRequests).hasSize(1);
-            assertThat(latestRequests.get(0)).contains("apiLevel=630").contains("minApiLevel=630");
+            assertThat(versionQueries).hasSize(1);
+            assertThat(versionQueries.get(0)).contains("apiLevel=630").contains("minApiLevel=630");
             assertThat(updateManager.getModuleUpdates()).containsKey("Demo");
             assertThat(updateManager.getModuleUpdates().get("Demo").getLatestVersion()).isEqualTo("1.1");
         }
 
         @Test
-        @DisplayName("the catalogue answering 409 (no compatible version): no offer, and nothing about a newer framework")
+        @DisplayName("the level-filtered list empty (no compatible version): no offer, and nothing about a newer framework")
         void noCompatibleVersion_isNoOffer() {
-            latestStatus = 409;
+            noCompatibleVersion = true;
 
             check();
 
-            assertThat(latestRequests).hasSize(1);
+            assertThat(versionQueries).hasSize(1);
             assertThat(updateManager.getModuleUpdates()).isEmpty();
             assertThat(updateManager.hasAnyUpdates()).isFalse();
         }

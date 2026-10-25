@@ -63,7 +63,9 @@ public final class StubCatalogue implements AutoCloseable {
         /** The download answers no {@code X-Content-SHA256} header at all. */
         NO_HEADER,
         /** The download answers the hash in upper-case hex. */
-        UPPER_HEADER
+        UPPER_HEADER,
+        /** The level-filtered version list is empty: versions exist, none this framework installs. */
+        NO_COMPATIBLE_VERSION
     }
 
     /** The module identifier every generated route uses. */
@@ -357,6 +359,11 @@ public final class StubCatalogue implements AutoCloseable {
         JsonObject root = JsonParser.parseString(fixture("versions-list.json")).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
         JsonArray items = new JsonArray();
+        if (mode == Mode.NO_COMPATIBLE_VERSION) {
+            data.add("items", items);
+            data.addProperty("total", 0);
+            return root.toString();
+        }
         JsonArray all = data.getAsJsonArray("items");
         Integer apiLevel = integerParameter(query, "apiLevel");
         Integer minApiLevel = integerParameter(query, "minApiLevel");

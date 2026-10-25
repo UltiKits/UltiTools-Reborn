@@ -198,7 +198,8 @@ class VerifiedDownloadTest {
     void noFailureLeavesAFile() {
         for (StubCatalogue.Mode mode : StubCatalogue.Mode.values()) {
             if (mode == StubCatalogue.Mode.NORMAL || mode == StubCatalogue.Mode.NO_HEADER
-                    || mode == StubCatalogue.Mode.UPPER_HEADER) {
+                    || mode == StubCatalogue.Mode.UPPER_HEADER
+                    || mode == StubCatalogue.Mode.NO_COMPATIBLE_VERSION) {
                 continue;
             }
             VerifiedDownload.Result result = fetchWith(mode);

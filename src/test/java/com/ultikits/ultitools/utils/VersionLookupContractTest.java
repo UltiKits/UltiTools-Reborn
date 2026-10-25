@@ -18,45 +18,57 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.sun.net.httpserver.HttpServer;
+import com.ultikits.ultitools.contract.PendingFixture;
 
 /**
  * The two public catalogue lookups keep their contract (a version, or {@code null} for every kind
  * of failure, no exception for an HTTP or body failure), while the internal lookups the start-up
  * update check uses tell "nothing newer is offered" apart from "the lookup failed" (Phase 19,
- * D19-032). No module calls the public methods, but they are public API on a published class.
- * <br>
- * 两个公开查询方法的约定不变；内部查询区分"没有可提供的版本"与"查询失败"。
+ * D19-032). Both now read the v2 catalogue (plan 22-18): {@code /v1/catalogue/framework} for the
+ * framework and {@code /v1/catalogue/modules/:moduleRef} plus its level-filtered {@code versions}
+ * for a module, each answering {@code {data: ...}}.
  */
 @DisplayName("D19-032: public version lookups unchanged; internal lookups tell 'none offered' from 'failed'")
+@PendingFixture
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class VersionLookupContractTest {
 
+    private static final String MODULE = "/v1/catalogue/modules/demo";
+    private static final String VERSIONS = MODULE + "/versions";
+
     private HttpServer server;
-    private volatile int status;
-    private volatile String body;
-    private volatile int getStatus;
-    private volatile String getBody;
+    private volatile int moduleStatus;
+    private volatile String moduleBody;
+    private volatile int versionsStatus;
+    private volatile String versionsBody;
+    private volatile int frameworkStatus;
+    private volatile String frameworkBody;
 
     @BeforeEach
     void setUp() throws IOException {
-        status = 200;
-        body = ok("\"6.3.1\"");
-        getStatus = 200;
-        getBody = ok("{\"id\":7,\"identifyString\":\"demo\"}");
+        frameworkStatus = 200;
+        frameworkBody = data("{\"version\":\"6.3.1\",\"sha256\":\"" + repeat('a', 64) + "\",\"sizeBytes\":1234}");
+        moduleStatus = 200;
+        moduleBody = data("{\"id\":\"01JCAT0000000000000000000\",\"identifier\":\"demo\",\"name\":\"Demo\"}");
+        versionsStatus = 200;
+        versionsBody = page(version("1.2", true));
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             String path = exchange.getRequestURI().getRawPath();
-            int s;
-            String b;
-            if ("/plugin/get".equals(path)) {
-                s = getStatus;
-                b = getBody;
+            int status;
+            String body;
+            if (MODULE.equals(path)) {
+                status = moduleStatus;
+                body = moduleBody;
+            } else if (VERSIONS.equals(path)) {
+                status = versionsStatus;
+                body = versionsBody;
             } else {
-                s = status;
-                b = body;
+                status = frameworkStatus;
+                body = frameworkBody;
             }
-            byte[] bytes = b.getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(s, bytes.length);
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(status, bytes.length);
             exchange.getResponseBody().write(bytes);
             exchange.close();
         });
@@ -70,19 +82,37 @@ class VersionLookupContractTest {
         server.stop(0);
     }
 
-    private static String ok(String data) {
-        return "{\"code\":\"200\",\"msg\":\"Success\",\"data\":" + data + "}";
+    private static String data(String payload) {
+        return "{\"data\":" + payload + "}";
     }
 
-    private void answer(int s, String b) {
-        status = s;
-        body = b;
+    private static String version(String version, boolean latest) {
+        return "{\"version\":\"" + version + "\",\"isLatest\":" + latest + ",\"sizeBytes\":1234,\"sha256\":\""
+                + repeat('a', 64) + "\",\"apiLevel\":630,\"download\":{\"kind\":\"public\",\"url\":\"/v1/catalogue"
+                + "/modules/demo/versions/" + version + "/download\"}}";
+    }
+
+    private static String page(String... versions) {
+        StringBuilder items = new StringBuilder("{\"items\":[");
+        for (String version : versions) {
+            items.append(items.length() > 11 ? "," : "").append(version);
+        }
+        return data(items.append("],\"total\":").append(versions.length).append(",\"page\":1,\"pageSize\":20}")
+                .toString());
+    }
+
+    private static String repeat(char value, int count) {
+        StringBuilder text = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            text.append(value);
+        }
+        return text.toString();
     }
 
     /**
      * A local port nothing listens on, so a request to it is refused at once. A closed plain
      * socket is used because a stopped {@code HttpServer} keeps accepting for a while and the
-     * request would wait for the 30-second read timeout instead.
+     * request would wait for the read timeout instead.
      */
     private static int closedPort() throws IOException {
         // Test-only: binds a loopback port and closes it at once; no data is ever sent over it.
@@ -106,23 +136,25 @@ class VersionLookupContractTest {
         }
 
         @Test
-        @DisplayName("a version string is returned as is; a non-primitive data is returned as its JSON text")
+        @DisplayName("the version the framework route names is returned")
         void versionReturned() {
             assertThat(VersionUtils.getUltiToolsNewestVersion()).isEqualTo("6.3.1");
-            answer(200, ok("{\"v\":1}"));
-            assertThat(VersionUtils.getUltiToolsNewestVersion()).isEqualTo("{\"v\":1}");
+            frameworkBody = data("{\"version\":\"6.4.0\"}");
+            assertThat(VersionUtils.getUltiToolsNewestVersion()).isEqualTo("6.4.0");
         }
 
         @Test
-        @DisplayName("null for an error status, an error envelope, missing data, a malformed body and an unreachable catalogue")
+        @DisplayName("null for an error status, data without a version, a malformed body and an unreachable catalogue")
         void nullForEveryFailure() throws IOException {
-            answer(500, "{\"code\":\"500\"}");
+            frameworkStatus = 500;
+            frameworkBody = "{\"error\":{\"code\":\"internal_error\"}}";
             assertThat(VersionUtils.getUltiToolsNewestVersion()).isNull();
-            answer(200, "{\"code\":\"500\",\"msg\":\"x\"}");
+            frameworkStatus = 200;
+            frameworkBody = data("{\"sizeBytes\":10}");
             assertThat(VersionUtils.getUltiToolsNewestVersion()).isNull();
-            answer(200, "{\"code\":\"200\",\"msg\":\"Success\"}");
+            frameworkBody = data("\"6.3.1\"");
             assertThat(VersionUtils.getUltiToolsNewestVersion()).isNull();
-            answer(200, "not json");
+            frameworkBody = "not json";
             assertThat(VersionUtils.getUltiToolsNewestVersion()).isNull();
             PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:" + closedPort());
             assertThat(VersionUtils.getUltiToolsNewestVersion()).isNull();
@@ -143,29 +175,30 @@ class VersionLookupContractTest {
         }
 
         @Test
-        @DisplayName("the latest version is returned")
+        @DisplayName("the version the level-filtered list marks as newest is returned")
         void versionReturned() {
-            answer(200, ok("\"1.2\""));
             assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isEqualTo("1.2");
         }
 
         @Test
-        @DisplayName("null for a blank id, an unknown module, 409, 404, 500 and a malformed body")
+        @DisplayName("null for a blank id, an id that cannot be a module reference, an unknown module, an"
+                + " empty list, an error status and a malformed body")
         void nullForEveryOtherAnswer() {
             assertThat(PluginInstallUtils.getPluginLatestVersion("  ")).isNull();
-            answer(409, "{\"code\":\"409\"}");
+            assertThat(PluginInstallUtils.getPluginLatestVersion("bad name+/")).isNull();
+            moduleStatus = 404;
+            moduleBody = "{\"error\":{\"code\":\"not_found\"}}";
             assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isNull();
-            answer(404, "{\"code\":\"404\"}");
+            moduleStatus = 500;
             assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isNull();
-            answer(500, "{\"code\":\"500\"}");
+            moduleStatus = 200;
+            moduleBody = "not json";
             assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isNull();
-            answer(200, "not json");
+            moduleBody = data("{\"identifier\":\"demo\"}");
+            versionsBody = page();
             assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isNull();
-            answer(200, ok("\"1.2\""));
-            getStatus = 404;
-            getBody = "{\"code\":\"404\"}";
-            assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isNull();
-            getStatus = 500;
+            versionsStatus = 500;
+            versionsBody = "{\"error\":{\"code\":\"internal_error\"}}";
             assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isNull();
         }
     }
@@ -175,19 +208,21 @@ class VersionLookupContractTest {
     class Internal {
 
         @Test
-        @DisplayName("framework: found, or failed for status / envelope / missing data / body / unreachable")
+        @DisplayName("framework: found, or failed for status, data without a version, a malformed body, unreachable")
         void framework() throws IOException {
             VersionLookup found = VersionUtils.lookUpUltiToolsNewestVersion();
             assertThat(found.getOutcome()).isEqualTo(VersionLookup.Outcome.FOUND);
             assertThat(found.getVersion()).isEqualTo("6.3.1");
 
-            answer(500, "{\"code\":\"500\"}");
+            frameworkStatus = 500;
+            frameworkBody = "{\"error\":{\"code\":\"internal_error\"}}";
             assertThat(VersionUtils.lookUpUltiToolsNewestVersion().getFailure()).isEqualTo("HTTP 500");
-            answer(200, "{\"code\":\"500\"}");
+            frameworkStatus = 200;
+            frameworkBody = "{\"error\":{\"code\":\"internal_error\"}}";
             assertThat(VersionUtils.lookUpUltiToolsNewestVersion().isFailed()).isTrue();
-            answer(200, "{\"code\":\"200\"}");
+            frameworkBody = data("{}");
             assertThat(VersionUtils.lookUpUltiToolsNewestVersion().isFailed()).isTrue();
-            answer(200, "not json");
+            frameworkBody = "not json";
             assertThat(VersionUtils.lookUpUltiToolsNewestVersion().isFailed()).isTrue();
             PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:" + closedPort());
             VersionLookup unreachable = VersionUtils.lookUpUltiToolsNewestVersion();
@@ -196,32 +231,33 @@ class VersionLookupContractTest {
         }
 
         @Test
-        @DisplayName("module: found; none for 404 / 409 from latest and 404 from plugin/get; failed otherwise")
+        @DisplayName("module: found; none for an unknown module and for an empty list; failed otherwise")
         void module() {
-            answer(200, ok("\"1.2\""));
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getVersion()).isEqualTo("1.2");
 
-            answer(409, "{\"code\":\"409\"}");
+            versionsBody = page();
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
                     .isEqualTo(VersionLookup.Outcome.NONE);
-            answer(404, "{\"code\":\"404\"}");
+            versionsBody = page(version("1.2", true));
+            moduleStatus = 404;
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
                     .isEqualTo(VersionLookup.Outcome.NONE);
-            answer(502, "bad gateway");
+            moduleStatus = 200;
+            versionsStatus = 502;
+            versionsBody = "bad gateway";
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getFailure()).isEqualTo("HTTP 502");
-            answer(200, "{\"code\":\"200\"}");
+            versionsStatus = 200;
+            versionsBody = data("{}");
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").isFailed()).isTrue();
+            versionsBody = "garbage";
+            assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").isFailed()).isTrue();
+        }
 
-            answer(200, ok("\"1.2\""));
-            getStatus = 404;
-            getBody = "{\"code\":\"404\"}";
-            assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
-                    .isEqualTo(VersionLookup.Outcome.NONE);
-            getStatus = 500;
-            assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").isFailed()).isTrue();
-            getStatus = 200;
-            getBody = "garbage";
-            assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").isFailed()).isTrue();
+        @Test
+        @DisplayName("module: a stop signal read after the module answered sends no versions request")
+        void stoppedBetweenTheTwoRequests() {
+            assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo", () -> true).getFailure())
+                    .isEqualTo("stopped");
         }
     }
 }

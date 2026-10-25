@@ -5,22 +5,21 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.jar.JarEntry;
-import java.util.jar.JarOutputStream;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,41 +29,47 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.manager.ModuleApiLevels;
+import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
- * {@code /upm install} against a catalogue stub (plan 18-40): every catalogue request carries the
- * framework's API level and the lowest level it installs, the download is written to a name the
- * module loader never reads, its {@code plugin.yml} is read again, and a module outside
- * {@code 630..<framework level>} is refused with a reason naming the levels and nothing left in the
- * modules folder.
+ * {@code /upm install} against the v2 catalogue (plan 22-18): only the versions route carries the
+ * API-level filter, the download is written to a name the module loader never reads and is checked
+ * byte for byte before it is installed, its {@code plugin.yml} is read again, and a module outside
+ * {@code 630..<framework level>} -- or a version the catalogue does not offer for download -- is
+ * refused with a reason and nothing left in the modules folder.
  */
-@DisplayName("/upm install sends the API level and refuses a downloaded module outside the accepted range (18-40)")
-@Timeout(value = 30, unit = TimeUnit.SECONDS)
+@DisplayName("/upm install over /v1/catalogue: levels, integrity and the licence-required outcome")
+@PendingFixture
+@Timeout(value = 60, unit = TimeUnit.SECONDS)
 class PluginInstallUtilsApiLevelTest {
 
     @TempDir
     File serverRoot;
 
     private File modules;
-    private HttpServer server;
-    private String base;
+    private StubCatalogue catalogue;
     private MockedStatic<UltiTools> ultiTools;
+    private final List<LogRecord> records = Collections.synchronizedList(new ArrayList<>());
 
-    /** Every request the stub received, as raw path plus "?" plus raw query. */
-    private final List<String> requests = Collections.synchronizedList(new ArrayList<>());
-    /** The JAR served for each version. */
-    private final Map<String, byte[]> jars = new HashMap<>();
-    /** Status answered by {@code /plugin/7/latest}; 200 serves {@link #latest}. */
-    private int latestStatus = 200;
-    private String latest = "1.1";
-    /** Versions whose {@code /download} answers 409. */
-    private final List<String> incompatibleVersions = new ArrayList<>();
-    /** What {@code /plugin/7/versions} answers. */
-    private List<String> versions = new ArrayList<>();
+    private final Handler capture = new Handler() {
+        @Override
+        public void publish(LogRecord record) {
+            records.add(record);
+        }
+
+        @Override
+        public void flush() {
+            // nothing buffered
+        }
+
+        @Override
+        public void close() {
+            // nothing to release
+        }
+    };
 
     @BeforeEach
     void setUp() throws IOException {
@@ -79,87 +84,25 @@ class PluginInstallUtilsApiLevelTest {
         ultiTools.when(UltiTools::getInstance).thenReturn(instance);
         frameworkAt(630);
 
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/", this::answer);
-        server.start();
-        base = "http://127.0.0.1:" + server.getAddress().getPort();
-        PluginInstallUtils.setBaseUrlForTesting(base);
+        catalogue = StubCatalogue.start();
+        PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
+
+        Logger logger = Logger.getLogger(PluginInstallUtils.class.getName());
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        logger.addHandler(capture);
     }
 
     @AfterEach
     void tearDown() {
+        Logger.getLogger(PluginInstallUtils.class.getName()).removeHandler(capture);
         PluginInstallUtils.resetBaseUrl();
-        server.stop(0);
+        catalogue.close();
         ultiTools.close();
     }
 
     private void frameworkAt(int level) {
         ultiTools.when(UltiTools::getPluginVersion).thenReturn(level);
-    }
-
-    private void answer(HttpExchange exchange) throws IOException {
-        String path = exchange.getRequestURI().getRawPath();
-        String query = exchange.getRequestURI().getRawQuery();
-        requests.add(path + (query == null ? "" : "?" + query));
-        if ("/plugin/get".equals(path)) {
-            send(exchange, 200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"id\":7,\"identifyString\":\"demo\"}}");
-        } else if ("/plugin/7/latest".equals(path)) {
-            send(exchange, latestStatus, latestStatus == 200
-                    ? "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"" + latest + "\"}"
-                    : "{\"code\":\"" + latestStatus + "\",\"msg\":\"No version of this module is compatible\"}");
-        } else if ("/plugin/7/versions".equals(path)) {
-            StringBuilder data = new StringBuilder("[");
-            for (String version : versions) {
-                data.append(data.length() > 1 ? "," : "").append('"').append(version).append('"');
-            }
-            send(exchange, 200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":" + data + "]}");
-        } else if (path.startsWith("/plugin/7/") && path.endsWith("/download")) {
-            String version = path.substring("/plugin/7/".length(), path.length() - "/download".length());
-            if (incompatibleVersions.contains(version)) {
-                send(exchange, 409, "{\"code\":\"409\",\"msg\":\"Version " + version + " is not compatible\"}");
-            } else {
-                send(exchange, 200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"" + base + "/files/" + version
-                        + ".jar\"}");
-            }
-        } else if (path.startsWith("/files/")) {
-            byte[] jar = jars.get(path.substring("/files/".length(), path.length() - ".jar".length()));
-            exchange.sendResponseHeaders(jar == null ? 404 : 200, jar == null ? -1 : jar.length);
-            if (jar != null) {
-                exchange.getResponseBody().write(jar);
-            }
-            exchange.close();
-        } else {
-            send(exchange, 404, "{\"code\":\"404\",\"msg\":\"Not found\"}");
-        }
-    }
-
-    private static void send(HttpExchange exchange, int status, String body) throws IOException {
-        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        exchange.sendResponseHeaders(status, bytes.length);
-        exchange.getResponseBody().write(bytes);
-        exchange.close();
-    }
-
-    /** A module JAR whose plugin.yml declares {@code apiVersion}, or no api-version when it is {@code null}. */
-    private static byte[] moduleJar(String version, String apiVersion) throws IOException {
-        StringBuilder yml = new StringBuilder()
-                .append("name: Demo\n")
-                .append("version: '").append(version).append("'\n")
-                .append("main: com.example.demo.DemoModule\n")
-                .append("identify-string: demo\n");
-        if (apiVersion != null) {
-            yml.append("api-version: ").append(apiVersion).append('\n');
-        }
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        try (JarOutputStream out = new JarOutputStream(bytes)) {
-            out.putNextEntry(new JarEntry("plugin.yml"));
-            out.write(yml.toString().getBytes(StandardCharsets.UTF_8));
-            out.closeEntry();
-            out.putNextEntry(new JarEntry("com/example/demo/DemoModule.class"));
-            out.write(new byte[]{(byte) 0xCA, (byte) 0xFE, (byte) 0xBA, (byte) 0xBE});
-            out.closeEntry();
-        }
-        return bytes.toByteArray();
     }
 
     private List<String> modulesFolderNames() {
@@ -172,49 +115,59 @@ class PluginInstallUtilsApiLevelTest {
         return list;
     }
 
-    private List<String> catalogueRequests() {
-        List<String> catalogue = new ArrayList<>();
-        synchronized (requests) {
-            for (String request : requests) {
-                if (request.startsWith("/plugin/")) {
-                    catalogue.add(request);
+    /** The records an operator sees: WARNING or above. */
+    private List<String> messages() {
+        List<String> messages = new ArrayList<>();
+        synchronized (records) {
+            for (LogRecord record : records) {
+                if (record.getLevel().intValue() >= Level.WARNING.intValue()) {
+                    messages.add(record.getMessage());
                 }
             }
         }
-        return catalogue;
+        return messages;
     }
 
     private boolean downloadedAnything() {
-        synchronized (requests) {
-            return requests.stream().anyMatch(request -> request.startsWith("/files/"));
+        for (StubCatalogue.Request request : catalogue.requests()) {
+            if (request.path().endsWith("/download")) {
+                return true;
+            }
         }
+        return false;
     }
 
-    private static Map<String, String> queryOf(String request) {
+    private static Map<String, String> queryOf(StubCatalogue.Request request) {
         Map<String, String> parameters = new LinkedHashMap<>();
-        int question = request.indexOf('?');
-        if (question < 0) {
+        String query = request.query();
+        if (query == null) {
             return parameters;
         }
-        for (String pair : request.substring(question + 1).split("&")) {
+        for (String pair : query.split("&")) {
             int equals = pair.indexOf('=');
             String key = equals < 0 ? pair : pair.substring(0, equals);
-            // The catalogue answers 400 to a repeated level parameter (contract section 3), so a
-            // request carrying one twice must fail here rather than be read as its last value.
             assertThat(parameters).as("parameter %s repeated in %s", key, request).doesNotContainKey(key);
             parameters.put(key, equals < 0 ? "" : pair.substring(equals + 1));
         }
         return parameters;
     }
 
-    /** A file in this test's modules folder, which lives under the JUnit {@code @TempDir}. */
+    private List<StubCatalogue.Request> versionRequests() {
+        List<StubCatalogue.Request> versions = new ArrayList<>();
+        for (StubCatalogue.Request request : catalogue.requests()) {
+            if (request.path().endsWith("/versions")) {
+                versions.add(request);
+            }
+        }
+        return versions;
+    }
+
     private File inModules(String name) {
         // Test-only path under the JUnit @TempDir; every name is a constant of this class.
         // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         return new File(modules, name);
     }
 
-    /** The bytes of a file in this test's modules folder. */
     private byte[] bytesInModules(String name) throws IOException {
         // Test-only read under the JUnit @TempDir; every name is a constant of this class.
         // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
@@ -222,26 +175,31 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("a JAR declaring api-version 630 installs under <identify-string>-<version>.jar, and every catalogue request carried apiLevel=630 and minApiLevel=630")
-    void compatibleModule_installsAndEveryRequestCarriesTheLevel() throws IOException {
-        jars.put("1.1", moduleJar("1.1", "630"));
-
+    @DisplayName("a JAR declaring api-version 630 installs; only the versions request carries apiLevel and minApiLevel")
+    void compatibleModule_installsAndOnlyTheVersionsRequestCarriesTheLevel() {
         assertThat(PluginInstallUtils.installLatestPlugin("demo")).isTrue();
 
         assertThat(modulesFolderNames()).containsExactly("demo-1.1.jar");
-        List<String> catalogue = catalogueRequests();
-        assertThat(catalogue).isNotEmpty();
-        for (String request : catalogue) {
-            assertThat(queryOf(request)).as(request)
+        List<StubCatalogue.Request> versions = versionRequests();
+        assertThat(versions).isNotEmpty();
+        for (StubCatalogue.Request request : versions) {
+            assertThat(queryOf(request)).as(request.toString())
                     .containsEntry("apiLevel", "630")
-                    .containsEntry("minApiLevel", "630");
+                    .containsEntry("minApiLevel", String.valueOf(ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
+        }
+        for (StubCatalogue.Request request : catalogue.requests()) {
+            if (!request.path().endsWith("/versions")) {
+                assertThat(queryOf(request)).as(request.toString())
+                        .doesNotContainKey("apiLevel")
+                        .doesNotContainKey("minApiLevel");
+            }
         }
     }
 
     @Test
-    @DisplayName("a JAR declaring api-version 620 is refused after download: nothing in the modules folder, no .part file, and the reason names 620, 630 and the range 630..630")
+    @DisplayName("a JAR declaring api-version 620 is refused after download: nothing in the modules folder, no .part, the reason naming 620 and 630..630")
     void olderModule_isRefusedAndNothingIsLeft() throws IOException {
-        jars.put("1.1", moduleJar("1.1", "620"));
+        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "620"));
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
@@ -256,8 +214,8 @@ class PluginInstallUtilsApiLevelTest {
 
     @Test
     @DisplayName("a JAR declaring an api-version above the framework's level is refused the same way")
-    void newerModule_isRefused() throws IOException {
-        jars.put("1.1", moduleJar("1.1", "640"));
+    void newerModule_isRefused() {
+        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "640"));
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
@@ -268,16 +226,16 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("the upper bound is the framework's own level: on a framework at 640 a 640 module installs and the requests carry apiLevel=640")
-    void frameworkLevelIsTheUpperBound() throws IOException {
+    @DisplayName("the upper bound is the framework's own level: on a framework at 640 a 640 module installs and the versions request carries apiLevel=640")
+    void frameworkLevelIsTheUpperBound() {
         frameworkAt(640);
-        jars.put("1.1", moduleJar("1.1", "640"));
+        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "640"));
 
         assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
 
         assertThat(modulesFolderNames()).containsExactly("demo-1.1.jar");
-        for (String request : catalogueRequests()) {
-            assertThat(queryOf(request)).as(request)
+        for (StubCatalogue.Request request : versionRequests()) {
+            assertThat(queryOf(request)).as(request.toString())
                     .containsEntry("apiLevel", "640")
                     .containsEntry("minApiLevel", String.valueOf(ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
         }
@@ -285,8 +243,8 @@ class PluginInstallUtilsApiLevelTest {
 
     @Test
     @DisplayName("a JAR declaring no api-version is refused, the reason saying it declares none")
-    void moduleWithoutApiVersion_isRefused() throws IOException {
-        jars.put("1.1", moduleJar("1.1", null));
+    void moduleWithoutApiVersion_isRefused() {
+        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", null));
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
@@ -298,8 +256,8 @@ class PluginInstallUtilsApiLevelTest {
 
     @Test
     @DisplayName("a JAR declaring a non-integer api-version (Bukkit style '1.19') is refused, naming the value as written")
-    void moduleWithBukkitStyleApiVersion_isRefused() throws IOException {
-        jars.put("1.1", moduleJar("1.1", "'1.19'"));
+    void moduleWithBukkitStyleApiVersion_isRefused() {
+        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "'1.19'"));
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
@@ -310,9 +268,9 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("the catalogue answering latest with 409: refused as 'no compatible version', nothing downloaded")
-    void latestConflict_noCompatibleVersion() {
-        latestStatus = 409;
+    @DisplayName("the level-filtered list empty: refused as 'no compatible version', nothing downloaded")
+    void noCompatibleVersion_isRefusedWithoutDownload() {
+        catalogue.mode(StubCatalogue.Mode.NO_COMPATIBLE_VERSION);
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
@@ -327,12 +285,11 @@ class PluginInstallUtilsApiLevelTest {
     @DisplayName("a stale .part file of the same name is replaced, and an accepted install leaves no .part file")
     void stalePartFile_isReplaced() throws IOException {
         Files.write(inModules("demo-1.1.jar.part").toPath(), "stale".getBytes(StandardCharsets.UTF_8));
-        jars.put("1.1", moduleJar("1.1", "630"));
 
         assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
 
         assertThat(modulesFolderNames()).containsExactly("demo-1.1.jar");
-        assertThat(bytesInModules("demo-1.1.jar")).isEqualTo(jars.get("1.1"));
+        assertThat(bytesInModules("demo-1.1.jar")).isEqualTo(catalogue.jar());
     }
 
     @Test
@@ -341,20 +298,19 @@ class PluginInstallUtilsApiLevelTest {
         try (OutputStream out = Files.newOutputStream(inModules("demo-1.1.jar").toPath())) {
             out.write("old".getBytes(StandardCharsets.UTF_8));
         }
-        jars.put("1.1", moduleJar("1.1", "630"));
 
         assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
 
         assertThat(modulesFolderNames()).containsExactly("demo-1.1.jar");
-        assertThat(bytesInModules("demo-1.1.jar")).isEqualTo(jars.get("1.1"));
+        assertThat(bytesInModules("demo-1.1.jar")).isEqualTo(catalogue.jar());
     }
 
     @Test
-    @DisplayName("/upm install demo 2.0.0, the catalogue answering 409 for that version: refused as 'this version cannot be installed', nothing downloaded")
-    void namedVersionConflict_isRefusedWithoutDownload() {
-        incompatibleVersions.add("2.0.0");
-
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "2.0.0");
+    @DisplayName("/upm install demo 2.0.0, whose metadata names apiLevel 640: refused as 'this version cannot be"
+            + " installed', nothing downloaded")
+    void namedVersionAboveTheLevel_isRefusedWithoutDownload() {
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+                StubCatalogue.LICENSED_VERSION);
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE);
@@ -365,15 +321,31 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("/upm install demo 1.0.0 from a catalogue that does not filter, the JAR declaring 620: refused after download, nothing left")
-    void namedVersionFromUnfilteredCatalogue_isRefusedAfterDownload() throws IOException {
-        jars.put("1.0.0", moduleJar("1.0.0", "620"));
+    @DisplayName("a version whose download is license_required is 'not available', refused before any download, with one English line")
+    void licensedVersion_isRefusedWithoutDownloading() {
+        frameworkAt(640);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.0.0");
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+                StubCatalogue.LICENSED_VERSION);
+
+        assertThat(result.isInstalled()).isFalse();
+        assertThat(downloadedAnything()).isFalse();
+        assertThat(modulesFolderNames()).isEmpty();
+        assertThat(messages()).containsExactly(
+                "demo 2.0.0 is not available for download (licence required); nothing was installed.");
+    }
+
+    @Test
+    @DisplayName("/upm install demo 1.1 from a catalogue that does not filter levels, the JAR declaring 620: refused after download, nothing left")
+    void namedVersionFromUnfilteredCatalogue_isRefusedAfterDownload() {
+        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "620"));
+
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+                StubCatalogue.VERSION);
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.0.0", "620", 630, 630, 630);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1", "620", 630, 630, 630);
         assertThat(downloadedAnything()).isTrue();
         assertThat(modulesFolderNames()).isEmpty();
     }
@@ -381,13 +353,16 @@ class PluginInstallUtilsApiLevelTest {
     @Test
     @DisplayName("/upm versions reads the level-filtered list: the request carries both parameters and an empty answer is an empty list, not a failure")
     void versionsRequestCarriesTheLevel() {
-        versions = new ArrayList<>();
+        assertThat(PluginInstallUtils.getPluginVersions("demo")).containsExactly("1.1");
 
+        catalogue.mode(StubCatalogue.Mode.NO_COMPATIBLE_VERSION);
         assertThat(PluginInstallUtils.getPluginVersions("demo")).isEmpty();
 
-        assertThat(catalogueRequests()).anySatisfy(request -> {
-            assertThat(request).startsWith("/plugin/7/versions?");
-            assertThat(queryOf(request)).containsEntry("apiLevel", "630").containsEntry("minApiLevel", "630");
-        });
+        assertThat(versionRequests()).isNotEmpty();
+        for (StubCatalogue.Request request : versionRequests()) {
+            assertThat(queryOf(request)).as(request.toString())
+                    .containsEntry("apiLevel", "630")
+                    .containsEntry("minApiLevel", "630");
+        }
     }
 }

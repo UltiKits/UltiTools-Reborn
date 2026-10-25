@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.*;
 import java.util.jar.*;
@@ -229,25 +230,13 @@ class PluginInstallUtilsUpdateTest {
         }
 
         @Test
-        @DisplayName("the catalogue answering latest with 409 through /upm's own catalogue: FAILED with 'no compatible newer version', nothing downloaded")
+        @DisplayName("an empty level-filtered list through /upm's own catalogue: FAILED with 'no compatible newer version', nothing downloaded")
         void latestConflict_stagesNothing() throws IOException {
-            com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(
-                    new java.net.InetSocketAddress("127.0.0.1", 0), 0);
-            server.createContext("/", exchange -> {
-                String path = exchange.getRequestURI().getRawPath();
-                int status = "/plugin/7/latest".equals(path) ? 409 : 200;
-                String body = "/plugin/get".equals(path)
-                        ? "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"id\":7,\"identifyString\":\"demo\"}}"
-                        : "{\"code\":\"" + status + "\",\"msg\":\"No version of this module is compatible\"}";
-                byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                exchange.sendResponseHeaders(status, bytes.length);
-                exchange.getResponseBody().write(bytes);
-                exchange.close();
-            });
-            server.start();
+            com.ultikits.ultitools.stub.StubCatalogue catalogue = com.ultikits.ultitools.stub.StubCatalogue.start();
+            catalogue.mode(com.ultikits.ultitools.stub.StubCatalogue.Mode.NO_COMPATIBLE_VERSION);
             java.util.List<String> downloads = new java.util.ArrayList<>();
             try {
-                PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:" + server.getAddress().getPort());
+                PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
                 java.util.Map<String, String> before = snapshot();
 
                 ModuleFileTransactions.StageResult result = stage(PluginInstallUtils.CATALOGUE,
@@ -259,7 +248,53 @@ class PluginInstallUtilsUpdateTest {
                 assertThat(downloads).isEmpty();
                 assertThat(snapshot()).isEqualTo(before);
             } finally {
-                server.stop(0);
+                catalogue.close();
+            }
+        }
+    }
+
+    /**
+     * A staged update becomes the module that loads at the next start, so its download is verified
+     * exactly like an install (plan 22-18, D-28).
+     */
+    @Nested
+    @DisplayName("the staged update download is verified like an install")
+    class VerifiedStagingDownload {
+
+        @Test
+        @DisplayName("a matching JAR is written under its final name and no .part survives")
+        void matchingJar_isWritten() throws IOException {
+            try (com.ultikits.ultitools.stub.StubCatalogue catalogue =
+                         com.ultikits.ultitools.stub.StubCatalogue.start()) {
+                PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
+                CatalogueClient.Version version = CatalogueClient.version("demo",
+                        com.ultikits.ultitools.stub.StubCatalogue.VERSION);
+
+                PluginInstallUtils.downloadVerified(CatalogueClient.absoluteDownloadUrl(version.downloadUrl()),
+                        "demo-1.1.jar", tempDir);
+
+                assertThat(new File(tempDir, "demo-1.1.jar")).exists();
+                assertThat(new File(tempDir, "demo-1.1.jar.part")).doesNotExist();
+            }
+        }
+
+        @Test
+        @DisplayName("a tampered JAR throws and leaves nothing behind")
+        void tamperedJar_isRefused() throws IOException {
+            try (com.ultikits.ultitools.stub.StubCatalogue catalogue =
+                         com.ultikits.ultitools.stub.StubCatalogue.start()) {
+                catalogue.mode(com.ultikits.ultitools.stub.StubCatalogue.Mode.TAMPER_HASH);
+                PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
+                CatalogueClient.Version version = CatalogueClient.version("demo",
+                        com.ultikits.ultitools.stub.StubCatalogue.VERSION);
+                String url = CatalogueClient.absoluteDownloadUrl(version.downloadUrl());
+
+                assertThatThrownBy(() -> PluginInstallUtils.downloadVerified(url, "demo-1.1.jar", tempDir))
+                        .isInstanceOf(IOException.class)
+                        .hasMessageContaining("hash mismatch");
+
+                assertThat(new File(tempDir, "demo-1.1.jar")).doesNotExist();
+                assertThat(new File(tempDir, "demo-1.1.jar.part")).doesNotExist();
             }
         }
     }

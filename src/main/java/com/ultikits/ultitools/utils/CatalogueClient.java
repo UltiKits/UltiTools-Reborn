@@ -21,8 +21,8 @@ import com.ultikits.ultitools.manager.ModuleApiLevels;
  * contract answer 12): a module is addressed by its identifier, a version names its {@code
  * sizeBytes}, its lower-case {@code sha256}, its integer {@code apiLevel} and a {@code download}
  * that is either {@code {kind: "public", url}} or {@code {kind: "license_required"}}. That
- * contract is not frozen yet, so the samples that pin these shapes are marked 「待夹具」 and plan
- * 22-26 swaps in the exported fixtures.
+ * contract is not frozen yet, so the samples that pin these shapes are marked as pending fixtures
+ * ({@code @PendingFixture}) and plan 22-26 swaps in the exported fixtures.
  *
  * <p>Only the versions route takes the API-level filter ({@code apiLevel}, {@code minApiLevel});
  * the other routes reject undeclared parameters, so no request carries them. A relative {@code
@@ -228,7 +228,21 @@ final class CatalogueClient {
      *         all) is offered, {@code FAILED} when the lookup established nothing
      */
     static VersionLookup latestVersion(String identifyString, int level) {
-        List<Version> versions = versions(identifyString, level);
+        String ref = moduleRef(identifyString);
+        if (ref == null) {
+            return VersionLookup.none();
+        }
+        CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref + "/versions" + levelQuery(level));
+        if (answer.kind() != CatalogueHttp.Kind.OK) {
+            return VersionLookup.failed("not reached");
+        }
+        if (answer.status() == 404) {
+            return VersionLookup.none();
+        }
+        if (answer.status() < 200 || answer.status() > 299) {
+            return VersionLookup.failed(VersionLookup.describe(answer.status(), answer.body()));
+        }
+        List<Version> versions = parseVersions(answer);
         if (versions == null) {
             return VersionLookup.failed(VersionLookup.UNREADABLE);
         }
@@ -348,6 +362,11 @@ final class CatalogueClient {
         if (answer.status() < 200 || answer.status() > 299) {
             return null;
         }
+        return parseVersions(answer);
+    }
+
+    /** @return the versions an answer carries, or {@code null} when it carries no usable list */
+    private static List<Version> parseVersions(CatalogueHttp.Json answer) {
         JsonArray items = itemsOf(answer);
         if (items == null) {
             return null;
