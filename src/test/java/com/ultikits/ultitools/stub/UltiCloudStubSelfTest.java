@@ -592,6 +592,132 @@ class UltiCloudStubSelfTest {
         assertThat(admin("/_stub/ack", "not json").status).isEqualTo(400);
     }
 
+    // ------------------------------------------------------------------ contract boundaries (22-19 fix round, W2)
+
+    @Test
+    void exactlyTwentyRefusedFramesKeepTheConnectionAndTheTwentyFirstClosesWith4429() throws Exception {
+        Login login = login();
+        AgentClient client = connectAndHello(login, "events:players");
+        for (int i = 0; i < 20; i++) {
+            client.sendText("not json " + i);
+        }
+        for (int i = 0; i < 20; i++) {
+            JsonObject refused = client.nextFrame(5000);
+            ContractSchemas.assertFrameValid(refused);
+            assertThat(refused.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+        }
+        client.sendText("ping");
+        assertThat(client.nextText(5000)).as("twenty refusals are within the limit").isEqualTo("pong");
+        client.sendText("not json 21");
+        assertThat(client.awaitClose(5000)).as("PROTOCOL.md: more than 20 in the window").isEqualTo(4429);
+    }
+
+    @Test
+    void aBurstOfEventsIsAckedInSchemaValidBatchesOfAtMostAckBatchMax() throws Exception {
+        Login login = login();
+        AgentClient client = connectAndHello(login, "events:players");
+        List<String> sent = new ArrayList<>();
+        for (int i = 0; i < 600; i++) {
+            JsonObject join = frame(i % 2 == 0 ? "player.join" : "player.leave", "basic.json");
+            sent.add(join.get("id").getAsString());
+            client.send(join);
+        }
+        java.util.Set<String> acked = new java.util.HashSet<>();
+        int acks = 0;
+        int largest = 0;
+        long deadline = System.currentTimeMillis() + 10000;
+        while (acked.size() < sent.size() && System.currentTimeMillis() < deadline) {
+            String text = client.pollText(2000);
+            if (text == null) {
+                break;
+            }
+            JsonObject ack = JsonParser.parseString(text).getAsJsonObject();
+            assertThat(ack.get("type").getAsString()).isEqualTo("ack");
+            ContractSchemas.assertFrameValid(ack);
+            JsonArray ids = ack.getAsJsonObject("payload").getAsJsonArray("ids");
+            largest = Math.max(largest, ids.size());
+            acks++;
+            for (int i = 0; i < ids.size(); i++) {
+                acked.add(ids.get(i).getAsString());
+            }
+        }
+        assertThat(acked).containsExactlyInAnyOrderElementsOf(sent);
+        assertThat(largest).as("ack.batchMax in PROTOCOL.md section 9").isLessThanOrEqualTo(100);
+        assertThat(acks).isGreaterThanOrEqualTo(6);
+        assertThat(stub.accessLog().count("WS-SELF-INVALID")).isZero();
+    }
+
+    @Test
+    void aForced402IsAppliedOnlyAfterTheCredentialStep() throws Exception {
+        Login login = login();
+        assertThat(admin("/_stub/mode", "{\"refusal\":402}").status).isEqualTo(200);
+        HttpReply unknown = upgradeRaw("ucs_" + repeat('C', 43), "2", FRAMEWORK);
+        assertThat(unknown.status).as("an unknown credential is refused before the plan").isEqualTo(401);
+        ContractSchemas.assertRestBodyValid("agentUpgrade.error.401.schema.json", unknown.json());
+        assertThat(upgradeRaw(login.credential, "2", FRAMEWORK).status).isEqualTo(402);
+    }
+
+    @Test
+    void aFrameOverMaxFrameBytesIsAnsweredPayloadTooLargeAndTheConnectionStays() throws Exception {
+        int maxFrameBytes = ContractFixtures.object("fixtures/agent/welcome/valid/default-limits.json")
+                .getAsJsonObject("payload").getAsJsonObject("limits").get("maxFrameBytes").getAsInt();
+        Login login = login();
+        AgentClient client = connectAndHello(login, "logs");
+        client.sendText(repeat('x', maxFrameBytes + 1));
+        JsonObject refused = client.nextFrame(5000);
+        ContractSchemas.assertFrameValid(refused);
+        assertThat(refused.get("type").getAsString()).isEqualTo("error");
+        assertThat(refused.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("payload_too_large");
+        client.sendText("ping");
+        assertThat(client.nextText(5000)).isEqualTo("pong");
+    }
+
+    @Test
+    void aJsonAnswerLeavesTheFrontDoorAsOneWriteOfHeadAndBody() throws Exception {
+        // A UAT run must not depend on TCP segmentation: refusals and the v1 410 are one write.
+        final List<byte[]> writes = new ArrayList<>();
+        OutputStream recorder = new OutputStream() {
+            @Override
+            public void write(int b) {
+                writes.add(new byte[]{(byte) b});
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) {
+                writes.add(java.util.Arrays.copyOfRange(b, off, off + len));
+            }
+        };
+        JsonObject body = ContractFixtures.object("fixtures/agent-rest/agentUpgrade/error/valid/402-plan-limit.json");
+        StubFrontDoor.writeJson(recorder, 402, "Payment Required", body, null);
+        assertThat(writes).hasSize(1);
+        HttpReply parsed = RawHttp.parse(writes.get(0));
+        assertThat(parsed.status).isEqualTo(402);
+        assertThat(parsed.json()).isEqualTo(body);
+    }
+
+    @Test
+    void everyV1PrefixAnswers410AndIsLoggedV1() throws Exception {
+        String[] paths = {
+            "/ws", "/ws/server/x/log/stream",
+            "/auth/magic-link/poll", "/auth/server-login/status",
+            "/editor/register", "/editor/updateServer",
+            "/server/getByUUID",
+            "/oauth/token",
+            "/plugin/ultitools/newest",
+        };
+        for (String path : paths) {
+            assertThat(RawHttp.get(stub.httpPort(), path, null).status).as(path).isEqualTo(410);
+        }
+        assertThat(stub.accessLog().count(" V1 ")).isEqualTo(paths.length);
+        for (String path : paths) {
+            assertThat(stub.accessLog().lines()).as(path)
+                    .anySatisfy(line -> assertThat(line).contains("V1 GET " + path + " -> 410"));
+        }
+        // Control: an unknown v2 path is a plain 404, not a v1 answer.
+        assertThat(RawHttp.get(stub.httpPort(), "/v1/nothing", null).status).isEqualTo(404);
+        assertThat(stub.accessLog().count(" V1 ")).isEqualTo(paths.length);
+    }
+
     // ------------------------------------------------------------------ Task 3: the standalone command
 
     @Test

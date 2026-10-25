@@ -416,8 +416,14 @@ public final class StubFrontDoor {
             }
         }
         head.append("\r\n");
-        out.write(head.toString().getBytes(StandardCharsets.ISO_8859_1));
-        out.write(bytes);
+        // One write for head and body, so every client reads the whole refusal in one segment and
+        // UAT runs do not depend on TCP segmentation. A client's robustness against a split
+        // response is proven by the framework's own StatusCapturingDraftSegmentationTest.
+        byte[] headBytes = head.toString().getBytes(StandardCharsets.ISO_8859_1);
+        byte[] response = new byte[headBytes.length + bytes.length];
+        System.arraycopy(headBytes, 0, response, 0, headBytes.length);
+        System.arraycopy(bytes, 0, response, headBytes.length, bytes.length);
+        out.write(response);
         out.flush();
     }
 
