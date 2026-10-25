@@ -130,6 +130,12 @@ ultipanel:
     # editor.
     # 读取与编辑 server.properties 的安全白名单键。关闭后面板无法编辑 server.properties。
     server-properties: false
+    # Whether the panel may stop or restart this server through the structured power action, which does not pass through the command blocklist.
+    # 面板是否可以通过结构化电源动作停止或重启本服务器；该动作不经过命令黑名单。
+    power-actions: false
+    # Whether the panel may kick players, change their game mode or teleport them.
+    # 面板是否可以踢出玩家、修改他们的游戏模式或传送他们。
+    player-actions: false
 
   commands:
     # Remote command blocklist. Fully operator-editable in both directions — add or remove any
