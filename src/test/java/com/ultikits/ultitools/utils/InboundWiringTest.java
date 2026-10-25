@@ -22,8 +22,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -89,6 +92,10 @@ class InboundWiringTest {
     private Path serverRoot;
     /** Wraps the real files handler of the next {@link #connect()}; identity by default. */
     private UnaryOperator<CloudRequestHandler> filesDecorator = UnaryOperator.identity();
+    /** Runs on the handler's thread for every action-log entry, after it is recorded. */
+    private Consumer<RemoteActionLog.Entry> actionHook = entry -> { };
+    /** Runs on the handler's thread when the fake power executor schedules a stop. */
+    private Runnable stopHook = () -> { };
 
     @BeforeEach
     void setUp() throws Exception {
@@ -151,10 +158,13 @@ class InboundWiringTest {
         bindings.disabling = () -> false;
         bindings.power = () -> new PowerActionHandler.PowerExecutor() {
             @Override public boolean restartSupported() { return true; }
-            @Override public void scheduleStop() { powerCalls.add("stop"); }
+            @Override public void scheduleStop() { stopHook.run(); powerCalls.add("stop"); }
             @Override public void scheduleRestart() { powerCalls.add("restart"); }
         };
-        bindings.actionLog = actions::add;
+        bindings.actionLog = entry -> {
+            actions.add(entry);
+            actionHook.accept(entry);
+        };
         FileOperationManager files = new FileOperationManager();
         bindings.files = () -> filesDecorator.apply(RemoteRequestHandlers.files(files, serverRoot.toFile(),
                 actions::add));
@@ -297,6 +307,32 @@ class InboundWiringTest {
         assertThat(reply("server.power.result", 2).getAsJsonObject("payload").get("status").getAsString())
                 .isEqualTo("ok");
         await(() -> powerCalls.contains("stop"), "the scheduled stop");
+    }
+
+    @Test
+    @DisplayName("server.power writes the reliable-delivery state again right before the stop is scheduled")
+    void powerFlushesTheStateBeforeTheStop() throws Exception {
+        final Path stateFile = serverRoot.resolve(".ultikits").resolve("cloud-outbox.json");
+        final AtomicBoolean removedAfterAck = new AtomicBoolean();
+        final AtomicReference<Boolean> presentAtStop = new AtomicReference<>();
+        // The allowed entry is recorded after the ack gate persisted the id and before the pre-shutdown hook.
+        actionHook = entry -> {
+            if (Capability.POWER_ACTIONS.name().equals(entry.getCapability())
+                    && entry.getVerdict() == RemoteActionLog.Verdict.ALLOWED) {
+                try {
+                    removedAfterAck.set(Files.deleteIfExists(stateFile));
+                } catch (java.io.IOException failure) {
+                    throw new IllegalStateException(failure);
+                }
+            }
+        };
+        stopHook = () -> presentAtStop.set(Files.exists(stateFile));
+        config.set(Capability.POWER_ACTIONS.getConfigPath(), true);
+        connect();
+        send("server.power", "stop", null);
+        await(() -> powerCalls.contains("stop"), "the scheduled stop");
+        assertThat(removedAfterAck.get()).as("control: the ack gate had written the state file").isTrue();
+        assertThat(presentAtStop.get()).as("the pre-shutdown flush wrote it again before the stop").isTrue();
     }
 
     @Test

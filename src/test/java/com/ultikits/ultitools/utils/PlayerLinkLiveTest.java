@@ -84,6 +84,21 @@ class PlayerLinkLiveTest {
     }
 
     @Test
+    @DisplayName("a create the gateway answers with a correlated error fails at once, not at its deadline")
+    void createAnsweredByErrorFailsAtOnce() throws Exception {
+        UltiToolsPlugin module = startServer();
+        CloudPlayerLinks links = UltiTools.getInstance().getCloudPlayerLinks();
+        CompletableFuture<CloudPlayerLinks.LinkCreation> creation = links.create(module, PLAYER, "Steve",
+                CloudPlayerLinks.GameAuth.none(), EnumSet.of(CloudPlayerLinks.LinkProof.WEB_REGISTRATION));
+        List<JsonObject> creates = stub.gateway().awaitReceived("player.link.create", 1, 10_000);
+        String createId = creates.get(0).get("id").getAsString();
+        // The protocol layer consumes inbound error frames; only its reply listener reaches the link channel.
+        stub.gateway().send("error", "reply-invalid-message", null, null, createId);
+        CloudPlayerLinks.LinkCreation failed = creation.get(5, TimeUnit.SECONDS);
+        assertThat(failed.failure()).isEqualTo(CloudPlayerLinks.Failure.INTERNAL_ERROR);
+    }
+
+    @Test
     @DisplayName("create, restart, completed redelivered twice: one handler call, the persisted receipt replayed")
     void completionSurvivesRestarts() throws Exception {
         // Run 1: the module registers at startup; a link is created and answered.
