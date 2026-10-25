@@ -37,6 +37,11 @@ import java.util.regex.Pattern;
  * {@code params} plus the {@code actor} object exactly as received; the plugin neither derives nor
  * overrides the actor, which the authenticated gateway channel vouches for (T-22-98).</p>
  *
+ * <p>This handler does not consult the capabilities the gateway accepted: the router admits
+ * {@code module.request} through its {@code fromPayload:module} sentinel, and the only module check
+ * here is the responder's owner. Whether a request for a module whose declared capability the
+ * gateway did not accept is filtered is decided in 22-21.</p>
+ *
  * <p>Each module-owned request is also republished on the module-facing event bus as one
  * {@link PanelMessageEvent}, built on the dispatching thread and delivered on the main thread, with
  * the fields the v1 inbound path gives it: the type the responder is registered under, the

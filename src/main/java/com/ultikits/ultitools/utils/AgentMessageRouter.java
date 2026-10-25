@@ -21,9 +21,12 @@ import java.util.logging.Logger;
  * <p>The capability predicate receives contract capability names such as commands
  * and files:read, plus the literal {@code fromPayload:module} for module.request.
  * Integration must return true for that sentinel so the module handler can validate
- * the payload's module and negotiated version and answer module_not_found when needed.
- * The sentinel is never declared in hello or welcome. Likewise, accept power here;
- * its handler applies the operator switch and answers power_disabled itself.</p>
+ * the payload's module identifier and answer module_not_found when no responder is
+ * owned by that module. The module handler does not check the negotiated
+ * {@code modules:<id>@<version>} capabilities; whether a request for a module the
+ * gateway did not accept is filtered is decided in 22-21. The sentinel is never
+ * declared in hello or welcome. Likewise, accept power here; its handler applies the
+ * operator switch and answers power_disabled itself.</p>
  *
  * @since 6.3.1
  */

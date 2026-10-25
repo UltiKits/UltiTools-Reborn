@@ -67,8 +67,10 @@ final class AgentMessageTypes {
         add(specs, "player.action", Direction.DOWN, ReplyTo.FORBIDDEN, "players:actions", false, false);
         add(specs, "player.action.result", Direction.UP, ReplyTo.REQUIRED, null, false, false);
         // This literal is a routing sentinel, not a hello/welcome capability name.
-        // The integration predicate must accept it; the module handler checks the
-        // payload's module and the negotiated modules:<id>@<version> capability.
+        // The integration predicate must accept it; the module handler validates the
+        // payload's module identifier and answers module_not_found when no responder is
+        // owned by that module. It does not check the negotiated modules:<id>@<version>
+        // capability; filtering by the accepted capabilities is 22-21's decision.
         add(specs, "module.request", Direction.DOWN, ReplyTo.FORBIDDEN, "fromPayload:module", false, false);
         add(specs, "module.response", Direction.UP, ReplyTo.REQUIRED, null, false, false);
         add(specs, "player.link.create", Direction.UP, ReplyTo.FORBIDDEN, "link", false, false);
