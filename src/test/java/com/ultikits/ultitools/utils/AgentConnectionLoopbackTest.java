@@ -650,11 +650,11 @@ class AgentConnectionLoopbackTest {
     }
 
     @Test
-    @DisplayName("a 426 whose body arrives after its head is UPGRADE_REQUIRED with the header's minimum")
+    @DisplayName("a 426 whose body arrives after its head is UPGRADE_REQUIRED with the body's minimum and request id")
     void delayedBody426() throws Exception {
         raw = new RawGateway(request -> reply426().splitAfterHead());
         connect(endpointFor(raw.port()), "6.3.1").start();
-        assertThat(awaitRecordedEvent()).containsExactly("upgradeRequired 6.3.1 null");
+        assertThat(awaitRecordedEvent()).containsExactly("upgradeRequired 6.3.1 req-426");
         assertThat(connection.state()).isEqualTo(AgentConnection.State.UPGRADE_REQUIRED);
     }
 
