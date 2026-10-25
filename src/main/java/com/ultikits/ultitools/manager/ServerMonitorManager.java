@@ -696,6 +696,23 @@ public class ServerMonitorManager {
     }
 
     /**
+     * Starts the TPS clock now without recording a sample (plan 22-22 fix): the clock otherwise starts when this
+     * object is created, and the v2 sampler first runs 20 ticks after the first connection, which may come long after
+     * the plugin enabled; that gap would be recorded as the first TPS sample. CPU is sampled once so the next sample
+     * has a value. <b>Main thread only</b>, like {@link #sampleTpsAndCpu()}.
+     *
+     * @return {@code true} when the clock was started, {@code false} off the main thread
+     */
+    boolean primeTpsClock() {
+        if (!isOnPrimaryThreadOrComplain()) {
+            return false;
+        }
+        sampleCpuUsage();
+        lastTick = System.currentTimeMillis();
+        return true;
+    }
+
+    /**
      * Reads the published main-thread sample for the v2 telemetry encoders
      * ({@link AgentTelemetry}). Package-private: internal cross-class reading, not a public API,
      * and the v1 send paths keep using {@link #currentSnapshot()}.

@@ -88,6 +88,8 @@ public final class AgentOutboundFeeds {
     private SystemLogHandler capture;
     /** Main thread only. */
     private int secondsSampled;
+    /** Whether the monitor's TPS clock was started by the first run. Main thread only. */
+    private boolean tpsClockPrimed;
 
     /**
      * @param monitor          supplies the server sampler, read at first use and then kept; {@code null}, or a
@@ -189,9 +191,9 @@ public final class AgentOutboundFeeds {
     }
 
     /**
-     * The once-a-second main-thread run: one TPS and CPU sample, a state sample every
-     * {@value #STATE_SAMPLE_PERIOD_SECONDS} seconds, then the telemetry cadence. Bukkit main thread only; scheduled every
-     * 20 ticks so the TPS sample measures ticks, not wall-clock hops.
+     * The once-a-second main-thread run: one TPS and CPU sample (the first run only starts the TPS clock), a state
+     * sample every {@value #STATE_SAMPLE_PERIOD_SECONDS} seconds, then the telemetry cadence. Bukkit main thread only;
+     * scheduled every 20 ticks so the TPS sample measures ticks, not wall-clock hops.
      */
     public void mainThreadSecond() {
         AgentTelemetry current = telemetry();
@@ -199,7 +201,12 @@ public final class AgentOutboundFeeds {
         if (current == null || sampler == null) {
             return;
         }
-        sampler.sampleTpsAndCpu();
+        if (tpsClockPrimed) {
+            sampler.sampleTpsAndCpu();
+        } else {
+            // The first run starts the clock: the time since the monitor was created is not a tick measurement.
+            tpsClockPrimed = sampler.primeTpsClock();
+        }
         if (secondsSampled % STATE_SAMPLE_PERIOD_SECONDS == 0) {
             sampler.sampleAndPublishState();
         }
