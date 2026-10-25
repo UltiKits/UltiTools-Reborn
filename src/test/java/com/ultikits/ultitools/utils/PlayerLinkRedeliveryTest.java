@@ -40,6 +40,7 @@ class PlayerLinkRedeliveryTest {
     private static final String COMPLETED = "01JB2Z8Y3K4M5N6P7Q8R9S0CC1";
     private static final String HELD = "01JB2Z8Y3K4M5N6P7Q8R9S0CC2";
     private static final String NO_PROVISION = "01JB2Z8Y3K4M5N6P7Q8R9S0CC3";
+    private static final String CANCELLED_EXPIRY_ID = "01JB2Z8Y3K4M5N6P7Q8R9S0TVW";
 
     private RecordingChannel recording;
     private PlayerLinkEndToEndTest.TestLedger ledger;
@@ -206,6 +207,43 @@ class PlayerLinkRedeliveryTest {
     }
 
     @Test
+    @DisplayName("completions and expiries reach the module only through the injected worker executor")
+    void handlerRunsOnlyOnTheWorkerExecutor() {
+        List<Runnable> queue = new ArrayList<>();
+        PlayerLinkChannel queued = new PlayerLinkChannel(() -> recording, ledger, () -> false, () -> 0L,
+                timers.service(), queue::add);
+        AgentMessageRouter queuedRouter = new AgentMessageRouter(capability -> true, capability -> "not available");
+        queued.register(queuedRouter);
+        final List<String> calls = new CopyOnWriteArrayList<>();
+        new CloudPlayerLinks(queued).setHandler(plugin, new Handler() {
+            @Override
+            public CompletableFuture<GameAccountResult> onCompleted(LinkCompletion completion) {
+                calls.add("completed");
+                return CompletableFuture.completedFuture(GameAccountResult.CREATED);
+            }
+
+            @Override
+            public void onExpired(LinkExpiry expiry) {
+                calls.add("expired");
+            }
+        });
+
+        queuedRouter.dispatch(completedFrame(COMPLETED, PlayerLinkEndToEndTest.CREATE_ID).toString(), recording);
+        queuedRouter.dispatch(ContractFixtures.object(
+                "fixtures/agent/player.link.expired/valid/expired.json").toString(), recording);
+
+        assertThat(calls).as("nothing runs on the socket thread").isEmpty();
+        assertThat(results()).as("nothing is answered before the module ran").isEmpty();
+
+        for (Runnable task : new ArrayList<>(queue)) {
+            task.run();
+        }
+
+        assertThat(calls).as("the handler and the expiry ran, in arrival order").containsExactly("completed", "expired");
+        assertThat(results()).as("the completion is answered once the handler ran").hasSize(1);
+    }
+
+    @Test
     @DisplayName("a handler that does not answer in time sends nothing and is asked again on redelivery")
     void handlerTimeoutSendsNothing() {
         List<String> calls = new CopyOnWriteArrayList<>();
@@ -309,21 +347,37 @@ class PlayerLinkRedeliveryTest {
     }
 
     @Test
-    @DisplayName("a cancelled expiry reaches the handler once, with the link and the player, and sends no frame")
+    @DisplayName("a cancelled expiry reaches the handler once and its envelope id is persisted first")
     void cancelledExpiryReachesTheHandlerOnce() {
-        AtomicReference<LinkExpiry> seen = new AtomicReference<>();
-        links.setHandler(plugin, new ExpiryHandler(seen));
+        final AtomicReference<LinkExpiry> seen = new AtomicReference<>();
+        final List<String> calls = new CopyOnWriteArrayList<>();
+        links.setHandler(plugin, new Handler() {
+            @Override
+            public CompletableFuture<GameAccountResult> onCompleted(LinkCompletion completion) {
+                return CompletableFuture.completedFuture(GameAccountResult.NOT_REQUESTED);
+            }
+
+            @Override
+            public void onExpired(LinkExpiry expiry) {
+                calls.add(expiry.linkId());
+                seen.set(expiry);
+            }
+        });
 
         JsonObject frame = ContractFixtures.object("fixtures/agent/player.link.expired/valid/cancelled.json");
         dispatch(frame);
         dispatch(frame);
 
+        assertThat(calls).as("one delivery per envelope id").hasSize(1);
         assertThat(seen.get()).isNotNull();
         assertThat(seen.get().reason()).isEqualTo(ExpiryReason.CANCELLED);
         assertThat(seen.get().linkId()).isEqualTo(PlayerLinkEndToEndTest.CREATE_ID);
         assertThat(seen.get().playerUuid()).isEqualTo(PlayerLinkEndToEndTest.STEVE);
         assertThat(seen.get().playerName()).isEqualTo("Steve");
         assertThat(recording.frames()).as("an expiry is never answered").isEmpty();
+        assertThat(ledger.idsAtPersist).as("the expiry id is persisted before it is delivered").hasSize(1);
+        assertThat(ledger.idsAtPersist.get(0)).as("the durable dedupe set holds the expiry id")
+                .containsExactly(CANCELLED_EXPIRY_ID);
     }
 
     @Test
@@ -493,24 +547,6 @@ class PlayerLinkRedeliveryTest {
         public CompletableFuture<GameAccountResult> onCompleted(LinkCompletion completion) {
             received.set(completion);
             return CompletableFuture.completedFuture(result);
-        }
-    }
-
-    private static final class ExpiryHandler implements CloudPlayerLinks.LinkEventHandler {
-        private final AtomicReference<LinkExpiry> seen;
-
-        private ExpiryHandler(AtomicReference<LinkExpiry> seen) {
-            this.seen = seen;
-        }
-
-        @Override
-        public CompletableFuture<GameAccountResult> onCompleted(LinkCompletion completion) {
-            return CompletableFuture.completedFuture(GameAccountResult.NOT_REQUESTED);
-        }
-
-        @Override
-        public void onExpired(LinkExpiry expiry) {
-            seen.set(expiry);
         }
     }
 }

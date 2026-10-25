@@ -29,6 +29,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -157,6 +158,10 @@ class PlayerLinkEndToEndTest {
                 .isEqualTo("created");
         assertThat(ledger.resultsAtPersist).as("result frames already sent when the receipt was persisted")
                 .containsExactly(0);
+        assertThat(ledger.receiptsAtPersist).as("the receipt is on disk before the result is sent").hasSize(1);
+        assertThat(ledger.receiptsAtPersist.get(0).keySet()).as("persisted receipt ids").containsExactly(COMPLETED_ID);
+        assertThat(ledger.receiptsAtPersist.get(0).get(COMPLETED_ID).getAsJsonObject("data")
+                .get("gameAccount").getAsString()).as("the persisted payload is the one that is sent").isEqualTo("created");
     }
 
     @Test
@@ -223,11 +228,16 @@ class PlayerLinkEndToEndTest {
 
     /**
      * In-memory {@link DedupeLedger} that also records, for every persisted receipt, how many
-     * completion-result frames had already been sent when the persistence happened.
+     * completion-result frames had already been sent when the persistence happened, and what the
+     * durable state looked like at that moment.
      */
     static final class TestLedger implements DedupeLedger {
         final Map<String, JsonObject> receipts = new ConcurrentHashMap<>();
         final List<Integer> resultsAtPersist = new CopyOnWriteArrayList<>();
+        /** The receipts as they were on disk at each persist, oldest first. */
+        final List<Map<String, JsonObject>> receiptsAtPersist = new CopyOnWriteArrayList<>();
+        /** The deduplicated ids as they were on disk at each persist, oldest first. */
+        final List<Set<String>> idsAtPersist = new CopyOnWriteArrayList<>();
         private final Set<String> seen = new HashSet<>();
         private final IntSupplier resultFrames;
 
@@ -243,6 +253,12 @@ class PlayerLinkEndToEndTest {
         @Override
         public synchronized void persistNow() throws IOException {
             resultsAtPersist.add(resultFrames.getAsInt());
+            Map<String, JsonObject> durable = new HashMap<>();
+            for (Map.Entry<String, JsonObject> entry : receipts.entrySet()) {
+                durable.put(entry.getKey(), entry.getValue().deepCopy());
+            }
+            receiptsAtPersist.add(durable);
+            idsAtPersist.add(new HashSet<>(seen));
         }
 
         @Override
