@@ -23,38 +23,47 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.contract.PendingFixture;
+import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
  * PluginInstallUtils 测试类
  * 测试插件安装工具类的方法签名和结构
  */
 @DisplayName("PluginInstallUtils 测试")
+@PendingFixture
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallUtilsTest {
 
+    /** The pending version shape, naming the given version of UltiTrade. */
+    private static String version(String version) {
+        return StubCatalogue.versionSample(version,
+                "/v1/catalogue/modules/ultitrade/versions/" + version + "/download");
+    }
+
     @Test
-    @DisplayName("所有元数据请求应规范化并编码插件标识与版本路径")
+    @DisplayName("每个元数据请求都把标识规范化为模块引用、把版本编码成路径段，且只有版本列表带级别过滤")
     void normalizesAndEncodesLookupForAllMetadataPaths() throws Exception {
         AtomicReference<String> request = new AtomicReference<>();
         AtomicReference<String> versionPath = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/plugin/get", exchange -> {
+        server.createContext("/v1/catalogue/modules/ultitrade", exchange -> {
             request.set(exchange.getRequestURI().getRawQuery());
-            byte[] body = "{\"code\":\"200\",\"data\":{\"id\":7,\"identifyString\":\"ultitrade\"}}".getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(200, body.length);
-            exchange.getResponseBody().write(body);
-            exchange.close();
-        });
-        server.createContext("/plugin/7/latest", exchange -> {
-            byte[] body = "{\"code\":\"200\",\"data\":\"1.0.0\"}".getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(200, body.length);
-            exchange.getResponseBody().write(body);
-            exchange.close();
-        });
-        server.createContext("/plugin/7/", exchange -> {
-            versionPath.set(exchange.getRequestURI().getRawPath());
-            byte[] body = "{\"code\":\"200\",\"data\":\"https://example.invalid/artifact.jar\"}"
+            byte[] body = StubCatalogue.moduleCardSample("ultitrade", "UltiTrade")
                     .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/v1/catalogue/modules/ultitrade/versions", exchange -> {
+            byte[] body = StubCatalogue.versionsPageOf(version("1.0.0")).getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/v1/catalogue/modules/ultitrade/versions/", exchange -> {
+            versionPath.set(exchange.getRequestURI().getRawPath());
+            byte[] body = ("{\"data\":" + version("release candidate") + "}").getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
@@ -63,13 +72,14 @@ class PluginInstallUtilsTest {
         try {
             PluginInstallUtils.setBaseUrlForTesting("http://localhost:" + server.getAddress().getPort());
             assertThat(PluginInstallUtils.getPluginLatestVersion("  UltiTrade  ")).isEqualTo("1.0.0");
-            // Every catalogue request also carries the API level (plan 18-40); no UltiTools here, so the floor.
-            assertThat(request.get()).isEqualTo("identifyString=ultitrade&apiLevel=630&minApiLevel=630");
-            assertThat(PluginInstallUtils.getPlugin(" bad name+/")).isNotNull();
-            assertThat(request.get()).isEqualTo("identifyString=bad+name%2B%2F&apiLevel=630&minApiLevel=630");
+            // The module route takes no level parameter (the contract rejects undeclared ones).
+            assertThat(request.get()).isNull();
+            // An identify-string that cannot be a module reference is refused without a request.
+            assertThat(PluginInstallUtils.getPlugin(" bad name+/")).isNull();
             assertThat(PluginInstallUtils.getPluginVersionDownloadLink("UltiTrade", "release candidate"))
-                    .isEqualTo("https://example.invalid/artifact.jar");
-            assertThat(versionPath.get()).isEqualTo("/plugin/7/release%20candidate/download");
+                    .isEqualTo("http://localhost:" + server.getAddress().getPort()
+                            + "/v1/catalogue/modules/ultitrade/versions/release candidate/download");
+            assertThat(versionPath.get()).isEqualTo("/v1/catalogue/modules/ultitrade/versions/release%20candidate");
             assertThat(PluginInstallUtils.getPlugin(null)).isNull();
             assertThat(PluginInstallUtils.getPlugin("  ")).isNull();
         } finally {

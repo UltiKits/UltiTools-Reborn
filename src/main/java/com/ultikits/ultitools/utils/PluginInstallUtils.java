@@ -5,10 +5,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.lang.reflect.Type;
 import java.net.URL;
-import java.net.URLEncoder;
-import java.io.UnsupportedEncodingException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
@@ -24,19 +21,12 @@ import java.util.logging.Logger;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.manager.ModuleApiLevels;
 import com.ultikits.ultitools.manager.ModuleJarIndex;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
 /**
  * Utility class for plugin installation and management operations.
@@ -54,23 +44,26 @@ public class PluginInstallUtils {
             module -> codeSourceLocationOf(module.getClass());
 
     /**
-     * The UltiCloud catalogue, as the update transaction asks it. A 409 from the level-filtered
-     * {@code latest} -- versions exist, none this framework installs -- is thrown as
+     * The UltiCloud catalogue, as the update transaction asks it. Versions exist but none this
+     * framework installs -- the level-filtered list is empty -- is thrown as
      * {@link ModuleFileTransactions.NoCompatibleVersionException} (plan 18-40).
      */
     static final ModuleFileTransactions.Catalogue CATALOGUE = new ModuleFileTransactions.Catalogue() {
         @Override
         public String latestVersion(String identifyString) {
             int level = ModuleApiLevels.frameworkLevel();
-            PluginEntity plugin = getPlugin(identifyString, level);
-            if (plugin == null) {
+            if (CatalogueClient.module(identifyString) == null) {
                 return null;
             }
-            CatalogueAnswer latest = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", level));
-            if (latest.noCompatibleVersion()) {
+            List<CatalogueClient.Version> versions = CatalogueClient.versions(identifyString, level);
+            if (versions == null) {
+                return null;
+            }
+            CatalogueClient.Version latest = CatalogueClient.newest(versions);
+            if (latest == null) {
                 throw new ModuleFileTransactions.NoCompatibleVersionException(level);
             }
-            return latest.data;
+            return latest.version();
         }
 
         @Override
@@ -79,24 +72,11 @@ public class PluginInstallUtils {
         }
     };
 
-    private static final Gson GSON = new GsonBuilder()
-            .setDateFormat("yyyy-MM-dd HH:mm:ss")
-            .create();
-
     // Use lazy initialization to avoid static initializer dependency on UltiTools
     private static volatile String baseUrl;
     
     // Custom base URL for testing purposes
     private static String customBaseUrl;
-
-    /** The HTTP status with which the catalogue answers that nothing this framework installs is offered. */
-    private static final int HTTP_CONFLICT = 409;
-
-    /**
-     * The HTTP status with which the catalogue answers that it does not know a module, or knows it
-     * but has no finalized version of it.
-     */
-    private static final int HTTP_NOT_FOUND = 404;
 
     /** The suffix of a download not yet checked; the module loader reads only {@code *.jar}. */
     static final String PART_SUFFIX = ".part";
@@ -148,70 +128,6 @@ public class PluginInstallUtils {
         return normalized.isEmpty() ? null : normalized;
     }
 
-    private static String encodeQueryValue(String value) {
-        try {
-            return URLEncoder.encode(value, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            throw new IllegalStateException("UTF-8 is required by the Java runtime", e);
-        }
-    }
-
-    private static String encodePathSegment(String value) {
-        return encodeQueryValue(value).replace("+", "%20");
-    }
-
-    /**
-     * The URL of a catalogue request: {@code path}, with its own query if it has one, under the base
-     * URL, followed by {@code apiLevel} (this framework's level) and {@code minApiLevel}
-     * ({@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL}). Every catalogue request {@code /upm} makes
-     * is built here, so none can omit them; the catalogue filters {@code latest}, {@code versions}
-     * and the download routes by them and ignores them elsewhere (plan 18-40).
-     *
-     * @param path           the route, starting with {@code /}, optionally with a query
-     * @param frameworkLevel this framework's API level
-     * @return the full URL
-     */
-    static String catalogueUrl(String path, int frameworkLevel) {
-        return getBaseUrl() + path + (path.indexOf('?') < 0 ? "?" : "&")
-                + "apiLevel=" + encodeQueryValue(String.valueOf(frameworkLevel))
-                + "&minApiLevel=" + encodeQueryValue(String.valueOf(ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
-    }
-
-    private static String catalogueUrl(String path) {
-        return catalogueUrl(path, ModuleApiLevels.frameworkLevel());
-    }
-
-    /** A catalogue answer whose {@code data} is a string, with its HTTP status kept. */
-    private static final class CatalogueAnswer {
-        private final int status;
-        private final String data;
-        /** For a non-2xx answer, {@link VersionLookup#describe(int, String)} of it; otherwise {@code null}. */
-        private final String failure;
-
-        private CatalogueAnswer(int status, String data, String failure) {
-            this.status = status;
-            this.data = data;
-            this.failure = failure;
-        }
-
-        /**
-         * HTTP 409: the module or version exists but nothing this framework installs is offered.
-         * Read from the status, never from the message text, which the catalogue may reword.
-         */
-        private boolean noCompatibleVersion() {
-            return status == HTTP_CONFLICT;
-        }
-    }
-
-    private static CatalogueAnswer catalogueString(String url) {
-        try (Response httpResponse = SimpleHttpClient.get(url)) {
-            boolean ok = httpResponse.isOk();
-            return new CatalogueAnswer(httpResponse.getStatus(),
-                    ok ? unwrapStringData(httpResponse.body()) : null,
-                    ok ? null : VersionLookup.describe(httpResponse.getStatus(), httpResponse.body()));
-        }
-    }
-
     static String installedJarName(String idString, String version) {
         String normalized = normalizeIdentifyString(idString);
         if (normalized == null || version == null) {
@@ -227,84 +143,6 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Extract the "data" field from a backend API envelope response.
-     * The backend wraps responses as {"code":"200","msg":"Success","data":...}.
-     *
-     * @param body the raw JSON response body
-     * @param clazz the class to deserialize the data field into
-     * @param <T> the target type
-     * @return the deserialized data, or null if absent or response indicates error
-     */
-    private static <T> T unwrapData(String body, Class<T> clazz) {
-        try {
-            JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
-            String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
-            if (!"200".equals(code)) {
-                return null;
-            }
-            JsonElement data = wrapper.get("data");
-            if (data == null || data.isJsonNull()) {
-                return null;
-            }
-            return GSON.fromJson(data, clazz);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /**
-     * Extract the "data" field from a backend API envelope response (generic type version).
-     *
-     * @param body the raw JSON response body
-     * @param type the Type to deserialize the data field into
-     * @param <T> the target type
-     * @return the deserialized data, or null if absent or response indicates error
-     */
-    private static <T> T unwrapData(String body, Type type) {
-        try {
-            JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
-            String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
-            if (!"200".equals(code)) {
-                return null;
-            }
-            JsonElement data = wrapper.get("data");
-            if (data == null || data.isJsonNull()) {
-                return null;
-            }
-            return GSON.fromJson(data, type);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /**
-     * Extract a String value from the "data" field of a backend API envelope response.
-     * Handles both quoted JSON strings and primitive values.
-     *
-     * @param body the raw JSON response body
-     * @return the data as a String, or null if absent or response indicates error
-     */
-    private static String unwrapStringData(String body) {
-        try {
-            JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
-            String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
-            if (!"200".equals(code)) {
-                return null;
-            }
-            JsonElement data = wrapper.get("data");
-            if (data == null || data.isJsonNull()) {
-                return null;
-            }
-            if (data.isJsonPrimitive()) {
-                return data.getAsString();
-            }
-            return data.toString();
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /**
      * Get plugin list online.
      *
      * @param page     the page number
@@ -312,38 +150,7 @@ public class PluginInstallUtils {
      * @return the plugin list
      */
     public static List<PluginEntity> getPluginList(int page, int pageSize) {
-        List<PluginEntity> pluginEntities = new ArrayList<>();
-        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/list?page=" + page + "&pageSize=" + pageSize))) {
-            if (!httpResponse.isOk()) {
-                return pluginEntities;
-            }
-            String body = httpResponse.body();
-            Type listType = new TypeToken<List<PluginEntity>>(){}.getType();
-            // Backend returns paginated wrapper: {items:[...], total, page, pageSize}
-            // Extract items array from the wrapper, falling back to direct list for backwards compat
-            try {
-                JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
-                String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
-                if (!"200".equals(code)) {
-                    return pluginEntities;
-                }
-                JsonElement data = wrapper.get("data");
-                if (data == null || data.isJsonNull()) {
-                    return pluginEntities;
-                }
-                // Handle paginated wrapper format: {items: [...], total, page, pageSize}
-                if (data.isJsonObject() && data.getAsJsonObject().has("items")) {
-                    JsonElement items = data.getAsJsonObject().get("items");
-                    List<PluginEntity> result = GSON.fromJson(items, listType);
-                    return result != null ? result : pluginEntities;
-                }
-                // Fallback: direct list format
-                List<PluginEntity> result = GSON.fromJson(data, listType);
-                return result != null ? result : pluginEntities;
-            } catch (Exception e) {
-                return pluginEntities;
-            }
-        }
+        return CatalogueClient.list(page, pageSize);
     }
 
     /**
@@ -354,15 +161,11 @@ public class PluginInstallUtils {
      * @return the plugin download link
      */
     public static String getPluginVersionDownloadLink(String idString, String version) {
-        PluginEntity plugin = getPlugin(idString);
-        if (plugin == null) {
-            return null;
-        }
         if (version == null || version.trim().isEmpty()) {
             return null;
         }
-        return catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/" + encodePathSegment(version.trim())
-                + "/download")).data;
+        CatalogueClient.Version found = CatalogueClient.version(idString, version.trim());
+        return found == null ? null : CatalogueClient.absoluteDownloadUrl(found.downloadUrl());
     }
 
     /**
@@ -372,17 +175,16 @@ public class PluginInstallUtils {
      * @return the plugin version list
      */
     public static List<String> getPluginVersions(String idString) {
-        PluginEntity plugin = getPlugin(idString);
-        if (plugin == null) {
+        List<CatalogueClient.Version> versions = CatalogueClient.versions(idString,
+                ModuleApiLevels.frameworkLevel());
+        if (versions == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/" + plugin.getId() + "/versions"))) {
-            if (!httpResponse.isOk()) {
-                return null;
-            }
-            Type listType = new TypeToken<List<String>>(){}.getType();
-            return unwrapData(httpResponse.body(), listType);
+        List<String> names = new ArrayList<>();
+        for (CatalogueClient.Version version : versions) {
+            names.add(version.version());
         }
+        return names;
     }
 
     /**
@@ -437,38 +239,14 @@ public class PluginInstallUtils {
      */
     @ApiStatus.Internal
     public static VersionLookup lookUpPluginLatestVersion(String idString, java.util.function.BooleanSupplier stopped) {
-        String normalized = normalizeIdentifyString(idString);
-        if (normalized == null) {
-            return VersionLookup.none();
+        VersionLookup module = CatalogueClient.moduleKnown(idString);
+        if (module.getOutcome() != VersionLookup.Outcome.FOUND) {
+            return module;
         }
-        int frameworkLevel = ModuleApiLevels.frameworkLevel();
-        PluginEntity plugin;
-        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/get?identifyString="
-                + encodeQueryValue(normalized), frameworkLevel))) {
-            if (httpResponse.getStatus() == HTTP_NOT_FOUND) {
-                return VersionLookup.none();
-            }
-            if (!httpResponse.isOk()) {
-                return VersionLookup.failed(VersionLookup.describe(httpResponse.getStatus(), httpResponse.body()));
-            }
-            plugin = unwrapData(httpResponse.body(), PluginEntity.class);
+        if (stopped.getAsBoolean()) {
+            return VersionLookup.failed("stopped");
         }
-        if (plugin == null) {
-            return VersionLookup.failed(VersionLookup.UNREADABLE);
-        }
-        return stopped.getAsBoolean() ? VersionLookup.failed("stopped") : lookUpLatestOf(plugin, frameworkLevel);
-    }
-
-    /** The {@code latest} half of {@link #lookUpPluginLatestVersion(String)}, for a module the catalogue knows. */
-    private static VersionLookup lookUpLatestOf(PluginEntity plugin, int frameworkLevel) {
-        CatalogueAnswer answer = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", frameworkLevel));
-        if (answer.data != null) {
-            return VersionLookup.found(answer.data);
-        }
-        if (answer.noCompatibleVersion() || answer.status == HTTP_NOT_FOUND) {
-            return VersionLookup.none();
-        }
-        return VersionLookup.failed(answer.failure != null ? answer.failure : VersionLookup.UNREADABLE);
+        return CatalogueClient.latestVersion(idString, ModuleApiLevels.frameworkLevel());
     }
 
     /**
@@ -478,11 +256,13 @@ public class PluginInstallUtils {
      * @return Download link for latest version
      */
     public static String getPluginLatestDownloadLink(String idString) {
-        PluginEntity plugin = getPlugin(idString);
-        if (plugin == null) {
+        List<CatalogueClient.Version> versions = CatalogueClient.versions(idString,
+                ModuleApiLevels.frameworkLevel());
+        if (versions == null) {
             return null;
         }
-        return catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest/download")).data;
+        CatalogueClient.Version latest = CatalogueClient.newest(versions);
+        return latest == null ? null : CatalogueClient.absoluteDownloadUrl(latest.downloadUrl());
     }
 
     /**
@@ -492,21 +272,7 @@ public class PluginInstallUtils {
      * @return Plugin entity or null if not found
      */
     public static PluginEntity getPlugin(String idString) {
-        return getPlugin(idString, ModuleApiLevels.frameworkLevel());
-    }
-
-    private static PluginEntity getPlugin(String idString, int frameworkLevel) {
-        String normalized = normalizeIdentifyString(idString);
-        if (normalized == null) {
-            return null;
-        }
-        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/get?identifyString="
-                + encodeQueryValue(normalized), frameworkLevel))) {
-            if (!httpResponse.isOk()) {
-                return null;
-            }
-            return unwrapData(httpResponse.body(), PluginEntity.class);
-        }
+        return CatalogueClient.module(idString);
     }
 
     /**
@@ -541,75 +307,111 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Installs a module from the catalogue and says why when it does not (plan 18-40).
+     * Installs a module from the v2 catalogue and says why when it does not (plan 22-18).
      *
-     * <p>Every catalogue request carries this framework's API level ({@link #catalogueUrl}). The
-     * JAR is downloaded into the modules folder as {@code <final name>.part}, a name the module
-     * loader never lists or puts on the class path (it reads only {@code *.jar}), on the same file
-     * system so that accepting it is one atomic rename. Its {@code plugin.yml} is then read again,
-     * and the module is refused -- the download deleted, the modules folder as it was -- unless its
-     * {@code api-version} is an integer from {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} to
-     * this framework's level. That check is the backstop for a catalogue that does not filter (one
-     * deployed before the filter, a self-hosted {@code api-url}) or a version recorded wrongly. An
-     * accepted JAR replaces a file of the same final name, as the download always did.
+     * <p>The version's metadata names the byte count and the SHA-256 of the JAR it offers, and the
+     * JAR is accepted only when both match the bytes that arrived (see {@link VerifiedDownload}).
+     * It is downloaded under a name the module loader never lists or puts on the class path (it
+     * reads only {@code *.jar}), on the same file system so that accepting it is one atomic
+     * rename. Its {@code plugin.yml} is then read again, and the module is refused -- the download
+     * deleted, the modules folder as it was -- unless its {@code api-version} is an integer from
+     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} to this framework's level. That check is the
+     * backstop for a catalogue that does not filter or records a version wrongly. An accepted JAR
+     * replaces a file of the same final name, as the download always did.
+     *
+     * <p>A version the catalogue lists but does not offer for public download (licence required)
+     * is refused before anything is requested, with its own line; the framework implements no
+     * licensing of its own.
      *
      * @param idString      the module's identify-string
      * @param versionOrNull the version, or {@code null} for the latest version the catalogue offers
      *                      this framework
-     * @return the outcome, carrying an i18n reason key and its arguments when the API level is the
-     *         reason; a failure without a key is reported as before
+     * @return the outcome; a refusal the operator is told about has already been logged
      */
     @ApiStatus.Internal
     public static InstallResult installReporting(String idString, String versionOrNull) {
         int level = ModuleApiLevels.frameworkLevel();
         int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
         String requested = idString == null ? null : idString.trim();
-        PluginEntity plugin = getPlugin(idString, level);
-        if (plugin == null) {
+        if (CatalogueClient.module(idString) == null) {
             return InstallResult.failed();
         }
         String version = versionOrNull;
+        CatalogueClient.Version metadata;
         if (version == null) {
-            CatalogueAnswer latest = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", level));
-            if (latest.noCompatibleVersion()) {
-                return InstallResult.refused(InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, requested, level, floor, level);
+            List<CatalogueClient.Version> versions = CatalogueClient.versions(idString, level);
+            if (versions == null) {
+                return InstallResult.failed();
             }
-            version = latest.data;
+            metadata = CatalogueClient.newest(versions);
+            if (metadata == null) {
+                return InstallResult.refused(InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, requested, level,
+                        floor, level);
+            }
+            version = metadata.version();
+        } else {
+            metadata = CatalogueClient.version(idString, version.trim());
+            if (metadata == null) {
+                return InstallResult.failed();
+            }
+            Integer moduleLevel = metadata.apiLevel();
+            if (moduleLevel != null && !ModuleApiLevels.isInstallable(moduleLevel, floor, level)) {
+                return InstallResult.refused(InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, requested,
+                        version.trim(), level, floor, level);
+            }
+            version = version.trim();
         }
         if (version == null || version.trim().isEmpty()) {
             return InstallResult.failed();
         }
-        return installVersion(plugin, idString, requested, version.trim(), level);
-    }
-
-    /** The second half of {@link #installReporting}: the version is known; fetch its link and install it. */
-    private static InstallResult installVersion(PluginEntity plugin, String idString, String requested, String version,
-                                                int level) {
-        CatalogueAnswer link = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/"
-                + encodePathSegment(version) + "/download", level));
-        if (link.noCompatibleVersion()) {
-            return InstallResult.refused(InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, requested, version, level,
-                    ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, level);
-        }
-        String fileName = installedJarName(idString, version);
-        if (link.data == null || fileName == null) {
-            return InstallResult.failed();
-        }
-        return downloadAndAdmit(link.data, fileName, requested, version, level);
+        return installVersion(metadata, idString, requested, version, level);
     }
 
     /**
-     * Downloads to {@code <fileName>.part}, checks it, and either renames it to {@code fileName} or
-     * deletes it. The {@code .part} file never survives this method, whatever happens.
+     * The second half of {@link #installReporting}: the version is known. A version the catalogue
+     * does not offer for public download is refused here, before any request, and every other
+     * version goes through the verified download.
      */
-    private static InstallResult downloadAndAdmit(String link, String fileName, String requested, String version,
-                                                  int level) {
+    private static InstallResult installVersion(CatalogueClient.Version metadata, String idString, String requested,
+                                                String version, int level) {
+        String fileName = installedJarName(idString, version);
+        if (fileName == null) {
+            return InstallResult.failed();
+        }
+        if (!metadata.downloadable()) {
+            LOGGER.log(Level.WARNING, notAvailableLine(requested, version, metadata));
+            return InstallResult.failed();
+        }
+        String url = CatalogueClient.absoluteDownloadUrl(metadata.downloadUrl());
+        if (url == null) {
+            // A catalogue pointing a download away from its own host is an attack signal, not an
+            // unavailable version: refused before any request, and said as what it is.
+            LOGGER.log(Level.SEVERE, foreignDownloadLine(requested, version));
+            return InstallResult.failed();
+        }
+        return downloadAndAdmit(url, metadata, fileName, requested, version, level);
+    }
+
+    /**
+     * Verifies the download, then checks it as an archive and by its declared {@code api-version},
+     * and either renames it to {@code fileName} or deletes it. No partial file survives this method,
+     * whatever happens.
+     */
+    private static InstallResult downloadAndAdmit(String url, CatalogueClient.Version metadata, String fileName,
+                                                  String requested, String version, int level) {
         File folder = modulesFolder();
         File part = new File(folder, fileName + PART_SUFFIX);
+        VerifiedDownload.Result download = VerifiedDownload.fetch(url, metadata.sha256(), metadata.sizeBytes(),
+                part.toPath());
+        if (download.kind() != VerifiedDownload.Kind.OK) {
+            LOGGER.log(Level.SEVERE, failureLine(requested, version, download.kind()));
+            LOGGER.log(Level.FINE, "Catalogue download for " + requested + " " + version + " was refused: "
+                    + download.kind() + "; expected sha256 " + VerifiedDownload.shortHash(metadata.sha256())
+                    + ", size " + metadata.sizeBytes());
+            return InstallResult.failed();
+        }
         boolean admitted = false;
         try {
-            Files.deleteIfExists(part.toPath());
-            HttpDownloadUtils.download(link, part.getName(), folder.getPath());
             InstallResult refusal = refusalOf(part, requested, version, level);
             if (refusal != null) {
                 return refusal;
@@ -617,7 +419,7 @@ public class PluginInstallUtils {
             moveIntoPlace(part, new File(folder, fileName));
             admitted = true;
         } catch (IOException e) {
-            UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
+            LOGGER.log(Level.SEVERE, "Failed to install " + requested + " " + version + ": " + e.getMessage());
             return InstallResult.failed();
         } finally {
             if (!admitted) {
@@ -626,6 +428,63 @@ public class PluginInstallUtils {
         }
         forgetDeferredRemoval(fileName);
         return InstallResult.installed(fileName);
+    }
+
+    /**
+     * The one line an operator sees when a download did not pass its checks: the module, the
+     * version and the reason, and that nothing was installed. Each reason names what actually
+     * happened, so a licence refusal, a withdrawn version, a transport failure and an integrity
+     * failure cannot be mistaken for one another. Only short hash prefixes may join it in the local
+     * log, never a whole URL.
+     *
+     * @param module the module as the operator asked for it
+     * @param version the version
+     * @param kind why the download was refused
+     * @return the line
+     */
+    static String failureLine(String module, String version, VerifiedDownload.Kind kind) {
+        switch (kind) {
+            case SIZE_MISMATCH:
+                return "Downloaded " + module + " " + version
+                        + " failed its integrity check (size mismatch); nothing was installed.";
+            case HEADER_MISMATCH:
+                return "Downloaded " + module + " " + version
+                        + " failed its integrity check (hash header mismatch); nothing was installed.";
+            case MISSING_METADATA:
+                // Nothing was requested: the catalogue entry itself cannot be trusted.
+                return module + " " + version
+                        + " was not downloaded: the catalogue entry carries no usable hash or size;"
+                        + " nothing was installed.";
+            case NOT_AVAILABLE:
+                // 403/404: the contract uses 404 for every version that is not public.
+                return module + " " + version
+                        + " is not available for download (withdrawn, unpublished or not licensed);"
+                        + " nothing was installed.";
+            case IO_ERROR:
+                // A timeout, a broken stream, a 5xx or a redirect: the bytes never arrived whole.
+                return "Could not download " + module + " " + version
+                        + " (the download did not complete); nothing was installed.";
+            default:
+                return "Downloaded " + module + " " + version
+                        + " failed its integrity check (hash mismatch); nothing was installed.";
+        }
+    }
+
+    /**
+     * The line for a {@code download.url} the catalogue put outside its own host: refused before
+     * anything is requested, because a catalogue answer must never move an executable download.
+     */
+    private static String foreignDownloadLine(String module, String version) {
+        return module + " " + version + " was refused: the download is not on the catalogue host;"
+                + " nothing was installed.";
+    }
+
+    /** The line for a version the catalogue lists but does not offer, which is not an integrity failure. */
+    private static String notAvailableLine(String module, String version, CatalogueClient.Version metadata) {
+        String reason = "license_required".equals(metadata.downloadKind())
+                ? "requires a licence" : "no public download";
+        return module + " " + version + " is not available for download (" + reason + ");"
+                + " nothing was installed.";
     }
 
     /**
@@ -825,8 +684,57 @@ public class PluginInstallUtils {
         // completing between a snapshot and the lock would be missed (Codex round 16).
         return new ModuleFileTransactions(ultiTools.getDataFolder()).stageUpdate(identifyString,
                 () -> new ArrayList<>(pluginManager.getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
-                CATALOGUE, (link, fileName, folder) -> HttpDownloadUtils.download(link, fileName,
-                        folder.getAbsolutePath()), recordedMainClass(pluginManager.getModuleJarIndex()));
+                CATALOGUE, PluginInstallUtils::downloadVerified,
+                recordedMainClass(pluginManager.getModuleJarIndex()));
+    }
+
+    /**
+     * The staging downloader: the same verification the install applies, because a staged update
+     * becomes the module that loads at the next start. The version's link is its {@code
+     * download.url}; the metadata it is checked against is read again from that version's own
+     * route, so staging never trusts a hash it did not just fetch.
+     *
+     * @param link     the absolute version download URL
+     * @param fileName the file name to write
+     * @param folder   the folder to write it into
+     * @throws IOException when the catalogue offers no readable metadata or the file does not verify
+     */
+    static void downloadVerified(String link, String fileName, File folder) throws IOException {
+        String metadataPath = CatalogueClient.metadataPathOf(link);
+        CatalogueClient.Version metadata = metadataPath == null ? null : CatalogueClient.versionAt(metadataPath);
+        if (metadata == null) {
+            throw new IOException("the version's catalogue entry could not be read");
+        }
+        if (!metadata.downloadable()) {
+            throw new IOException("the catalogue offers no public download for this version");
+        }
+        File part = new File(folder, fileName + PART_SUFFIX);
+        VerifiedDownload.Result result = VerifiedDownload.fetch(link, metadata.sha256(), metadata.sizeBytes(),
+                part.toPath());
+        if (result.kind() == VerifiedDownload.Kind.OK) {
+            moveIntoPlace(part, new File(folder, fileName));
+            return;
+        }
+        LOGGER.log(Level.SEVERE, failureLine(fileName, metadata.version(), result.kind()));
+        throw new IOException("the downloaded file did not pass its integrity check (" + reasonOf(result.kind()) + ")");
+    }
+
+    /** @return the reason a staged download was refused, as the update reason names it */
+    static String reasonOf(VerifiedDownload.Kind kind) {
+        switch (kind) {
+            case SIZE_MISMATCH:
+                return "size mismatch";
+            case HEADER_MISMATCH:
+                return "hash header mismatch";
+            case MISSING_METADATA:
+                return "no usable hash or size in the catalogue entry";
+            case NOT_AVAILABLE:
+                return "not available";
+            case IO_ERROR:
+                return "download did not complete";
+            default:
+                return "hash mismatch";
+        }
     }
 
     /**

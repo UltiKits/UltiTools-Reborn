@@ -30,6 +30,9 @@ public final class VersionLookup {
     /** The failure description for an answer whose status was fine but whose body could not be read. */
     static final String UNREADABLE = "unreadable response";
 
+    /** The failure description for an answer longer than the client reads; the contract allows none. */
+    static final String TOO_LARGE = "response too large";
+
     /** The prefix {@link SimpleHttpClient} puts on the body it makes up when the request itself failed. */
     private static final String NOT_SENT_PREFIX = "Error: ";
 

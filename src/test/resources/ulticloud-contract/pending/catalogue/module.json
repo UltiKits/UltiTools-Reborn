@@ -1,0 +1,17 @@
+{
+  "data": {
+    "id": "01JCAT0000000000000000000",
+    "identifier": "demo",
+    "name": "Demo",
+    "shortDescription": "A module used by the framework's catalogue tests.",
+    "description": "A module used by the framework's catalogue tests. It is not published anywhere.",
+    "iconUrl": null,
+    "author": "UltiKits",
+    "category": "technology",
+    "tags": ["demo", "test"],
+    "latestVersion": "1.1",
+    "downloads": 42,
+    "publishedAt": "2026-10-01T08:00:00Z",
+    "updatedAt": "2026-10-20T10:00:00Z"
+  }
+}

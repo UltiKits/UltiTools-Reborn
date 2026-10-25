@@ -12,10 +12,12 @@ import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionLookup;
 import com.ultikits.ultitools.utils.VersionUtils;
+import com.ultikits.ultitools.stub.StubCatalogue;
 
 @DisplayName("UpdateManager Tests")
 class UpdateManagerTest {
@@ -338,11 +340,12 @@ class UpdateManagerTest {
      */
     @Nested
     @DisplayName("module update check asks with the API level and offers only what this framework installs (18-40)")
+    @PendingFixture
     class ApiLevelUpdateCheck {
 
         private com.sun.net.httpserver.HttpServer server;
-        private final List<String> latestRequests = Collections.synchronizedList(new ArrayList<>());
-        private int latestStatus;
+        private final List<String> versionQueries = Collections.synchronizedList(new ArrayList<>());
+        private boolean noCompatibleVersion;
 
         @BeforeEach
         void startCatalogue() throws java.io.IOException {
@@ -352,16 +355,16 @@ class UpdateManagerTest {
                 String query = exchange.getRequestURI().getRawQuery();
                 int status = 200;
                 String body;
-                if ("/plugin/get".equals(path)) {
-                    body = "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"id\":7,\"identifyString\":\"demo\"}}";
-                } else if ("/plugin/7/latest".equals(path)) {
-                    latestRequests.add(query);
-                    status = latestStatus;
-                    body = status == 200 ? "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"1.1\"}"
-                            : "{\"code\":\"409\",\"msg\":\"No version of this module is compatible\"}";
+                if ("/v1/catalogue/modules/demo".equals(path)) {
+                    body = StubCatalogue.sample("module.json");
+                } else if ("/v1/catalogue/modules/demo/versions".equals(path)) {
+                    versionQueries.add(query);
+                    body = noCompatibleVersion ? StubCatalogue.versionsPageOf()
+                            : StubCatalogue.versionsPageOf(StubCatalogue.versionSample("1.1",
+                                    "/v1/catalogue/modules/demo/versions/1.1/download"));
                 } else {
                     status = 404;
-                    body = "{\"code\":\"404\",\"msg\":\"Not found\"}";
+                    body = "{\"error\":{\"code\":\"not_found\"}}";
                 }
                 byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 exchange.sendResponseHeaders(status, bytes.length);
@@ -403,26 +406,24 @@ class UpdateManagerTest {
         }
 
         @Test
-        @DisplayName("the latest request carries apiLevel=630 and minApiLevel=630, and a compatible newer version is offered")
+        @DisplayName("the versions request carries apiLevel=630 and minApiLevel=630, and a compatible newer version is offered")
         void compatibleNewerVersion_isOfferedAndTheRequestCarriesTheLevel() {
-            latestStatus = 200;
-
             check();
 
-            assertThat(latestRequests).hasSize(1);
-            assertThat(latestRequests.get(0)).contains("apiLevel=630").contains("minApiLevel=630");
+            assertThat(versionQueries).hasSize(1);
+            assertThat(versionQueries.get(0)).contains("apiLevel=630").contains("minApiLevel=630");
             assertThat(updateManager.getModuleUpdates()).containsKey("Demo");
             assertThat(updateManager.getModuleUpdates().get("Demo").getLatestVersion()).isEqualTo("1.1");
         }
 
         @Test
-        @DisplayName("the catalogue answering 409 (no compatible version): no offer, and nothing about a newer framework")
+        @DisplayName("the level-filtered list empty (no compatible version): no offer, and nothing about a newer framework")
         void noCompatibleVersion_isNoOffer() {
-            latestStatus = 409;
+            noCompatibleVersion = true;
 
             check();
 
-            assertThat(latestRequests).hasSize(1);
+            assertThat(versionQueries).hasSize(1);
             assertThat(updateManager.getModuleUpdates()).isEmpty();
             assertThat(updateManager.hasAnyUpdates()).isFalse();
         }

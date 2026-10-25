@@ -1,0 +1,12 @@
+{
+  "data": {
+    "version": "6.3.1",
+    "publishedAt": "2026-10-20T10:00:00Z",
+    "sizeBytes": 1234,
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "download": {
+      "kind": "public",
+      "url": "/v1/catalogue/framework/download"
+    }
+  }
+}
