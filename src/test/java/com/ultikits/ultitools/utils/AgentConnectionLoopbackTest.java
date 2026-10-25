@@ -117,6 +117,25 @@ class AgentConnectionLoopbackTest {
         }
     }
 
+    /**
+     * Waits until the connection has run the listener callback that carries an outcome, then returns
+     * a copy of everything recorded so far.
+     * <p>
+     * Waiting on {@link AgentConnection#state()} alone is not deterministic: the connection
+     * publishes the new state field inside its monitor and runs {@code onStateChanged} and the
+     * refusal callback afterwards, outside it, so a state condition can hold while the event list is
+     * still empty. Asserting the live list is not deterministic either: {@code containsExactly}
+     * matches against it and then re-reads it to print the failure, so a late append makes "actual"
+     * and "expected" print identically. Waiting for the recorded event and asserting a copy removes
+     * both windows.
+     *
+     * @return an immutable copy of the recorded events
+     */
+    private List<String> awaitRecordedEvent() throws InterruptedException {
+        await(() -> !recorder.events.isEmpty(), "the listener callback carrying the outcome");
+        return new ArrayList<>(recorder.events);
+    }
+
     /** Records every listener callback, in order. */
     static final class Recorder implements AgentConnection.Listener {
         final List<String> events = new CopyOnWriteArrayList<>();
@@ -611,8 +630,8 @@ class AgentConnectionLoopbackTest {
         raw = new RawGateway(request -> reply401().splitAt(11));
         bearer.set("ucs_BAD");
         connect(endpointFor(raw.port()), "6.3.1").start();
-        await(() -> connection.state() == AgentConnection.State.CREDENTIAL_REJECTED, "CREDENTIAL_REJECTED");
-        assertThat(recorder.events).containsExactly("credentialRejected 401 req-401");
+        assertThat(awaitRecordedEvent()).containsExactly("credentialRejected 401 req-401");
+        assertThat(connection.state()).isEqualTo(AgentConnection.State.CREDENTIAL_REJECTED);
     }
 
     @Test
@@ -623,8 +642,8 @@ class AgentConnectionLoopbackTest {
             raw = new RawGateway(request -> Reply.of("426 Upgrade Required",
                     "X-UltiCloud-Min-Framework: " + value + "\r\n", null));
             connect(endpointFor(raw.port()), "6.3.1").start();
-            await(() -> connection.state() == AgentConnection.State.UPGRADE_REQUIRED, "UPGRADE_REQUIRED");
-            assertThat(recorder.events).containsExactly("upgradeRequired null null");
+            assertThat(awaitRecordedEvent()).containsExactly("upgradeRequired null null");
+            assertThat(connection.state()).isEqualTo(AgentConnection.State.UPGRADE_REQUIRED);
             connection.stop();
             raw.close();
         }
@@ -635,8 +654,8 @@ class AgentConnectionLoopbackTest {
     void delayedBody426() throws Exception {
         raw = new RawGateway(request -> reply426().splitAfterHead());
         connect(endpointFor(raw.port()), "6.3.1").start();
-        await(() -> connection.state() == AgentConnection.State.UPGRADE_REQUIRED, "UPGRADE_REQUIRED");
-        assertThat(recorder.events).containsExactly("upgradeRequired 6.3.1 null");
+        assertThat(awaitRecordedEvent()).containsExactly("upgradeRequired 6.3.1 null");
+        assertThat(connection.state()).isEqualTo(AgentConnection.State.UPGRADE_REQUIRED);
     }
 
     @Test
