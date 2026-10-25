@@ -14,8 +14,10 @@ import java.util.logging.Logger;
  * <p>The gateway delivers {@code credential.rotate} with a new {@code ucs_} credential. Persisting
  * first keeps the promise that a failed write leaves the old credential in place and produces no
  * acknowledgement, so the gateway retries; a redelivery is persisted and acknowledged again. The
- * current connection is not dropped: the next handshake reads the new credential from the store
- * (D-10). The credential is never logged, and no diagnostic here carries it.</p>
+ * current connection is not dropped (D-10). In production the persister is
+ * {@link CloudSession#rotateCredential}: the session that owns the connection is the one owner of the
+ * current credential, so the next handshake and {@code /ulticloud logout} use the rotated secret. The
+ * credential is never logged, and no diagnostic here carries it.</p>
  */
 final class CredentialRotationHandler implements CloudRequestHandler {
     private static final Logger LOGGER = Logger.getLogger(CredentialRotationHandler.class.getName());

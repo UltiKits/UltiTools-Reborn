@@ -235,8 +235,14 @@ final class CloudSession {
     private volatile boolean pendingAuthenticationCancelled;
 
     /**
-     * The protocol v2 server credential this session committed, or {@code null}. Written only by
-     * {@link #commitCredential(ServerCredential)}.
+     * The protocol v2 server credential this session holds, or {@code null} -- the one owner of the current server
+     * credential (plan 22-21 fix). Every change of the stored {@code cloud_credential} entry is made under this
+     * session's monitor together with this field: {@link #loadServerCredential()} (adopt from disk),
+     * {@link #commitCredential(ServerCredential)} (device login), {@link #rotateCredential(String, String)}
+     * ({@code credential.rotate}, disk first), {@link #completeCredentialLogout(ServerCredential)} and the listener's
+     * rejection path (delete-if-matches, then cleared). Every reader in the session -- the bearer of each attempt, the
+     * protocol's server id, the linked checks -- and {@code CloudAuthManager}'s status, login and logout read this
+     * field; they read the file only while the session holds no credential.
      */
     private volatile ServerCredential credential;
 
@@ -256,6 +262,13 @@ final class CloudSession {
 
     /** The server id whose buffered state the three fields above hold, or {@code null}. */
     private volatile String cloudStateServerId;
+
+    /**
+     * The id set, state file and server id above as one reference (plan 22-21), so the shared
+     * {@link SessionDedupeLedger} never sees one session's set with another identity's file. Set and
+     * cleared with them, under this session's monitor; read without it.
+     */
+    private volatile SessionDedupeLedger.Target ledgerTarget;
 
     /** The pending 30 s state-flush task of this session's connection, or {@code null}. */
     private volatile ScheduledFuture<?> stateFlushTask;
@@ -947,20 +960,34 @@ final class CloudSession {
     }
 
     /**
-     * Builds the protocol layer of one upgraded attempt of {@code connection} (plan 22-20). Until
-     * plan 22-21 supplies the real capability mapping and operator switches, the hello declares the
-     * framework capabilities derived from the {@link Capability} switches and reports power actions
-     * as off, and the operator gate admits every capability the welcome accepted.
+     * Builds the protocol layer of one upgraded attempt of {@code connection} (plan 22-20) and, while
+     * the plugin's {@link CloudFeatures} are installed, registers every inbound handler on it (plan
+     * 22-21): the hello declares what the operator's switches allow ({@link AgentCapabilities}, S-65),
+     * reports the operator settings, and the router re-checks the switch of every request (S-66).
+     * Without installed features (a session driven by a test alone) the hello declares the framework
+     * capabilities of {@link #frameworkCapabilities()}, reports power actions as off, and the operator
+     * gate admits every capability the welcome accepted.
      *
      * @param connection the attempt's connection
      * @return the protocol, not yet opened
      */
     private AgentProtocol newProtocol(AgentConnection connection) {
         ServerCredential linked = credential;
-        return new AgentProtocol(connection, cloudOutbox, commandDedupe,
-                linked == null ? null : linked.getServerId(), CloudSession::frameworkCapabilities,
-                CloudSession::frameworkSettings, capability -> true,
-                capability -> "This capability is not available on this server.", agentClock);
+        String serverId = linked == null ? null : linked.getServerId();
+        CloudFeatures features = CloudFeatures.installed();
+        if (features == null) {
+            return new AgentProtocol(connection, cloudOutbox, commandDedupe, serverId,
+                    CloudSession::frameworkCapabilities, CloudSession::frameworkSettings, capability -> true,
+                    capability -> "This capability is not available on this server.", agentClock);
+        }
+        AgentCapabilities capabilities = features.capabilities();
+        AgentProtocol protocol = new AgentProtocol(connection, cloudOutbox, commandDedupe, serverId,
+                capabilities::helloCapabilities, features::helloSettings, capabilities::enabled,
+                capabilities::refusal, agentClock);
+        // The inbound handlers of this connection, registered before its hello is sent. A rotation goes through
+        // this session, the one owner of the current credential (plan 22-21 fix).
+        features.register(protocol.router(), protocol.channel(), protocol, this::rotateCredential);
+        return protocol;
     }
 
     /**
@@ -1015,6 +1042,19 @@ final class CloudSession {
         return commandDedupe;
     }
 
+    /** @return this session's state file writer, or {@code null} while no credential is adopted */
+    CloudStateStore cloudStateStore() {
+        return cloudState;
+    }
+
+    /**
+     * @return this session's id set, state file and server id as one value for the shared ledger, or {@code null}
+     *         while no credential is adopted (plan 22-21)
+     */
+    SessionDedupeLedger.Target ledgerTarget() {
+        return ledgerTarget;
+    }
+
     /**
      * Writes the pending outbox and command-dedupe changes, if there are any. Called from
      * {@link #invalidate()} -- which {@code PluginInitiationUtils#stopWebsocket()} runs at plugin
@@ -1040,6 +1080,7 @@ final class CloudSession {
      */
     synchronized void discardCloudState() {
         cancelStateFlushTask();
+        ledgerTarget = null;
         CloudStateStore store = cloudState;
         cloudState = null;
         cloudStateServerId = null;
@@ -1097,6 +1138,7 @@ final class CloudSession {
         cloudState = store;
         cloudStateServerId = adopted.getServerId();
         store.load(adopted.getServerId());
+        ledgerTarget = new SessionDedupeLedger.Target(dedupe, store, adopted.getServerId());
     }
 
     /**
@@ -1286,14 +1328,19 @@ final class CloudSession {
             return !invalidated && CloudSession.this == current() && agentConnection == connection;
         }
 
+        /**
+         * The bearer of the next attempt: the session's own {@link #credential}, the one owner of the current
+         * credential (plan 22-21 fix), so an attempt after a rotation authenticates with the rotated secret and
+         * {@link #attemptCredentialId} names the credential this attempt really used.
+         */
         private String readBearer() {
             synchronized (CloudSession.this) {
                 if (!live()) {
                     return null;
                 }
-                ServerCredential stored = ServerCredentialStore.load();
-                attemptCredentialId = stored == null ? null : stored.getCredentialId();
-                return stored == null ? null : stored.bearerValue();
+                ServerCredential held = credential;
+                attemptCredentialId = held == null ? null : held.getCredentialId();
+                return held == null ? null : held.bearerValue();
             }
         }
 
@@ -1471,6 +1518,32 @@ final class CloudSession {
         ServerCredentialStore.save(newCredential);
         this.credential = newCredential;
         adoptCloudState(newCredential);
+        return true;
+    }
+
+    /**
+     * Rotates this session's credential (plan 22-21, D-10): the {@code credential.rotate} persister of every
+     * connection this session owns. Under this session's monitor, {@link ServerCredentialStore#replace} first makes
+     * the new secret durable (one atomic, owner-only write) and only then is {@link #credential} replaced, so the
+     * in-memory credential and the file change in one step and the caller acknowledges only a durable rotation. The
+     * next connection attempt ({@code readBearer}) and {@code /ulticloud logout} both read {@link #credential}, so
+     * neither can use the retired secret. Nothing is written, and the gateway gets no acknowledgement, when this
+     * session was invalidated or replaced, holds no credential, or the file holds another server identity.
+     *
+     * @param secret       the new {@code ucs_} secret
+     * @param credentialId the new credential's public id
+     * @return {@code true} when the new credential is durable and held
+     * @throws DataAccessException if the write fails; the old credential then stays in place in memory and on disk
+     */
+    synchronized boolean rotateCredential(String secret, String credentialId) {
+        ServerCredential held = credential;
+        if (invalidated || this != current() || held == null) {
+            return false;
+        }
+        if (!ServerCredentialStore.replace(held.getServerId(), secret, credentialId)) {
+            return false;
+        }
+        credential = held.rotated(secret, credentialId);
         return true;
     }
 

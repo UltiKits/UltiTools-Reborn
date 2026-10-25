@@ -235,8 +235,10 @@ class PlayerLinkRedeliveryTest {
         assertThat(calls).as("nothing runs on the socket thread").isEmpty();
         assertThat(results()).as("nothing is answered before the module ran").isEmpty();
 
-        for (Runnable task : new ArrayList<>(queue)) {
-            task.run();
+        // Drain the worker until it is empty: the answer of a completed future is itself a worker task (22-21 fix),
+        // so the persistence of the result never runs on the thread that completed the module's future.
+        while (!queue.isEmpty()) {
+            queue.remove(0).run();
         }
 
         assertThat(calls).as("the handler and the expiry ran, in arrival order").containsExactly("completed", "expired");

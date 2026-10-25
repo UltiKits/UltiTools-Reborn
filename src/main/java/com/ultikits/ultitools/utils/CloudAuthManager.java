@@ -118,7 +118,13 @@ public class CloudAuthManager {
     }
 
     /**
-     * @return the credential {@code session} committed, else the one stored in
+     * The current credential for status, login and logout. The session is its one owner (plan 22-21 fix): every
+     * change to the stored entry -- device login, rotation, logout, rejection -- updates the session's copy in the
+     * same step, so the two never diverge. The file is read only when the session holds no credential (it has not
+     * adopted one yet, for example while cloud features are off at startup), so logout still revokes and deletes a
+     * stored credential the running session never loaded.
+     *
+     * @return the credential {@code session} holds, else the one stored in
      *         {@code credentials.json}, else {@code null}
      */
     static ServerCredential linkedCredential(CloudSession session) {
