@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Timeout;
 
 import com.sun.net.httpserver.HttpServer;
 import com.ultikits.ultitools.contract.PendingFixture;
+import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
  * The two public catalogue lookups keep their contract (a version, or {@code null} for every kind
@@ -47,11 +48,11 @@ class VersionLookupContractTest {
     @BeforeEach
     void setUp() throws IOException {
         frameworkStatus = 200;
-        frameworkBody = data("{\"version\":\"6.3.1\",\"sha256\":\"" + repeat('a', 64) + "\",\"sizeBytes\":1234}");
+        frameworkBody = StubCatalogue.sample("framework.json");
         moduleStatus = 200;
-        moduleBody = data("{\"id\":\"01JCAT0000000000000000000\",\"identifier\":\"demo\",\"name\":\"Demo\"}");
+        moduleBody = StubCatalogue.sample("module.json");
         versionsStatus = 200;
-        versionsBody = page(version("1.2", true));
+        versionsBody = pageWith("1.2");
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             String path = exchange.getRequestURI().getRawPath();
@@ -86,27 +87,10 @@ class VersionLookupContractTest {
         return "{\"data\":" + payload + "}";
     }
 
-    private static String version(String version, boolean latest) {
-        return "{\"version\":\"" + version + "\",\"isLatest\":" + latest + ",\"sizeBytes\":1234,\"sha256\":\""
-                + repeat('a', 64) + "\",\"apiLevel\":630,\"download\":{\"kind\":\"public\",\"url\":\"/v1/catalogue"
-                + "/modules/demo/versions/" + version + "/download\"}}";
-    }
-
-    private static String page(String... versions) {
-        StringBuilder items = new StringBuilder("{\"items\":[");
-        for (String version : versions) {
-            items.append(items.length() > 11 ? "," : "").append(version);
-        }
-        return data(items.append("],\"total\":").append(versions.length).append(",\"page\":1,\"pageSize\":20}")
-                .toString());
-    }
-
-    private static String repeat(char value, int count) {
-        StringBuilder text = new StringBuilder(count);
-        for (int i = 0; i < count; i++) {
-            text.append(value);
-        }
-        return text.toString();
+    /** The pending versions page's shape carrying one version of the sample module. */
+    private static String pageWith(String version) {
+        return StubCatalogue.versionsPageOf(StubCatalogue.versionSample(version,
+                "/v1/catalogue/modules/demo/versions/" + version + "/download"));
     }
 
     /**
@@ -195,7 +179,7 @@ class VersionLookupContractTest {
             moduleBody = "not json";
             assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isNull();
             moduleBody = data("{\"identifier\":\"demo\"}");
-            versionsBody = page();
+            versionsBody = StubCatalogue.versionsPageOf();
             assertThat(PluginInstallUtils.getPluginLatestVersion("demo")).isNull();
             versionsStatus = 500;
             versionsBody = "{\"error\":{\"code\":\"internal_error\"}}";
@@ -235,10 +219,10 @@ class VersionLookupContractTest {
         void module() {
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getVersion()).isEqualTo("1.2");
 
-            versionsBody = page();
+            versionsBody = StubCatalogue.versionsPageOf();
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
                     .isEqualTo(VersionLookup.Outcome.NONE);
-            versionsBody = page(version("1.2", true));
+            versionsBody = pageWith("1.2");
             moduleStatus = 404;
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
                     .isEqualTo(VersionLookup.Outcome.NONE);

@@ -35,6 +35,23 @@ apiLevel, changelog, download}` where `download` is `{"kind": "public", "url": "
 a JAR it generates, so it substitutes the real byte count and hash of exactly the bytes it serves.
 Everything else is served byte for byte.
 
+## Bodies still written by hand
+
+A test that stands in for the catalogue now builds its answers from these samples through
+`StubCatalogue.sample(...)`, `moduleCardSample(...)`, `versionSample(...)`, `versionsPageOf(...)`
+or `frameworkSample(...)`, so a field that changes in the frozen export changes in one place.
+Two places still spell a body out, and plan 22-26 re-reads them when it swaps the samples:
+
+- `manager/UpdateCheckShutdownAndOutcomeTest` — the answers it varies per test (an error status, an
+  error envelope, a body that is not JSON) are not catalogue shapes, but the class still names the
+  three routes it answers.
+- `utils/PluginInstallUtilsTest` and `utils/VersionLookupContractTest` — deliberately partial or
+  invalid bodies only (a `data` without a card, text that is not JSON, an empty object).
+
+Every test class that reads a sample or names a catalogue route carries `@PendingFixture`, so
+`mvn -B test -Dgroups=pending-fixture` together with this file names every place that encodes a
+catalogue shape.
+
 ## Replacement
 
 Plan 22-26 replaces this directory with the frozen export

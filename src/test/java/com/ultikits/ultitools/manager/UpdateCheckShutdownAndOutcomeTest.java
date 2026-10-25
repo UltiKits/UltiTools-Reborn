@@ -40,6 +40,8 @@ import org.mockito.MockedStatic;
 import com.sun.net.httpserver.HttpServer;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.contract.PendingFixture;
+import com.ultikits.ultitools.stub.StubCatalogue;
 import com.ultikits.ultitools.utils.PluginInstallUtilsTestAccess;
 import com.ultikits.ultitools.utils.VersionUtils;
 
@@ -56,6 +58,7 @@ import com.ultikits.ultitools.utils.VersionUtils;
  * 启动时的更新检查：UltiTools 禁用时停止；只有每一次查询都确认没有新版本时才报告"全部最新"。
  */
 @DisplayName("D19-032: the start-up update check stops on disable and never reports up to date after a failed lookup")
+@PendingFixture
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class UpdateCheckShutdownAndOutcomeTest {
 
@@ -67,14 +70,9 @@ class UpdateCheckShutdownAndOutcomeTest {
     private final List<LogRecord> records = new CopyOnWriteArrayList<>();
 
     /** What the stub catalogue answers; a test changes these before running the check. */
-    private volatile Answer newest = new Answer(200, "{\"data\":{\"version\":\"6.3.0\"}}");
-    private volatile Answer pluginGet = new Answer(200,
-            "{\"data\":{\"id\":\"01JCAT0000000000000000000\",\"identifier\":\"demo\",\"name\":\"Demo\"}}");
-    private volatile Answer latest = new Answer(200, "{\"data\":{\"items\":[{\"version\":\"1.0\","
-            + "\"isLatest\":true,\"sizeBytes\":1234,\"sha256\":"
-            + "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"apiLevel\":630,"
-            + "\"download\":{\"kind\":\"public\",\"url\":\"/v1/catalogue/modules/demo/versions/1.0"
-            + "/download\"}}],\"total\":1,\"page\":1,\"pageSize\":20}}");
+    private volatile Answer newest = new Answer(200, StubCatalogue.frameworkSample("6.3.0"));
+    private volatile Answer pluginGet = new Answer(200, StubCatalogue.sample("module.json"));
+    private volatile Answer latest = new Answer(200, versionsPage("1.0"));
     /** Runs inside the stub while it answers the framework lookup (before the answer is sent). */
     private volatile Runnable onNewest = () -> { };
     /** Runs inside the stub while it answers a module's plugin/get lookup (before the answer is sent). */
@@ -154,6 +152,12 @@ class UpdateCheckShutdownAndOutcomeTest {
     void tearDown() {
         PluginInstallUtilsTestAccess.resetBaseUrl();
         server.stop(0);
+    }
+
+    /** The pending versions page's shape carrying one version of the sample module. */
+    private static String versionsPage(String version) {
+        return StubCatalogue.versionsPageOf(StubCatalogue.versionSample(version,
+                "/v1/catalogue/modules/demo/versions/" + version + "/download"));
     }
 
     /** Runs the check against the stub with UltiTools 6.3.0 (API level 630) and the given modules. */
@@ -310,12 +314,7 @@ class UpdateCheckShutdownAndOutcomeTest {
         @DisplayName("disabling while the result lines print: no INFO line follows the one being written")
         void stopWhileResultsPrintSilencesTheRest() {
             newest = new Answer(200, "{\"data\":{\"version\":\"6.4.0\"}}");
-            latest = new Answer(200, "{\"data\":{\"items\":[{\"version\":\"1.1\",\"isLatest\":true,"
-                    + "\"sizeBytes\":1234,\"sha256\":"
-                    + "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
-                    + "\"apiLevel\":630,\"download\":{\"kind\":\"public\",\"url\":"
-                    + "\"/v1/catalogue/modules/demo/versions/1.1/download\"}}],\"total\":1,\"page\":1,"
-                    + "\"pageSize\":20}}");
+            latest = new Answer(200, versionsPage("1.1"));
             onRecord = r -> {
                 if (r.getMessage().contains("UltiTools-API有新版本")) {
                     updateManager.stop();
@@ -429,7 +428,7 @@ class UpdateCheckShutdownAndOutcomeTest {
         @Test
         @DisplayName("an empty level-filtered list and a 404 from the versions route are confirmed answers: up to date")
         void noOfferAnswersAreConfirmed() {
-            latest = new Answer(200, "{\"data\":{\"items\":[],\"total\":0,\"page\":1,\"pageSize\":20}}");
+            latest = new Answer(200, StubCatalogue.versionsPageOf());
             check(Collections.singletonList(demo));
             assertThat(lastInfo()).isEqualTo("[UltiTools-API] " + UP_TO_DATE);
 
@@ -443,12 +442,7 @@ class UpdateCheckShutdownAndOutcomeTest {
         @Test
         @DisplayName("an update found for one module while another lookup failed: the update is listed, then incomplete, and no up-to-date line")
         void updateFoundAndAnotherFailed() {
-            latest = new Answer(200, "{\"data\":{\"items\":[{\"version\":\"1.1\",\"isLatest\":true,"
-                    + "\"sizeBytes\":1234,\"sha256\":"
-                    + "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
-                    + "\"apiLevel\":630,\"download\":{\"kind\":\"public\",\"url\":"
-                    + "\"/v1/catalogue/modules/demo/versions/1.1/download\"}}],\"total\":1,\"page\":1,"
-                    + "\"pageSize\":20}}");
+            latest = new Answer(200, versionsPage("1.1"));
             newest = new Answer(503, "{\"error\":{\"code\":\"unavailable\"}}");
 
             check(Collections.singletonList(demo));

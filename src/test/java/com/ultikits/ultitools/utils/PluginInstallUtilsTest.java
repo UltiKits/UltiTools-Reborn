@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.contract.PendingFixture;
+import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
  * PluginInstallUtils 测试类
@@ -34,12 +35,10 @@ import com.ultikits.ultitools.contract.PendingFixture;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallUtilsTest {
 
-    private static final String HASH = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
+    /** The pending version shape, naming the given version of UltiTrade. */
     private static String version(String version) {
-        return "{\"version\":\"" + version + "\",\"isLatest\":true,\"sizeBytes\":1234,\"sha256\":\"" + HASH
-                + "\",\"apiLevel\":630,\"download\":{\"kind\":\"public\",\"url\":\"/v1/catalogue/modules"
-                + "/ultitrade/versions/" + version + "/download\"}}";
+        return StubCatalogue.versionSample(version,
+                "/v1/catalogue/modules/ultitrade/versions/" + version + "/download");
     }
 
     @Test
@@ -50,15 +49,14 @@ class PluginInstallUtilsTest {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/catalogue/modules/ultitrade", exchange -> {
             request.set(exchange.getRequestURI().getRawQuery());
-            byte[] body = "{\"data\":{\"identifier\":\"ultitrade\",\"name\":\"UltiTrade\"}}"
+            byte[] body = StubCatalogue.moduleCardSample("ultitrade", "UltiTrade")
                     .getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
         });
         server.createContext("/v1/catalogue/modules/ultitrade/versions", exchange -> {
-            byte[] body = ("{\"data\":{\"items\":[" + version("1.0.0") + "],\"total\":1,\"page\":1,"
-                    + "\"pageSize\":20}}").getBytes(StandardCharsets.UTF_8);
+            byte[] body = StubCatalogue.versionsPageOf(version("1.0.0")).getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();

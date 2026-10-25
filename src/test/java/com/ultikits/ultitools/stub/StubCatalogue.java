@@ -491,8 +491,80 @@ public final class StubCatalogue implements AutoCloseable {
         return null;
     }
 
-    static String fixture(String name) {
-        try (InputStream input = StubCatalogue.class.getClassLoader().getResourceAsStream(FIXTURES + name)) {
+    /**
+     * One of the pending samples, exactly as it is served.
+     *
+     * <p>Tests that stand in for the catalogue build their answers from these rather than from
+     * hand-written JSON, so the shapes have one source: the samples plan 22-26 swaps.
+     *
+     * @param name the sample's file name under {@code pending/catalogue/}
+     * @return the whole answer body
+     */
+    public static String sample(String name) {
+        return fixture(name);
+    }
+
+    /**
+     * The pending module card's shape, addressed to another module.
+     *
+     * @param identifier the {@code identifier}
+     * @param name       the {@code name}
+     * @return the whole answer body
+     */
+    public static String moduleCardSample(String identifier, String name) {
+        JsonObject root = JsonParser.parseString(fixture("module.json")).getAsJsonObject();
+        JsonObject data = root.getAsJsonObject("data");
+        data.addProperty("identifier", identifier);
+        data.addProperty("name", name);
+        return root.toString();
+    }
+
+    /**
+     * The pending version sample's shape, with another version name and download URL.
+     *
+     * @param version     the {@code version}
+     * @param downloadUrl the {@code download.url}, relative or absolute
+     * @return the {@code data} object as JSON, without the envelope
+     */
+    public static String versionSample(String version, String downloadUrl) {
+        JsonObject data = JsonParser.parseString(fixture("version-public.json")).getAsJsonObject()
+                .getAsJsonObject("data");
+        data.addProperty("version", version);
+        data.getAsJsonObject("download").addProperty("url", downloadUrl);
+        return data.toString();
+    }
+
+    /**
+     * The pending versions page's shape carrying the given version objects.
+     *
+     * @param versions the versions, as {@link #versionSample} returns them; none for an empty page
+     * @return the whole answer body
+     */
+    public static String versionsPageOf(String... versions) {
+        JsonObject root = JsonParser.parseString(fixture("versions-list.json")).getAsJsonObject();
+        JsonObject data = root.getAsJsonObject("data");
+        JsonArray items = new JsonArray();
+        for (String version : versions) {
+            items.add(JsonParser.parseString(version).getAsJsonObject());
+        }
+        data.add("items", items);
+        data.addProperty("total", items.size());
+        return root.toString();
+    }
+
+    /**
+     * The pending framework sample's shape naming another version.
+     *
+     * @param version the {@code data.version}
+     * @return the whole answer body
+     */
+    public static String frameworkSample(String version) {
+        JsonObject root = JsonParser.parseString(fixture("framework.json")).getAsJsonObject();
+        root.getAsJsonObject("data").addProperty("version", version);
+        return root.toString();
+    }
+
+    static String fixture(String name) {        try (InputStream input = StubCatalogue.class.getClassLoader().getResourceAsStream(FIXTURES + name)) {
             if (input == null) {
                 throw new IllegalStateException("Missing pending catalogue sample: " + FIXTURES + name);
             }

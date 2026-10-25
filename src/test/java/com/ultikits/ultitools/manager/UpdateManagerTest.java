@@ -12,10 +12,12 @@ import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionLookup;
 import com.ultikits.ultitools.utils.VersionUtils;
+import com.ultikits.ultitools.stub.StubCatalogue;
 
 @DisplayName("UpdateManager Tests")
 class UpdateManagerTest {
@@ -338,6 +340,7 @@ class UpdateManagerTest {
      */
     @Nested
     @DisplayName("module update check asks with the API level and offers only what this framework installs (18-40)")
+    @PendingFixture
     class ApiLevelUpdateCheck {
 
         private com.sun.net.httpserver.HttpServer server;
@@ -353,18 +356,12 @@ class UpdateManagerTest {
                 int status = 200;
                 String body;
                 if ("/v1/catalogue/modules/demo".equals(path)) {
-                    body = "{\"data\":{\"id\":\"01JCAT0000000000000000000\",\"identifier\":\"demo\","
-                            + "\"name\":\"Demo\"}}";
+                    body = StubCatalogue.sample("module.json");
                 } else if ("/v1/catalogue/modules/demo/versions".equals(path)) {
                     versionQueries.add(query);
-                    body = noCompatibleVersion
-                            ? "{\"data\":{\"items\":[],\"total\":0,\"page\":1,\"pageSize\":20}}"
-                            : "{\"data\":{\"items\":[{\"version\":\"1.1\",\"isLatest\":true,"
-                            + "\"sizeBytes\":1234,\"sha256\":"
-                            + "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
-                            + "\"apiLevel\":630,\"download\":{\"kind\":\"public\",\"url\":"
-                            + "\"/v1/catalogue/modules/demo/versions/1.1/download\"}}],\"total\":1,"
-                            + "\"page\":1,\"pageSize\":20}}";
+                    body = noCompatibleVersion ? StubCatalogue.versionsPageOf()
+                            : StubCatalogue.versionsPageOf(StubCatalogue.versionSample("1.1",
+                                    "/v1/catalogue/modules/demo/versions/1.1/download"));
                 } else {
                     status = 404;
                     body = "{\"error\":{\"code\":\"not_found\"}}";

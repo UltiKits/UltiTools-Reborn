@@ -9,6 +9,8 @@ import java.util.jar.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.ultitools.contract.PendingFixture;
+
 /**
  * Tests for PluginInstallUtils.findPluginJar() and updatePlugin().
  * Focuses on findPluginJar() since updatePlugin() requires complex mocking
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
  * 主要测试 findPluginJar()，因为 updatePlugin() 需要复杂的静态方法+文件系统+网络模拟。
  */
 @DisplayName("PluginInstallUtils Update Tests")
+@PendingFixture
 class PluginInstallUtilsUpdateTest {
 
     @TempDir
