@@ -84,6 +84,42 @@ final class ServerCredentialStore {
     }
 
     /**
+     * Replaces the secret and its public id of the stored credential with a rotated pair (plan 22-21, D-10), in one
+     * {@link CredentialStore#update} -- one atomic, owner-only write. Every other field of the entry (the server id
+     * among them) and every other key of the file is kept. Nothing is written when no valid credential is stored,
+     * because a rotation can only replace a credential this server holds. Framework-owned state only; see the class
+     * javadoc for why this cannot overwrite operator content. The secret is never logged.
+     *
+     * @param credential   the new {@code ucs_} secret
+     * @param credentialId the new credential's public id
+     * @return {@code true} when the new credential is stored
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if the write fails or the current file cannot be
+     *         parsed
+     */
+    static boolean replace(String credential, String credentialId) {
+        if (!ServerCredential.isWellFormedSecret(credential) || credentialId == null || credentialId.isEmpty()) {
+            return false;
+        }
+        AtomicBoolean replaced = new AtomicBoolean();
+        CredentialStore.update(document -> {
+            Object entry = document.get(KEY);
+            if (ServerCredential.fromDocument(entry) != null) {
+                java.util.Map<String, Object> updated = new java.util.LinkedHashMap<>();
+                for (java.util.Map.Entry<?, ?> field : ((java.util.Map<?, ?>) entry).entrySet()) {
+                    updated.put(String.valueOf(field.getKey()), field.getValue());
+                }
+                updated.put(ServerCredential.FIELD_CREDENTIAL, credential);
+                updated.put(ServerCredential.FIELD_CREDENTIAL_ID, credentialId);
+                document.put(KEY, updated);
+                replaced.set(true);
+            }
+            return document;
+        });
+        REPORTED_MALFORMED.set(false);
+        return replaced.get();
+    }
+
+    /**
      * Removes the credential only if its public id still matches the rejected connection's id.
      * The comparison and removal share one CredentialStore lock acquisition, so a newer login or
      * rotation cannot be erased by a late rejection. Framework-owned state only; see the class

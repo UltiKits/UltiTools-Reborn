@@ -954,25 +954,32 @@ final class CloudSession {
     }
 
     /**
-     * Builds the protocol layer of one upgraded attempt of {@code connection} (plan 22-20). Until
-     * plan 22-21 supplies the real capability mapping and operator switches, the hello declares the
-     * framework capabilities derived from the {@link Capability} switches and reports power actions
-     * as off, and the operator gate admits every capability the welcome accepted.
+     * Builds the protocol layer of one upgraded attempt of {@code connection} (plan 22-20) and, while
+     * the plugin's {@link CloudFeatures} are installed, registers every inbound handler on it (plan
+     * 22-21): the hello declares what the operator's switches allow ({@link AgentCapabilities}, S-65),
+     * reports the operator settings, and the router re-checks the switch of every request (S-66).
+     * Without installed features (a session driven by a test alone) the hello declares the framework
+     * capabilities of {@link #frameworkCapabilities()}, reports power actions as off, and the operator
+     * gate admits every capability the welcome accepted.
      *
      * @param connection the attempt's connection
      * @return the protocol, not yet opened
      */
     private AgentProtocol newProtocol(AgentConnection connection) {
         ServerCredential linked = credential;
-        AgentProtocol protocol = new AgentProtocol(connection, cloudOutbox, commandDedupe,
-                linked == null ? null : linked.getServerId(), CloudSession::frameworkCapabilities,
-                CloudSession::frameworkSettings, capability -> true,
-                capability -> "This capability is not available on this server.", agentClock);
+        String serverId = linked == null ? null : linked.getServerId();
         CloudFeatures features = CloudFeatures.installed();
-        if (features != null) {
-            // Plan 22-21: the inbound handlers of this connection, before its hello is sent.
-            features.register(protocol.router(), protocol.channel(), protocol);
+        if (features == null) {
+            return new AgentProtocol(connection, cloudOutbox, commandDedupe, serverId,
+                    CloudSession::frameworkCapabilities, CloudSession::frameworkSettings, capability -> true,
+                    capability -> "This capability is not available on this server.", agentClock);
         }
+        AgentCapabilities capabilities = features.capabilities();
+        AgentProtocol protocol = new AgentProtocol(connection, cloudOutbox, commandDedupe, serverId,
+                capabilities::helloCapabilities, features::helloSettings, capabilities::enabled,
+                capabilities::refusal, agentClock);
+        // The inbound handlers of this connection, registered before its hello is sent.
+        features.register(protocol.router(), protocol.channel(), protocol);
         return protocol;
     }
 
