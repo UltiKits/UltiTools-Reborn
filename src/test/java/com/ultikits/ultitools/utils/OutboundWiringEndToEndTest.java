@@ -20,6 +20,9 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -459,6 +462,29 @@ class OutboundWiringEndToEndTest {
         assertThat(payload.toString()).isEqualTo("{\"name\":\"login\"}");
         assertThat(allReceivedText()).doesNotContain("secret");
         assertThat(stub.accessLog().count("WS-INVALID")).isZero();
+    }
+
+    @Test
+    @DisplayName("a command another plugin cancelled is not reported as player.command")
+    void cancelledCommandIsNotReported() throws Exception {
+        connect(bindings());
+        PlayerMock player = playerWithListener("Notch");
+        server.getPluginManager().registerEvents(new Listener() {
+            @EventHandler(priority = EventPriority.LOWEST)
+            public void block(PlayerCommandPreprocessEvent event) {
+                if (event.getMessage().startsWith("/blocked")) {
+                    event.setCancelled(true); // e.g. a login plugin before the player logged in
+                }
+            }
+        }, MockBukkit.createMockPlugin());
+        server.getPluginManager().callEvent(new PlayerCommandPreprocessEvent(player, "/blocked now"));
+        server.getPluginManager().callEvent(new PlayerCommandPreprocessEvent(player, "/spawn"));
+
+        await(() -> !stub.gateway().received("player.command").isEmpty(), "player.command");
+        Thread.sleep(1000L);
+        assertThat(stub.gateway().received("player.command")).hasSize(1);
+        assertThat(stub.gateway().received("player.command").get(0).getAsJsonObject("payload").toString())
+                .isEqualTo("{\"name\":\"spawn\"}");
     }
 
     @Test

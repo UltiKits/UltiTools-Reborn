@@ -83,11 +83,13 @@ public final class CloudOutboxListener implements Listener {
 
     /**
      * Reports one player command to the live connection by its name only (D-20). Nothing is sent while
-     * no connection is established or {@code ultipanel.capabilities.player-events} is off.
+     * no connection is established or {@code ultipanel.capabilities.player-events} is off. A command another
+     * plugin cancelled (a login plugin before the player logged in, a permission plugin) was not run, so it is not
+     * reported (22-22 fix).
      *
      * @param event the command event, on the main thread
      */
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onCommand(PlayerCommandPreprocessEvent event) {
         CloudFeatures features = CloudFeatures.installed();
         if (features != null) {
