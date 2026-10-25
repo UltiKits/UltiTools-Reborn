@@ -59,6 +59,8 @@ class CloudLogoutRevokeTest {
     volatile String contentType;
     volatile int bodyBytes;
     volatile boolean credentialPresentAtRevoke;
+    volatile Boolean sessionCurrentAtRevoke;
+    volatile Boolean connectedAtRevoke;
     volatile int replyStatus = 200;
     volatile boolean pauseReply;
 
@@ -107,6 +109,7 @@ class CloudLogoutRevokeTest {
     }
 
     @Test
+    @Timeout(value = 40, unit = TimeUnit.SECONDS)
     void logoutClosesThenRevokesThenDeletesAndNeverReconnects() throws Exception {
         gateway = new Gateway();
         gateway.start();
@@ -123,15 +126,17 @@ class CloudLogoutRevokeTest {
         new CloudLoginCommand().logout(sender());
         assertThat(lines).containsExactly(ChatColor.AQUA + "Unlinking this server from UltiCloud...");
         assertThat(CloudSession.current().isCurrent()).isFalse();
-        // The gateway observes the socket close on its own thread, while logout() only *schedules*
-        // the revoke on a tick; plan 22-07 also deletes the buffered state file before the teardown
-        // (S-32), which widens that window without changing the product order. Awaiting the close
-        // keeps the assertion below pinning that order -- close, then revoke -- rather than which
-        // thread won a millisecond race.
-        AgentConnectionLoopbackTest.await(() -> events.contains("closed"), "gateway saw the close");
-        server.getScheduler().performOneTick();
+        // The order logout guarantees is local: the connection is stopped (session no longer
+        // current, not connected) before the revoke is sent. It does not wait for the server-side
+        // close handshake -- a revoke that reaches the backend first invalidates the credential and
+        // the backend closes the socket itself, so the end state is the same. The revoke task does
+        // not wait for a tick either: MockBukkit's runTaskAsynchronously hands it to its pool at
+        // once, so the revoke POST and the gateway's onClose (on the gateway's own thread) can be
+        // recorded in either order. The handler therefore records the client's state at the
+        // instant the revoke arrives, and the gateway's close is awaited separately.
         assertThat(requestArrived.await(5, TimeUnit.SECONDS)).as("revoke POST arrived").isTrue();
-        assertThat(events).containsExactly("closed", "revoke");
+        assertThat(sessionCurrentAtRevoke).as("session still current when the revoke arrived").isFalse();
+        assertThat(connectedAtRevoke).as("still connected when the revoke arrived").isFalse();
         assertThat(authorization).isEqualTo("Bearer " + SECRET);
         assertThat(bodyBytes).isZero();
         assertThat(contentType).isNull();
@@ -145,6 +150,8 @@ class CloudLogoutRevokeTest {
         assertThat(lines).containsExactly(ChatColor.AQUA + "Unlinking this server from UltiCloud...",
                 ChatColor.GREEN + "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.",
                 ChatColor.GRAY + "Use /ulticloud login to link it again.");
+        awaitWithin(15_000, () -> events.contains("closed"), "gateway saw the close");
+        assertThat(new java.util.ArrayList<>(events)).containsExactlyInAnyOrder("closed", "revoke");
         Thread.sleep(3100);
         assertThat(gateway.opens.get()).isEqualTo(1);
         assertThat(records.subList(logoutLogIndex, records.size()).stream().map(LogRecord::getMessage))
@@ -227,6 +234,18 @@ class CloudLogoutRevokeTest {
         assertThat(old.getCredential()).isNull();
     }
 
+    /** Polls {@code condition} until it holds or {@code millis} pass; fails on the deadline. */
+    static void awaitWithin(long millis, java.util.function.BooleanSupplier condition, String what)
+            throws InterruptedException {
+        long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() - end > 0) {
+                throw new AssertionError("Timed out after " + millis + " ms waiting for: " + what);
+            }
+            Thread.sleep(5);
+        }
+    }
+
     ConsoleCommandSender sender() {
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
         doAnswer(call -> { lines.add(call.getArgument(0)); return null; }).when(sender).sendMessage(anyString());
@@ -244,6 +263,8 @@ class CloudLogoutRevokeTest {
             contentType = exchange.getRequestHeaders().getFirst("Content-Type");
             while (exchange.getRequestBody().read() != -1) { bodyBytes++; }
             credentialPresentAtRevoke = CredentialStore.read().data().containsKey("cloud_credential");
+            sessionCurrentAtRevoke = CloudSession.current().isCurrent();
+            connectedAtRevoke = CloudAuthManager.status().isConnected();
             events.add("revoke");
             requestArrived.countDown();
             if (pauseReply && !replyAllowed.await(5, TimeUnit.SECONDS)) {
