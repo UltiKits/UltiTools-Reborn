@@ -15,11 +15,13 @@ import com.google.gson.JsonObject;
  * (D-14, D-17, S-16), whether or not the connection is open: the outbox exists precisely to carry
  * an event across a disconnect (contract answer 15).
  * <p>
- * <b>Public only because Bukkit needs it to be.</b> Bukkit registers listeners reflectively and
- * dispatches to public handler methods, so a package-private class could not be registered at all
- * (S-03). Everything else about this class -- its handler bodies, its payload builder -- is an
- * implementation detail; the class is marked {@link ApiStatus.Internal} so no module treats it as
- * API.
+ * <b>Public because {@code UltiTools} constructs it from another package.</b> The registration in
+ * {@code UltiTools#onEnable()} lives in {@code com.ultikits.ultitools}, so the class and its
+ * no-argument constructor have to be visible there; made package-private, it could not be
+ * instantiated from that package at all (S-03). Bukkit is not the reason: Paper registers listener
+ * classes through its method-handle fallback and does not require them to be public. Nothing else
+ * here is public surface: the handler bodies and the payload builder are implementation details,
+ * and the class is marked {@link ApiStatus.Internal} so no module treats it as API.
  * <p>
  * <b>Registered once, decided per event.</b> {@code UltiTools#onEnable()} registers this listener a
  * single time, beside {@code PlayerJoinListener}, and never unregisters it while the plugin is
@@ -37,10 +39,10 @@ import com.google.gson.JsonObject;
  * <p>
  * <b>Known limitation.</b> A quit fired after the plugin has already been disabled during a server
  * stop is not captured: Bukkit stops dispatching to a disabled plugin's listeners. The plugin's own
- * shutdown flush still persists everything captured before that point; whether the CraftBukkit stop
- * sequence disables plugins before it removes players is not verified here, and the real-server
- * observation is recorded by the UAT row {@code ultitools.cloud.outbox.persist-restart} and in
- * {@code COMPATIBILITY.md} (plan 22-15).
+ * shutdown flush still persists everything captured before that point. Whether the CraftBukkit stop
+ * sequence disables plugins before it removes players is not verified here: the UAT row
+ * {@code ultitools.cloud.outbox.persist-restart} (plan 22-28) observes it on a real server, and the
+ * limitation itself belongs on the {@code COMPATIBILITY.md} known-limitations list (plan 22-27).
  *
  * @since 6.3.1
  */
