@@ -35,6 +35,12 @@ import java.util.regex.Pattern;
  * capabilities also draw from. This class never returns more than 64; the caller that adds the
  * framework's own capabilities keeps the combined list within the cap.</p>
  *
+ * <p>{@code hello} also caps one capability name at 96 characters. A module name long enough to
+ * push {@code modules:<id>@<version>} past that would make the whole {@code hello} schema-invalid,
+ * and the gateway answers an invalid frame with a 4400 close — every panel feature down because of
+ * one module's name. Such a module is skipped with one WARNING naming it, exactly like a name that
+ * cannot form an identifier.</p>
+ *
  * @since 6.3.1
  */
 @ApiStatus.Internal
@@ -42,6 +48,8 @@ final class ModuleCapabilities {
 
     /** The contract's {@code capabilitiesMaxItems}; the framework's own names share this cap. */
     static final int MAX_NAMES = 64;
+    /** The contract's {@code hello} limit on one capability name. */
+    static final int MAX_CAPABILITY_LENGTH = 96;
     /** The contract's bound on a module identifier. */
     private static final int MODULE_IDENTIFIER_MAX_LENGTH = 64;
     private static final String NAME_PREFIX = "modules:";
@@ -74,6 +82,11 @@ final class ModuleCapabilities {
                 continue;
             }
             String name = NAME_PREFIX + id + "@" + version(moduleVersionByName.apply(owner));
+            if (name.length() > MAX_CAPABILITY_LENGTH) {
+                LOGGER.warning("UltiCloud: capability name for module '" + owner + "' exceeds the protocol's "
+                        + MAX_CAPABILITY_LENGTH + "-character limit; its responders are not declared to the panel.");
+                continue;
+            }
             if (!ContractPrimitives.CAPABILITY.matcher(name).matches()
                     || !ContractPrimitives.isModuleCapability(name)) {
                 LOGGER.warning("UltiCloud: capability name for module '" + owner + "' is not contract-valid"

@@ -143,6 +143,31 @@ class ModuleCapabilitiesTest {
                 .containsExactly("modules:ultimail@1.2.3");
     }
 
+    /**
+     * {@code hello} caps a capability name at 96 characters. A module name long enough to break that
+     * limit would make the whole {@code hello} schema-invalid, and the gateway answers that with a
+     * 4400 close — every panel feature down, for one module's name. Such a module is skipped with
+     * one WARNING naming it instead.
+     */
+    @Test
+    void aNameOverTheHelloLimitIsSkippedWithOneWarning() {
+        StringBuilder longOwner = new StringBuilder("ulti");
+        for (int index = 0; index < 60; index++) {
+            longOwner.append('x');
+        }
+        String owner = longOwner.toString();
+        register(owner, owner + ".ping");
+        register("UltiMail", "ultimail.inbox.list");
+
+        try (WarningCapture capture = new WarningCapture()) {
+            List<String> names = ModuleCapabilities.names(registry,
+                    name -> owner.equals(name) ? "20261025.123456789.987654321" : "1.0.0");
+
+            assertThat(names).containsExactly("modules:ultimail@1.0.0");
+            assertThat(onlyMentions(capture.records(), owner)).hasSize(1);
+        }
+    }
+
     private void register(String owner, String messageType) {
         registry.registerResponder(messageType, data -> CompletableFuture.completedFuture(new JsonObject()), owner);
     }
