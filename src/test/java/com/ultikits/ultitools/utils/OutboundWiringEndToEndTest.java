@@ -342,6 +342,103 @@ class OutboundWiringEndToEndTest {
         assertThat(stub.gateway().sent("error")).isEmpty();
     }
 
+    // ------------------------------------------------------------------ guards across reconnects (22-22 fix)
+
+    @Test
+    @DisplayName("after a reconnect: still one main-thread sampler, one log handler, and each line sent once")
+    void reconnectKeepsOneSamplerAndOneLogHandler() throws Exception {
+        long handlersBefore = systemLogHandlers();
+        connect(bindings());
+        awaitStreaming();
+        await(() -> !mainTimers.isEmpty(), "the 1 Hz main-thread sampler");
+
+        reconnectAndAwaitStreaming();
+        assertThat(mainTimers).as("one sampler for the plugin's lifetime, not one per connection").hasSize(1);
+        assertThat(systemLogHandlers() - handlersBefore).as("one log handler on the root logger").isEqualTo(1);
+        CONSOLE.info("Exactly once after the reconnect");
+        await(() -> logText().contains("Exactly once after the reconnect"), "the line after the reconnect");
+        Thread.sleep(1500L);
+        assertThat(occurrences(logText(), "Exactly once after the reconnect")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a log teardown between connections (as a logout does) is repaired once at the next welcome")
+    void aLogTeardownIsRepairedOnceAtTheNextWelcome() throws Exception {
+        connect(bindings());
+        awaitStreaming();
+        // A logout's v1 log teardown (LogStreamManager#shutdown) removes every SystemLogHandler from the root logger.
+        Logger root = Logger.getLogger("");
+        for (Handler handler : root.getHandlers()) {
+            if (handler instanceof com.ultikits.ultitools.handler.SystemLogHandler) {
+                root.removeHandler(handler);
+            }
+        }
+        reconnectAndAwaitStreaming();
+        assertThat(systemLogHandlers()).as("re-attached exactly once").isEqualTo(1);
+        CONSOLE.info("Once after the teardown");
+        await(() -> logText().contains("Once after the teardown"), "the line after the teardown");
+        Thread.sleep(1500L);
+        assertThat(occurrences(logText(), "Once after the teardown")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a SEVERE record with an exception reaches log.lines with message and stack trace redacted")
+    void anExceptionRecordIsRedactedInMessageAndStackTrace() throws Exception {
+        connect(bindings());
+        awaitStreaming();
+        LogRecord record = new LogRecord(java.util.logging.Level.SEVERE,
+                "first line\nNotch issued server command: /login secret3\nthird line");
+        record.setLoggerName(CONSOLE.getName());
+        record.setThrown(new IllegalStateException("outer /login secret1",
+                new RuntimeException("Caused by typing /ultilogin:login secret2")));
+        CONSOLE.log(record);
+
+        await(() -> logText().contains("IllegalStateException") && logText().contains("third line"),
+                "the exception record in log.lines");
+        // The stack trace's first line carries the exception message; the line limit may cut the cause off.
+        assertThat(logText()).contains("Notch issued server command: /login ***")
+                .contains("java.lang.IllegalStateException: outer /login ***");
+        assertThat(allReceivedText()).doesNotContain("secret");
+        assertThat(stub.accessLog().count("WS-INVALID")).isZero();
+    }
+
+    private void reconnectAndAwaitStreaming() throws InterruptedException {
+        stub.gateway().closeLive(1011, "test restart");
+        await(() -> !CloudAuthManager.status().isConnected(), "disconnected");
+        await(() -> CloudAuthManager.status().isConnected(), "reconnected");
+        int before = stub.gateway().received("log.lines").size();
+        int probe = 0;
+        long end = System.currentTimeMillis() + 30_000L;
+        while (stub.gateway().received("log.lines").size() == before) {
+            CONSOLE.info("reconnect stream probe " + probe++);
+            Thread.sleep(200L);
+            await(() -> true, "nothing");
+            if (System.currentTimeMillis() > end) {
+                throw new AssertionError("the log stream never restarted");
+            }
+        }
+        // The welcome's listeners attach the handler first and start the sampler after it.
+        Thread.sleep(500L);
+    }
+
+    private static long systemLogHandlers() {
+        long count = 0;
+        for (Handler handler : Logger.getLogger("").getHandlers()) {
+            if (handler instanceof com.ultikits.ultitools.handler.SystemLogHandler) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static int occurrences(String text, String part) {
+        int count = 0;
+        for (int at = text.indexOf(part); at >= 0; at = text.indexOf(part, at + part.length())) {
+            count++;
+        }
+        return count;
+    }
+
     // ------------------------------------------------------------------ events (Task 2)
 
     private PlayerMock playerWithListener(String name) {

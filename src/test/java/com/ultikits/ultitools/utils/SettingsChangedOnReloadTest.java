@@ -164,6 +164,26 @@ class SettingsChangedOnReloadTest {
         assertThat(stub.gateway().received("settings.changed")).isEmpty();
     }
 
+    @Test
+    @DisplayName("power actions changed after the hello was built and before the welcome: one settings.changed")
+    void changeBetweenHelloAndWelcomeIsReportedAtTheWelcome() throws Exception {
+        features.shutdown();
+        CloudFeatures.Bindings bindings = CloudFeatures.Bindings.forTesting();
+        final java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+        // The hello reads the switch first (off); the operator turns it on before the welcome arrives.
+        bindings.powerEnabled = () -> reads.getAndIncrement() > 0;
+        features = CloudFeatures.start(bindings);
+        setField(plugin, "cloudFeatures", features);
+        connect();
+        assertThat(helloPower(0)).isFalse();
+
+        await(() -> !stub.gateway().received("settings.changed").isEmpty(), "settings.changed at the welcome");
+        assertThat(stub.gateway().received("settings.changed").get(0).getAsJsonObject("payload").toString())
+                .isEqualTo("{\"powerActionsEnabled\":true}");
+        Thread.sleep(1000L);
+        assertThat(stub.gateway().received("settings.changed")).hasSize(1);
+    }
+
     private static void await(BooleanSupplier condition, String what) throws InterruptedException {
         long end = System.currentTimeMillis() + 30_000L;
         while (!condition.getAsBoolean()) {
