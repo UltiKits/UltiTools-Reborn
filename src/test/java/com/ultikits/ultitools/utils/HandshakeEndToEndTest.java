@@ -206,6 +206,97 @@ class HandshakeEndToEndTest {
                 .as("welcome reset the counter").startsWith("reconnecting in 1 s");
     }
 
+    @Test
+    @DisplayName("while connected a new player event is sent at once with its outbox id and stays until acked")
+    void newEventIsSentAtOnceWhileConnected() {
+        FakeSession fake = startFakeSession();
+        FakeAttempt attempt = fake.acceptNext();
+        attempt.text(welcomeFor(attempt.sent.get(0), SERVER_ID).toString());
+        assertThat(CloudAuthManager.status().isConnected()).isTrue();
+        int before = attempt.sent.size();
+
+        CloudSession session = CloudSession.current();
+        session.offerReliableEvent("player.join", join("069a79f4-44e9-4726-a5be-fca90e38aaf5", "Steve"));
+
+        List<CloudOutbox.Entry> unacked = session.cloudOutbox().unacked();
+        assertThat(unacked).hasSize(1);
+        assertThat(attempt.sent).as("sent now, not at the next reconnect").hasSize(before + 1);
+        JsonObject frame = JsonParser.parseString(attempt.sent.get(before)).getAsJsonObject();
+        ContractSchemas.assertFrameValid(frame);
+        assertThat(frame.get("type").getAsString()).isEqualTo("player.join");
+        assertThat(frame.get("id").getAsString()).isEqualTo(unacked.get(0).id());
+    }
+
+    @Test
+    @DisplayName("a channel kept from a dropped connection never sends on the next socket, before or after its hello")
+    void droppedConnectionClosesItsProtocol() {
+        FakeSession fake = startFakeSession();
+        FakeAttempt first = fake.acceptNext();
+        first.text(welcomeFor(first.sent.get(0), SERVER_ID).toString());
+        com.ultikits.ultitools.websocket.CloudChannel kept = CloudSession.current().agentProtocol().channel();
+        JsonObject lines = new JsonObject();
+        lines.add("lines", new JsonArray());
+        assertThat(kept.send("log.lines", lines)).as("control: the live channel sends").isTrue();
+
+        first.close(1011);
+        assertThat(kept.isOpen()).isFalse();
+        fake.scheduler().advance(1000);
+        assertThat(fake.attempts).as("the retry opened a second socket").hasSize(2);
+        FakeAttempt second = fake.acceptNext();
+
+        assertThat(kept.send("log.lines", lines)).isFalse();
+        assertThat(second.sent).as("the hello alone, nothing from the old channel").hasSize(1);
+        assertThat(JsonParser.parseString(second.sent.get(0)).getAsJsonObject().get("type").getAsString())
+                .isEqualTo("hello");
+        second.text(welcomeFor(second.sent.get(0), SERVER_ID).toString());
+        int before = second.sent.size();
+        assertThat(kept.send("log.lines", lines)).as("still closed after the new welcome").isFalse();
+        assertThat(second.sent).hasSize(before);
+    }
+
+    /** The linked session on a manual clock and fake sockets, started but no attempt accepted yet. */
+    private FakeSession startFakeSession() {
+        FakeSession fake = new FakeSession();
+        CloudSession.setAgentEndpointOverrideForTesting(URI.create("ws://cloud.example.test/v1/agent"));
+        CloudSession.setAgentTimingOverrideForTesting(new ReconnectPolicy(() -> HIGH),
+                AgentConnection.Timing.defaults());
+        CloudSession.setAgentRuntimeForTesting(() -> {
+            AgentConnectionTest.ManualScheduler scheduler = new AgentConnectionTest.ManualScheduler(fake.clock);
+            fake.schedulers.add(scheduler);
+            return scheduler;
+        }, (uri, headers, events) -> {
+            FakeAttempt attempt = new FakeAttempt(events, fake.scheduler());
+            fake.attempts.add(attempt);
+            return attempt;
+        }, fake.clock::get);
+        CloudTestAccess.storeLinkedCredential("Survival", SERVER_ID);
+        assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
+        try {
+            PluginInitiationUtils.initWebsocket();
+        } catch (java.io.IOException e) {
+            throw new AssertionError(e);
+        }
+        fake.scheduler().runDue();
+        return fake;
+    }
+
+    /** The fake runtime of {@link #startFakeSession()}. */
+    private static final class FakeSession {
+        final AtomicLong clock = new AtomicLong(1_000_000L);
+        final List<AgentConnectionTest.ManualScheduler> schedulers = new ArrayList<>();
+        final List<FakeAttempt> attempts = new ArrayList<>();
+
+        AgentConnectionTest.ManualScheduler scheduler() {
+            return schedulers.get(schedulers.size() - 1);
+        }
+
+        FakeAttempt acceptNext() {
+            FakeAttempt attempt = attempts.get(attempts.size() - 1);
+            attempt.accept();
+            return attempt;
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
 
     static JsonObject join(String uuid, String name) {

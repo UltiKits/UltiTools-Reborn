@@ -245,6 +245,81 @@ class AgentProtocolTest {
         assertThat(attempts).hasSize(1);
     }
 
+    // ------------------------------------------------------------------ ack
+
+    private CloudOutbox.Entry enqueueJoin(String name) {
+        return outbox.enqueue("player.join", HandshakeEndToEndTest.join("069a79f4-44e9-4726-a5be-fca90e38aaf5", name));
+    }
+
+    private static List<String> idsOf(List<CloudOutbox.Entry> entries) {
+        List<String> ids = new ArrayList<>();
+        for (CloudOutbox.Entry entry : entries) {
+            ids.add(entry.id());
+        }
+        return ids;
+    }
+
+    @Test
+    @DisplayName("an ack removes exactly the listed ids; an unknown id is ignored and the others stay")
+    void ackRemovesExactlyTheListedIds() {
+        CloudOutbox.Entry first = enqueueJoin("Steve");
+        CloudOutbox.Entry second = enqueueJoin("Alex");
+        CloudOutbox.Entry third = enqueueJoin("Notch");
+        HandshakeEndToEndTest.FakeAttempt attempt = open();
+        attempt.text(welcome(attempt, SERVER_ID).toString());
+        assertThat(protocol.isEstablished()).isTrue();
+
+        attempt.text(HandshakeEndToEndTest.ackFor(Arrays.asList(first.id(), third.id(), Ulid.next())).toString());
+
+        assertThat(idsOf(outbox.unacked())).containsExactly(second.id());
+        assertThat(sentFrames(attempt)).as("a valid ack is not answered").extracting(f -> f.get("type").getAsString())
+                .doesNotContain("error");
+    }
+
+    @Test
+    @DisplayName("an ack received before welcome removes nothing; the same ack after welcome does")
+    void ackBeforeWelcomeIsIgnored() {
+        CloudOutbox.Entry first = enqueueJoin("Steve");
+        CloudOutbox.Entry second = enqueueJoin("Alex");
+        HandshakeEndToEndTest.FakeAttempt attempt = open();
+        String ack = HandshakeEndToEndTest.ackFor(Arrays.asList(first.id(), second.id())).toString();
+
+        attempt.text(ack);
+
+        assertThat(idsOf(outbox.unacked())).containsExactly(first.id(), second.id());
+        assertThat(sentFrames(attempt)).as("nothing but the hello").hasSize(1);
+        assertThat(connection.state()).isEqualTo(AgentConnection.State.OPEN);
+        // Control: once welcomed, the same ack drains the outbox.
+        attempt.text(welcome(attempt, SERVER_ID).toString());
+        attempt.text(HandshakeEndToEndTest.ackFor(Arrays.asList(first.id(), second.id())).toString());
+        assertThat(outbox.unacked()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an ack over the 500-id bound is answered invalid_message and removes nothing")
+    void oversizedAckIsAnsweredAndRemovesNothing() {
+        CloudOutbox.Entry kept = enqueueJoin("Steve");
+        HandshakeEndToEndTest.FakeAttempt attempt = open();
+        attempt.text(welcome(attempt, SERVER_ID).toString());
+        List<String> ids = new ArrayList<>();
+        ids.add(kept.id());
+        for (int i = 0; i < AgentProtocol.MAX_ACK_IDS; i++) {
+            ids.add(Ulid.next());
+        }
+        JsonObject ack = HandshakeEndToEndTest.ackFor(ids);
+        int before = attempt.sent.size();
+
+        attempt.text(ack.toString());
+
+        assertThat(idsOf(outbox.unacked())).containsExactly(kept.id());
+        assertThat(attempt.sent).hasSize(before + 1);
+        JsonObject error = frame(attempt.sent.get(before));
+        ContractSchemas.assertFrameValid(error);
+        assertThat(error.get("type").getAsString()).isEqualTo("error");
+        assertThat(error.get("replyTo").getAsString()).isEqualTo(ack.get("id").getAsString());
+        assertThat(error.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+    }
+
     // ------------------------------------------------------------------ overflow
 
     @Test
