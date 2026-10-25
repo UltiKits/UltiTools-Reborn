@@ -1,8 +1,12 @@
 package com.ultikits.ultitools.websocket;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -241,6 +245,15 @@ public class PanelResponderRegistry {
      * on the main thread, scheduled by the responder itself. See the class documentation for the
      * full scheduling contract.
      *
+     * <h4>UltiCloud protocol v2 module types</h4>
+     * <p>A module that answers UltiCloud protocol v2 {@code module.request} messages registers its
+     * responder under {@code <module id>.<action>}, the module id being the module's own name
+     * lower-cased. The v2 bridge derives that exact type from the request payload's {@code module}
+     * and {@code action} fields and dispatches only when the responder's owner module name,
+     * lower-cased, equals {@code module}; a request that would reach another module's responder is
+     * answered {@code module_not_found} and never dispatched (D-25, contract answer 11). An action
+     * therefore needs no namespace of its own: the module id is the namespace.</p>
+     *
      * @param messageType the exact message type string this responder will serve, matched by
      *                    {@code String.equals} — no case folding, no Unicode normalization
      * @param responder   the responder function, invoked with the inbound message's {@code data}
@@ -448,6 +461,37 @@ public class PanelResponderRegistry {
      */
     public boolean hasResponder(String messageType) {
         return messageType != null && responders.containsKey(messageType);
+    }
+
+    /**
+     * The module name owning the responder registered for the exact string {@code messageType}, as
+     * the registration recorded it. A read-only view of the ownership a dispatch of this type would
+     * use, so a caller can decide whether a request may reach it before admitting it.
+     *
+     * @param messageType the message type to look up, possibly {@code null}
+     * @return the owner module name, or {@code null} when no responder owns this exact type
+     * @since 6.3.1
+     */
+    public String ownerModuleOf(String messageType) {
+        ResponderEntry entry = messageType == null ? null : responders.get(messageType);
+        return entry == null ? null : entry.ownerModule;
+    }
+
+    /**
+     * The distinct module names owning at least one registered responder, in ascending name order.
+     * A read-only snapshot: later registrations and removals do not change the returned list. One
+     * name appears once however many types the module owns, and a module with no responder at the
+     * moment of the call does not appear at all.
+     *
+     * @return an unmodifiable list of owner module names; empty when no responder is registered
+     * @since 6.3.1
+     */
+    public List<String> ownerModules() {
+        Set<String> names = new TreeSet<>();
+        for (ResponderEntry entry : responders.values()) {
+            names.add(entry.ownerModule);
+        }
+        return Collections.unmodifiableList(new ArrayList<>(names));
     }
 
     /**
