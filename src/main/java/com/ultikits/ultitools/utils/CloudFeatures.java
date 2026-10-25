@@ -98,6 +98,7 @@ public final class CloudFeatures {
     static final long SEND_PERIOD_MS = 1000L;
 
     private static final String SETTINGS_CHANGED = "settings.changed";
+    private static final String TELEMETRY = "telemetry";
 
     private static volatile CloudFeatures installed;
 
@@ -129,10 +130,11 @@ public final class CloudFeatures {
         this.playerLinkChannel = new PlayerLinkChannel(this::liveChannel, ledger, bindings.onlineMode,
                 this::gatewayClockOffsetMillis, timers, handlerThread);
         this.playerLinks = new CloudPlayerLinks(playerLinkChannel);
-        this.capabilities = new AgentCapabilities(bindings.switches, bindings.errorReporting, this::moduleNames);
+        this.capabilities = new AgentCapabilities(bindings.switches, bindings.errorReporting, this::moduleNames,
+                this::available);
         this.settings = new AgentSettings(bindings.powerEnabled);
-        ServerMonitorManager monitor = bindings.monitor == null ? null : bindings.monitor.get();
-        this.outbound = new AgentOutboundFeeds(monitor, () -> capabilities.enabled("telemetry"),
+        // Never resolved here: UltiTools#onEnable starts the features before it creates the monitor (22-22 fix).
+        this.outbound = new AgentOutboundFeeds(bindings.monitor, () -> capabilities.enabled(TELEMETRY),
                 () -> capabilities.enabled("logs"), () -> capabilities.enabled("errors"),
                 bindings.errors == null ? () -> null : bindings.errors, bindings.clock, bindings.mainThread);
     }
@@ -229,10 +231,7 @@ public final class CloudFeatures {
         registerModules(router, protocol);
         router.register("credential.rotate", new CredentialRotationHandler(rotation));
         playerLinkChannel.register(router);
-        CloudRequestHandler snapshots = outbound.snapshotRequests();
-        if (snapshots != null) {
-            router.register(AgentOutboundFeeds.SNAPSHOT_REQUEST, snapshots);
-        }
+        registerSnapshots(router);
         // The protocol layer consumes inbound error frames itself; the link channel hears them as reply listener.
         protocol.addReplyListener(playerLinkChannel::onErrorReply);
         protocol.addLifecycleListener(new AgentProtocol.Listener() {
@@ -268,6 +267,37 @@ public final class CloudFeatures {
                 }
             }
         });
+    }
+
+    /**
+     * Registers {@code snapshot.request} on every connection; the telemetry behind it is looked up per request. While
+     * it is unavailable the hello does not declare {@code telemetry} and the router refuses the request before it
+     * gets here ({@link #available(String)}); the warning says why, once per connection.
+     */
+    private void registerSnapshots(AgentMessageRouter router) {
+        if (bindings.switches.test(Capability.MONITORING) && !outbound.telemetryAvailable()) {
+            PanelConnectionLog.log(Level.WARNING, "UltiCloud: telemetry is switched on, but the server monitor is not "
+                    + "available; this connection does not declare telemetry.");
+        }
+        router.register(AgentOutboundFeeds.SNAPSHOT_REQUEST, new CloudRequestHandler() {
+            @Override
+            public void handle(CloudRequest request, CloudChannel reply) {
+                CloudRequestHandler snapshots = outbound.snapshotRequests();
+                if (snapshots == null) {
+                    JsonObject details = new JsonObject();
+                    details.addProperty("capability", TELEMETRY);
+                    reply.replyError(request.id(), "error", "capability_not_accepted",
+                            "This capability is not available on this server.", details);
+                    return;
+                }
+                snapshots.handle(request, reply);
+            }
+        });
+    }
+
+    /** @return whether the feature behind a contract capability can run now (only telemetry can be missing) */
+    private boolean available(String contractCapability) {
+        return !TELEMETRY.equals(contractCapability) || outbound.telemetryAvailable();
     }
 
     /** Starts the main-thread sampling task once; it runs until {@link #shutdown()}, so TPS history has no gaps. */
@@ -565,7 +595,11 @@ public final class CloudFeatures {
         Function<String, String> moduleVersion;
         /** The collector the {@code error.report} frames are drained from; {@code null} sends none. */
         Supplier<com.ultikits.ultitools.manager.ErrorReportCollector> errors;
-        /** The server sampler of the telemetry; {@code null} sends no telemetry. */
+        /**
+         * The server sampler of the telemetry, read at first use and never by {@link CloudFeatures#start}: the plugin
+         * creates it after the features start. {@code null}, or a supplier of {@code null}, sends no telemetry and
+         * keeps {@code telemetry} out of the hello.
+         */
         Supplier<ServerMonitorManager> monitor;
         /**
          * Starts a task on the server thread every 20 ticks and returns what cancels it; {@code null} starts none.

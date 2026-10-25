@@ -156,6 +156,8 @@ class InboundWiringTest {
         bindings.commands = () -> commands;
         bindings.mainThread = mainQueue::add;
         bindings.disabling = () -> false;
+        // A server with a monitor declares telemetry; one without does not (22-22 fix).
+        bindings.monitor = com.ultikits.ultitools.manager.OutboundTestAccess::newMonitor;
         bindings.power = () -> new PowerActionHandler.PowerExecutor() {
             @Override public boolean restartSupported() { return true; }
             @Override public void scheduleStop() { stopHook.run(); powerCalls.add("stop"); }

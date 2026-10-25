@@ -41,6 +41,12 @@ import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
  * <p>
  * <b>Threads.</b> {@link #established} and {@link #closed} run on the agent thread; {@link #mainThreadSecond()} on the
  * Bukkit main thread only; {@link #agentSecond()} on the agent thread; {@link #offerLine} on any logging thread.
+ * <p>
+ * <b>Resolved at first use (22-22 fix).</b> The plugin creates this object before {@code initWebSocketManagers()}
+ * creates the {@link ServerMonitorManager}, so the monitor is never read at construction: {@link #telemetryAvailable()}
+ * and every telemetry path ask the supplier until it yields a monitor, and keep the first one it yields. The error
+ * collector is read every second for the same reason. Nothing else this object holds depends on an object the plugin
+ * creates later.
  *
  * @since 6.3.1
  */
@@ -58,8 +64,15 @@ public final class AgentOutboundFeeds {
 
     private static final String ERROR_REPORT = "error.report";
 
-    private final ServerMonitorManager monitor;
-    private final AgentTelemetry telemetry;
+    private final Supplier<ServerMonitorManager> monitorSource;
+    private final BooleanSupplier telemetryEnabled;
+    private final LongSupplier clock;
+    private final Executor mainThread;
+    private final Object telemetryLock = new Object();
+    /** The first monitor the supplier yielded, or {@code null} before. Written under {@code telemetryLock}. */
+    private volatile ServerMonitorManager monitor;
+    /** The telemetry over {@link #monitor}, or {@code null} before a monitor exists. Same guard. */
+    private volatile AgentTelemetry telemetry;
     private final AgentLogBatcher logs;
     private final BooleanSupplier logsEnabled;
     private final BooleanSupplier errorsEnabled;
@@ -77,7 +90,8 @@ public final class AgentOutboundFeeds {
     private int secondsSampled;
 
     /**
-     * @param monitor          the server sampler, or {@code null} for no telemetry
+     * @param monitor          supplies the server sampler, read at first use and then kept; {@code null}, or a
+     *                         supplier of {@code null}, means no telemetry (yet)
      * @param telemetryEnabled the {@code telemetry} switch, read for every frame
      * @param logsEnabled      the {@code logs} switch, read for every line
      * @param errorsEnabled    the {@code errors} switch, read every second
@@ -85,12 +99,13 @@ public final class AgentOutboundFeeds {
      * @param clock            epoch milliseconds for the cadence and the log rate bucket
      * @param mainThread       runs Bukkit work on the main thread, in order; {@code null} for no telemetry
      */
-    public AgentOutboundFeeds(ServerMonitorManager monitor, BooleanSupplier telemetryEnabled,
+    public AgentOutboundFeeds(Supplier<ServerMonitorManager> monitor, BooleanSupplier telemetryEnabled,
                               BooleanSupplier logsEnabled, BooleanSupplier errorsEnabled,
                               Supplier<ErrorReportCollector> errors, LongSupplier clock, Executor mainThread) {
-        this.monitor = monitor;
-        this.telemetry = monitor == null || mainThread == null ? null
-                : new AgentTelemetry(monitor, telemetryEnabled, clock, mainThread);
+        this.monitorSource = monitor;
+        this.telemetryEnabled = telemetryEnabled;
+        this.clock = clock;
+        this.mainThread = mainThread;
         this.logs = new AgentLogBatcher(clock);
         this.logsEnabled = logsEnabled;
         this.errorsEnabled = errorsEnabled;
@@ -98,9 +113,42 @@ public final class AgentOutboundFeeds {
         this.transmitter = new UltiPanelLogTransmitter(this::offerLine);
     }
 
-    /** @return the {@code snapshot.request} handler, or {@code null} when there is no telemetry */
+    /** @return the {@code snapshot.request} handler, or {@code null} while there is no telemetry */
     public CloudRequestHandler snapshotRequests() {
-        return telemetry;
+        return telemetry();
+    }
+
+    /**
+     * Whether the telemetry can run now: a monitor exists and the main thread is bound. The hello declares
+     * {@code telemetry} only when this is true, so the hello and the router agree.
+     *
+     * @return {@code true} once a monitor was obtained
+     */
+    public boolean telemetryAvailable() {
+        return telemetry() != null;
+    }
+
+    /** The telemetry, built over the first monitor the supplier yields; {@code null} while it yields none. */
+    private AgentTelemetry telemetry() {
+        AgentTelemetry current = telemetry;
+        if (current != null || monitorSource == null || mainThread == null) {
+            return current;
+        }
+        synchronized (telemetryLock) {
+            if (telemetry == null) {
+                ServerMonitorManager found;
+                try {
+                    found = monitorSource.get();
+                } catch (RuntimeException failure) {
+                    found = null;
+                }
+                if (found != null) {
+                    monitor = found;
+                    telemetry = new AgentTelemetry(found, telemetryEnabled, clock, mainThread);
+                }
+            }
+            return telemetry;
+        }
     }
 
     /**
@@ -114,8 +162,9 @@ public final class AgentOutboundFeeds {
         logs.reset();
         this.agentThread = agentThread;
         this.live = channel;
-        if (telemetry != null) {
-            telemetry.onWelcome(channel);
+        AgentTelemetry current = telemetry();
+        if (current != null) {
+            current.onWelcome(channel);
         }
         if (logsEnabled.getAsBoolean()) {
             ensureLogCapture();
@@ -133,8 +182,9 @@ public final class AgentOutboundFeeds {
             agentThread = null;
         }
         logs.reset();
-        if (telemetry != null) {
-            telemetry.onClose();
+        AgentTelemetry current = telemetry;
+        if (current != null) {
+            current.onClose();
         }
     }
 
@@ -144,17 +194,19 @@ public final class AgentOutboundFeeds {
      * 20 ticks so the TPS sample measures ticks, not wall-clock hops.
      */
     public void mainThreadSecond() {
-        if (monitor == null) {
+        AgentTelemetry current = telemetry();
+        ServerMonitorManager sampler = monitor;
+        if (current == null || sampler == null) {
             return;
         }
-        monitor.sampleTpsAndCpu();
+        sampler.sampleTpsAndCpu();
         if (secondsSampled % STATE_SAMPLE_PERIOD_SECONDS == 0) {
-            monitor.sampleAndPublishState();
+            sampler.sampleAndPublishState();
         }
         secondsSampled++;
         CloudChannel channel = live;
-        if (channel != null && telemetry != null) {
-            telemetry.tick(channel);
+        if (channel != null) {
+            current.tick(channel);
         }
     }
 

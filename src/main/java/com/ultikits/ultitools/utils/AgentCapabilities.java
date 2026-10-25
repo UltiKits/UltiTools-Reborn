@@ -31,6 +31,10 @@ import com.ultikits.ultitools.entities.Capability;
  * switch again for every request; a switch turned off after the handshake refuses the request with
  * {@code capability_not_accepted} and {@link #refusal(String)} names its configuration key. Whether the gateway
  * accepted the capability at the handshake is checked separately, by the router's gate in {@link AgentProtocol}.
+ * <p>
+ * <b>Availability (22-22 fix).</b> A switched-on name whose feature cannot run on this server (the {@code telemetry}
+ * of a server without a monitor) is neither declared nor admitted per request; its refusal says it is not available
+ * instead of naming a switch that is already on. The hello and the router therefore read one predicate.
  */
 final class AgentCapabilities {
 
@@ -68,6 +72,7 @@ final class AgentCapabilities {
     private final Predicate<Capability> switchOn;
     private final BooleanSupplier errorReporting;
     private final Supplier<List<String>> moduleNames;
+    private final Predicate<String> available;
 
     /**
      * @param switchOn       whether an operator switch is on now (production: {@link Capability#isEnabled()})
@@ -76,9 +81,21 @@ final class AgentCapabilities {
      */
     AgentCapabilities(Predicate<Capability> switchOn, BooleanSupplier errorReporting,
                       Supplier<List<String>> moduleNames) {
+        this(switchOn, errorReporting, moduleNames, name -> true);
+    }
+
+    /**
+     * @param switchOn       whether an operator switch is on now
+     * @param errorReporting whether {@value #ERROR_REPORTING_KEY} is on now
+     * @param moduleNames    the {@code modules:<id>@<X.Y.Z>} names of the modules that answer requests
+     * @param available      whether the feature behind a switch-mapped contract name can run on this server now
+     */
+    AgentCapabilities(Predicate<Capability> switchOn, BooleanSupplier errorReporting,
+                      Supplier<List<String>> moduleNames, Predicate<String> available) {
         this.switchOn = Objects.requireNonNull(switchOn, "switchOn");
         this.errorReporting = Objects.requireNonNull(errorReporting, "errorReporting");
         this.moduleNames = Objects.requireNonNull(moduleNames, "moduleNames");
+        this.available = Objects.requireNonNull(available, "available");
     }
 
     /**
@@ -121,7 +138,7 @@ final class AgentCapabilities {
                 || contractCapability.startsWith(MODULE_PREFIX)) {
             return true;
         }
-        if (!SWITCHES.containsKey(contractCapability)) {
+        if (!SWITCHES.containsKey(contractCapability) || !available.test(contractCapability)) {
             return false;
         }
         Capability capability = SWITCHES.get(contractCapability);
@@ -134,7 +151,8 @@ final class AgentCapabilities {
      *         decides
      */
     String refusal(String contractCapability) {
-        if (contractCapability == null || !SWITCHES.containsKey(contractCapability)) {
+        if (contractCapability == null || !SWITCHES.containsKey(contractCapability)
+                || !available.test(contractCapability)) {
             return UNAVAILABLE;
         }
         Capability capability = SWITCHES.get(contractCapability);

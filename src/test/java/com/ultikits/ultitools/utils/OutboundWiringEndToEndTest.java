@@ -13,6 +13,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
@@ -40,6 +41,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.OutboundTestAccess;
+import com.ultikits.ultitools.manager.ServerMonitorManager;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.stub.UltiCloudStub;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
@@ -72,6 +74,8 @@ class OutboundWiringEndToEndTest {
     /** The repeating main-thread tasks the features started; the test runs them as the server would every second. */
     private final List<Runnable> mainTimers = new CopyOnWriteArrayList<>();
     private long lastTimerRun;
+    /** What the framework logged through its own logger (PanelConnectionLog lines included). */
+    private final List<LogRecord> pluginLog = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -83,7 +87,7 @@ class OutboundWiringEndToEndTest {
         Logger logger = Logger.getLogger("OutboundWiringEndToEndTest." + System.nanoTime());
         logger.setUseParentHandlers(false);
         logger.addHandler(new Handler() {
-            @Override public void publish(LogRecord record) { }
+            @Override public void publish(LogRecord record) { pluginLog.add(record); }
             @Override public void flush() { }
             @Override public void close() { }
         });
@@ -133,6 +137,11 @@ class OutboundWiringEndToEndTest {
 
     private void connect(CloudFeatures.Bindings bindings) throws Exception {
         features = CloudFeatures.start(bindings);
+        connectStarted();
+    }
+
+    /** Connects with the features already started. */
+    private void connectStarted() throws Exception {
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
         PluginInitiationUtils.initWebsocket();
         await(() -> CloudAuthManager.status().isConnected(), "connected");
@@ -181,6 +190,57 @@ class OutboundWiringEndToEndTest {
         JsonObject status = stub.gateway().received("status").get(0).getAsJsonObject("payload");
         assertThat(status.get("worldCount").getAsInt()).isEqualTo(1);
         assertThat(stub.accessLog().count("WS-INVALID")).isZero();
+    }
+
+    @Test
+    @DisplayName("production order: the monitor is created after the features start, and telemetry still runs")
+    void monitorCreatedAfterStartStillFeedsTelemetry() throws Exception {
+        final AtomicReference<ServerMonitorManager> monitor = new AtomicReference<>();
+        CloudFeatures.Bindings bindings = bindings();
+        bindings.monitor = monitor::get;
+        // UltiTools#onEnable starts the features before initWebSocketManagers() creates the monitor.
+        features = CloudFeatures.start(bindings);
+        monitor.set(OutboundTestAccess.newMonitor());
+        connectStarted();
+
+        for (String type : new String[] {"status", "players.snapshot", "plugins.snapshot", "worlds.snapshot"}) {
+            final String wanted = type;
+            await(() -> !stub.gateway().received(wanted).isEmpty(), type);
+        }
+        JsonObject hello = stub.gateway().received("hello").get(0).getAsJsonObject("payload");
+        assertThat(hello.getAsJsonArray("capabilities").toString()).contains("\"telemetry\"");
+        await(() -> !mainTimers.isEmpty(), "the 1 Hz main-thread sampler");
+        String id = stub.gateway().send("snapshot.request", "all", null, null, null).get("id").getAsString();
+        await(() -> !stub.gateway().received("snapshot.request.result").isEmpty(), "snapshot.request.result");
+        JsonObject result = stub.gateway().received("snapshot.request.result").get(0);
+        assertThat(result.get("replyTo").getAsString()).isEqualTo(id);
+        assertThat(result.getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(stub.gateway().sent("error")).isEmpty();
+        assertThat(stub.accessLog().count("WS-INVALID")).isZero();
+    }
+
+    @Test
+    @DisplayName("no monitor at all: the hello does not declare telemetry, a warning says why, and the router agrees")
+    void noMonitorMeansNoTelemetryInTheHello() throws Exception {
+        CloudFeatures.Bindings bindings = bindings();
+        bindings.monitor = () -> null;
+        connect(bindings);
+        JsonObject hello = stub.gateway().received("hello").get(0).getAsJsonObject("payload");
+        assertThat(hello.getAsJsonArray("capabilities").toString()).doesNotContain("\"telemetry\"")
+                .contains("\"logs\"");
+        assertThat(pluginLog).anySatisfy(record -> {
+            assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
+            assertThat(record.getMessage()).contains("telemetry").contains("monitor");
+        });
+
+        int errorsBefore = stub.gateway().received("error").size();
+        String id = stub.gateway().send("snapshot.request", "all", null, null, null).get("id").getAsString();
+        await(() -> stub.gateway().received("error").size() > errorsBefore, "the refusal of snapshot.request");
+        JsonObject refusal = stub.gateway().received("error").get(errorsBefore);
+        assertThat(refusal.get("replyTo").getAsString()).isEqualTo(id);
+        assertThat(refusal.getAsJsonObject("payload").get("code").getAsString())
+                .isEqualTo("capability_not_accepted");
+        assertThat(stub.gateway().received("status")).isEmpty();
     }
 
     @Test
