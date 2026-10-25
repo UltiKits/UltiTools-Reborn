@@ -1124,9 +1124,13 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Bridges an inbound panel message the framework has already handled onto the module-facing
-     * {@link EventBus} (WIRE-16). This is the single publish site — see the dispatch-table call
-     * site in {@link #handleInboundMessage} for the only place this is invoked.
+     * Bridges a panel message the framework has already handled onto the module-facing
+     * {@link EventBus} (WIRE-16). This is the single publish site, invoked from exactly two places:
+     * the v1 inbound path ({@link #handleInboundMessage}) and the UltiCloud protocol v2 module
+     * bridge ({@link ModuleRequestHandler}), which publishes one event per module-owned request.
+     * The second call site exists because {@code PanelMessageEvent} is public since 6.3.0 and a
+     * module subscribing to observe its own panel traffic must keep receiving it after the v1 path
+     * is removed.
      * <p>
      * {@link EventBus#publishAsync} was considered and rejected: it submits to an async worker
      * pool and never reaches the main thread, so it does not address Paper's AsyncCatcher at
@@ -1142,7 +1146,7 @@ public class PluginInitiationUtils {
      * @param message the full inbound envelope
      * @param data    the message's {@code data} object, possibly {@code null}
      */
-    private static void publishPanelMessageEvent(String type, JsonObject message, JsonObject data) {
+    static void publishPanelMessageEvent(String type, JsonObject message, JsonObject data) {
         try {
             UltiTools instance = UltiTools.getInstance();
             if (instance == null) {

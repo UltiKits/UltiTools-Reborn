@@ -1,19 +1,34 @@
 package com.ultikits.ultitools.utils;
 
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.contract.RecordingChannel;
+import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.events.PanelMessageEvent;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
+import org.bukkit.Bukkit;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
 
+import java.lang.reflect.Field;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.lenient;
 
 /**
  * End-to-end contract for D-25: a {@code module.request} fixture routed through the real
@@ -211,6 +226,95 @@ class ModuleRequestEndToEndTest {
             actor.addProperty("minecraftUuid", minecraftUuid);
         }
         return actor;
+    }
+
+    /**
+     * {@code PanelMessageEvent} is public since 6.3.0, and the v1 inbound path publishes it for every
+     * module-owned type. Under protocol v2 nothing else would publish it, so the bridge does — once
+     * per module-owned request, on the main thread, carrying the request the responder received and
+     * the v2 envelope. A request that reaches no responder publishes nothing, exactly as a request
+     * for another module's responder did not reach that module in v1 either.
+     */
+    @Nested
+    @DisplayName("PanelMessageEvent bridge")
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    class PanelMessageEventBridge {
+        private final List<PanelMessageEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicBoolean observedPrimaryThread = new AtomicBoolean();
+        private ServerMock server;
+        private EventBus eventBus;
+
+        @BeforeEach
+        void setUp() {
+            MockBukkitHelper.ensureCleanState();
+            server = MockBukkit.mock();
+            MockBukkit.createMockPlugin();
+            eventBus = new EventBus();
+            eventBus.subscribe(PanelMessageEvent.class, event -> {
+                observedPrimaryThread.set(Bukkit.isPrimaryThread());
+                received.add(event);
+            });
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(Logger.getLogger("22-16-event-test"));
+                lenient().when(ultiTools.getEventBus()).thenReturn(eventBus);
+            });
+        }
+
+        @AfterEach
+        void tearDown() throws Exception {
+            eventBus.shutdown();
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+            MockBukkitHelper.safeUnmock();
+        }
+
+        @Test
+        void oneEventPerModuleRequestOnTheMainThread() throws Exception {
+            registry.registerResponder(TYPE, data -> CompletableFuture.completedFuture(new JsonObject()), OWNER);
+
+            runOffPrimaryThread(() -> dispatchFixture(FIXTURE));
+
+            assertThat(received).as("the publish is a scheduled hop, not an in-line call").isEmpty();
+
+            server.getScheduler().performOneTick();
+
+            assertThat(received).hasSize(1);
+            PanelMessageEvent event = received.get(0);
+            assertThat(event.getType()).isEqualTo(TYPE);
+            assertThat(event.getData().get("page").getAsInt()).isEqualTo(1);
+            assertThat(event.getData().getAsJsonObject("actor").get("userId").getAsLong()).isEqualTo(42L);
+            assertThat(event.getRawMessage().get("type").getAsString()).isEqualTo("module.request");
+            assertThat(event.getRawMessage().getAsJsonObject("payload").get("module").getAsString())
+                    .isEqualTo("ultimail");
+            assertThat(observedPrimaryThread).as("the subscriber must observe the primary thread").isTrue();
+        }
+
+        @Test
+        void aRequestThatReachesNoResponderPublishesNothing() throws Exception {
+            dispatchFixture(FIXTURE);
+            server.getScheduler().performOneTick();
+
+            assertThat(received).isEmpty();
+        }
+
+        /** Runs {@code action} on a thread that is not MockBukkit's scheduler thread. */
+        private void runOffPrimaryThread(Runnable action) throws InterruptedException {
+            AtomicReference<Throwable> thrown = new AtomicReference<>();
+            Thread worker = new Thread(() -> {
+                try {
+                    action.run();
+                } catch (Throwable failure) {
+                    thrown.set(failure);
+                }
+            }, "22-16-event-test-thread");
+            worker.start();
+            worker.join(TimeUnit.SECONDS.toMillis(10));
+            assertThat(worker.isAlive()).isFalse();
+            if (thrown.get() != null) {
+                throw new AssertionError("The dispatch failed.", thrown.get());
+            }
+        }
     }
 
     private RecordingChannel dispatchFixture(String path) {

@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.stream.JsonWriter;
+import com.ultikits.ultitools.events.PanelMessageEvent;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.UltiToolsException;
 import com.ultikits.ultitools.websocket.CloudChannel;
@@ -35,6 +36,12 @@ import java.util.regex.Pattern;
  * without dispatching (T-22-99). The responder receives a fresh object holding a copy of
  * {@code params} plus the {@code actor} object exactly as received; the plugin neither derives nor
  * overrides the actor, which the authenticated gateway channel vouches for (T-22-98).</p>
+ *
+ * <p>Each module-owned request is also republished on the module-facing event bus as one
+ * {@link PanelMessageEvent}, built on the dispatching thread and delivered on the main thread, with
+ * the fields the v1 inbound path gives it: the type the responder is registered under, the
+ * responder's input and the request envelope as received. A request answered
+ * {@code module_not_found} reached no module's responder and publishes nothing.</p>
  *
  * <p>Exactly one {@code module.response} is produced per request, on whichever thread settles the
  * registry's future, and the dispatching thread is never blocked:
@@ -125,6 +132,29 @@ final class ModuleRequestHandler implements CloudRequestHandler {
         }
         registry.dispatch(messageType, data, request.id())
                 .whenComplete((result, failure) -> reply(channel, request.id(), result, failure));
+        publishPanelMessageEvent(request, messageType, data);
+    }
+
+    /**
+     * Republishes the request for modules that subscribe to {@link PanelMessageEvent}, exactly as
+     * the v1 inbound path does: built here on the dispatching thread, delivered on the main thread,
+     * carrying the type the responder is registered under, the responder's input (the request's
+     * params plus the gateway-asserted actor) and the v2 envelope as received. Best effort: no
+     * failure here may affect the request's single reply.
+     */
+    private static void publishPanelMessageEvent(CloudRequest request, String messageType, JsonObject data) {
+        try {
+            JsonObject envelope = new JsonObject();
+            envelope.addProperty("v", 2);
+            envelope.addProperty("id", request.id());
+            envelope.addProperty("type", request.type());
+            envelope.addProperty("ts", request.ts());
+            envelope.add("payload", request.payload());
+            PluginInitiationUtils.publishPanelMessageEvent(messageType, envelope, data);
+        } catch (RuntimeException publishFailed) {
+            PanelConnectionLog.log(Level.FINE,
+                    "UltiCloud: could not publish a PanelMessageEvent for a module request.");
+        }
     }
 
     /** Checks the gateway-asserted actor against the contract's actor object, exactly as sent. */
