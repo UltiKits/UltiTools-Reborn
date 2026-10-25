@@ -151,6 +151,53 @@ class RemoteConfigEndToEndTest {
         assertThat(entity.prefix).isEqualTo("[C]");
     }
 
+    @Test
+    void aCrlfFileWithOperatorLayoutKeepsEveryUnownedByte() throws Exception {
+        // A file an operator wrote on Windows: CRLF everywhere, a header comment, blank lines, a comment
+        // above a key, single quotes with an inline comment, and keys no entity declares.
+        String crlf = "# Operator note: this line must never change\r\n"
+                + "\r\n"
+                + "chat:\r\n"
+                + "  # Supports {player}\r\n"
+                + "  prefix: '[Chat]' # trailing note\r\n"
+                + "\r\n"
+                + "  cooldown: 3\r\n"
+                + "  enabled: true\r\n"
+                + "  words:\r\n"
+                + "    - a\r\n"
+                + "    - b\r\n"
+                + "  mode: \"global\"\r\n"
+                + "  extra: \"keep\" # undeclared\r\n"
+                + "undeclared:\r\n"
+                + "  deep: [1, 2]\r\n"
+                + "  other: {a: 1}\r\n";
+        Files.write(file, crlf.getBytes(StandardCharsets.UTF_8));
+        String before = read();
+        String version = sha256(before.getBytes(StandardCharsets.UTF_8));
+
+        dispatch("config.update", "01JB2Z8Y3K4M5N6P7Q8R9S0TV4", updatePayload(version,
+                "[{\"key\":\"chat.cooldown\",\"value\":5}]"));
+
+        JsonObject payload = onlyFrame("config.update.result").getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+
+        List<String> original = Arrays.asList(before.split("\n", -1));
+        List<String> written = Arrays.asList(read().split("\n", -1));
+        assertThat(written).hasSameSizeAs(original);
+        for (int line = 0; line < original.size(); line++) {
+            if (line == 6) {
+                continue;
+            }
+            assertThat(written.get(line)).as("line " + line).isEqualTo(original.get(line));
+        }
+        assertThat(written.get(6)).as("the edited line keeps its CRLF").endsWith("\r");
+        assertThat(written.get(6)).contains("cooldown:").contains("5");
+        assertThat(written.get(4)).as("an unowned quoted value with its inline comment").endsWith("\r")
+                .contains("'[Chat]' # trailing note");
+        assertThat(entity.cooldown).isEqualTo(5);
+        assertThat(entity.prefix).isEqualTo("[Chat]");
+    }
+
     private JsonObject entry(JsonArray entries, String key) {
         for (int index = 0; index < entries.size(); index++) {
             JsonObject entry = entries.get(index).getAsJsonObject();
