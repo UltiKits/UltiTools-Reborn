@@ -56,6 +56,10 @@ public final class StubCatalogue implements AutoCloseable {
         REDIRECT,
         /** The download route answers 403. */
         FORBIDDEN,
+        /** The version names a download on another host; the stub's own download route is never reached. */
+        FOREIGN_URL,
+        /** The download route answers 500. */
+        SERVER_ERROR,
         /** The body is {@value #HUGE_BODY_BYTES} bytes while the metadata names {@value #HUGE_DECLARED_BYTES}. */
         HUGE_BODY,
         /** The download route announces the body but closes the connection after a few bytes. */
@@ -78,6 +82,8 @@ public final class StubCatalogue implements AutoCloseable {
     private static final String FIXTURES = "ulticloud-contract/pending/catalogue/";
     private static final String VERSION_PATH = "/v1/catalogue/modules/" + MODULE + "/versions/" + VERSION;
     private static final String HASH_OF_ONE_MIB = repeat('d', 64);
+    /** A download URL on a host that is not the catalogue's, as a compromised answer would name it. */
+    private static final String FOREIGN_DOWNLOAD = "https://evil.example/module.jar";
     /** The byte count the {@link Mode#HUGE_BODY} answer announces. */
     public static final int HUGE_BODY_BYTES = 10 * 1024 * 1024;
     /** The byte count the {@link Mode#HUGE_BODY} metadata claims. */
@@ -278,6 +284,9 @@ public final class StubCatalogue implements AutoCloseable {
             case FORBIDDEN:
                 send(exchange, 403, "{\"error\":{\"code\":\"forbidden\",\"message\":\"not available\"}}");
                 return;
+            case SERVER_ERROR:
+                send(exchange, 500, "{\"error\":{\"code\":\"internal_error\",\"message\":\"down\"}}");
+                return;
             case LICENSE_REQUIRED:
                 send(exchange, 404, fixture("error-not-found.json"));
                 return;
@@ -381,6 +390,9 @@ public final class StubCatalogue implements AutoCloseable {
             JsonObject download = new JsonObject();
             download.addProperty("kind", "license_required");
             data.add("download", download);
+        }
+        if (mode == Mode.FOREIGN_URL) {
+            data.getAsJsonObject("download").addProperty("url", FOREIGN_DOWNLOAD);
         }
         if (mode == Mode.HUGE_BODY) {
             data.addProperty("sizeBytes", HUGE_DECLARED_BYTES);

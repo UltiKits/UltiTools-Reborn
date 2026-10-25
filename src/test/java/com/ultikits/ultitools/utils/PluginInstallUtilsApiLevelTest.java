@@ -332,7 +332,7 @@ class PluginInstallUtilsApiLevelTest {
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
         assertThat(messages()).containsExactly(
-                "demo 2.0.0 is not available for download (licence required); nothing was installed.");
+                "demo 2.0.0 is not available for download (requires a licence); nothing was installed.");
     }
 
     @Test

@@ -382,8 +382,14 @@ public class PluginInstallUtils {
             LOGGER.log(Level.WARNING, notAvailableLine(requested, version, metadata));
             return InstallResult.failed();
         }
-        return downloadAndAdmit(CatalogueClient.absoluteDownloadUrl(metadata.downloadUrl()), metadata, fileName,
-                requested, version, level);
+        String url = CatalogueClient.absoluteDownloadUrl(metadata.downloadUrl());
+        if (url == null) {
+            // A catalogue pointing a download away from its own host is an attack signal, not an
+            // unavailable version: refused before any request, and said as what it is.
+            LOGGER.log(Level.SEVERE, foreignDownloadLine(requested, version));
+            return InstallResult.failed();
+        }
+        return downloadAndAdmit(url, metadata, fileName, requested, version, level);
     }
 
     /**
@@ -426,8 +432,10 @@ public class PluginInstallUtils {
 
     /**
      * The one line an operator sees when a download did not pass its checks: the module, the
-     * version and the reason, and that nothing was installed. Only short hash prefixes may join it
-     * in the local log, never a whole URL.
+     * version and the reason, and that nothing was installed. Each reason names what actually
+     * happened, so a licence refusal, a withdrawn version, a transport failure and an integrity
+     * failure cannot be mistaken for one another. Only short hash prefixes may join it in the local
+     * log, never a whole URL.
      *
      * @param module the module as the operator asked for it
      * @param version the version
@@ -443,25 +451,38 @@ public class PluginInstallUtils {
                 return "Downloaded " + module + " " + version
                         + " failed its integrity check (hash header mismatch); nothing was installed.";
             case MISSING_METADATA:
-                return "Downloaded " + module + " " + version
-                        + " failed its integrity check (the catalogue entry carries no usable hash or size);"
+                // Nothing was requested: the catalogue entry itself cannot be trusted.
+                return module + " " + version
+                        + " was not downloaded: the catalogue entry carries no usable hash or size;"
                         + " nothing was installed.";
             case NOT_AVAILABLE:
-                return module + " " + version + " is not available for download (licence required);"
+                // 403/404: the contract uses 404 for every version that is not public.
+                return module + " " + version
+                        + " is not available for download (withdrawn, unpublished or not licensed);"
                         + " nothing was installed.";
             case IO_ERROR:
-                return "Downloaded " + module + " " + version
-                        + " failed (the download did not come from the catalogue host); nothing was installed.";
+                // A timeout, a broken stream, a 5xx or a redirect: the bytes never arrived whole.
+                return "Could not download " + module + " " + version
+                        + " (the download did not complete); nothing was installed.";
             default:
                 return "Downloaded " + module + " " + version
                         + " failed its integrity check (hash mismatch); nothing was installed.";
         }
     }
 
+    /**
+     * The line for a {@code download.url} the catalogue put outside its own host: refused before
+     * anything is requested, because a catalogue answer must never move an executable download.
+     */
+    private static String foreignDownloadLine(String module, String version) {
+        return module + " " + version + " was refused: the download is not on the catalogue host;"
+                + " nothing was installed.";
+    }
+
     /** The line for a version the catalogue lists but does not offer, which is not an integrity failure. */
     private static String notAvailableLine(String module, String version, CatalogueClient.Version metadata) {
         String reason = "license_required".equals(metadata.downloadKind())
-                ? "licence required" : "no public download";
+                ? "requires a licence" : "no public download";
         return module + " " + version + " is not available for download (" + reason + ");"
                 + " nothing was installed.";
     }
@@ -708,7 +729,7 @@ public class PluginInstallUtils {
             case MISSING_METADATA:
                 return "no usable hash or size in the catalogue entry";
             case NOT_AVAILABLE:
-                return "no public download";
+                return "not available";
             case IO_ERROR:
                 return "download did not complete";
             default:

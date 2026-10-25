@@ -236,4 +236,73 @@ class CatalogueInstallEndToEndTest {
             }
         }
     }
+    /**
+     * The operator's line has to name what actually happened (plan 22-18 fix round, gap 3): a
+     * timeout or a 5xx is a transport failure, a download URL outside the catalogue's host is a
+     * refusal, a 403/404 is a version that is not offered, and a {@code license_required} entry
+     * needs a licence. One line each, naming module, version and reason, never a URL.
+     */
+    @Nested
+    @DisplayName("each download refusal names its own reason")
+    class RefusalReasons {
+
+        @Test
+        @DisplayName("a download URL on another host is refused before any request, said as a refusal")
+        void foreignDownloadUrl_isRefusedWithoutARequest() {
+            catalogue.mode(StubCatalogue.Mode.FOREIGN_URL);
+
+            PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1");
+
+            assertThat(result.isInstalled()).isFalse();
+            assertThat(catalogue.paths()).as("nothing was requested from the foreign host or locally")
+                    .noneMatch(path -> path.endsWith("/download"));
+            assertThat(messages()).containsExactly(
+                    "demo 1.1 was refused: the download is not on the catalogue host; nothing was installed.");
+            assertThat(modulesFolderNames()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("403 is 'not available', neither a licence nor an integrity failure")
+        void forbidden_isNotAvailable() {
+            catalogue.mode(StubCatalogue.Mode.FORBIDDEN);
+
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1").isInstalled()).isFalse();
+
+            assertThat(messages()).containsExactly("demo 1.1 is not available for download"
+                    + " (withdrawn, unpublished or not licensed); nothing was installed.");
+            assertThat(modulesFolderNames()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("500 is a transport failure ('could not download'), never the catalogue-host wording")
+        void serverError_isATransportFailure() {
+            catalogue.mode(StubCatalogue.Mode.SERVER_ERROR);
+
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1").isInstalled()).isFalse();
+
+            assertThat(messages()).containsExactly(
+                    "Could not download demo 1.1 (the download did not complete); nothing was installed.");
+            assertThat(modulesFolderNames()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("every kind maps to its own line, and metadata without a hash says nothing was requested")
+        void everyKindHasItsOwnLine() {
+            List<String> lines = new ArrayList<>();
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.HASH_MISMATCH));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.SIZE_MISMATCH));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.HEADER_MISMATCH));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.MISSING_METADATA));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.NOT_AVAILABLE));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.IO_ERROR));
+
+            assertThat(lines).doesNotHaveDuplicates().hasSize(6);
+            assertThat(lines.get(3)).isEqualTo("demo 1.1 was not downloaded:"
+                    + " the catalogue entry carries no usable hash or size; nothing was installed.");
+            assertThat(lines.get(4)).isEqualTo("demo 1.1 is not available for download"
+                    + " (withdrawn, unpublished or not licensed); nothing was installed.");
+            assertThat(lines.get(5)).isEqualTo(
+                    "Could not download demo 1.1 (the download did not complete); nothing was installed.");
+        }
+    }
 }
