@@ -9,10 +9,14 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -170,13 +174,50 @@ class AgentProtocolTest {
         assertRefused(attempt, welcome.get("id").getAsString());
     }
 
+    static Stream<Arguments> invalidWelcomeFixtures() {
+        return ContractFixtures.invalidFrames("welcome").stream()
+                .map(fixture -> Arguments.of(fixture.path().substring(fixture.path().lastIndexOf('/') + 1), fixture));
+    }
+
+    @Test
+    @DisplayName("the vendored contract carries both invalid welcome fixtures the parameterised test reads")
+    void invalidWelcomeFixturesArePresent() {
+        assertThat(ContractFixtures.invalidFrames("welcome")).extracting(ContractFixtures.Fixture::path)
+                .anyMatch(path -> path.endsWith("/missing-replyTo.json"))
+                .anyMatch(path -> path.endsWith("/batch-too-large.json"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidWelcomeFixtures")
+    @DisplayName("every vendored invalid welcome is answered invalid_message and ends the attempt at once")
+    void vendoredInvalidWelcomeIsRefusedAtOnce(String name, ContractFixtures.Fixture fixture) {
+        HandshakeEndToEndTest.FakeAttempt attempt = open();
+        JsonObject frame = fixture.frame();
+        assertThat(fixture.expect()).isEqualTo("invalid_message");
+        attempt.text(frame.toString());
+        // No scheduler advance: the refusal must not wait for the 15 s welcome deadline.
+        assertRefused(attempt, frame.get("id").getAsString());
+    }
+
+    @Test
+    @DisplayName("an unreadable frame before welcome is answered invalid_message without replyTo and ends the attempt")
+    void unreadableFrameBeforeWelcomeIsRefused() {
+        HandshakeEndToEndTest.FakeAttempt attempt = open();
+        attempt.text("{not json");
+        assertRefused(attempt, null);
+    }
+
     private void assertRefused(HandshakeEndToEndTest.FakeAttempt attempt, String welcomeId) {
         List<JsonObject> frames = sentFrames(attempt);
         assertThat(frames).hasSize(2);
         JsonObject error = frames.get(1);
         ContractSchemas.assertFrameValid(error);
         assertThat(error.get("type").getAsString()).isEqualTo("error");
-        assertThat(error.get("replyTo").getAsString()).isEqualTo(welcomeId);
+        if (welcomeId == null) {
+            assertThat(error.has("replyTo")).as("no readable id to answer").isFalse();
+        } else {
+            assertThat(error.get("replyTo").getAsString()).isEqualTo(welcomeId);
+        }
         assertThat(error.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
         assertThat(attempt.closedWith).isEqualTo(1000);
         assertThat(protocol.isEstablished()).isFalse();

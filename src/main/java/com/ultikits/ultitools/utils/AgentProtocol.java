@@ -255,7 +255,10 @@ final class AgentProtocol {
                 // The router answers the frame with the contract's correlated error.
                 router.dispatch(text, channel);
             } else {
-                log.accept(Level.FINE, "UltiCloud: discarded an invalid frame received before welcome.");
+                refuseBeforeWelcome(invalid, after);
+                for (Runnable action : after) {
+                    safely(action);
+                }
             }
             return;
         }
@@ -353,6 +356,28 @@ final class AgentProtocol {
         log.accept(Level.INFO, "UltiCloud: connected.");
         for (Listener listener : notify) {
             after.add(() -> listener.established(channel));
+        }
+    }
+
+    /**
+     * A frame that fails the envelope check before welcome. Only a welcome may arrive then, so the
+     * frame is treated as a broken welcome (for example the vendored {@code missing-replyTo.json}):
+     * it is answered with {@code error invalid_message} (replyTo the frame's id when that id is a
+     * readable ULID, otherwise none) and the attempt is abandoned through the same path as a welcome
+     * that breaks the contract, instead of waiting for the welcome deadline.
+     */
+    private void refuseBeforeWelcome(InvalidFrameException invalid, List<Runnable> after) {
+        synchronized (lock) {
+            if (closed || welcomeSeen || established) {
+                log.accept(Level.FINE, "UltiCloud: discarded an invalid frame received before welcome.");
+                return;
+            }
+            welcomeSeen = true;
+            sendErrorUnlocked(invalid.replyTo(), "invalid_message",
+                    "The frame before welcome is not a valid welcome answering the hello.");
+            notice(Level.WARNING, "invalid-welcome",
+                    "UltiCloud: refused the gateway's welcome (invalid_message); the connection is retried.");
+            after.add(() -> connection.abandonAttempt("invalid welcome"));
         }
     }
 
