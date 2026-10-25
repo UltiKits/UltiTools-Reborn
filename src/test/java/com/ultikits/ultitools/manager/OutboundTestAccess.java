@@ -18,6 +18,14 @@ public final class OutboundTestAccess {
         return monitor;
     }
 
+    /**
+     * @param error an exception
+     * @return the group key the error-report collector files it under
+     */
+    public static String fingerprintOf(Throwable error) {
+        return ErrorReportCollector.fingerprintOf(error);
+    }
+
     /** @return the one-minute TPS the last created monitor reports */
     public static double currentTps() {
         return last.getCurrentTPS();

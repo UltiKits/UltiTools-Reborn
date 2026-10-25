@@ -54,6 +54,7 @@ public class ErrorReportCollector {
     private static final int MAX_STACK_TRACE_LENGTH = 2048;
     private static final int MAX_STACK_FRAMES = 20;
     private static final int FINGERPRINT_STACK_FRAMES = 3;
+    private static final long BYTES_PER_MB = 1024L * 1024L;
 
     // Config values (volatile for cross-thread visibility)
     private volatile boolean enabled = true;
@@ -183,7 +184,37 @@ public class ErrorReportCollector {
      * @return JsonArray of error reports
      */
     public JsonArray drainErrors(int max) {
-        if (!enabled) return new JsonArray();
+        JsonArray result = new JsonArray();
+        for (ErrorReport report : drainReports(max)) {
+            result.add(report.toJson());
+        }
+        return result;
+    }
+
+    /**
+     * Drains the pending reports as v2 {@code error.report} payloads (plan 22-22, S-55), with the same limit, merge and
+     * order as {@link #drainErrors(int)}. Each payload is built by {@link AgentEventEncoders#errorReport} from
+     * {@link ErrorReport#view()}, so the message, stack trace and trigger detail are redacted exactly as the v1 report
+     * is, and the fingerprint is this collector's group key padded to eight hex digits. A report the encoder cannot
+     * make valid is dropped. A repeat of a report already drained inside the dedupe window is counted on it and not
+     * sent again, as before.
+     *
+     * @param max the most payloads to return
+     * @return the payloads, most frequent first; empty while error reporting is off
+     */
+    List<JsonObject> drainErrorReportPayloads(int max) {
+        List<JsonObject> payloads = new ArrayList<>();
+        for (ErrorReport report : drainReports(max)) {
+            JsonObject payload = AgentEventEncoders.errorReport(report.view());
+            if (payload != null) {
+                payloads.add(payload);
+            }
+        }
+        return payloads;
+    }
+
+    private List<ErrorReport> drainReports(int max) {
+        if (!enabled) return Collections.emptyList();
 
         int limit = Math.min(max, maxErrorsPerBatch);
         List<ErrorReport> drained = new ArrayList<>();
@@ -192,7 +223,7 @@ public class ErrorReportCollector {
             drained.add(report);
         }
 
-        if (drained.isEmpty()) return new JsonArray();
+        if (drained.isEmpty()) return Collections.emptyList();
 
         // Final dedup pass — merge entries with same fingerprint
         Map<String, ErrorReport> merged = new HashMap<>();
@@ -210,10 +241,7 @@ public class ErrorReportCollector {
         Collections.sort(sorted, (a, b) -> Integer.compare(b.getCount(), a.getCount()));
 
         // Take at most limit
-        JsonArray result = new JsonArray();
-        for (int i = 0; i < Math.min(limit, sorted.size()); i++) {
-            result.add(sorted.get(i).toJson());
-        }
+        List<ErrorReport> result = new ArrayList<>(sorted.subList(0, Math.min(limit, sorted.size())));
 
         // Put remaining back into queue
         for (int i = limit; i < sorted.size(); i++) {
@@ -233,9 +261,18 @@ public class ErrorReportCollector {
     }
 
     /**
+     * @param throwable an exception
+     * @return the group key this collector files it under; the panel's error group id is this key padded to eight hex
+     *         digits (S-55)
+     */
+    static String fingerprintOf(Throwable throwable) {
+        return computeFingerprint(throwable);
+    }
+
+    /**
      * Compute a fingerprint for dedup: hash of (exception class + top N stack frame method:line).
      */
-    private String computeFingerprint(Throwable throwable) {
+    private static String computeFingerprint(Throwable throwable) {
         StringBuilder sb = new StringBuilder();
         sb.append(throwable.getClass().getName());
 
@@ -259,7 +296,10 @@ public class ErrorReportCollector {
         ErrorReport report = new ErrorReport();
         report.fingerprint = fingerprint;
         report.timestamp = System.currentTimeMillis();
+        report.firstSeenAt = report.timestamp;
+        report.lastSeenAt = report.timestamp;
         report.count = new AtomicInteger(1);
+        report.exceptionType = throwable.getClass().getName();
 
         // Error code from UltiToolsException
         if (throwable instanceof UltiToolsException) {
@@ -318,6 +358,8 @@ public class ErrorReportCollector {
             report.serverMemoryPct = maxMem > 0
                     ? Math.round((double) usedMem / maxMem * 10000.0) / 100.0
                     : 0;
+            report.memUsedMb = usedMem / BYTES_PER_MB;
+            report.memMaxMb = maxMem > 0 && maxMem != Long.MAX_VALUE ? maxMem / BYTES_PER_MB : -1;
 
             UltiTools instance = UltiTools.getInstance();
             if (instance != null) {
@@ -342,6 +384,8 @@ public class ErrorReportCollector {
             report.serverTPS = -1;
             report.serverMemoryPct = -1;
             report.playerCount = -1;
+            report.memUsedMb = -1;
+            report.memMaxMb = -1;
         }
     }
 
@@ -455,6 +499,16 @@ public class ErrorReportCollector {
         long timestamp;
         AtomicInteger count;
         boolean isFramework;
+        /** The exception's binary class name, for the v2 report. */
+        String exceptionType;
+        /** Used heap in megabytes when the report was created, or -1. */
+        long memUsedMb = -1;
+        /** Maximum heap in megabytes, or -1 when unknown. */
+        long memMaxMb = -1;
+        /** When the group was first seen, in milliseconds. */
+        volatile long firstSeenAt;
+        /** When the group was last counted, in milliseconds. */
+        volatile long lastSeenAt;
 
         String getFingerprint() {
             return fingerprint;
@@ -466,6 +520,7 @@ public class ErrorReportCollector {
 
         void incrementCount() {
             count.incrementAndGet();
+            lastSeenAt = System.currentTimeMillis();
         }
 
         /**
@@ -473,6 +528,8 @@ public class ErrorReportCollector {
          */
         void mergeFrom(ErrorReport other) {
             count.addAndGet(other.getCount());
+            firstSeenAt = Math.min(firstSeenAt, other.firstSeenAt);
+            lastSeenAt = Math.max(lastSeenAt, other.lastSeenAt);
             if (other.timestamp > this.timestamp) {
                 this.timestamp = other.timestamp;
                 this.triggerDetail = other.triggerDetail;
@@ -482,6 +539,40 @@ public class ErrorReportCollector {
                 this.serverMemoryPct = other.serverMemoryPct;
                 this.playerCount = other.playerCount;
             }
+        }
+
+        /**
+         * The report's values for the v2 {@code error.report} encoder, field by field (plan 22-22): the raw group key
+         * as fingerprint (the encoder pads it), the exception class, the redacted message, stack trace and trigger
+         * detail, the module, the trigger type name, the player name, {@code className.methodName} of the top frame
+         * as location, and the server snapshot with every unknown value ({@code -1}) as {@code null}.
+         *
+         * @return a view over this report
+         */
+        AgentEventEncoders.ErrorReportView view() {
+            final String redactedMessage = redact(message);
+            final String redactedStackTrace = redact(stackTrace);
+            final String redactedDetail = redact(triggerDetail);
+            return new AgentEventEncoders.ErrorReportView() {
+                @Override public String fingerprint() { return fingerprint; }
+                @Override public String exceptionType() { return exceptionType; }
+                @Override public String message() { return redactedMessage; }
+                @Override public String stackTrace() { return redactedStackTrace; }
+                @Override public String moduleName() { return moduleName; }
+                @Override public String triggerKind() { return triggerType; }
+                @Override public String triggerDetail() { return redactedDetail; }
+                @Override public String playerName() { return playerName; }
+                @Override public String location() {
+                    return className == null ? null : className + "." + methodName;
+                }
+                @Override public Double tps() { return serverTPS < 0 ? null : serverTPS; }
+                @Override public Long memUsedMb() { return memUsedMb < 0 ? null : memUsedMb; }
+                @Override public Long memMaxMb() { return memMaxMb < 0 ? null : memMaxMb; }
+                @Override public Long onlinePlayers() { return playerCount < 0 ? null : (long) playerCount; }
+                @Override public int occurrences() { return count.get(); }
+                @Override public long firstSeenAt() { return firstSeenAt; }
+                @Override public long lastSeenAt() { return lastSeenAt; }
+            };
         }
 
         /**

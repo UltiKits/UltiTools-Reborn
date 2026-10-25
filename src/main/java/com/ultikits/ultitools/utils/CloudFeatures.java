@@ -130,7 +130,8 @@ public final class CloudFeatures {
         this.settings = new AgentSettings(bindings.powerEnabled);
         ServerMonitorManager monitor = bindings.monitor == null ? null : bindings.monitor.get();
         this.outbound = new AgentOutboundFeeds(monitor, () -> capabilities.enabled("telemetry"),
-                () -> capabilities.enabled("logs"), bindings.clock, bindings.mainThread);
+                () -> capabilities.enabled("logs"), () -> capabilities.enabled("errors"),
+                bindings.errors == null ? () -> null : bindings.errors, bindings.clock, bindings.mainThread);
     }
 
     /**
@@ -276,6 +277,29 @@ public final class CloudFeatures {
             }
             mainTimerCancel = bindings.mainTimer.apply(outbound::mainThreadSecond);
         }
+    }
+
+    /**
+     * Sends one {@code player.command} carrying only the command's normalised name (D-20), while a connection is
+     * established and the {@code events:commands} switch is on; never buffered (D-14).
+     *
+     * @param commandLine the command line as the player typed it
+     */
+    void sendPlayerCommand(String commandLine) {
+        if (!capabilities.enabled("events:commands")) {
+            return;
+        }
+        CloudChannel channel = liveChannel();
+        if (channel == null || !channel.isOpen()) {
+            return;
+        }
+        JsonObject payload = AgentOutboundFeeds.playerCommandPayload(commandLine);
+        if (payload == null) {
+            PanelConnectionLog.log(Level.FINE, "UltiCloud: a player command whose name the contract cannot carry "
+                    + "was not reported.");
+            return;
+        }
+        channel.send("player.command", payload);
     }
 
     /** @return the hello list and the per-request switch check of every connection */
@@ -505,6 +529,8 @@ public final class CloudFeatures {
         Supplier<PanelResponderRegistry> responders;
         /** A loaded module's {@code plugin.yml} version by module name, for its capability name. */
         Function<String, String> moduleVersion;
+        /** The collector the {@code error.report} frames are drained from; {@code null} sends none. */
+        Supplier<com.ultikits.ultitools.manager.ErrorReportCollector> errors;
         /** The server sampler of the telemetry; {@code null} sends no telemetry. */
         Supplier<ServerMonitorManager> monitor;
         /**
@@ -532,6 +558,7 @@ public final class CloudFeatures {
                     () -> Bukkit.getScheduler().runTask(plugin, runnable));
             bindings.disabling = () -> !PluginInitiationUtils.isAcceptingPanelMessages();
             bindings.monitor = plugin::getServerMonitorManager;
+            bindings.errors = plugin::getErrorReportCollector;
             bindings.mainTimer = task -> {
                 final org.bukkit.scheduler.BukkitTask started = PluginInitiationUtils.scheduleUnlessDisabling(
                         "UltiCloud telemetry", () -> Bukkit.getScheduler().runTaskTimer(plugin, task, 20L, 20L));

@@ -6,16 +6,19 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.jetbrains.annotations.ApiStatus;
 
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.handler.ConsoleMirror;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
+import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 
 /**
  * The framework's outbound producers on the v2 connection (plan 22-22, D-14, D-20, D-23, S-56); internal, not for module
@@ -28,6 +31,9 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  * {@link ServerMonitorManager}, without its v1 sender. Logs: a {@link SystemLogHandler} attached to the root logger
  * hands every record to a v2 {@link UltiPanelLogTransmitter}, whose single builder redacts it (22-04), and the redacted
  * line goes to {@link AgentLogBatcher}; a full batch is flushed at once on the agent thread, the rest every second.
+ * Errors: the reports {@link ErrorReportCollector} grouped leave as {@code error.report} every second (at most
+ * {@value #ERRORS_PER_SECOND}). Player events: the join, leave and command payloads come only from
+ * {@link AgentEventEncoders} ({@link #playerRefPayload}, {@link #playerCommandPayload}).
  * <p>
  * <b>Only while connected.</b> A line logged while no connection is established is dropped, never buffered for the
  * next one (D-14), and a close clears what the batcher still held. The switches are read for every line and every
@@ -47,10 +53,17 @@ public final class AgentOutboundFeeds {
     /** The server state is sampled on every fifth once-a-second run, as v1's 100-tick state task did. */
     static final int STATE_SAMPLE_PERIOD_SECONDS = 5;
 
+    /** The most error reports sent in one second (the collector's own per-batch cap still applies). */
+    static final int ERRORS_PER_SECOND = 10;
+
+    private static final String ERROR_REPORT = "error.report";
+
     private final ServerMonitorManager monitor;
     private final AgentTelemetry telemetry;
     private final AgentLogBatcher logs;
     private final BooleanSupplier logsEnabled;
+    private final BooleanSupplier errorsEnabled;
+    private final Supplier<ErrorReportCollector> errors;
     private final UltiPanelLogTransmitter transmitter;
     private final AtomicBoolean flushQueued = new AtomicBoolean();
 
@@ -67,16 +80,21 @@ public final class AgentOutboundFeeds {
      * @param monitor          the server sampler, or {@code null} for no telemetry
      * @param telemetryEnabled the {@code telemetry} switch, read for every frame
      * @param logsEnabled      the {@code logs} switch, read for every line
+     * @param errorsEnabled    the {@code errors} switch, read every second
+     * @param errors           the error-report collector, or a supplier of {@code null} for no error reports
      * @param clock            epoch milliseconds for the cadence and the log rate bucket
      * @param mainThread       runs Bukkit work on the main thread, in order; {@code null} for no telemetry
      */
     public AgentOutboundFeeds(ServerMonitorManager monitor, BooleanSupplier telemetryEnabled,
-                              BooleanSupplier logsEnabled, LongSupplier clock, Executor mainThread) {
+                              BooleanSupplier logsEnabled, BooleanSupplier errorsEnabled,
+                              Supplier<ErrorReportCollector> errors, LongSupplier clock, Executor mainThread) {
         this.monitor = monitor;
         this.telemetry = monitor == null || mainThread == null ? null
                 : new AgentTelemetry(monitor, telemetryEnabled, clock, mainThread);
         this.logs = new AgentLogBatcher(clock);
         this.logsEnabled = logsEnabled;
+        this.errorsEnabled = errorsEnabled;
+        this.errors = errors;
         this.transmitter = new UltiPanelLogTransmitter(this::offerLine);
     }
 
@@ -140,7 +158,7 @@ public final class AgentOutboundFeeds {
         }
     }
 
-    /** The once-a-second agent-thread run: sends the buffered log lines. Never throws. */
+    /** The once-a-second agent-thread run: sends the buffered log lines and the pending error reports. Never throws. */
     public void agentSecond() {
         CloudChannel channel = live;
         if (channel == null) {
@@ -148,6 +166,7 @@ public final class AgentOutboundFeeds {
         }
         try {
             logs.flush(channel);
+            sendErrorReports(channel);
         } catch (RuntimeException failure) {
             PanelConnectionLog.log(Level.WARNING, "UltiCloud: the once-a-second send failed ("
                     + failure.getClass().getSimpleName() + ").");
@@ -168,6 +187,39 @@ public final class AgentOutboundFeeds {
                 Logger.getLogger("").removeHandler(attached);
             }
         }
+    }
+
+    /**
+     * Sends what the collector grouped since the last second, while the {@code errors} switch is on. While it is off
+     * or no connection is established the reports stay in the collector's bounded queue.
+     */
+    private void sendErrorReports(CloudChannel channel) {
+        ErrorReportCollector collector = errors == null ? null : errors.get();
+        if (collector == null || !errorsEnabled.getAsBoolean()) {
+            return;
+        }
+        for (JsonObject payload : collector.drainErrorReportPayloads(ERRORS_PER_SECOND)) {
+            channel.send(ERROR_REPORT, payload);
+        }
+    }
+
+    /**
+     * @param uuid the player's UUID string
+     * @param name the player's name as the server reports it
+     * @return the {@code player.join} / {@code player.leave} payload {@code { playerUuid, playerName }}, or
+     *         {@code null} when the contract cannot carry this player
+     */
+    public static JsonObject playerRefPayload(String uuid, String name) {
+        return AgentEventEncoders.playerRef(uuid, name);
+    }
+
+    /**
+     * @param commandLine the command line as the player typed it
+     * @return the {@code player.command} payload carrying only the normalised command name (D-20), or {@code null}
+     *         when the name does not fit the contract
+     */
+    public static JsonObject playerCommandPayload(String commandLine) {
+        return AgentEventEncoders.playerCommand(SensitiveCommandRegistry.commandName(commandLine));
     }
 
     /** One redacted line from the transmitter; dropped while offline or with the logs switch off. */

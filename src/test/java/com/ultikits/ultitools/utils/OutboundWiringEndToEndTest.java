@@ -19,6 +19,9 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,12 +31,16 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.OutboundTestAccess;
+import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.stub.UltiCloudStub;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 
@@ -273,6 +280,126 @@ class OutboundWiringEndToEndTest {
         }
         assertThat(firstOfSecond).isEqualTo(secondConnection + ":hello");
         assertThat(stub.gateway().sent("error")).isEmpty();
+    }
+
+    // ------------------------------------------------------------------ events (Task 2)
+
+    private PlayerMock playerWithListener(String name) {
+        server.getPluginManager().registerEvents(new CloudOutboxListener(), MockBukkit.createMockPlugin());
+        return server.addPlayer(name);
+    }
+
+    @Test
+    @DisplayName("a namespaced sensitive command reaches the gateway as player.command with its name only")
+    void playerCommandCarriesOnlyTheName() throws Exception {
+        connect(bindings());
+        PlayerMock player = playerWithListener("Notch");
+        server.getPluginManager().callEvent(new PlayerCommandPreprocessEvent(player, "/ultilogin:login secret"));
+
+        await(() -> !stub.gateway().received("player.command").isEmpty(), "player.command");
+        assertThat(stub.gateway().received("player.command")).hasSize(1);
+        JsonObject payload = stub.gateway().received("player.command").get(0).getAsJsonObject("payload");
+        assertThat(payload.toString()).isEqualTo("{\"name\":\"login\"}");
+        assertThat(allReceivedText()).doesNotContain("secret");
+        assertThat(stub.accessLog().count("WS-INVALID")).isZero();
+    }
+
+    @Test
+    @SuppressWarnings("deprecation") // the String constructors are the ones every supported Paper keeps
+    @DisplayName("a join and a leave enter the outbox as { playerUuid, playerName }, are sent and acked")
+    void joinAndLeaveAreSentAndAcked() throws Exception {
+        connect(bindings());
+        PlayerMock player = playerWithListener("Steve");
+        int joinsBefore = stub.gateway().received("player.join").size();
+        server.getPluginManager().callEvent(new PlayerJoinEvent(player, "joined"));
+        server.getPluginManager().callEvent(new PlayerQuitEvent(player, "left"));
+
+        await(() -> stub.gateway().received("player.join").size() > joinsBefore
+                && !stub.gateway().received("player.leave").isEmpty(), "player.join and player.leave");
+        JsonObject leave = stub.gateway().received("player.leave").get(0).getAsJsonObject("payload");
+        assertThat(leave.keySet()).containsExactlyInAnyOrder("playerUuid", "playerName");
+        assertThat(leave.get("playerName").getAsString()).isEqualTo("Steve");
+        assertThat(leave.get("playerUuid").getAsString()).isEqualTo(player.getUniqueId().toString());
+        await(() -> CloudSession.current().cloudOutbox().unacked().isEmpty(), "every event acked");
+        assertThat(stub.accessLog().count("WS-INVALID")).isZero();
+    }
+
+    @Test
+    @DisplayName("an error the collector caught arrives once as error.report with the padded group key, redacted")
+    void errorReportReachesTheGateway() throws Exception {
+        final ErrorReportCollector collector = new ErrorReportCollector();
+        CloudFeatures.Bindings bindings = bindings();
+        bindings.errors = () -> collector;
+        connect(bindings);
+        IllegalStateException error = new IllegalStateException("failed while running /login secret");
+        collector.reportError(error, "UltiChat", TriggerContext.scheduled("tick"));
+
+        await(() -> !stub.gateway().received("error.report").isEmpty(), "error.report");
+        JsonObject payload = stub.gateway().received("error.report").get(0).getAsJsonObject("payload");
+        String key = OutboundTestAccess.fingerprintOf(error);
+        assertThat(Long.parseLong(payload.get("fingerprint").getAsString(), 16)).isEqualTo(Long.parseLong(key, 16));
+        assertThat(payload.get("fingerprint").getAsString()).hasSizeGreaterThanOrEqualTo(8).endsWith(key);
+        assertThat(payload.get("message").getAsString()).isEqualTo("failed while running /login ***");
+
+        collector.reportError(error, "UltiChat", TriggerContext.scheduled("tick"));
+        Thread.sleep(2500L);
+        await(() -> true, "nothing");
+        assertThat(stub.gateway().received("error.report")).as("counted, not resent").hasSize(1);
+        assertThat(allReceivedText()).doesNotContain("secret");
+        collector.shutdown();
+    }
+
+    @Test
+    @DisplayName("snapshot.request is answered after the requested snapshots, with replyTo")
+    void snapshotRequestIsAnsweredAfterTheSnapshots() throws Exception {
+        connect(bindings());
+        await(() -> !stub.gateway().received("worlds.snapshot").isEmpty(), "the opening snapshots");
+        int statusBefore = stub.gateway().received("status").size();
+        int worldsBefore = stub.gateway().received("worlds.snapshot").size();
+        String id = stub.gateway().send("snapshot.request", "all", null, null, null).get("id").getAsString();
+
+        await(() -> !stub.gateway().received("snapshot.request.result").isEmpty(), "snapshot.request.result");
+        JsonObject result = stub.gateway().received("snapshot.request.result").get(0);
+        assertThat(result.get("replyTo").getAsString()).isEqualTo(id);
+        assertThat(result.getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        JsonArray sent = result.getAsJsonObject("payload").getAsJsonObject("data").getAsJsonArray("sent");
+        assertThat(sent.size()).isPositive();
+        assertThat(stub.gateway().received("status").size()).isGreaterThan(statusBefore);
+        assertThat(stub.gateway().received("worlds.snapshot").size()).isGreaterThan(worldsBefore);
+        List<String> order = new ArrayList<>();
+        for (com.ultikits.ultitools.stub.StubGateway.Frame frame : stub.gateway().frames()) {
+            if ("in".equals(frame.direction())) {
+                order.add(frame.type());
+            }
+        }
+        assertThat(order.lastIndexOf("worlds.snapshot")).isLessThan(order.indexOf("snapshot.request.result"));
+    }
+
+    @Test
+    @SuppressWarnings("deprecation") // the String constructor is the one every supported Paper keeps
+    @DisplayName("player events and error reporting turned off mid-session: no command, join or error frame leaves")
+    void eventSwitchesOffSendNothing() throws Exception {
+        final ErrorReportCollector collector = new ErrorReportCollector();
+        CloudFeatures.Bindings bindings = bindings();
+        bindings.errors = () -> collector;
+        connect(bindings);
+        PlayerMock player = playerWithListener("Alex");
+        await(() -> !stub.gateway().received("player.join").isEmpty(), "the join of adding the player");
+        int joins = stub.gateway().received("player.join").size();
+        // Declared and accepted at the handshake; the operator switches them off afterwards (S-66).
+        config.set(Capability.PLAYER_EVENTS.getConfigPath(), false);
+        config.set("ultipanel.logging.error-reporting.enabled", false);
+        server.getPluginManager().callEvent(new PlayerCommandPreprocessEvent(player, "/spawn"));
+        server.getPluginManager().callEvent(new PlayerJoinEvent(player, "joined"));
+        collector.reportError(new IllegalStateException("off"), null, null);
+        Thread.sleep(2500L);
+        await(() -> true, "nothing");
+
+        assertThat(stub.gateway().received("player.command")).isEmpty();
+        assertThat(stub.gateway().received("player.join")).hasSize(joins);
+        assertThat(stub.gateway().received("error.report")).isEmpty();
+        assertThat(stub.gateway().sent("error")).isEmpty();
+        collector.shutdown();
     }
 
     // ------------------------------------------------------------------ helpers
