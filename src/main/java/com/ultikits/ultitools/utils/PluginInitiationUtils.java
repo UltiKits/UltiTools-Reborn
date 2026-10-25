@@ -15,6 +15,7 @@ import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
@@ -960,8 +961,11 @@ public class PluginInitiationUtils {
      * outbound replies.
      * <p>
      * The reply always carries the message type and the request's {@code requestId} (echoed from
-     * {@code data}), and either the responder's resolved {@link JsonObject} or an {@code error}
-     * member naming the failure — {@link PanelResponderRegistry#dispatch} guarantees its returned
+     * {@code data}), and either the responder's result or an {@code error} member naming the
+     * failure. An object result's members are carried next to {@code requestId}, as in 6.3.0; a
+     * "no content" result ({@link com.google.gson.JsonNull}) carries {@code requestId} alone, as a
+     * success; an array or primitive result is carried under {@code result}.
+     * {@link PanelResponderRegistry#dispatch} guarantees its returned
      * future always settles one way or the other, so this method never has to guess. When the
      * request carried no {@code requestId}, the reply is logged rather than sent: the panel has no
      * way to correlate an uncorrelated reply, matching {@link #sendCapabilityRefusal}'s same
@@ -974,6 +978,28 @@ public class PluginInitiationUtils {
      * @param data     the message's {@code data} object, possibly {@code null}
      * @param registry the registry to dispatch through
      */
+    /**
+     * The v1 reply body for a responder's outcome, before {@code requestId} is added: always a new
+     * object, so the responder's own result is never changed. A failure or "no content" gives an
+     * empty object, an object result a copy of it, and an array or primitive result an object
+     * holding a copy under {@code result}.
+     *
+     * @param result    the registry's successful outcome, possibly {@code null}
+     * @param throwable the registry's failure, or {@code null}
+     * @return a fresh reply body
+     */
+    static JsonObject responderReplyPayload(JsonElement result, Throwable throwable) {
+        if (throwable != null || result == null || result.isJsonNull()) {
+            return new JsonObject();
+        }
+        if (result.isJsonObject()) {
+            return result.getAsJsonObject().deepCopy();
+        }
+        JsonObject payload = new JsonObject();
+        payload.add("result", result.deepCopy());
+        return payload;
+    }
+
     private static void dispatchToResponder(String type, JsonObject data, PanelResponderRegistry registry) {
         String requestId = data != null ? readString(data, "requestId") : null;
         CloudSession admittedSession = CloudSession.current();
@@ -1001,7 +1027,7 @@ public class PluginInitiationUtils {
             // Each reply is built from its own copy: a responder may return one cached object for
             // every call, and replies run concurrently, so writing requestId into that object would
             // let one reply carry another request's id and would change the responder's object.
-            JsonObject payload = throwable != null || result == null ? new JsonObject() : result.deepCopy();
+            JsonObject payload = responderReplyPayload(result, throwable);
             payload.addProperty("requestId", requestId);
             if (throwable != null) {
                 payload.addProperty("error", rootCauseMessage(throwable));

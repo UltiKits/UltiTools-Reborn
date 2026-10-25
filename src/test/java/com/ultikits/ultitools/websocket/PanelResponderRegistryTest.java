@@ -37,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.mockito.ArgumentCaptor;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -230,7 +231,7 @@ class PanelResponderRegistryTest {
             result.addProperty("ok", true);
             registry.registerResponder("stats", data -> CompletableFuture.completedFuture(result), "module-a");
 
-            CompletableFuture<JsonObject> outcome = registry.dispatch("stats", new JsonObject(), "req-1");
+            CompletableFuture<JsonElement> outcome = registry.dispatch("stats", new JsonObject(), "req-1");
 
             assertThat(outcome.get(2, TimeUnit.SECONDS)).isSameAs(result);
         }
@@ -241,7 +242,7 @@ class PanelResponderRegistryTest {
             PanelResponderRegistry registry = new PanelResponderRegistry();
             registry.registerResponder("stalls", data -> new CompletableFuture<>(), "module-a");
 
-            CompletableFuture<JsonObject> outcome = registry.dispatch("stalls", new JsonObject(), "req-1");
+            CompletableFuture<JsonElement> outcome = registry.dispatch("stalls", new JsonObject(), "req-1");
 
             assertThatThrownBy(() -> outcome.get(PanelResponderRegistry.RESPONDER_TIMEOUT_MILLIS + 5000,
                     TimeUnit.MILLISECONDS))
@@ -262,7 +263,7 @@ class PanelResponderRegistryTest {
                 throw boom;
             }, "module-a");
 
-            CompletableFuture<JsonObject> outcome = registry.dispatch("throws", new JsonObject(), "req-1");
+            CompletableFuture<JsonElement> outcome = registry.dispatch("throws", new JsonObject(), "req-1");
             awaitSettled(outcome);
 
             assertThat(outcome).isCompletedExceptionally();
@@ -275,7 +276,7 @@ class PanelResponderRegistryTest {
             PanelResponderRegistry registry = new PanelResponderRegistry();
             registry.registerResponder("returns-null", data -> null, "module-a");
 
-            CompletableFuture<JsonObject> outcome = registry.dispatch("returns-null", new JsonObject(), "req-1");
+            CompletableFuture<JsonElement> outcome = registry.dispatch("returns-null", new JsonObject(), "req-1");
             awaitSettled(outcome);
 
             assertThat(outcome).isCompletedExceptionally();
@@ -300,7 +301,7 @@ class PanelResponderRegistryTest {
          * registry worker, so the outcome is not settled yet when {@code dispatch} returns. A
          * missed settlement surfaces as a {@code TimeoutException}.
          */
-        private void awaitSettled(CompletableFuture<JsonObject> outcome) throws Exception {
+        private void awaitSettled(CompletableFuture<JsonElement> outcome) throws Exception {
             outcome.handle((value, failure) -> null).get(5, TimeUnit.SECONDS);
         }
     }

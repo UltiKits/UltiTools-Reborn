@@ -24,6 +24,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
@@ -166,7 +168,7 @@ class PanelResponderRegistryLifecycleTest {
             throw PanelResponderRegistryLifecycleTest.<RuntimeException>sneakyThrow(checked);
         }, "module-a");
 
-        CompletableFuture<JsonObject> outcome = registry.dispatch("sneaky", new JsonObject(), "req-1");
+        CompletableFuture<JsonElement> outcome = registry.dispatch("sneaky", new JsonObject(), "req-1");
 
         assertThat(outcome).failsWithin(PROMPT)
                 .withThrowableOfType(ExecutionException.class)
@@ -183,7 +185,7 @@ class PanelResponderRegistryLifecycleTest {
             throw linkage;
         }, "module-a");
 
-        CompletableFuture<JsonObject> outcome = registry.dispatch("linkage", new JsonObject(), "req-1");
+        CompletableFuture<JsonElement> outcome = registry.dispatch("linkage", new JsonObject(), "req-1");
 
         assertThat(outcome).failsWithin(PROMPT)
                 .withThrowableOfType(ExecutionException.class)
@@ -207,7 +209,7 @@ class PanelResponderRegistryLifecycleTest {
         registry.dispatch("crowded", new JsonObject(), "req-2");
         assertThat(registry.queuedInvocationCountForTesting()).as("the second request fills the queue").isEqualTo(1);
 
-        AtomicReference<CompletableFuture<JsonObject>> refused = new AtomicReference<>();
+        AtomicReference<CompletableFuture<JsonElement>> refused = new AtomicReference<>();
         assertThatCode(() -> refused.set(registry.dispatch("crowded", new JsonObject(), "req-3")))
                 .doesNotThrowAnyException();
 
@@ -241,10 +243,10 @@ class PanelResponderRegistryLifecycleTest {
         AtomicInteger laterCalls = new AtomicInteger();
         registry.registerResponder("later", counting(laterCalls), "module-c");
 
-        CompletableFuture<JsonObject> busy = registry.dispatch("busy", new JsonObject(), "req-1");
+        CompletableFuture<JsonElement> busy = registry.dispatch("busy", new JsonObject(), "req-1");
         assertThat(started.await(5, TimeUnit.SECONDS)).as("the first call occupies the only worker").isTrue();
         busy.cancel(false);
-        CompletableFuture<JsonObject> queued = registry.dispatch("cancelled", new JsonObject(), "req-2");
+        CompletableFuture<JsonElement> queued = registry.dispatch("cancelled", new JsonObject(), "req-2");
         assertThat(registry.queuedInvocationCountForTesting()).as("the second request is queued").isEqualTo(1);
 
         queued.cancel(false);
@@ -276,9 +278,9 @@ class PanelResponderRegistryLifecycleTest {
         AtomicInteger queuedCalls = new AtomicInteger();
         registry.registerResponder("waiting", counting(queuedCalls), "module-b");
 
-        CompletableFuture<JsonObject> running = registry.dispatch("running", new JsonObject(), "req-1");
+        CompletableFuture<JsonElement> running = registry.dispatch("running", new JsonObject(), "req-1");
         assertThat(started.await(5, TimeUnit.SECONDS)).as("the first call occupies the only worker").isTrue();
-        CompletableFuture<JsonObject> waiting = registry.dispatch("waiting", new JsonObject(), "req-2");
+        CompletableFuture<JsonElement> waiting = registry.dispatch("waiting", new JsonObject(), "req-2");
 
         registry.shutdown();
 
@@ -310,7 +312,7 @@ class PanelResponderRegistryLifecycleTest {
         registry.registerResponder("late", counting(calls), "module-a");
         registry.shutdown();
 
-        AtomicReference<CompletableFuture<JsonObject>> outcome = new AtomicReference<>();
+        AtomicReference<CompletableFuture<JsonElement>> outcome = new AtomicReference<>();
         assertThatCode(() -> outcome.set(registry.dispatch("late", new JsonObject(), "req-1")))
                 .doesNotThrowAnyException();
 
@@ -347,7 +349,7 @@ class PanelResponderRegistryLifecycleTest {
 
         registry.dispatch("running", new JsonObject(), "req-1");
         assertThat(started.await(5, TimeUnit.SECONDS)).as("the first call occupies the only worker").isTrue();
-        CompletableFuture<JsonObject> waiting = registry.dispatch("waiting", new JsonObject(), "req-2");
+        CompletableFuture<JsonElement> waiting = registry.dispatch("waiting", new JsonObject(), "req-2");
         waiting.whenComplete((value, failure) -> queuedReached.countDown());
         assertThat(registry.queuedInvocationCountForTesting()).as("the second request is queued").isEqualTo(1);
 
@@ -390,7 +392,7 @@ class PanelResponderRegistryLifecycleTest {
         request.addProperty("requestId", "req-1");
         JsonObject asReceived = request.deepCopy();
 
-        CompletableFuture<JsonObject> outcome = registry.dispatch("mutates", request, "req-1");
+        CompletableFuture<JsonElement> outcome = registry.dispatch("mutates", request, "req-1");
 
         assertThat(outcome).succeedsWithin(BOUND).isNotSameAs(request);
         assertThat(seen.get()).as("the responder saw the request as received").isEqualTo(asReceived);
@@ -432,18 +434,13 @@ class PanelResponderRegistryLifecycleTest {
     }
 
     @Test
-    @DisplayName("control: a null completion fails with a message naming type and owner")
-    void nullCompletionFails() {
+    @DisplayName("control: a null completion is a success with no content (JsonNull)")
+    void nullCompletionSucceedsWithJsonNull() {
         PanelResponderRegistry registry = registry(LONG_DEADLINE_MILLIS, 1, 4);
         registry.registerResponder("completes-null", data -> CompletableFuture.completedFuture(null), "module-a");
 
-        assertThat(registry.dispatch("completes-null", new JsonObject(), "req-1")).failsWithin(PROMPT)
-                .withThrowableOfType(ExecutionException.class)
-                .havingCause()
-                .isInstanceOf(IllegalStateException.class)
-                .withMessageContaining("completes-null")
-                .withMessageContaining("module-a")
-                .withMessageContaining("completed with null");
+        assertThat(registry.dispatch("completes-null", new JsonObject(), "req-1")).succeedsWithin(PROMPT)
+                .isSameAs(JsonNull.INSTANCE);
     }
 
     @Test
@@ -468,7 +465,7 @@ class PanelResponderRegistryLifecycleTest {
         CompletableFuture<JsonObject> responderFuture = new CompletableFuture<>();
         registry.registerResponder("slow", data -> responderFuture, "module-a");
 
-        CompletableFuture<JsonObject> outcome = registry.dispatch("slow", new JsonObject(), "req-1");
+        CompletableFuture<JsonElement> outcome = registry.dispatch("slow", new JsonObject(), "req-1");
         assertThat(outcome).failsWithin(BOUND)
                 .withThrowableOfType(ExecutionException.class)
                 .havingCause()
@@ -499,7 +496,7 @@ class PanelResponderRegistryLifecycleTest {
 
         registry.dispatch("busy", new JsonObject(), "req-1");
         assertThat(started.await(5, TimeUnit.SECONDS)).as("the first call occupies the only worker").isTrue();
-        CompletableFuture<JsonObject> queued = registry.dispatch("queued", new JsonObject(), "req-2");
+        CompletableFuture<JsonElement> queued = registry.dispatch("queued", new JsonObject(), "req-2");
 
         assertThat(queued).failsWithin(BOUND)
                 .withThrowableOfType(ExecutionException.class)

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
@@ -113,7 +114,7 @@ class PanelResponderOwnershipContextTest {
 
         Thread thread = Thread.currentThread();
         ClassLoader saved = thread.getContextClassLoader();
-        CompletableFuture<JsonObject> outcome;
+        CompletableFuture<JsonElement> outcome;
         try {
             thread.setContextClassLoader(admitting);
             outcome = registry.dispatch("tccl", new JsonObject(), "req-1");
@@ -182,7 +183,7 @@ class PanelResponderOwnershipContextTest {
             return CompletableFuture.completedFuture(result("module-c"));
         }, "module-c");
 
-        CompletableFuture<JsonObject> outcome;
+        CompletableFuture<JsonElement> outcome;
         registry.beginRegistrationScope(instanceC);
         try {
             outcome = registry.dispatch("registers-in-scope", new JsonObject(), "req-1");
@@ -214,18 +215,18 @@ class PanelResponderOwnershipContextTest {
 
         registry.dispatch("busy", new JsonObject(), "req-0");
         assertThat(started.await(5, TimeUnit.SECONDS)).as("the only worker is busy").isTrue();
-        CompletableFuture<JsonObject> admittedUnderA = registry.dispatch("shared", new JsonObject(), "req-1");
+        CompletableFuture<JsonElement> admittedUnderA = registry.dispatch("shared", new JsonObject(), "req-1");
         registry.unregisterAll("module-a");
         registry.registerResponder("shared", answering("module-b", bCalls), "module-b");
         release.countDown();
 
         assertThat(admittedUnderA).succeedsWithin(BOUND)
-                .satisfies(reply -> assertThat(reply.get("from").getAsString()).isEqualTo("module-a"));
+                .satisfies(reply -> assertThat(reply.getAsJsonObject().get("from").getAsString()).isEqualTo("module-a"));
         assertThat(aCalls).hasValue(1);
         assertThat(bCalls).as("module B's responder was not called for the earlier request").hasValue(0);
 
         assertThat(registry.dispatch("shared", new JsonObject(), "req-2")).succeedsWithin(BOUND)
-                .satisfies(reply -> assertThat(reply.get("from").getAsString()).isEqualTo("module-b"));
+                .satisfies(reply -> assertThat(reply.getAsJsonObject().get("from").getAsString()).isEqualTo("module-b"));
         assertThat(bCalls).hasValue(1);
     }
 
@@ -240,7 +241,7 @@ class PanelResponderOwnershipContextTest {
 
         registry.dispatch("busy", new JsonObject(), "req-0");
         assertThat(started.await(5, TimeUnit.SECONDS)).as("the only worker is busy").isTrue();
-        CompletableFuture<JsonObject> admittedUnderA = registry.dispatch("shared", new JsonObject(), "req-1");
+        CompletableFuture<JsonElement> admittedUnderA = registry.dispatch("shared", new JsonObject(), "req-1");
         registry.unregisterAll("module-a");
         registry.registerResponder("shared", answering("module-b", new AtomicInteger()), "module-b");
 
@@ -267,7 +268,7 @@ class PanelResponderOwnershipContextTest {
             return CompletableFuture.completedFuture(result("module-a"));
         }, "module-a");
 
-        CompletableFuture<JsonObject> outcome;
+        CompletableFuture<JsonElement> outcome;
         local.set("admitting thread value");
         AuditableDataEntity.setCurrentUser(UUID.randomUUID());
         try {

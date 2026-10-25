@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.utils;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.stream.JsonWriter;
 import com.ultikits.ultitools.events.PanelMessageEvent;
@@ -51,11 +53,13 @@ import java.util.regex.Pattern;
  * <p>Exactly one {@code module.response} is produced per request, on whichever thread settles the
  * registry's future, and the dispatching thread is never blocked:
  * <ul>
- *   <li>the responder's result becomes {@code status: ok} with that result as {@code data};</li>
+ *   <li>the responder's result becomes {@code status: ok} with that result as {@code data},
+ *       whatever its shape: an object, an array, a primitive, or {@code null} when the responder's
+ *       future completed with {@code null} or {@code JsonNull} ("answered, no content");</li>
  *   <li>no responder, or one owned by another module, becomes {@code module_not_found};</li>
  *   <li>the registry's deadline passing becomes {@code deadline_exceeded};</li>
- *   <li>every other failure — a responder that throws, completes exceptionally, returns null, or is
- *       refused because the registry's queue is full or the registry shut down — becomes
+ *   <li>every other failure — a responder that throws, completes exceptionally, returns no future
+ *       ({@code null} instead of a future), or is refused because the registry's queue is full or the registry shut down — becomes
  *       {@code module_error} carrying only the root cause's message, cut to the schema's limit;</li>
  *   <li>a result that cannot be written as strict JSON — a {@code NaN} or infinite number, which
  *       Gson writes as a bare token no strict parser accepts — becomes {@code module_error} with a
@@ -64,11 +68,6 @@ import java.util.regex.Pattern;
  *   <li>a reply that cannot be built at all becomes one {@code internal_error}, so the single reply
  *       is never lost to a channel or serialiser failure inside the completion callback.</li>
  * </ul>
- * <p>The contract also allows the {@code ok} shape with {@code data: null}. The 6.3.0 extension
- * point is typed {@code Function<JsonObject, CompletableFuture<JsonObject>>} and always treats a
- * null result as a failure, so that shape is not reachable through it without widening the
- * registry's released public signature.
- *
  * @since 6.3.1
  */
 @ApiStatus.Internal
@@ -177,10 +176,12 @@ final class ModuleRequestHandler implements CloudRequestHandler {
     }
 
     /** Produces the request's single reply from the registry's outcome. */
-    private static void reply(CloudChannel channel, String replyTo, JsonObject result, Throwable failure) {
+    private static void reply(CloudChannel channel, String replyTo, JsonElement result, Throwable failure) {
         try {
-            if (failure == null && isStrictJson(result)) {
-                channel.replyOk(replyTo, RESPONSE_TYPE, result);
+            // The registry settles "no content" as JsonNull; a Java null is treated the same way.
+            JsonElement data = result == null ? JsonNull.INSTANCE : result;
+            if (failure == null && isStrictJson(data)) {
+                channel.replyOk(replyTo, RESPONSE_TYPE, data);
             } else if (failure == null) {
                 // The registry settled successfully, but what the module returned cannot be put in
                 // a frame: Gson writes NaN and Infinity as bare tokens, no strict parser accepts
@@ -222,13 +223,14 @@ final class ModuleRequestHandler implements CloudRequestHandler {
     // IllegalArgumentException; any runtime failure means "not strict JSON".
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static boolean isStrictJson(JsonElement result) {
-        if (result == null) {
-            return false;
-        }
         try (JsonWriter writer = new JsonWriter(new StringWriter())) {
             writer.setLenient(false);
             writer.setSerializeNulls(true);
-            RESULT_GSON.getAdapter(JsonElement.class).write(writer, result);
+            // Wrapped in an array: some Gson versions' strict writer refuses a top-level primitive
+            // or null, and the server's bundled Gson may differ from the one the framework is tested with.
+            JsonArray wrapped = new JsonArray();
+            wrapped.add(result);
+            RESULT_GSON.getAdapter(JsonElement.class).write(writer, wrapped);
             return true;
         } catch (IOException | RuntimeException notStrictJson) {
             return false;

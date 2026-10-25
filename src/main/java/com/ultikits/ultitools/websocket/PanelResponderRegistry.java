@@ -22,6 +22,8 @@ import java.util.logging.Logger;
 
 import org.jetbrains.annotations.ApiStatus;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -46,6 +48,18 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  * Deliberately does not require a {@code <module>:<type>} namespace prefix — D-26 rejected that as a
  * cross-repository protocol convention the panel would also have to honour, rather than an in-repo
  * check the framework can enforce alone.
+ *
+ * <h2>Result shapes</h2>
+ * A responder answers with a future of any {@link JsonElement}: an object, an array, a primitive,
+ * or "no content". The future completing with Java {@code null} or with {@link JsonNull} means
+ * "answered successfully, no content", and {@link #dispatch} then settles with
+ * {@link JsonNull#INSTANCE}; it never settles successfully with a Java {@code null}. Only a
+ * responder that returns no future at all ({@code null} instead of a future), throws, or whose
+ * future completes exceptionally fails the request. Over UltiCloud protocol v2 the result becomes
+ * the {@code data} of an {@code ok} {@code module.response} unchanged, including {@code data: null}.
+ * A responder written against 6.3.0, typed {@code Function<JsonObject, CompletableFuture<JsonObject>>},
+ * keeps compiling and behaving as before, except that completing with {@code null} is now a success
+ * with no content rather than a failure.
  *
  * <h2>Scheduling contract for responders</h2>
  * <ul>
@@ -257,7 +271,11 @@ public class PanelResponderRegistry {
      * @param messageType the exact message type string this responder will serve, matched by
      *                    {@code String.equals} — no case folding, no Unicode normalization
      * @param responder   the responder function, invoked with the inbound message's {@code data}
-     *                    and returning a {@link CompletableFuture} that resolves the reply
+     *                    and returning a {@link CompletableFuture} that resolves the reply: any
+     *                    {@link JsonElement} (object, array or primitive), or {@code null} /
+     *                    {@link JsonNull} for "answered, no content"; see "Result shapes" in the
+     *                    class documentation. Returning {@code null} instead of a future is a
+     *                    failure
      * @param ownerModule the name of the module registering this responder. The responder is
      *                    recorded against a module instance (#506, #562 item 1): the module the
      *                    framework is loading on this thread, if any; otherwise the copy listed as
@@ -271,8 +289,8 @@ public class PanelResponderRegistry {
      *                                   another registration (including the same module's own
      *                                   prior registration) already claims it
      */
-    public void registerResponder(String messageType, Function<JsonObject, CompletableFuture<JsonObject>> responder,
-            String ownerModule) {
+    public void registerResponder(String messageType,
+            Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>> responder, String ownerModule) {
         registerResponder(messageType, responder, ownerModule, null);
     }
 
@@ -288,7 +306,8 @@ public class PanelResponderRegistry {
      * admission, possibly concurrent calls finishing out of order, so it must be thread-safe.
      *
      * @param messageType   the exact message type string this responder will serve
-     * @param responder     the responder function
+     * @param responder     the responder function; its result shapes are those of {@link
+     *                      #registerResponder(String, Function, String)}
      * @param ownerModule   the name of the module registering this responder
      * @param ownerInstance the module instance registering it; {@code null} records the module the
      *                      framework is loading on this thread, if any (see {@link
@@ -302,8 +321,9 @@ public class PanelResponderRegistry {
      *                                   another registration already claims it
      * @since 6.3.0
      */
-    public void registerResponder(String messageType, Function<JsonObject, CompletableFuture<JsonObject>> responder,
-            String ownerModule, UltiToolsPlugin ownerInstance) {
+    public void registerResponder(String messageType,
+            Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>> responder, String ownerModule,
+            UltiToolsPlugin ownerInstance) {
         if (messageType == null || messageType.isEmpty()) {
             throw new IllegalArgumentException("messageType must not be null or empty");
         }
@@ -502,11 +522,14 @@ public class PanelResponderRegistry {
      * {@link #RESPONDER_TIMEOUT_MILLIS}, and queues the call for a worker thread. The returned future
      * settles exactly once — the single reply-shape point every outcome routes through (D-27):
      * <ul>
-     *   <li>the responder's future completes with a value — that value;</li>
+     *   <li>the responder's future completes with a {@link JsonElement} other than {@link JsonNull}
+     *       — that value, whatever its shape (object, array or primitive);</li>
+     *   <li>the responder's future completes with {@code null} or {@link JsonNull} — {@link
+     *       JsonNull#INSTANCE}, a success with no content;</li>
      *   <li>the responder throws, including a checked exception thrown sneakily or a linkage error
      *       from a closed module class loader — that throwable;</li>
-     *   <li>the responder returns {@code null}, or its future completes with {@code null} — an
-     *       explicit {@link IllegalStateException} naming the type and owning module;</li>
+     *   <li>the responder returns {@code null} instead of a future — an explicit {@link
+     *       IllegalStateException} naming the type and owning module;</li>
      *   <li>the responder's future completes exceptionally — that exception, relayed;</li>
      *   <li>the deadline passes while the request waits, runs or awaits its future — {@link
      *       PluginModuleException#responderTimedOut(String, String, long)} naming the owner
@@ -533,11 +556,12 @@ public class PanelResponderRegistry {
      * @param requestId    the request's correlation id — not used by {@code dispatch} itself, but
      *                     accepted so the call site does not have to separately track it; reserved
      *                     for the caller assembling the outbound reply
-     * @return a future that always settles — successfully with the responder's result, or
-     *         exceptionally with a failure describing what went wrong
+     * @return a future that always settles — successfully with the responder's result, never a
+     *         Java {@code null} ({@link JsonNull#INSTANCE} for "no content"), or exceptionally with
+     *         a failure describing what went wrong
      */
-    public CompletableFuture<JsonObject> dispatch(String messageType, JsonObject data, String requestId) {
-        CompletableFuture<JsonObject> outcome = new CompletableFuture<>();
+    public CompletableFuture<JsonElement> dispatch(String messageType, JsonObject data, String requestId) {
+        CompletableFuture<JsonElement> outcome = new CompletableFuture<>();
         ResponderEntry entry = responders.get(messageType);
         if (entry == null) {
             outcome.completeExceptionally(
@@ -645,12 +669,12 @@ public class PanelResponderRegistry {
      * when the registration named one, the module instance (#506).
      */
     private static final class ResponderEntry {
-        private final Function<JsonObject, CompletableFuture<JsonObject>> responder;
+        private final Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>> responder;
         private final String ownerModule;
         private final UltiToolsPlugin ownerInstance;
 
-        private ResponderEntry(Function<JsonObject, CompletableFuture<JsonObject>> responder, String ownerModule,
-                UltiToolsPlugin ownerInstance) {
+        private ResponderEntry(Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>> responder,
+                String ownerModule, UltiToolsPlugin ownerInstance) {
             this.responder = responder;
             this.ownerModule = ownerModule;
             this.ownerInstance = ownerInstance;
@@ -665,7 +689,7 @@ public class PanelResponderRegistry {
         private final String messageType;
         private final ResponderEntry entry;
         private final JsonObject data;
-        private final CompletableFuture<JsonObject> outcome;
+        private final CompletableFuture<JsonElement> outcome;
         /** The admitting thread's context class loader, installed for the call. */
         private final ClassLoader admittingLoader;
         /** This registry's registration scope on the admitting thread, possibly {@code null}. */
@@ -673,7 +697,7 @@ public class PanelResponderRegistry {
         private volatile ScheduledFuture<?> deadline;
 
         private Invocation(String messageType, ResponderEntry entry, JsonObject data,
-                CompletableFuture<JsonObject> outcome) {
+                CompletableFuture<JsonElement> outcome) {
             this.messageType = messageType;
             this.entry = entry;
             this.data = data;
@@ -696,18 +720,17 @@ public class PanelResponderRegistry {
                 settle(null, shutDownFailure());
                 return;
             }
-            CompletableFuture<JsonObject> responderFuture = callResponder();
+            CompletableFuture<? extends JsonElement> responderFuture = callResponder();
             if (responderFuture == null) {
                 return;
             }
             responderFuture.whenComplete((value, throwable) -> {
                 if (throwable != null) {
                     settle(null, throwable);
-                } else if (value == null) {
-                    settle(null, new IllegalStateException("Responder for '" + messageType
-                            + "' (owned by module '" + entry.ownerModule + "') completed with null"));
                 } else {
-                    settle(value, null);
+                    // "Answered, no content": Java null and JsonNull both settle as JsonNull, so no
+                    // consumer ever sees a Java null for a successful outcome.
+                    settle(value == null ? JsonNull.INSTANCE : value, null);
                 }
             });
         }
@@ -720,8 +743,8 @@ public class PanelResponderRegistry {
         // PMD.AvoidCatchingGenericException: this is the boundary to module code; any exception,
         // including a checked one thrown sneakily, must become the request's outcome.
         @SuppressWarnings("PMD.AvoidCatchingGenericException")
-        private CompletableFuture<JsonObject> callResponder() {
-            CompletableFuture<JsonObject> responderFuture;
+        private CompletableFuture<? extends JsonElement> callResponder() {
+            CompletableFuture<? extends JsonElement> responderFuture;
             Thread worker = Thread.currentThread();
             ClassLoader savedLoader = worker.getContextClassLoader();
             UltiToolsPlugin savedScope = registrationScopeOwner.get();
@@ -789,7 +812,7 @@ public class PanelResponderRegistry {
          * {@link CompletableFuture} runs later-registered dependents first, so a caller waiting on
          * the outcome must find the deadline already gone. A second settlement is a no-op.
          */
-        private void settle(JsonObject value, Throwable failure) {
+        private void settle(JsonElement value, Throwable failure) {
             ScheduledFuture<?> task = deadline;
             if (task != null) {
                 task.cancel(false);

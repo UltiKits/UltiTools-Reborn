@@ -33,7 +33,7 @@ import static org.mockito.Mockito.lenient;
 /**
  * End-to-end contract for D-25: a {@code module.request} fixture routed through the real
  * {@link AgentMessageRouter} reaches the responder registered under {@code <module>.<action>} on the
- * unchanged 6.3.0 {@link PanelResponderRegistry} and is answered with a schema-valid
+ * {@link PanelResponderRegistry} and is answered with a schema-valid
  * {@code module.response} carrying the request id in {@code replyTo}.
  */
 class ModuleRequestEndToEndTest {
@@ -138,16 +138,25 @@ class ModuleRequestEndToEndTest {
                 .isEqualTo("Mailbox unavailable");
     }
 
-    /**
-     * Documents an intentional deviation: the 6.3.0 extension point is typed
-     * {@code Function<JsonObject, CompletableFuture<JsonObject>>} and always treats a null result as
-     * a failure, so the contract's {@code ok} + {@code data: null} shape cannot be produced through
-     * it. Reaching that shape needs the registry's result type widened, which is a public API change
-     * this plan does not carry.
-     */
+    /** A future completing with null is "answered, no content": the contract's ok + data: null. */
     @Test
-    void nullResponderResultIsModuleErrorBecauseTheRegistryRejectsNullResults() throws InterruptedException {
+    void nullResponderResultRepliesOkWithDataNull() throws InterruptedException {
         registry.registerResponder(TYPE, data -> CompletableFuture.completedFuture(null), OWNER);
+
+        RecordingChannel channel = dispatchFixture(FIXTURE);
+
+        JsonObject frame = awaitReply(channel, 10);
+        assertThat(channel.frames()).hasSize(1);
+        JsonObject payload = frame.getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+        assertThat(payload.has("data")).isTrue();
+        assertThat(payload.get("data").isJsonNull()).isTrue();
+    }
+
+    /** A responder that returns no future at all is still a module failure. */
+    @Test
+    void responderReturningNoFutureRepliesModuleError() throws InterruptedException {
+        registry.registerResponder(TYPE, data -> null, OWNER);
 
         RecordingChannel channel = dispatchFixture(FIXTURE);
 
