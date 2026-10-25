@@ -51,9 +51,15 @@ final class FramedChannel implements CloudChannel {
 
     @Override
     public boolean replyOk(String replyTo, String type, JsonElement data) {
+        return replyOk(replyTo, type, data, null);
+    }
+
+    @Override
+    public boolean replyOk(String replyTo, String type, JsonElement data, String messageOrNull) {
         JsonObject payload = new JsonObject();
         payload.addProperty("status", "ok");
         payload.add("data", data);
+        if (messageOrNull != null) { payload.addProperty("message", messageOrNull); }
         return reply(replyTo, type, payload);
     }
 

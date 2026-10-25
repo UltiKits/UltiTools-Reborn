@@ -58,6 +58,25 @@ public interface CloudChannel {
     boolean replyOk(String replyTo, String type, JsonElement data);
 
     /**
+     * Replies with an OpOutcome payload containing {@code status: ok}, data and an optional
+     * message, for result types whose ok variant declares one.
+     * <p>
+     * A channel that cannot carry the message refuses instead of silently dropping it, so a
+     * caller never believes an explanation reached the panel when it did not.
+     *
+     * @param replyTo the request's ULID
+     * @param type the result message type
+     * @param data result data matching that type's schema, including JSON null where allowed
+     * @param messageOrNull a safe result message (1..500 characters), or null to omit it
+     * @return true if the requested reply was handed to the socket
+     * @throws UnsupportedOperationException if the channel cannot send an ok message
+     * @since 6.3.1
+     */
+    default boolean replyOk(String replyTo, String type, JsonElement data, String messageOrNull) {
+        throw new UnsupportedOperationException("This channel cannot send an ok reply with a message");
+    }
+
+    /**
      * Replies with {@code status: partial}; only result types declaring partial allow this.
      * @param replyTo the request's ULID
      * @param type the result message type
