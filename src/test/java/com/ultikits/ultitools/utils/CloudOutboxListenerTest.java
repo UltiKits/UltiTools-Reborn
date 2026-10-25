@@ -6,8 +6,10 @@ import static org.mockito.Mockito.mock;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -29,7 +31,9 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
 
 /**
@@ -203,6 +207,24 @@ class CloudOutboxListenerTest {
     }
 
     @Test
+    @DisplayName("the 30 s task re-arms itself: a join made after the first tick is saved by the second tick")
+    void everyTickReArmsSoLaterChangesAreSaved() throws IOException {
+        linkWithConnection();
+
+        server.addPlayer("Steve");
+        runtime.advance(FLUSH_INTERVAL_MS);
+        assertThat(savedPlayerNames()).containsExactly("Steve");
+
+        // The first tick has finished; this join is saved only if that tick re-armed itself, because
+        // nothing else writes the state file while the connection stays up.
+        server.addPlayer("Alex");
+        assertThat(savedPlayerNames()).containsExactly("Steve");
+
+        runtime.advance(FLUSH_INTERVAL_MS);
+        assertThat(savedPlayerNames()).containsExactly("Steve", "Alex");
+    }
+
+    @Test
     @DisplayName("the shutdown flush writes before returning even when the 30 s task never ran")
     void shutdownFlushWritesPendingChanges() throws IOException {
         linkWithConnection();
@@ -247,6 +269,17 @@ class CloudOutboxListenerTest {
 
     private Path stateFile() {
         return tempDir.resolve("cloud-outbox.json");
+    }
+
+    /** The player names of the events the state file holds, in the order it holds them. */
+    private List<String> savedPlayerNames() throws IOException {
+        JsonObject state = JsonParser.parseString(
+                new String(Files.readAllBytes(stateFile()), StandardCharsets.UTF_8)).getAsJsonObject();
+        List<String> names = new ArrayList<>();
+        for (JsonElement event : state.getAsJsonArray("events")) {
+            names.add(event.getAsJsonObject().getAsJsonObject("payload").get("playerName").getAsString());
+        }
+        return names;
     }
 
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the repository's test idiom for the plugin singleton
