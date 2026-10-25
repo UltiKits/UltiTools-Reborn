@@ -114,6 +114,35 @@ class ModuleCapabilitiesTest {
         }
     }
 
+    /**
+     * The contract's semver core forbids leading zeros, so {@code 01.002.3-b} must be declared as
+     * {@code 1.2.3}; keeping the zeros would make the whole name contract-invalid and the module
+     * would silently vanish from {@code hello}.
+     */
+    @Test
+    void leadingZerosInTheVersionAreDropped() {
+        register("UltiMail", "ultimail.inbox.list");
+
+        assertThat(ModuleCapabilities.names(registry, owner -> "01.002.3-b"))
+                .containsExactly("modules:ultimail@1.2.3");
+    }
+
+    /**
+     * Two module names that lower-case to the same id can only be declared once; the contract has no
+     * way to name two versions of one id, so the first owner in sorted order keeps its version.
+     */
+    @Test
+    void duplicateIdsKeepTheFirstOwnerInSortedOrder() {
+        register("UltiMail", "ultimail.inbox.list");
+        register("ultimail", "ultimail.outbox.list");
+        Map<String, String> versions = new HashMap<>();
+        versions.put("UltiMail", "1.2.3");
+        versions.put("ultimail", "9.9.9");
+
+        assertThat(ModuleCapabilities.names(registry, versions::get))
+                .containsExactly("modules:ultimail@1.2.3");
+    }
+
     private void register(String owner, String messageType) {
         registry.registerResponder(messageType, data -> CompletableFuture.completedFuture(new JsonObject()), owner);
     }

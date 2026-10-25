@@ -151,6 +151,68 @@ class ModuleRequestEndToEndTest {
         }
     }
 
+    /**
+     * The actor is the gateway's assertion about who asked. A value the contract's actor object
+     * forbids must be refused before any module code runs, exactly like the other invalid fixtures.
+     */
+    @Test
+    void actorValuesTheContractForbidsReplyInvalidMessage() throws InterruptedException {
+        registry.registerResponder(TYPE, data -> CompletableFuture.completedFuture(new JsonObject()), OWNER);
+
+        assertInvalidActor(actor(0L, null));
+        assertInvalidActor(actor(9007199254740992L, null));
+        assertInvalidActor(actor(42L, "069A79F4-44E9-4726-A5BE-FCA90E38AAF5"));
+        assertInvalidActor(actor(42L, "069a79f444e94726a5befca90e38aaf5"));
+        JsonObject extra = actor(42L, null);
+        extra.addProperty("extra", 1);
+        assertInvalidActor(extra);
+    }
+
+    /**
+     * The schema caps a response message at 500 characters. A responder's exception message is
+     * module-written text and can be longer; without the cut the frame would be schema-invalid.
+     */
+    @Test
+    void failureMessageIsCutToTheContractedLength() throws InterruptedException {
+        StringBuilder longMessage = new StringBuilder();
+        for (int index = 0; index < 600; index++) {
+            longMessage.append('x');
+        }
+        String text = longMessage.toString();
+        registry.registerResponder(TYPE, data -> {
+            throw new IllegalStateException(text);
+        }, OWNER);
+
+        RecordingChannel channel = dispatchFixture(FIXTURE);
+
+        assertError(channel, "module_error");
+        String message = channel.frames().get(0).getAsJsonObject("payload").get("message").getAsString();
+        assertThat(message).hasSize(500).isEqualTo(text.substring(0, 500));
+    }
+
+    private void assertInvalidActor(JsonObject actor) throws InterruptedException {
+        JsonObject frame = ContractFixtures.object(FIXTURE);
+        frame.getAsJsonObject("payload").add("actor", actor);
+
+        RecordingChannel channel = dispatchFrame(frame);
+
+        JsonObject reply = awaitReply(channel, 5);
+        assertThat(channel.frames()).as(actor.toString()).hasSize(1);
+        assertThat(reply.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+        assertThat(channel.frames().get(0).get("replyTo").getAsString()).isEqualTo(ID);
+    }
+
+    private static JsonObject actor(long userId, String minecraftUuid) {
+        JsonObject actor = new JsonObject();
+        actor.addProperty("userId", userId);
+        if (minecraftUuid == null) {
+            actor.add("minecraftUuid", com.google.gson.JsonNull.INSTANCE);
+        } else {
+            actor.addProperty("minecraftUuid", minecraftUuid);
+        }
+        return actor;
+    }
+
     private RecordingChannel dispatchFixture(String path) {
         return dispatchFrame(ContractFixtures.object(path));
     }
