@@ -42,7 +42,12 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
  * than preserved in place, unlike {@link CredentialStore}'s credential file, which is an identity (S-15).
  * <p>
  * <b>Format.</b> {@code {"version":1, "serverId":..., "events":[{"id","type","ts","payload"}], "dropped":N,
- * "commandIds":[{"id","seenAt"}]}}, with {@code ts} and {@code seenAt} in epoch milliseconds (contract answer 5).
+ * "commandIds":[{"id","seenAt","receipt"?}]}}, with {@code ts} and {@code seenAt} in epoch milliseconds (contract answer
+ * 5). {@code receipt} (plan 22-21, S-65) is optional: the JSON object the framework answered a
+ * {@code player.link.completed} with, at most {@link CommandDedupeSet#MAX_RECEIPT_BYTES} of compact JSON, written only
+ * for an id that has one. The file stays {@code version: 1}: a file written before receipts existed has no such field
+ * and loads with no receipts, and a version 1 reader that predates them never sees one written by a store that
+ * knew none.
  * Written through {@link OwnerOnlyAtomicFile}, the writer {@link CredentialStore} uses: owner-only on POSIX, forced
  * to disk, atomically moved into place from a temporary file {@code cloud-outbox.json.<ULID>.tmp} unique to that
  * write.
@@ -51,7 +56,10 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
  * of {@link #FORMAT_VERSION}, or holds any invalid entry (an event id that is not a ULID, a missing type, a payload
  * that is not an object, a repeated id, a malformed command id) is unreadable as a whole: it is moved to
  * {@code cloud-outbox.json.unreadable} (replacing an older one), one WARNING names both paths, and the store starts
- * empty. A crafted or hand-edited file is not repaired entry by entry (the niche-case rule). A file written for
+ * empty. A crafted or hand-edited file is not repaired entry by entry (the niche-case rule), with one exception: a
+ * {@code receipt} that is not a JSON object, or is larger than {@link CommandDedupeSet#MAX_RECEIPT_BYTES}, is dropped
+ * with one WARNING and its id kept, because losing a receipt costs only one more question to the module that owns the
+ * player-link handler, while losing the id could run a command twice. A file written for
  * another server id is discarded with one INFO line. Payloads are never logged: they hold player names and UUIDs.
  * <p>
  * <b>Detaching.</b> {@link #detachAndDelete()} is used when the server identity is cleared (22-07): it deletes the
@@ -170,6 +178,12 @@ final class CloudStateStore {
                         + "its buffered events and command ids were discarded and it will be rewritten.");
                 startEmpty();
                 return;
+            }
+            if (parsed.droppedReceipts > 0) {
+                log(Level.WARNING, "The UltiCloud state file " + file + " held " + parsed.droppedReceipts
+                        + " player-link receipt(s) that are not a JSON object of at most "
+                        + CommandDedupeSet.MAX_RECEIPT_BYTES + " bytes; they were dropped and their ids kept. "
+                        + "A redelivered link completion for such an id asks the module again.");
             }
             outbox.restore(parsed.events, parsed.dropped);
             dedupe.restore(parsed.seen);
@@ -338,15 +352,26 @@ final class CloudStateStore {
 
         List<CommandDedupeSet.Seen> seen = new ArrayList<>();
         Set<String> commandIds = new HashSet<>();
+        int droppedReceipts = 0;
         for (JsonElement element : requireArray(root.get("commandIds"), "commandIds")) {
             JsonObject command = requireObject(element, "a command id entry");
             String id = requireUlid(command.get("id"), "a command id");
             if (!commandIds.add(id)) {
                 throw new UnreadableException("a repeated command id");
             }
-            seen.add(new CommandDedupeSet.Seen(id, requireLong(command.get("seenAt"), "a command time")));
+            long seenAt = requireLong(command.get("seenAt"), "a command time");
+            JsonObject receipt = null;
+            JsonElement stored = command.get("receipt");
+            if (stored != null) {
+                if (stored.isJsonObject() && CommandDedupeSet.fitsReceipt(stored.getAsJsonObject())) {
+                    receipt = stored.getAsJsonObject();
+                } else {
+                    droppedReceipts++;
+                }
+            }
+            seen.add(new CommandDedupeSet.Seen(id, seenAt, receipt));
         }
-        return new Parsed(serverId, events, dropped, seen);
+        return new Parsed(serverId, events, dropped, seen, droppedReceipts);
     }
 
     private static JsonArray requireArray(JsonElement element, String what) throws UnreadableException {
@@ -423,6 +448,9 @@ final class CloudStateStore {
             JsonObject o = new JsonObject();
             o.addProperty("id", s.id());
             o.addProperty("seenAt", s.seenAt());
+            if (s.receipt() != null) {
+                o.add("receipt", s.receipt());
+            }
             seenArray.add(o);
         }
         root.add("commandIds", seenArray);
@@ -459,12 +487,15 @@ final class CloudStateStore {
         final List<CloudOutbox.Entry> events;
         final long dropped;
         final List<CommandDedupeSet.Seen> seen;
+        final int droppedReceipts;
 
-        Parsed(String serverId, List<CloudOutbox.Entry> events, long dropped, List<CommandDedupeSet.Seen> seen) {
+        Parsed(String serverId, List<CloudOutbox.Entry> events, long dropped, List<CommandDedupeSet.Seen> seen,
+               int droppedReceipts) {
             this.serverId = serverId;
             this.events = events;
             this.dropped = dropped;
             this.seen = seen;
+            this.droppedReceipts = droppedReceipts;
         }
     }
 

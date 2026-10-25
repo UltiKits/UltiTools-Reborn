@@ -78,10 +78,12 @@ import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.CloudOutboxListener;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.CloudAuthManager;
+import com.ultikits.ultitools.utils.CloudFeatures;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.OfficialLanguageFiles;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
+import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 
@@ -223,6 +225,28 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Getter
     @SuppressWarnings("PMD.FieldDeclarationsShouldBeAtStartOfClass")
     private PanelResponderRegistry panelResponderRegistry;
+    /**
+     * The inbound UltiCloud features of this enable (plan 22-21): created once by {@link #onEnable()} before any
+     * module loads, so a module can set its player-link handler while it enables, and stopped by
+     * {@link #onDisable()} after every module has been unloaded. Reached through {@link #getCloudPlayerLinks()}.
+     */
+    // PMD.FieldDeclarationsShouldBeAtStartOfClass: same rationale as remoteActionLog above.
+    @SuppressWarnings("PMD.FieldDeclarationsShouldBeAtStartOfClass")
+    private CloudFeatures cloudFeatures;
+
+    /**
+     * The UltiCloud player-link API (as of 6.3.1): one object for the whole time the framework is enabled. It works
+     * before, during and between connections -- a create while the server is not connected completes with
+     * {@link CloudPlayerLinks.Failure#NOT_CONNECTED} -- and the handler a module sets on it stays registered across
+     * every reconnect until the module removes it or is unloaded.
+     *
+     * @return the player-link API; never {@code null} once the framework has enabled
+     * @since 6.3.1
+     */
+    public CloudPlayerLinks getCloudPlayerLinks() {
+        CloudFeatures features = cloudFeatures;
+        return features == null ? null : features.playerLinks();
+    }
 
     /**
      * Returns the instance of the UltiTools.
@@ -335,6 +359,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // may claim a responder while it loads. Created after the dependency check, so an early
         // return above creates nothing.
         initPanelResponderRegistry();
+        // Plan 22-21 (S-60): the player-link API exists before the modules that set its handler load.
+        cloudFeatures = CloudFeatures.start(this);
         initPluginModules();
         migrateCapabilitiesConfig();
         initWebSocketManagers();
@@ -879,6 +905,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
         stopWebsocket();
         if (pluginManager != null) {
             pluginManager.close();
+        }
+        // Plan 22-21: after the modules unloaded (each releases its player-link handler); the field is kept, so a late
+        // call still reaches a stopped API that answers NOT_CONNECTED.
+        if (cloudFeatures != null) {
+            cloudFeatures.shutdown();
         }
         if (dependenceManagers != null) {
             dependenceManagers.closeContext();

@@ -257,6 +257,13 @@ final class CloudSession {
     /** The server id whose buffered state the three fields above hold, or {@code null}. */
     private volatile String cloudStateServerId;
 
+    /**
+     * The id set, state file and server id above as one reference (plan 22-21), so the shared
+     * {@link SessionDedupeLedger} never sees one session's set with another identity's file. Set and
+     * cleared with them, under this session's monitor; read without it.
+     */
+    private volatile SessionDedupeLedger.Target ledgerTarget;
+
     /** The pending 30 s state-flush task of this session's connection, or {@code null}. */
     private volatile ScheduledFuture<?> stateFlushTask;
 
@@ -957,10 +964,16 @@ final class CloudSession {
      */
     private AgentProtocol newProtocol(AgentConnection connection) {
         ServerCredential linked = credential;
-        return new AgentProtocol(connection, cloudOutbox, commandDedupe,
+        AgentProtocol protocol = new AgentProtocol(connection, cloudOutbox, commandDedupe,
                 linked == null ? null : linked.getServerId(), CloudSession::frameworkCapabilities,
                 CloudSession::frameworkSettings, capability -> true,
                 capability -> "This capability is not available on this server.", agentClock);
+        CloudFeatures features = CloudFeatures.installed();
+        if (features != null) {
+            // Plan 22-21: the inbound handlers of this connection, before its hello is sent.
+            features.register(protocol.router(), protocol.channel(), protocol);
+        }
+        return protocol;
     }
 
     /**
@@ -1015,6 +1028,19 @@ final class CloudSession {
         return commandDedupe;
     }
 
+    /** @return this session's state file writer, or {@code null} while no credential is adopted */
+    CloudStateStore cloudStateStore() {
+        return cloudState;
+    }
+
+    /**
+     * @return this session's id set, state file and server id as one value for the shared ledger, or {@code null}
+     *         while no credential is adopted (plan 22-21)
+     */
+    SessionDedupeLedger.Target ledgerTarget() {
+        return ledgerTarget;
+    }
+
     /**
      * Writes the pending outbox and command-dedupe changes, if there are any. Called from
      * {@link #invalidate()} -- which {@code PluginInitiationUtils#stopWebsocket()} runs at plugin
@@ -1040,6 +1066,7 @@ final class CloudSession {
      */
     synchronized void discardCloudState() {
         cancelStateFlushTask();
+        ledgerTarget = null;
         CloudStateStore store = cloudState;
         cloudState = null;
         cloudStateServerId = null;
@@ -1097,6 +1124,7 @@ final class CloudSession {
         cloudState = store;
         cloudStateServerId = adopted.getServerId();
         store.load(adopted.getServerId());
+        ledgerTarget = new SessionDedupeLedger.Target(dedupe, store, adopted.getServerId());
     }
 
     /**
