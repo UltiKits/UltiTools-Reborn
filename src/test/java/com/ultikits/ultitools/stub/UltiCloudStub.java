@@ -3,11 +3,13 @@ package com.ultikits.ultitools.stub;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -55,13 +58,144 @@ import com.ultikits.ultitools.contract.ContractFixtures;
  * authorization and credential revoke; {@link StubCatalogue} (plan 22-18) answers the catalogue;
  * {@link StubAccessLog} records everything.
  *
- * <p>Test scope only: nothing here is part of {@code src/main} or the shaded JAR.
+ * <p>Test scope only: nothing here is part of {@code src/main} or the shaded JAR. The standalone
+ * command is {@link #START_COMMAND}, after {@link #CLASSPATH_COMMAND} has built the classpath once.
  *
  * @since 6.3.1
  */
 public final class UltiCloudStub {
 
+    /** Builds the test classes and writes the test classpath, from the framework checkout's root. */
+    public static final String CLASSPATH_COMMAND = "mvn -B -q -DskipTests test-compile dependency:build-classpath"
+            + " -Dmdep.outputFile=target/stub.classpath -Dmdep.includeScope=test";
+
+    /** Starts the stub from the framework checkout's root, after {@link #CLASSPATH_COMMAND}. */
+    public static final String START_COMMAND = "java -cp \"target/test-classes:target/classes:$(cat target/stub.classpath)\""
+            + " com.ultikits.ultitools.stub.UltiCloudStub --http-port 18080 --admin-port 18081 --access-log <file>";
+
     private UltiCloudStub() {
+    }
+
+    /**
+     * Runs the stub as a program until it is interrupted (Ctrl-C).
+     *
+     * @param args {@code --http-port N}, {@code --admin-port N}, {@code --access-log FILE},
+     *             {@code --fixtures-root DIR}, {@code --help}
+     */
+    public static void main(String[] args) {
+        int code = run(args, System.out, System.err);
+        if (code != 0) {
+            System.exit(code);
+        }
+    }
+
+    /**
+     * The body of {@link #main(String[])}, returning the exit code instead of exiting.
+     *
+     * @param args the program arguments
+     * @param out  where the listening lines and the help go
+     * @param err  where argument and start-up errors go
+     * @return 0 after an interrupt or {@code --help}, 1 when the stub cannot start, 2 for bad arguments
+     */
+    static int run(String[] args, PrintStream out, PrintStream err) {
+        Options options = Options.defaults();
+        try {
+            for (int i = 0; i < args.length; i++) {
+                String arg = args[i];
+                if ("--help".equals(arg) || "-h".equals(arg)) {
+                    out.print(usage());
+                    out.flush();
+                    return 0;
+                } else if ("--http-port".equals(arg)) {
+                    options.httpPort(port(value(args, ++i, arg)));
+                } else if ("--admin-port".equals(arg)) {
+                    options.adminPort(port(value(args, ++i, arg)));
+                } else if ("--access-log".equals(arg)) {
+                    options.accessLog(Paths.get(value(args, ++i, arg)));
+                } else if ("--fixtures-root".equals(arg)) {
+                    options.fixturesRoot(Paths.get(value(args, ++i, arg)));
+                } else {
+                    throw new IllegalArgumentException("unknown argument " + arg);
+                }
+            }
+        } catch (IllegalArgumentException bad) {
+            err.println("UltiCloudStub: " + bad.getMessage());
+            err.print(usage());
+            return 2;
+        }
+        Handle handle;
+        try {
+            handle = start(options);
+        } catch (IOException | RuntimeException failure) {
+            err.println("UltiCloudStub: could not start: " + failure);
+            return 1;
+        }
+        out.println("UltiCloudStub http  listening on 127.0.0.1:" + handle.httpPort()
+                + " (build the framework with -Dultitools.api.url=" + handle.baseUrl() + ")");
+        out.println("UltiCloudStub admin listening on 127.0.0.1:" + handle.adminPort()
+                + " (GET " + handle.adminUrl() + StubAdminApi.PREFIX + " lists the endpoints)");
+        out.println("UltiCloudStub access log " + (handle.accessLogPath() == null
+                ? "kept in memory (GET " + handle.adminUrl() + StubAdminApi.PREFIX + "/log)"
+                : handle.accessLogPath().toAbsolutePath().toString()));
+        out.flush();
+        Thread hook = new Thread(handle::close, "ulticloud-stub-shutdown");
+        Runtime.getRuntime().addShutdownHook(hook);
+        try {
+            new CountDownLatch(1).await();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } finally {
+            handle.close();
+            try {
+                Runtime.getRuntime().removeShutdownHook(hook);
+            } catch (IllegalStateException shuttingDown) {
+                // The JVM is exiting and runs the hook itself.
+            }
+        }
+        return 0;
+    }
+
+    /** @return the {@code --help} text: usage, options, the start command and the admin endpoints */
+    static String usage() {
+        StringBuilder text = new StringBuilder()
+                .append("UltiCloudStub - a local UltiCloud (protocol v2, contract 2.0.0) for UAT and tests\n\n")
+                .append("From the framework checkout's root, build the classpath once:\n  ")
+                .append(CLASSPATH_COMMAND).append("\n")
+                .append("then start the stub:\n  ").append(START_COMMAND).append("\n\n")
+                .append("Build the framework JAR under test with -Dultitools.api.url=http://127.0.0.1:<http-port>.\n\n")
+                .append("Options:\n")
+                .append("  --http-port N        public port: /v1/device/*, /v1/agent/credential/revoke, /v1/agent,\n")
+                .append("                       /v1/catalogue/*; v1 paths answer 410 (default: a free port)\n")
+                .append("  --admin-port N       admin API port, bound to 127.0.0.1 only (default: a free port)\n")
+                .append("  --access-log FILE    append the access log to FILE (default: memory only)\n")
+                .append("  --fixtures-root DIR  read the contract from DIR, a copy of the contract version directory\n")
+                .append("                       with its MANIFEST.json (default: the vendored classpath copy)\n")
+                .append("  --help               print this text\n\n")
+                .append("Admin endpoints (JSON bodies; every action writes one ADMIN line to the access log):\n");
+        for (String endpoint : StubAdminApi.ENDPOINTS) {
+            text.append("  ").append(endpoint).append("\n");
+        }
+        text.append("\nThe stub runs until interrupted (Ctrl-C).\n");
+        return text.toString();
+    }
+
+    private static String value(String[] args, int index, String name) {
+        if (index >= args.length) {
+            throw new IllegalArgumentException(name + " needs a value");
+        }
+        return args[index];
+    }
+
+    private static int port(String value) {
+        try {
+            int port = Integer.parseInt(value);
+            if (port >= 0 && port <= 65535) {
+                return port;
+            }
+        } catch (NumberFormatException notANumber) {
+            // Answered below.
+        }
+        throw new IllegalArgumentException("a port must be a number from 0 to 65535: " + value);
     }
 
     /**
@@ -209,6 +343,7 @@ public final class UltiCloudStub {
         private StubGateway gateway;
         private StubFrontDoor frontDoor;
         private StubAdminApi admin;
+        private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
 
         private Handle(Options options) {
             this.options = options;
@@ -345,6 +480,9 @@ public final class UltiCloudStub {
 
         @Override
         public void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
             if (admin != null) {
                 admin.stop();
             }

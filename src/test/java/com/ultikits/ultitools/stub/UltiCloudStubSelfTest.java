@@ -221,6 +221,7 @@ class UltiCloudStubSelfTest {
                         .containsEntry("x-ulticloud-min-framework", "9.9.9");
                 assertThat(refused.json().getAsJsonObject("error").getAsJsonObject("details")
                         .get("minFramework").getAsString()).isEqualTo("9.9.9");
+                assertThat(refused.json().getAsJsonObject("error").get("message").getAsString()).contains("9.9.9");
             } else if (status == 429) {
                 assertThat(refused.headers).containsEntry("retry-after", "120");
             } else if (status == 402) {
@@ -589,6 +590,54 @@ class UltiCloudStubSelfTest {
         assertThat(RawHttp.get(stub.adminPort(), "/_stub", null).body).contains("/_stub/send");
         assertThat(RawHttp.get(stub.adminPort(), "/_stub/nothing", null).status).isEqualTo(404);
         assertThat(admin("/_stub/ack", "not json").status).isEqualTo(400);
+    }
+
+    // ------------------------------------------------------------------ Task 3: the standalone command
+
+    @Test
+    void helpPrintsTheUsageTheAdminEndpointsAndTheStartCommand() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        assertThat(UltiCloudStub.run(new String[]{"--help"}, new java.io.PrintStream(out, true),
+                new java.io.PrintStream(new ByteArrayOutputStream(), true))).isZero();
+        assertThat(out.toString("UTF-8"))
+                .contains("--http-port").contains("--admin-port").contains("--access-log").contains("--fixtures-root")
+                .contains("dependency:build-classpath").contains("com.ultikits.ultitools.stub.UltiCloudStub")
+                .contains("-Dultitools.api.url=")
+                .contains("POST /_stub/send").contains("GET  /_stub/frames");
+        assertThat(UltiCloudStub.run(new String[]{"--bogus"}, new java.io.PrintStream(new ByteArrayOutputStream(), true),
+                new java.io.PrintStream(new ByteArrayOutputStream(), true))).isEqualTo(2);
+    }
+
+    @Test
+    void theCommandPrintsOneLinePerPortAndRunsUntilInterrupted() throws Exception {
+        stub.close();
+        stub = null;
+        java.io.PipedOutputStream pipe = new java.io.PipedOutputStream();
+        java.io.BufferedReader lines = new java.io.BufferedReader(new java.io.InputStreamReader(
+                new java.io.PipedInputStream(pipe, 65536), StandardCharsets.UTF_8));
+        Path log = temp.resolve("standalone.log");
+        int[] exit = {-1};
+        Thread command = new Thread(() -> exit[0] = UltiCloudStub.run(new String[]{
+            "--http-port", "0", "--admin-port", "0", "--access-log", log.toString(),
+            "--fixtures-root", "src/test/resources/" + ContractFixtures.ROOT},
+                new java.io.PrintStream(pipe, true), new java.io.PrintStream(new ByteArrayOutputStream(), true)));
+        command.start();
+        String http = lines.readLine();
+        String admin = lines.readLine();
+        assertThat(http).matches("UltiCloudStub http +listening on 127\\.0\\.0\\.1:\\d+ .*-Dultitools\\.api\\.url=http://127\\.0\\.0\\.1:\\d+.*");
+        assertThat(admin).matches("UltiCloudStub admin +listening on 127\\.0\\.0\\.1:\\d+ .*");
+        int httpPort = Integer.parseInt(http.replaceAll(".*127\\.0\\.0\\.1:(\\d+) .*", "$1"));
+        int adminPort = Integer.parseInt(admin.replaceAll(".*127\\.0\\.0\\.1:(\\d+) .*", "$1"));
+        assertThat(RawHttp.get(adminPort, "/_stub", null).status).isEqualTo(200);
+        assertThat(RawHttp.get(httpPort, "/v1/catalogue/framework", null).status).isEqualTo(200);
+        assertThat(new String(Files.readAllBytes(log), StandardCharsets.UTF_8))
+                .contains("contract=" + java.nio.file.Paths.get("src/test/resources/" + ContractFixtures.ROOT).toAbsolutePath());
+
+        command.interrupt();
+        command.join(10_000);
+        assertThat(command.isAlive()).isFalse();
+        assertThat(exit[0]).isZero();
+        assertThat(new String(Files.readAllBytes(log), StandardCharsets.UTF_8)).contains("STUB stopped");
     }
 
     // ------------------------------------------------------------------ helpers

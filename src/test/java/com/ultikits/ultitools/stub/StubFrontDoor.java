@@ -484,6 +484,8 @@ public final class StubFrontDoor {
                 JsonObject details = error.getAsJsonObject("details");
                 if (minFramework != null) {
                     details.addProperty("minFramework", minFramework);
+                    // The vendored message names the vendored minimum; keep the two in step.
+                    error.addProperty("message", "UltiTools " + minFramework + " or later is required");
                 }
                 StringBuilder supported = new StringBuilder();
                 for (int i = 0; i < details.getAsJsonArray("supportedProtocols").size(); i++) {
