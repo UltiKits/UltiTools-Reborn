@@ -379,7 +379,12 @@ public class PluginInstallUtils {
             return InstallResult.failed();
         }
         if (!metadata.downloadable()) {
-            LOGGER.log(Level.WARNING, notAvailableLine(requested, version, metadata));
+            if (licenceRequired(metadata)) {
+                LOGGER.log(Level.WARNING, FrameworkText.format(InstallResult.Keys.REASON_LICENCE_REQUIRED, requested,
+                        version));
+                return InstallResult.refused(InstallResult.Keys.REASON_LICENCE_REQUIRED, requested, version);
+            }
+            LOGGER.log(Level.WARNING, notAvailableLine(requested, version));
             return InstallResult.failed();
         }
         String url = CatalogueClient.absoluteDownloadUrl(metadata.downloadUrl());
@@ -408,7 +413,9 @@ public class PluginInstallUtils {
             LOGGER.log(Level.FINE, "Catalogue download for " + requested + " " + version + " was refused: "
                     + download.kind() + "; expected sha256 " + VerifiedDownload.shortHash(metadata.sha256())
                     + ", size " + metadata.sizeBytes());
-            return InstallResult.failed();
+            return isIntegrityFailure(download.kind())
+                    ? InstallResult.refused(InstallResult.Keys.REASON_INTEGRITY_FAILED, requested, version)
+                    : InstallResult.failed();
         }
         boolean admitted = false;
         try {
@@ -432,10 +439,12 @@ public class PluginInstallUtils {
 
     /**
      * The one line an operator sees when a download did not pass its checks: the module, the
-     * version and the reason, and that nothing was installed. Each reason names what actually
-     * happened, so a licence refusal, a withdrawn version, a transport failure and an integrity
-     * failure cannot be mistaken for one another. Only short hash prefixes may join it in the local
-     * log, never a whole URL.
+     * version and the reason, and that nothing was installed. A withdrawn version, a transport
+     * failure and an integrity failure cannot be mistaken for one another; every integrity failure
+     * (hash, size, hash header, no usable hash or size) is the catalogue text
+     * {@link InstallResult.Keys#REASON_INTEGRITY_FAILED} in the server's language (plan 22-22), and
+     * which check failed is on the FINE line beside it. Only short hash prefixes may join it in the
+     * local log, never a whole URL.
      *
      * @param module the module as the operator asked for it
      * @param version the version
@@ -443,31 +452,36 @@ public class PluginInstallUtils {
      * @return the line
      */
     static String failureLine(String module, String version, VerifiedDownload.Kind kind) {
+        if (isIntegrityFailure(kind)) {
+            return FrameworkText.format(InstallResult.Keys.REASON_INTEGRITY_FAILED, module, version);
+        }
         switch (kind) {
-            case SIZE_MISMATCH:
-                return "Downloaded " + module + " " + version
-                        + " failed its integrity check (size mismatch); nothing was installed.";
-            case HEADER_MISMATCH:
-                return "Downloaded " + module + " " + version
-                        + " failed its integrity check (hash header mismatch); nothing was installed.";
-            case MISSING_METADATA:
-                // Nothing was requested: the catalogue entry itself cannot be trusted.
-                return module + " " + version
-                        + " was not downloaded: the catalogue entry carries no usable hash or size;"
-                        + " nothing was installed.";
             case NOT_AVAILABLE:
                 // 403/404: the contract uses 404 for every version that is not public.
                 return module + " " + version
                         + " is not available for download (withdrawn, unpublished or not licensed);"
                         + " nothing was installed.";
             case IO_ERROR:
+            default:
                 // A timeout, a broken stream, a 5xx or a redirect: the bytes never arrived whole.
                 return "Could not download " + module + " " + version
                         + " (the download did not complete); nothing was installed.";
-            default:
-                return "Downloaded " + module + " " + version
-                        + " failed its integrity check (hash mismatch); nothing was installed.";
         }
+    }
+
+    /**
+     * @param kind why a download was refused
+     * @return whether the bytes, the header or the catalogue entry failed the integrity check, as opposed to a
+     *         version that is not offered or a download that did not complete
+     */
+    private static boolean isIntegrityFailure(VerifiedDownload.Kind kind) {
+        return kind == VerifiedDownload.Kind.HASH_MISMATCH || kind == VerifiedDownload.Kind.SIZE_MISMATCH
+                || kind == VerifiedDownload.Kind.HEADER_MISMATCH || kind == VerifiedDownload.Kind.MISSING_METADATA;
+    }
+
+    /** @return whether the catalogue offers the version only with a licence */
+    private static boolean licenceRequired(CatalogueClient.Version metadata) {
+        return "license_required".equals(metadata.downloadKind());
     }
 
     /**
@@ -479,11 +493,12 @@ public class PluginInstallUtils {
                 + " nothing was installed.";
     }
 
-    /** The line for a version the catalogue lists but does not offer, which is not an integrity failure. */
-    private static String notAvailableLine(String module, String version, CatalogueClient.Version metadata) {
-        String reason = "license_required".equals(metadata.downloadKind())
-                ? "requires a licence" : "no public download";
-        return module + " " + version + " is not available for download (" + reason + ");"
+    /**
+     * The line for a version the catalogue lists but does not offer for another reason than a licence (that one is
+     * {@link InstallResult.Keys#REASON_LICENCE_REQUIRED}); it is not an integrity failure.
+     */
+    private static String notAvailableLine(String module, String version) {
+        return module + " " + version + " is not available for download (no public download);"
                 + " nothing was installed.";
     }
 
@@ -616,6 +631,16 @@ public class PluginInstallUtils {
             /** Args: module, version, framework level, floor, framework level. */
             public static final String REASON_JAR_NO_LEVEL =
                     "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
+            /**
+             * Args: module, version. The download did not match the catalogue's SHA-256 or size (including the
+             * {@code X-Content-SHA256} header), or the catalogue entry named no usable hash or size (plan 22-18,
+             * 22-22); nothing was installed.
+             */
+            public static final String REASON_INTEGRITY_FAILED =
+                    "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。";
+            /** Args: module, version. The catalogue lists the version but offers it only with a licence (plan 22-18, 22-22). */
+            public static final String REASON_LICENCE_REQUIRED =
+                    "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
             /** Args: module, version. */
             public static final String REASON_JAR_INVALID =
                     "已拒绝安装 %s %s：下载的文件不是有效的模块 JAR。下载的文件已删除，模块目录没有任何改动。";

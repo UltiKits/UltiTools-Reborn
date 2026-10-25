@@ -96,6 +96,8 @@ public final class CloudFeatures {
     /** How often the agent thread sends the buffered log lines (contract: every second, or when a batch is full). */
     static final long SEND_PERIOD_MS = 1000L;
 
+    private static final String SETTINGS_CHANGED = "settings.changed";
+
     private static volatile CloudFeatures installed;
 
     private final Bindings bindings;
@@ -241,6 +243,7 @@ public final class CloudFeatures {
                     return;
                 }
                 outbound.established(live, agent);
+                reportSettingsIfChanged(live);
                 startMainTimer();
                 try {
                     sending = agent.scheduleAtFixedRate(outbound::agentSecond, SEND_PERIOD_MS, SEND_PERIOD_MS,
@@ -314,9 +317,39 @@ public final class CloudFeatures {
      * @return the settings the next hello carries
      */
     JsonObject helloSettings() {
-        JsonObject current = settings.helloSettings();
-        settings.markReported(current);
-        return current;
+        synchronized (settings) {
+            JsonObject current = settings.helloSettings();
+            settings.markReported(current);
+            return current;
+        }
+    }
+
+    /**
+     * Reports a changed operator setting on the open connection (plan 22-22, S-53): called by {@code /ul reload} after
+     * the framework configuration was read again. Exactly one {@code settings.changed { powerActionsEnabled }} is sent
+     * when the value differs from the last one the panel was told (by a hello or an earlier {@code settings.changed});
+     * nothing when it is unchanged or no connection is established, in which case the next hello carries the value.
+     * Reads the configuration only; never writes an operator file (D-31).
+     */
+    public void onReload() {
+        reportSettingsIfChanged(liveChannel());
+    }
+
+    /**
+     * The comparison and the mark happen under one monitor, with the hello's own mark, so a reload racing a hello can
+     * neither repeat a value nor lose one. Also run when a connection is established, which reports a change made
+     * between its hello and its welcome.
+     */
+    private void reportSettingsIfChanged(CloudChannel channel) {
+        if (channel == null || !channel.isOpen()) {
+            return;
+        }
+        synchronized (settings) {
+            JsonObject changed = settings.changedSinceLastReport();
+            if (changed != null && channel.send(SETTINGS_CHANGED, changed)) {
+                settings.markReported(changed);
+            }
+        }
     }
 
     /** @return the operator settings reporter shared by every connection */

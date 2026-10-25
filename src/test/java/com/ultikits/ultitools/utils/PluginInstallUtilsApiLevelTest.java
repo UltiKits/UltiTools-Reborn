@@ -321,7 +321,7 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("a version whose download is license_required is 'not available', refused before any download, with one English line")
+    @DisplayName("a version whose download is license_required is 'not available', refused before any download, with one catalogue line")
     void licensedVersion_isRefusedWithoutDownloading() {
         frameworkAt(640);
 
@@ -331,8 +331,9 @@ class PluginInstallUtilsApiLevelTest {
         assertThat(result.isInstalled()).isFalse();
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
-        assertThat(messages()).containsExactly(
-                "demo 2.0.0 is not available for download (requires a licence); nothing was installed.");
+        // The catalogue text of plan 22-22; the mocked framework has no language loaded, so the key itself is shown.
+        assertThat(messages()).containsExactly(String.format(
+                PluginInstallUtils.InstallResult.Keys.REASON_LICENCE_REQUIRED, "demo", StubCatalogue.LICENSED_VERSION));
     }
 
     @Test

@@ -87,6 +87,8 @@
   "已拒绝安装 %s %s：下载的 JAR 声明 api-version %s。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。": "已拒绝安装 %s %s：下载的 JAR 声明 api-version %s。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。",
   "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。": "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。",
   "已拒绝安装 %s %s：下载的文件不是有效的模块 JAR。下载的文件已删除，模块目录没有任何改动。": "已拒绝安装 %s %s：下载的文件不是有效的模块 JAR。下载的文件已删除，模块目录没有任何改动。",
+  "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。": "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。",
+  "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。": "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。",
   "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。": "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
   "下载的 %s 声明 api-version %s，本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块": "下载的 %s 声明 api-version %s，本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块",
   "下载的 %s 没有声明 api-version，本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块": "下载的 %s 没有声明 api-version，本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块",
