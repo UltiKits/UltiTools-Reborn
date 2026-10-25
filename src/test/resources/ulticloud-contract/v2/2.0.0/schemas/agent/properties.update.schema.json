@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent/properties.update.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "properties.update"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "baseVersion": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "changes": {
+          "type": "object",
+          "properties": {
+            "motd": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "max-players": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "difficulty": {
+              "type": "string",
+              "enum": [
+                "peaceful",
+                "easy",
+                "normal",
+                "hard"
+              ]
+            },
+            "gamemode": {
+              "type": "string",
+              "enum": [
+                "survival",
+                "creative",
+                "adventure",
+                "spectator"
+              ]
+            },
+            "spawn-protection": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "view-distance": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 32
+            },
+            "simulation-distance": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 32
+            },
+            "pvp": {
+              "type": "boolean"
+            },
+            "allow-flight": {
+              "type": "boolean"
+            },
+            "spawn-monsters": {
+              "type": "boolean"
+            },
+            "allow-nether": {
+              "type": "boolean"
+            },
+            "enable-command-block": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "baseVersion",
+        "changes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "payload"
+  ],
+  "additionalProperties": false
+}

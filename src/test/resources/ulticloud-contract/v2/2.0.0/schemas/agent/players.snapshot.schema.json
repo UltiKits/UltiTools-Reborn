@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent/players.snapshot.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "players.snapshot"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "players": {
+          "maxItems": 1000,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "uuid": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+              },
+              "world": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "health": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "maxHealth": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "gameMode": {
+                "type": "string",
+                "enum": [
+                  "survival",
+                  "creative",
+                  "adventure",
+                  "spectator"
+                ]
+              },
+              "op": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "uuid",
+              "name",
+              "world",
+              "health",
+              "maxHealth",
+              "gameMode",
+              "op"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "players"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "payload"
+  ],
+  "additionalProperties": false
+}

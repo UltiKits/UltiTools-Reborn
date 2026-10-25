@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "lastSeenAt 必填（从未连上时为 null）",
+  "frame": {
+    "type": "presence",
+    "stream": "status",
+    "online": false,
+    "powerActionsEnabled": null,
+    "cloudState": "active"
+  }
+}

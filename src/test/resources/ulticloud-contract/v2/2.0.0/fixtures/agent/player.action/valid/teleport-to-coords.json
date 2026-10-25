@@ -1,0 +1,17 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "player.action",
+  "ts": 1761274800000,
+  "payload": {
+    "action": "teleport",
+    "player": "Steve",
+    "target": {
+      "kind": "coords",
+      "world": "world_nether",
+      "x": 10,
+      "y": 64,
+      "z": -5
+    }
+  }
+}

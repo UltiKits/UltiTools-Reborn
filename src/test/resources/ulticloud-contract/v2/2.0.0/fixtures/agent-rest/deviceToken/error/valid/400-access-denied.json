@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "access_denied",
+    "message": "request refused",
+    "requestId": "req_01"
+  }
+}

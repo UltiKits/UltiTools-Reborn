@@ -1,0 +1,9 @@
+{
+  "expect": "invalid_message",
+  "why": "opId 必填",
+  "frame": {
+    "type": "op.progress",
+    "stream": "commands",
+    "done": 1
+  }
+}

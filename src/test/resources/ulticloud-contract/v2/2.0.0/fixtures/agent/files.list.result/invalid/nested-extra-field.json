@@ -1,0 +1,27 @@
+{
+  "expect": "invalid_message",
+  "why": "目录项是 strict 的",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "files.list.result",
+    "ts": 1761274800000,
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+    "payload": {
+      "status": "ok",
+      "data": {
+        "path": "",
+        "entries": [
+          {
+            "name": "a",
+            "type": "file",
+            "sizeBytes": 1,
+            "modifiedAt": 1761274800000,
+            "owner": "root"
+          }
+        ],
+        "truncated": false
+      }
+    }
+  }
+}

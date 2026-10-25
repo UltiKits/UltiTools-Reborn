@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "v1 的 commandId/success 字段不再存在",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "command.result",
+    "ts": 1761274800000,
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+    "payload": {
+      "commandId": "x",
+      "success": true,
+      "output": "dispatched"
+    }
+  }
+}

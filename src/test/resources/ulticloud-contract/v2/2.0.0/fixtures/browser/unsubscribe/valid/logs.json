@@ -1,0 +1,6 @@
+{
+  "type": "unsubscribe",
+  "streams": [
+    "logs"
+  ]
+}

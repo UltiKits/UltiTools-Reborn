@@ -1,0 +1,32 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "backups.list.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "ok",
+    "data": {
+      "backups": [
+        {
+          "id": "2026-10-24_03-00",
+          "fileName": "backup-2026-10-24_03-00.zip",
+          "createdAt": 1761274800000,
+          "sizeBytes": 1600000000,
+          "status": "completed",
+          "progressPercent": null,
+          "error": null
+        },
+        {
+          "id": "running",
+          "fileName": "backup-2026-10-24_03-00.zip",
+          "createdAt": 1761274800000,
+          "sizeBytes": null,
+          "status": "in_progress",
+          "progressPercent": 42,
+          "error": null
+        }
+      ]
+    }
+  }
+}

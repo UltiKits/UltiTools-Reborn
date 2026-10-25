@@ -1,0 +1,10 @@
+{
+  "expect": "invalid",
+  "why": "402 与其他拒绝一样包在 error 里，reason/graceEndedAt/manageUrl 在 error.details",
+  "body": {
+    "code": "plan_limit",
+    "reason": "pro_expired_over_limit",
+    "graceEndedAt": "2026-11-01T00:00:00.000Z",
+    "manageUrl": "https://panel.ultikits.com/owner/billing"
+  }
+}

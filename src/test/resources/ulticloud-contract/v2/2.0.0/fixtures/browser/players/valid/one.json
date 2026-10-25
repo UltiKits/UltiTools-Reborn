@@ -1,0 +1,16 @@
+{
+  "type": "players",
+  "stream": "status",
+  "asOf": "2026-10-24T03:00:00.000Z",
+  "players": [
+    {
+      "name": "Steve",
+      "uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+      "isOp": true,
+      "world": "world",
+      "health": 20,
+      "maxHealth": 20,
+      "gameMode": "survival"
+    }
+  ]
+}

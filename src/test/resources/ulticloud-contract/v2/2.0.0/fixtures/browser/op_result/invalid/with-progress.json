@@ -1,0 +1,18 @@
+{
+  "expect": "invalid_message",
+  "why": "进度走 op.progress 帧，op_result 不带 progress",
+  "frame": {
+    "type": "op_result",
+    "stream": "commands",
+    "opId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "kind": "config.tree",
+    "state": "pending",
+    "result": null,
+    "error": null,
+    "finishedAt": null,
+    "progress": {
+      "done": 1,
+      "total": 3
+    }
+  }
+}

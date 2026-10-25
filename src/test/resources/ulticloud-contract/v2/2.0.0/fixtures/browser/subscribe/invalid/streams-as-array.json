@@ -1,0 +1,14 @@
+{
+  "expect": "invalid_message",
+  "why": "FE §B 的旧形状；第 12 条改为按流名的对象",
+  "frame": {
+    "type": "subscribe",
+    "streams": [
+      "logs",
+      "status"
+    ],
+    "since": {
+      "logs": 1
+    }
+  }
+}

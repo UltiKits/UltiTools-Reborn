@@ -1,0 +1,18 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "hello",
+  "ts": 1761274800000,
+  "payload": {
+    "framework": "6.3.1",
+    "protocol": 2,
+    "capabilities": [
+      "telemetry",
+      "logs",
+      "modules:ultimail@1.2.0"
+    ],
+    "settings": {
+      "powerActionsEnabled": false
+    }
+  }
+}

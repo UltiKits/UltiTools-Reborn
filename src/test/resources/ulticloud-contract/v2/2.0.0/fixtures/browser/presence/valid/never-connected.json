@@ -1,0 +1,8 @@
+{
+  "type": "presence",
+  "stream": "status",
+  "online": false,
+  "lastSeenAt": null,
+  "powerActionsEnabled": null,
+  "cloudState": "active"
+}

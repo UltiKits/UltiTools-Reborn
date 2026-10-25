@@ -1,0 +1,13 @@
+{
+  "expect": "invalid_message",
+  "why": "config.tree 没有参数",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "config.tree",
+    "ts": 1761274800000,
+    "payload": {
+      "plugin": "UltiChat"
+    }
+  }
+}

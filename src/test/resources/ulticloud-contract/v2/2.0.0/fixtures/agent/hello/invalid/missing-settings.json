@@ -1,0 +1,15 @@
+{
+  "expect": "invalid_message",
+  "why": "settings 必填（用户决定第 24 条）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "hello",
+    "ts": 1761274800000,
+    "payload": {
+      "framework": "6.3.1",
+      "protocol": 2,
+      "capabilities": []
+    }
+  }
+}

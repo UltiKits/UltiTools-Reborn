@@ -1,0 +1,10 @@
+{
+  "expect": "invalid_message",
+  "why": "流只有 logs、events、status、commands",
+  "frame": {
+    "type": "subscribe",
+    "streams": {
+      "chat": {}
+    }
+  }
+}

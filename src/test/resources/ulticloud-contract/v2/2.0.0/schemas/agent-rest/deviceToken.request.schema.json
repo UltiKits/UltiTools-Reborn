@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent-rest/deviceToken.request.schema.json",
+  "type": "object",
+  "properties": {
+    "deviceCode": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,128}$"
+    }
+  },
+  "required": [
+    "deviceCode"
+  ],
+  "additionalProperties": false
+}

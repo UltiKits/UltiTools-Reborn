@@ -1,0 +1,28 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "error.report",
+  "ts": 1761274800000,
+  "payload": {
+    "fingerprint": "a91f3c2e7b0d",
+    "exceptionType": "java.lang.NullPointerException",
+    "message": "player is null",
+    "stackTrace": "java.lang.NullPointerException: player is null\n\tat com.example.ChannelService.send(ChannelService.java:42)",
+    "moduleName": null,
+    "trigger": {
+      "kind": "scheduler",
+      "detail": null
+    },
+    "playerName": null,
+    "location": null,
+    "snapshot": {
+      "tps": null,
+      "memUsedMb": null,
+      "memMaxMb": null,
+      "onlinePlayers": null
+    },
+    "occurrences": 3,
+    "firstSeenAt": 1761274800000,
+    "lastSeenAt": 1761274800000
+  }
+}

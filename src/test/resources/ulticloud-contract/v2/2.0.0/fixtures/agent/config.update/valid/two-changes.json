@@ -1,0 +1,20 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "config.update",
+  "ts": 1761274800000,
+  "payload": {
+    "path": "plugins/UltiChat/config.yml",
+    "baseVersion": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "changes": [
+      {
+        "key": "chat.prefix",
+        "value": "[C]"
+      },
+      {
+        "key": "chat.cooldown",
+        "value": 5
+      }
+    ]
+  }
+}

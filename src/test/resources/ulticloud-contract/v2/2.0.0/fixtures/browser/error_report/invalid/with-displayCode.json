@@ -1,0 +1,31 @@
+{
+  "expect": "invalid_message",
+  "why": "没有 displayCode（P3 D-9）；展示码由前端取 id 前 8 位",
+  "frame": {
+    "type": "error_report",
+    "stream": "status",
+    "group": {
+      "id": "a91f3c2e7b0d",
+      "fingerprint": "a91f3c2e7b0d",
+      "exceptionType": "java.lang.NullPointerException",
+      "title": "NullPointerException: player is null",
+      "moduleName": "UltiChat",
+      "moduleId": null,
+      "serverId": "01JB2Z8Y3K4M5N6P7Q8R9S0SRV",
+      "serverName": "Home Server",
+      "affectedServerCount": 1,
+      "count": 12,
+      "firstSeenAt": "2026-10-24T03:00:00.000Z",
+      "lastSeenAt": "2026-10-24T03:00:00.000Z",
+      "resolved": false,
+      "trigger": {
+        "kind": "event",
+        "detail": "AsyncPlayerChatEvent"
+      },
+      "playerName": "Steve",
+      "location": "ChannelService.send",
+      "displayCode": "E-UC-001"
+    },
+    "isNew": false
+  }
+}

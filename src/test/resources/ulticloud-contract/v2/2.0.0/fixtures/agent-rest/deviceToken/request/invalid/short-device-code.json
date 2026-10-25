@@ -1,0 +1,7 @@
+{
+  "expect": "invalid",
+  "why": "deviceCode 43..128 个 URL 安全字符",
+  "body": {
+    "deviceCode": "abc"
+  }
+}

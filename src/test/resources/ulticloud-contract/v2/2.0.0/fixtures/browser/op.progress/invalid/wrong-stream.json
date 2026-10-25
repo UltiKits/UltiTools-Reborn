@@ -1,0 +1,10 @@
+{
+  "expect": "invalid_message",
+  "why": "进度属于 commands 流",
+  "frame": {
+    "type": "op.progress",
+    "stream": "status",
+    "opId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "done": 1
+  }
+}

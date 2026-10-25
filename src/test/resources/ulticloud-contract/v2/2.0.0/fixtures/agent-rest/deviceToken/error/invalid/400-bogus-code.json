@@ -1,0 +1,11 @@
+{
+  "expect": "invalid",
+  "why": "错误码沿用 RFC 8628 §3.5 的集合",
+  "body": {
+    "error": {
+      "code": "bogus",
+      "message": "request refused",
+      "requestId": "req_01"
+    }
+  }
+}

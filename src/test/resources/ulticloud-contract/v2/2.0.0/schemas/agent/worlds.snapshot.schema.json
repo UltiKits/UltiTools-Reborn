@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent/worlds.snapshot.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "worlds.snapshot"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "worlds": {
+          "maxItems": 200,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "environment": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "nether",
+                  "the_end",
+                  "custom"
+                ]
+              },
+              "difficulty": {
+                "type": "string",
+                "enum": [
+                  "peaceful",
+                  "easy",
+                  "normal",
+                  "hard"
+                ]
+              },
+              "playerCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              "loadedChunks": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "pvp": {
+                "type": "boolean"
+              },
+              "spawn": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "minimum": -30000000,
+                    "maximum": 30000000
+                  },
+                  "y": {
+                    "type": "number",
+                    "minimum": -30000000,
+                    "maximum": 30000000
+                  },
+                  "z": {
+                    "type": "number",
+                    "minimum": -30000000,
+                    "maximum": 30000000
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "z"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "name",
+              "environment",
+              "difficulty",
+              "playerCount",
+              "loadedChunks",
+              "pvp",
+              "spawn"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "worlds"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "payload"
+  ],
+  "additionalProperties": false
+}

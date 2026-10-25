@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent/player.link.completed.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "player.link.completed"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "replyTo": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "proof": {
+              "type": "string",
+              "const": "in_game_session"
+            },
+            "player": {
+              "type": "object",
+              "properties": {
+                "uuid": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+                }
+              },
+              "required": [
+                "uuid",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "provisionGameAccount": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "proof",
+            "player",
+            "provisionGameAccount"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "proof": {
+              "type": "string",
+              "const": "linked_web_account"
+            },
+            "player": {
+              "type": "object",
+              "properties": {
+                "uuid": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+                }
+              },
+              "required": [
+                "uuid",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "provisionGameAccount": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "proof",
+            "player",
+            "provisionGameAccount"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "proof": {
+              "type": "string",
+              "const": "web_registration"
+            },
+            "player": {
+              "type": "object",
+              "properties": {
+                "uuid": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+                }
+              },
+              "required": [
+                "uuid",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "webUsername": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "provisionGameAccount": {
+              "type": "boolean",
+              "const": true
+            }
+          },
+          "required": [
+            "proof",
+            "player",
+            "webUsername",
+            "provisionGameAccount"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "replyTo",
+    "payload"
+  ],
+  "additionalProperties": false
+}

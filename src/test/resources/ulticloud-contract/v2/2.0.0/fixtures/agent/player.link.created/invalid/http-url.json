@@ -1,0 +1,21 @@
+{
+  "expect": "invalid_message",
+  "why": "只能是 https",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.link.created",
+    "ts": 1761274800000,
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+    "payload": {
+      "status": "ok",
+      "data": {
+        "url": "http://panel.ultikits.com/link#ucl_x",
+        "expiresAt": 1761274800000,
+        "acceptedProofs": [
+          "in_game_session"
+        ]
+      }
+    }
+  }
+}

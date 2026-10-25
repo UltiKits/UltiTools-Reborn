@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/browser/op.progress.schema.json",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "op.progress"
+    },
+    "stream": {
+      "type": "string",
+      "const": "commands"
+    },
+    "opId": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "done": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    }
+  },
+  "required": [
+    "type",
+    "stream",
+    "opId",
+    "done"
+  ],
+  "additionalProperties": false
+}

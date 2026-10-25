@@ -1,0 +1,15 @@
+{
+  "expect": "invalid_message",
+  "why": "properties.get 没有参数",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "properties.get",
+    "ts": 1761274800000,
+    "payload": {
+      "keys": [
+        "motd"
+      ]
+    }
+  }
+}

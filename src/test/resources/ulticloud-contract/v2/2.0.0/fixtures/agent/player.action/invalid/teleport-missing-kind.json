@@ -1,0 +1,17 @@
+{
+  "expect": "invalid_message",
+  "why": "传送目标必须带 kind（player 或 coords）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.action",
+    "ts": 1761274800000,
+    "payload": {
+      "action": "teleport",
+      "player": "Steve",
+      "target": {
+        "player": "Alex"
+      }
+    }
+  }
+}

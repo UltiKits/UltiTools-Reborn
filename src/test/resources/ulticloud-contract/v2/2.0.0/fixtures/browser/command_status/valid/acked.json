@@ -1,0 +1,7 @@
+{
+  "type": "command_status",
+  "stream": "commands",
+  "commandId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "status": "acked",
+  "at": "2026-10-24T03:00:00.000Z"
+}
