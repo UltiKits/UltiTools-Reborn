@@ -245,7 +245,7 @@ public class PanelResponderRegistry {
      * on the main thread, scheduled by the responder itself. See the class documentation for the
      * full scheduling contract.
      *
-     * <h2>UltiCloud protocol v2 module types</h2>
+     * <h4>UltiCloud protocol v2 module types</h4>
      * <p>A module that answers UltiCloud protocol v2 {@code module.request} messages registers its
      * responder under {@code <module id>.<action>}, the module id being the module's own name
      * lower-cased. The v2 bridge derives that exact type from the request payload's {@code module}

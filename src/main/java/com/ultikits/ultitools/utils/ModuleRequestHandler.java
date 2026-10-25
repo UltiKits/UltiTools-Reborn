@@ -40,10 +40,10 @@ import java.util.regex.Pattern;
  *       refused because the registry's queue is full or the registry shut down — becomes
  *       {@code module_error} carrying only the root cause's message, cut to the schema's limit.</li>
  * </ul>
- * The contract also allows the {@code ok} shape with {@code data: null}. The 6.3.0 extension point
- * is typed {@code Function<JsonObject, CompletableFuture<JsonObject>>} and always treats a null
- * result as a failure, so that shape is not reachable through it without widening the registry's
- * released public signature.</p>
+ * <p>The contract also allows the {@code ok} shape with {@code data: null}. The 6.3.0 extension
+ * point is typed {@code Function<JsonObject, CompletableFuture<JsonObject>>} and always treats a
+ * null result as a failure, so that shape is not reachable through it without widening the
+ * registry's released public signature.
  *
  * @since 6.3.1
  */
