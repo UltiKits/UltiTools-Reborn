@@ -102,8 +102,8 @@ class VerifiedDownloadTest {
     }
 
     @Test
-    @DisplayName("fetch itself aborts an oversized body while streaming: a fresh stub never serves all 10 MiB")
-    void largerBody_isAbortedWhileStreaming() throws IOException {
+    @DisplayName("fetch itself aborts an oversized body while streaming: a fresh stub never serves the whole body")
+    void largerBody_isAbortedWhileStreaming() throws IOException, InterruptedException {
         // A fresh stub, so the sticky clientAborted flag can only be set by this call: the earlier
         // version of this test called CatalogueHttp.download first and then asserted a flag that
         // call had already set, so it held even when fetch read the whole body.
@@ -117,8 +117,10 @@ class VerifiedDownloadTest {
                     version.sizeBytes(), part);
 
             assertThat(result.kind()).isEqualTo(VerifiedDownload.Kind.SIZE_MISMATCH);
-            assertThat(fresh.clientAborted())
-                    .as("the client closed the connection instead of reading all 10 MiB")
+            // The stub notices the close on its writer thread when its next write fails, which can
+            // come after fetch returned: wait for that event instead of reading the flag at once.
+            assertThat(fresh.awaitClientAborted(20, TimeUnit.SECONDS))
+                    .as("the client closed the connection instead of reading the whole body")
                     .isTrue();
             assertThat(fresh.servedBytes())
                     .as("the stub stopped writing: the client read at most sizeBytes + 1")

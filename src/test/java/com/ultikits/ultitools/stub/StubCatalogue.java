@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
@@ -84,8 +86,16 @@ public final class StubCatalogue implements AutoCloseable {
     private static final String HASH_OF_ONE_MIB = repeat('d', 64);
     /** A download URL on a host that is not the catalogue's, as a compromised answer would name it. */
     private static final String FOREIGN_DOWNLOAD = "https://evil.example/module.jar";
-    /** The byte count the {@link Mode#HUGE_BODY} answer announces. */
-    public static final int HUGE_BODY_BYTES = 10 * 1024 * 1024;
+    /**
+     * The byte count the {@link Mode#HUGE_BODY} answer announces.
+     *
+     * <p>It must exceed what the loopback socket buffers can hold, or the stub can finish writing
+     * a body the client never read: with Linux's default maxima (4 MiB send, 6 MiB receive) a
+     * 10 MiB body was written in full in 6 of 500 runs under CPU load, so neither
+     * {@link #clientAborted()} nor {@link #servedBytes()} could tell a client that stopped early
+     * from one that read everything. 64 MiB leaves a wide margin above those buffers.
+     */
+    public static final int HUGE_BODY_BYTES = 64 * 1024 * 1024;
     /** The byte count the {@link Mode#HUGE_BODY} metadata claims. */
     public static final int HUGE_DECLARED_BYTES = 1024 * 1024;
     private static final int BROKEN_STREAM_CHUNK = 1024;
@@ -99,6 +109,7 @@ public final class StubCatalogue implements AutoCloseable {
     private volatile byte[] jar = moduleJar("Demo", VERSION, MODULE, "630");
     private volatile int servedBytes;
     private volatile boolean clientAborted;
+    private final CountDownLatch clientAbortSeen = new CountDownLatch(1);
     private volatile int longDescriptionChars;
     private volatile int versionCount;
     private volatile int changelogChars;
@@ -214,6 +225,27 @@ public final class StubCatalogue implements AutoCloseable {
     /** @return whether a client closed a download before the stub finished writing it */
     public boolean clientAborted() {
         return clientAborted;
+    }
+
+    /**
+     * Waits until the stub has seen a client close a download early.
+     *
+     * <p>The stub learns of the close on its own writer thread, when its next write fails, which can
+     * be after the client's call has already returned; asserting {@link #clientAborted()} at once
+     * races that write. After this returns {@code true}, {@link #servedBytes()} is final.
+     *
+     * @param timeout the longest wait
+     * @param unit    the unit of {@code timeout}
+     * @return whether the abort was seen within the wait
+     * @throws InterruptedException when the waiting thread is interrupted
+     */
+    public boolean awaitClientAborted(long timeout, TimeUnit unit) throws InterruptedException {
+        return clientAbortSeen.await(timeout, unit);
+    }
+
+    private void markClientAborted() {
+        clientAborted = true;
+        clientAbortSeen.countDown();
     }
 
     /** @return the {@code sha256} the stub reports for the bytes it serves */
@@ -335,7 +367,7 @@ public final class StubCatalogue implements AutoCloseable {
             out.flush();
         } catch (IOException closedByClient) {
             // The client aborted the download on purpose (an oversized or tampered body).
-            clientAborted = true;
+            markClientAborted();
         }
     }
 
@@ -356,7 +388,7 @@ public final class StubCatalogue implements AutoCloseable {
             out.flush();
         } catch (IOException closedByClient) {
             // The client stopped after the declared size, which is what the test proves.
-            clientAborted = true;
+            markClientAborted();
         }
     }
 
