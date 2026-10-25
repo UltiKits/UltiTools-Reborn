@@ -9,10 +9,14 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -24,12 +28,14 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.manager.AgentOutboundFeeds;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.RemoteRequestHandlers;
+import com.ultikits.ultitools.manager.ServerMonitorManager;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 import com.ultikits.ultitools.websocket.CloudRequest;
@@ -44,7 +50,8 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * {@link CloudPlayerLinks} API and the {@link PlayerLinkChannel} behind it (so a handler a module set at startup
  * survives every reconnect), and the one {@link SessionDedupeLedger} every handler shares (so the ledger monitor is
  * the same across connections). Each upgraded connection gets its own {@link AgentProtocol}; {@link CloudSession}
- * calls {@link #register(AgentMessageRouter, CloudChannel, AgentProtocol, CredentialRotationHandler.CredentialPersister)}
+ * calls {@link #register(AgentMessageRouter, CloudChannel, AgentProtocol, CredentialRotationHandler.CredentialPersister,
+ * ScheduledExecutorService)}
  * once for it, which registers the request handlers on that connection's router and points the lifetime objects at
  * that connection. A {@code credential.rotate} is persisted through the session that owns the connection, never
  * through the store directly, because that session is the one owner of the current credential.
@@ -67,6 +74,13 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * (S-65, S-66). A {@code module.request} is also filtered by the module capabilities the gateway accepted: a request
  * for a module whose {@code modules:<id>@<X.Y.Z>} name was not accepted is answered {@code capability_not_accepted}
  * (contract SEMANTICS 8) and never reaches the module.
+ * <p>
+ * <b>Outbound (plan 22-22).</b> One {@link AgentOutboundFeeds} lives as long as the plugin is enabled. On every
+ * established connection it gets the live channel; the connection's agent scheduler then runs its once-a-second send
+ * (log lines) until the close, and a main-thread task every 20 ticks, started at the first connection, samples TPS,
+ * CPU and the server state and advances the telemetry cadence. {@code snapshot.request} is registered on every
+ * connection. A {@code /ul reload} that changes an operator setting sends {@code settings.changed} once
+ * ({@link #onReload()}).
  *
  * @since 6.3.1
  */
@@ -79,6 +93,12 @@ public final class CloudFeatures {
     private static final String PANEL_ACTOR = "panel";
     private static final String MODULE_REQUEST = "module.request";
     private static final String MODULE_PREFIX = "modules:";
+
+    /** How often the agent thread sends the buffered log lines (contract: every second, or when a batch is full). */
+    static final long SEND_PERIOD_MS = 1000L;
+
+    private static final String SETTINGS_CHANGED = "settings.changed";
+    private static final String TELEMETRY = "telemetry";
 
     private static volatile CloudFeatures installed;
 
@@ -97,6 +117,11 @@ public final class CloudFeatures {
     /** The file-request worker of the current connection, or {@code null}. */
     private volatile SerialRequestWorker fileWorker;
 
+    private final AgentOutboundFeeds outbound;
+
+    /** Cancels the main-thread sampling task, or {@code null} before the first connection. Guarded by {@code this}. */
+    private Runnable mainTimerCancel;
+
     private CloudFeatures(Bindings bindings) {
         this.bindings = Objects.requireNonNull(bindings, "bindings");
         this.handlerThread = Executors.newSingleThreadExecutor(daemon(HANDLER_THREAD_NAME));
@@ -105,8 +130,13 @@ public final class CloudFeatures {
         this.playerLinkChannel = new PlayerLinkChannel(this::liveChannel, ledger, bindings.onlineMode,
                 this::gatewayClockOffsetMillis, timers, handlerThread);
         this.playerLinks = new CloudPlayerLinks(playerLinkChannel);
-        this.capabilities = new AgentCapabilities(bindings.switches, bindings.errorReporting, this::moduleNames);
+        this.capabilities = new AgentCapabilities(bindings.switches, bindings.errorReporting, this::moduleNames,
+                this::available);
         this.settings = new AgentSettings(bindings.powerEnabled);
+        // Never resolved here: UltiTools#onEnable starts the features before it creates the monitor (22-22 fix).
+        this.outbound = new AgentOutboundFeeds(bindings.monitor, () -> capabilities.enabled(TELEMETRY),
+                () -> capabilities.enabled("logs"), () -> capabilities.enabled("errors"),
+                bindings.errors == null ? () -> null : bindings.errors, bindings.clock, bindings.mainThread);
     }
 
     /**
@@ -157,6 +187,15 @@ public final class CloudFeatures {
         playerLinkChannel.onChannelClosed();
         handlerThread.shutdown();
         timers.shutdown();
+        Runnable cancel;
+        synchronized (this) {
+            cancel = mainTimerCancel;
+            mainTimerCancel = null;
+        }
+        if (cancel != null) {
+            cancel.run();
+        }
+        outbound.shutdown();
     }
 
     /**
@@ -167,13 +206,15 @@ public final class CloudFeatures {
      * @param channel  the connection's live channel (open between welcome and close)
      * @param protocol the connection's protocol layer
      * @param rotation persists a {@code credential.rotate} through the session that owns this connection
+     * @param agent    the connection's agent scheduler: runs the once-a-second send while it is established
      */
     void register(AgentMessageRouter router, CloudChannel channel, final AgentProtocol protocol,
-                  CredentialRotationHandler.CredentialPersister rotation) {
+                  CredentialRotationHandler.CredentialPersister rotation, final ScheduledExecutorService agent) {
         Objects.requireNonNull(router, "router");
         Objects.requireNonNull(channel, "channel");
         Objects.requireNonNull(protocol, "protocol");
         Objects.requireNonNull(rotation, "rotation");
+        Objects.requireNonNull(agent, "agent");
         this.protocol = protocol;
         final SerialRequestWorker worker = new SerialRequestWorker(bindings.fileQueueCapacity);
         SerialRequestWorker previous = fileWorker;
@@ -190,17 +231,114 @@ public final class CloudFeatures {
         registerModules(router, protocol);
         router.register("credential.rotate", new CredentialRotationHandler(rotation));
         playerLinkChannel.register(router);
+        registerSnapshots(router);
         // The protocol layer consumes inbound error frames itself; the link channel hears them as reply listener.
         protocol.addReplyListener(playerLinkChannel::onErrorReply);
         protocol.addLifecycleListener(new AgentProtocol.Listener() {
+            private ScheduledFuture<?> sending;
+
+            @Override
+            public void established(CloudChannel live) {
+                if (CloudFeatures.this.protocol != protocol) {
+                    return;
+                }
+                if (protocol.capabilitiesChangedSinceHello()) {
+                    // A reload between the hello and the welcome changed the set: this welcome answered the old one.
+                    reconnectForNewCapabilities(protocol);
+                    return;
+                }
+                outbound.established(live, agent, protocol.acceptedCapabilities().contains("logs"));
+                reportSettingsIfChanged(live);
+                startMainTimer();
+                try {
+                    sending = agent.scheduleAtFixedRate(outbound::agentSecond, SEND_PERIOD_MS, SEND_PERIOD_MS,
+                            TimeUnit.MILLISECONDS);
+                } catch (RejectedExecutionException stopping) {
+                    sending = null;
+                }
+            }
+
             @Override
             public void closed() {
                 worker.close();
+                ScheduledFuture<?> task = sending;
+                sending = null;
+                if (task != null) {
+                    task.cancel(false);
+                }
+                outbound.closed(channel);
                 if (CloudFeatures.this.protocol == protocol) {
                     playerLinkChannel.onChannelClosed();
                 }
             }
         });
+    }
+
+    /**
+     * Registers {@code snapshot.request} on every connection; the telemetry behind it is looked up per request. While
+     * it is unavailable the hello does not declare {@code telemetry} and the router refuses the request before it
+     * gets here ({@link #available(String)}); the warning says why, once per connection.
+     */
+    private void registerSnapshots(AgentMessageRouter router) {
+        if (bindings.switches.test(Capability.MONITORING) && !outbound.telemetryAvailable()) {
+            PanelConnectionLog.log(Level.WARNING, "UltiCloud: telemetry is switched on, but the server monitor is not "
+                    + "available; this connection does not declare telemetry.");
+        }
+        router.register(AgentOutboundFeeds.SNAPSHOT_REQUEST, new CloudRequestHandler() {
+            @Override
+            public void handle(CloudRequest request, CloudChannel reply) {
+                CloudRequestHandler snapshots = outbound.snapshotRequests();
+                if (snapshots == null) {
+                    JsonObject details = new JsonObject();
+                    details.addProperty("capability", TELEMETRY);
+                    reply.replyError(request.id(), "error", "capability_not_accepted",
+                            "This capability is not available on this server.", details);
+                    return;
+                }
+                snapshots.handle(request, reply);
+            }
+        });
+    }
+
+    /** @return whether the feature behind a contract capability can run now (only telemetry can be missing) */
+    private boolean available(String contractCapability) {
+        return !TELEMETRY.equals(contractCapability) || outbound.telemetryAvailable();
+    }
+
+    /** Starts the main-thread sampling task once; it runs until {@link #shutdown()}, so TPS history has no gaps. */
+    private void startMainTimer() {
+        if (bindings.mainTimer == null) {
+            return;
+        }
+        synchronized (this) {
+            if (mainTimerCancel != null || installed != this) {
+                return;
+            }
+            mainTimerCancel = bindings.mainTimer.apply(outbound::mainThreadSecond);
+        }
+    }
+
+    /**
+     * Sends one {@code player.command} carrying only the command's normalised name (D-20), while a connection is
+     * established and the {@code events:commands} switch is on; never buffered (D-14).
+     *
+     * @param commandLine the command line as the player typed it
+     */
+    void sendPlayerCommand(String commandLine) {
+        if (!capabilities.enabled("events:commands")) {
+            return;
+        }
+        CloudChannel channel = liveChannel();
+        if (channel == null || !channel.isOpen()) {
+            return;
+        }
+        JsonObject payload = AgentOutboundFeeds.playerCommandPayload(commandLine);
+        if (payload == null) {
+            PanelConnectionLog.log(Level.FINE, "UltiCloud: a player command whose name the contract cannot carry "
+                    + "was not reported.");
+            return;
+        }
+        channel.send("player.command", payload);
     }
 
     /** @return the hello list and the per-request switch check of every connection */
@@ -215,9 +353,55 @@ public final class CloudFeatures {
      * @return the settings the next hello carries
      */
     JsonObject helloSettings() {
-        JsonObject current = settings.helloSettings();
-        settings.markReported(current);
-        return current;
+        synchronized (settings) {
+            JsonObject current = settings.helloSettings();
+            settings.markReported(current);
+            return current;
+        }
+    }
+
+    /**
+     * Reports a changed operator setting on the open connection (plan 22-22, S-53): called by {@code /ul reload} after
+     * the framework configuration was read again. Exactly one {@code settings.changed { powerActionsEnabled }} is sent
+     * when the value differs from the last one the panel was told (by a hello or an earlier {@code settings.changed});
+     * nothing when it is unchanged or no connection is established, in which case the next hello carries the value.
+     * <p>
+     * A reload that adds or removes a declared capability (an operator switch) closes the connection normally (1000)
+     * instead, and the connection reconnects after its normal short backoff: capabilities are negotiated only at the
+     * handshake (backend decision k), so the new hello declares the new set and carries the settings; no
+     * {@code settings.changed} is sent then. A change made while the hello waits for its welcome is caught when the
+     * welcome arrives. Reads the configuration only; never writes an operator file (D-31).
+     */
+    public void onReload() {
+        AgentProtocol current = protocol;
+        if (current != null && current.isEstablished() && current.capabilitiesChangedSinceHello()) {
+            reconnectForNewCapabilities(current);
+            return;
+        }
+        reportSettingsIfChanged(liveChannel());
+    }
+
+    private static void reconnectForNewCapabilities(AgentProtocol connection) {
+        PanelConnectionLog.log(Level.INFO, "UltiCloud: the reload changed which capabilities this server offers; "
+                + "reconnecting so UltiCloud sees the new set.");
+        connection.reconnectForNewHello("capabilities changed");
+    }
+
+    /**
+     * The comparison and the mark happen under one monitor, with the hello's own mark, so a reload racing a hello can
+     * neither repeat a value nor lose one. Also run when a connection is established, which reports a change made
+     * between its hello and its welcome.
+     */
+    private void reportSettingsIfChanged(CloudChannel channel) {
+        if (channel == null || !channel.isOpen()) {
+            return;
+        }
+        synchronized (settings) {
+            JsonObject changed = settings.changedSinceLastReport();
+            if (changed != null && channel.send(SETTINGS_CHANGED, changed)) {
+                settings.markReported(changed);
+            }
+        }
     }
 
     /** @return the operator settings reporter shared by every connection */
@@ -430,6 +614,21 @@ public final class CloudFeatures {
         Supplier<PanelResponderRegistry> responders;
         /** A loaded module's {@code plugin.yml} version by module name, for its capability name. */
         Function<String, String> moduleVersion;
+        /** The collector the {@code error.report} frames are drained from; {@code null} sends none. */
+        Supplier<com.ultikits.ultitools.manager.ErrorReportCollector> errors;
+        /**
+         * The server sampler of the telemetry, read at first use and never by {@link CloudFeatures#start}: the plugin
+         * creates it after the features start. {@code null}, or a supplier of {@code null}, sends no telemetry and
+         * keeps {@code telemetry} out of the hello.
+         */
+        Supplier<ServerMonitorManager> monitor;
+        /**
+         * Starts a task on the server thread every 20 ticks and returns what cancels it; {@code null} starts none.
+         * Ticks, not a wall-clock hop, so the TPS sample measures the server.
+         */
+        Function<Runnable, Runnable> mainTimer;
+        /** Epoch milliseconds for the telemetry cadence and the log rate bucket. */
+        LongSupplier clock = System::currentTimeMillis;
 
         /** @return bindings with no server behind them: only the switches, the credential rotation and links */
         static Bindings forTesting() {
@@ -447,6 +646,17 @@ public final class CloudFeatures {
             bindings.mainThread = runnable -> PluginInitiationUtils.scheduleUnlessDisabling("UltiCloud request",
                     () -> Bukkit.getScheduler().runTask(plugin, runnable));
             bindings.disabling = () -> !PluginInitiationUtils.isAcceptingPanelMessages();
+            bindings.monitor = plugin::getServerMonitorManager;
+            bindings.errors = plugin::getErrorReportCollector;
+            bindings.mainTimer = task -> {
+                final org.bukkit.scheduler.BukkitTask started = PluginInitiationUtils.scheduleUnlessDisabling(
+                        "UltiCloud telemetry", () -> Bukkit.getScheduler().runTaskTimer(plugin, task, 20L, 20L));
+                return () -> {
+                    if (started != null) {
+                        started.cancel();
+                    }
+                };
+            };
             bindings.power = BukkitPowerExecutor::create;
             bindings.actionLog = entry -> {
                 try {

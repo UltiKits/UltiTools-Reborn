@@ -1,14 +1,19 @@
 package com.ultikits.ultitools.utils;
 
+import java.util.logging.Level;
+
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.manager.AgentOutboundFeeds;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 
 /**
  * Captures player joins and leaves into the current UltiCloud session's reliable-delivery outbox
@@ -32,10 +37,16 @@ import com.google.gson.JsonObject;
  * unlinked server writes no state file at all.
  * <p>
  * <b>Payload.</b> {@link #payloadFor(Player)} is the single builder of a {@code player.join} /
- * {@code player.leave} payload, and it emits exactly two keys: {@code playerUuid} (the UUID string)
- * and {@code playerName} (the name the server reports, a Floodgate prefix such as {@code .Steve}
- * included). No IP address, display name, location or online-mode flag ever reaches the outbox
- * (T-22-29, contract answer 15).
+ * {@code player.leave} payload; it delegates to the contract encoder (plan 22-13 through
+ * {@link AgentOutboundFeeds#playerRefPayload}, plan 22-22), which emits exactly two keys:
+ * {@code playerUuid} (the UUID string) and {@code playerName} (the name the server reports, a
+ * Floodgate prefix such as {@code .Steve} included). A player the contract cannot carry is skipped
+ * with one FINE line. No IP address, display name, location or online-mode flag ever reaches the
+ * outbox (T-22-29, contract answer 15).
+ * <p>
+ * <b>Commands (plan 22-22).</b> A player's command is reported live, never buffered (D-14), as
+ * {@code player.command} carrying only the normalised command name (D-20): the arguments of any
+ * command, registered as sensitive or not, never leave the server.
  * <p>
  * <b>Known limitation.</b> A quit fired after the plugin has already been disabled during a server
  * stop is not captured: Bukkit stops dispatching to a disabled plugin's listeners. The plugin's own
@@ -71,6 +82,22 @@ public final class CloudOutboxListener implements Listener {
     }
 
     /**
+     * Reports one player command to the live connection by its name only (D-20). Nothing is sent while
+     * no connection is established or {@code ultipanel.capabilities.player-events} is off. A command another
+     * plugin cancelled (a login plugin before the player logged in, a permission plugin) was not run, so it is not
+     * reported (22-22 fix).
+     *
+     * @param event the command event, on the main thread
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onCommand(PlayerCommandPreprocessEvent event) {
+        CloudFeatures features = CloudFeatures.installed();
+        if (features != null) {
+            features.sendPlayerCommand(event.getMessage());
+        }
+    }
+
+    /**
      * Hands one event to the session that is current <b>now</b>, not the one captured at
      * registration time: a login replaces the session, and the replacement owns the outbox the
      * event belongs in.
@@ -79,7 +106,13 @@ public final class CloudOutboxListener implements Listener {
      * @param player the player the event is about
      */
     private static void offer(String type, Player player) {
-        CloudSession.current().offerReliableEvent(type, payloadFor(player));
+        JsonObject payload = payloadFor(player);
+        if (payload == null) {
+            PanelConnectionLog.log(Level.FINE, "UltiCloud: a " + type + " event for a player the contract cannot "
+                    + "carry was not buffered.");
+            return;
+        }
+        CloudSession.current().offerReliableEvent(type, payload);
     }
 
     /**
@@ -87,12 +120,9 @@ public final class CloudOutboxListener implements Listener {
      * the exact key set without a live server.
      *
      * @param player the player the event is about
-     * @return a fresh payload object the outbox copies
+     * @return a fresh payload object the outbox copies, or {@code null} when the contract cannot carry this player
      */
     static JsonObject payloadFor(Player player) {
-        JsonObject payload = new JsonObject();
-        payload.addProperty("playerUuid", player.getUniqueId().toString());
-        payload.addProperty("playerName", player.getName());
-        return payload;
+        return AgentOutboundFeeds.playerRefPayload(player.getUniqueId().toString(), player.getName());
     }
 }

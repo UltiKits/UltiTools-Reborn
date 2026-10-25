@@ -53,6 +53,23 @@ class AgentCapabilitiesTest {
                 "files:delete", "config:write", "properties:read", "properties:write", "backups");
     }
 
+    @Test
+    @DisplayName("an unavailable feature is neither declared nor admitted, and its refusal names no switch")
+    void unavailableFeatureIsNotDeclared() {
+        shippedDefaults();
+        AtomicBoolean monitorExists = new AtomicBoolean(false);
+        AgentCapabilities gated = new AgentCapabilities(on::contains, errors::get, () -> modules,
+                name -> !"telemetry".equals(name) || monitorExists.get());
+        assertThat(gated.helloCapabilities()).doesNotContain("telemetry").contains("logs");
+        assertThat(gated.enabled("telemetry")).isFalse();
+        assertThat(gated.refusal("telemetry")).isEqualTo("This capability is not available on this server.");
+
+        monitorExists.set(true);
+        assertThat(gated.helloCapabilities()).startsWith("telemetry");
+        assertThat(gated.enabled("telemetry")).isTrue();
+        assertThat(gated.refusal("telemetry")).isEqualTo(capabilities.refusal("telemetry"));
+    }
+
     static Stream<Arguments> switches() {
         Map<Capability, List<String>> table = new LinkedHashMap<>();
         table.put(Capability.MONITORING, Collections.singletonList("telemetry"));

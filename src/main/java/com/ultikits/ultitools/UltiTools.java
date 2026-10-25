@@ -942,7 +942,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     /**
      * Reloads the framework configuration and language, then every module, and returns the
      * summary {@code /ul reload} shows its sender (#509). Each module is reloaded in isolation; see
-     * {@code PluginManager#reloadAllAndReport()}.
+     * {@code PluginManager#reloadAllAndReport()}. A changed operator setting the panel mirrors (power
+     * actions) is reported to an open UltiCloud connection once, as {@code settings.changed} (6.3.1).
      *
      * @return the summary lines, already localized
      * @throws IOException if an I/O error occurs during the reloading process
@@ -954,6 +955,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
         reloadConfig();
         // Reinitialize framework language based on (possibly changed) config
         initLanguage();
+        // Tell an open UltiCloud connection about a changed operator setting (plan 22-22); reads config only
+        CloudFeatures features = cloudFeatures;
+        if (features != null) {
+            features.onReload();
+        }
         return pluginManager.reloadAllAndReport();
     }
 

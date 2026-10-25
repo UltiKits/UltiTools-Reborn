@@ -141,8 +141,9 @@ class CatalogueInstallEndToEndTest {
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getFileName()).isNull();
         assertThat(modulesFolderNames()).isEmpty();
+        // The catalogue text of plan 22-22; the mocked framework has no language loaded, so the key itself is shown.
         assertThat(messages()).containsExactly(
-                "Downloaded demo 1.1 failed its integrity check (hash mismatch); nothing was installed.");
+                String.format(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED, "demo", "1.1"));
     }
 
     @Test
@@ -286,7 +287,7 @@ class CatalogueInstallEndToEndTest {
         }
 
         @Test
-        @DisplayName("every kind maps to its own line, and metadata without a hash says nothing was requested")
+        @DisplayName("integrity failures share the catalogue reason; unavailable and incomplete downloads keep their own lines")
         void everyKindHasItsOwnLine() {
             List<String> lines = new ArrayList<>();
             lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.HASH_MISMATCH));
@@ -296,9 +297,11 @@ class CatalogueInstallEndToEndTest {
             lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.NOT_AVAILABLE));
             lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.IO_ERROR));
 
-            assertThat(lines).doesNotHaveDuplicates().hasSize(6);
-            assertThat(lines.get(3)).isEqualTo("demo 1.1 was not downloaded:"
-                    + " the catalogue entry carries no usable hash or size; nothing was installed.");
+            // Plan 22-22: every integrity failure is the one catalogue reason (which check failed is on the FINE line);
+            // a version not offered and a download that did not complete keep their own lines.
+            String integrity = String.format(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED, "demo", "1.1");
+            assertThat(lines.subList(0, 4)).containsOnly(integrity);
+            assertThat(lines.subList(3, 6)).doesNotHaveDuplicates();
             assertThat(lines.get(4)).isEqualTo("demo 1.1 is not available for download"
                     + " (withdrawn, unpublished or not licensed); nothing was installed.");
             assertThat(lines.get(5)).isEqualTo(
