@@ -197,6 +197,34 @@ final class AgentProtocol {
     }
 
     /**
+     * Whether a hello built now would declare another capability set than this connection's hello did (22-22 fix):
+     * the set is negotiated only at the handshake, so such a change needs a new connection. Builds the set exactly as
+     * {@link #onOpen()} does.
+     *
+     * @return {@code false} before the hello was sent, or when the set is unchanged
+     */
+    boolean capabilitiesChangedSinceHello() {
+        Set<String> sent;
+        synchronized (lock) {
+            if (helloId == null || closed) {
+                return false;
+            }
+            sent = declared;
+        }
+        return !helloCapabilities().equals(sent);
+    }
+
+    /**
+     * Closes this connection normally (1000) and lets the connection retry after its normal backoff, so the next
+     * hello declares the current capability set (22-22 fix). Asynchronous; a no-op unless the socket is open.
+     *
+     * @param reason the reason for the retry line
+     */
+    void reconnectForNewHello(String reason) {
+        connection.reconnectForNewHello(reason);
+    }
+
+    /**
      * @param listener receives every inbound {@code error} that carries a {@code replyTo}, on the
      *                 agent thread; it must not block
      */

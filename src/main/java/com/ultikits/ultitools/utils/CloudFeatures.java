@@ -242,6 +242,11 @@ public final class CloudFeatures {
                 if (CloudFeatures.this.protocol != protocol) {
                     return;
                 }
+                if (protocol.capabilitiesChangedSinceHello()) {
+                    // A reload between the hello and the welcome changed the set: this welcome answered the old one.
+                    reconnectForNewCapabilities(protocol);
+                    return;
+                }
                 outbound.established(live, agent, protocol.acceptedCapabilities().contains("logs"));
                 reportSettingsIfChanged(live);
                 startMainTimer();
@@ -360,10 +365,26 @@ public final class CloudFeatures {
      * the framework configuration was read again. Exactly one {@code settings.changed { powerActionsEnabled }} is sent
      * when the value differs from the last one the panel was told (by a hello or an earlier {@code settings.changed});
      * nothing when it is unchanged or no connection is established, in which case the next hello carries the value.
-     * Reads the configuration only; never writes an operator file (D-31).
+     * <p>
+     * A reload that adds or removes a declared capability (an operator switch) closes the connection normally (1000)
+     * instead, and the connection reconnects after its normal short backoff: capabilities are negotiated only at the
+     * handshake (backend decision k), so the new hello declares the new set and carries the settings; no
+     * {@code settings.changed} is sent then. A change made while the hello waits for its welcome is caught when the
+     * welcome arrives. Reads the configuration only; never writes an operator file (D-31).
      */
     public void onReload() {
+        AgentProtocol current = protocol;
+        if (current != null && current.isEstablished() && current.capabilitiesChangedSinceHello()) {
+            reconnectForNewCapabilities(current);
+            return;
+        }
         reportSettingsIfChanged(liveChannel());
+    }
+
+    private static void reconnectForNewCapabilities(AgentProtocol connection) {
+        PanelConnectionLog.log(Level.INFO, "UltiCloud: the reload changed which capabilities this server offers; "
+                + "reconnecting so UltiCloud sees the new set.");
+        connection.reconnectForNewHello("capabilities changed");
     }
 
     /**

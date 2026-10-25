@@ -11,7 +11,9 @@ import java.lang.reflect.Field;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
@@ -39,6 +41,10 @@ import com.ultikits.ultitools.stub.UltiCloudStub;
  * {@code ultipanel.capabilities.power-actions} once, as {@code settings.changed}, on the open connection; an unchanged
  * value is not repeated; a reload while offline sends nothing and the next hello carries the new value. The reload is
  * driven through the real {@code UltiTools#reloadPluginsAndReport()}.
+ * <p>
+ * A reload that adds or removes a declared capability closes the connection normally (1000) and reconnects, so the
+ * next hello declares the new set (backend decision: capabilities are negotiated only at the handshake); then no
+ * {@code settings.changed} is sent, because the new hello carries the settings.
  */
 @DisplayName("settings.changed on /ul reload")
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
@@ -135,6 +141,8 @@ class SettingsChangedOnReloadTest {
         await(() -> !stub.gateway().received("settings.changed").isEmpty(), "settings.changed");
         JsonObject payload = stub.gateway().received("settings.changed").get(0).getAsJsonObject("payload");
         assertThat(payload.toString()).isEqualTo("{\"powerActionsEnabled\":true}");
+        assertThat(hellos()).as("only a setting changed: no new handshake").isEqualTo(1);
+        assertThat(pluginClosedNormally()).isFalse();
 
         plugin.reloadPluginsAndReport();
         Thread.sleep(1000L);
@@ -149,6 +157,93 @@ class SettingsChangedOnReloadTest {
         plugin.reloadPluginsAndReport();
         Thread.sleep(1000L);
         assertThat(stub.gateway().received("settings.changed")).isEmpty();
+        assertThat(hellos()).as("unchanged capabilities: the connection stays").isEqualTo(1);
+        assertThat(pluginClosedNormally()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a reload that switches a capability on closes normally, and the next hello declares it")
+    void capabilityAddedOnReloadReconnects() throws Exception {
+        config.set(Capability.LOGS.getConfigPath(), false);
+        connect();
+        assertThat(helloCapabilities(0)).doesNotContain("logs");
+
+        config.set(Capability.LOGS.getConfigPath(), true);
+        plugin.reloadPluginsAndReport();
+        await(() -> hellos() == 2, "the second hello");
+        assertThat(helloCapabilities(1)).contains("logs");
+        assertThat(pluginClosedNormally()).as("closed by the plugin with 1000").isTrue();
+        await(() -> CloudAuthManager.status().isConnected(), "reconnected");
+        Thread.sleep(500L);
+        assertThat(stub.gateway().received("settings.changed")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a reload that switches a capability off closes normally, and the next hello no longer declares it")
+    void capabilityRemovedOnReloadReconnects() throws Exception {
+        config.set(Capability.PLAYER_EVENTS.getConfigPath(), true);
+        connect();
+        assertThat(helloCapabilities(0)).contains("events:players", "events:commands");
+
+        config.set(Capability.PLAYER_EVENTS.getConfigPath(), false);
+        plugin.reloadPluginsAndReport();
+        await(() -> hellos() == 2, "the second hello");
+        assertThat(helloCapabilities(1)).doesNotContain("events:players", "events:commands");
+        assertThat(pluginClosedNormally()).isTrue();
+        assertThat(stub.gateway().received("settings.changed")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a capability and power actions changed together: one reconnect, the new hello carries both")
+    void capabilityAndPowerChangedTogetherReconnectOnce() throws Exception {
+        config.set(Capability.LOGS.getConfigPath(), false);
+        connect();
+
+        config.set(Capability.LOGS.getConfigPath(), true);
+        config.set(Capability.POWER_ACTIONS.getConfigPath(), true);
+        plugin.reloadPluginsAndReport();
+        await(() -> hellos() == 2, "the second hello");
+        assertThat(helloCapabilities(1)).contains("logs");
+        assertThat(helloPower(1)).isTrue();
+        await(() -> CloudAuthManager.status().isConnected(), "reconnected");
+        Thread.sleep(1000L);
+        assertThat(stub.gateway().received("settings.changed")).isEmpty();
+        assertThat(hellos()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("offline: a capability changed by a reload sends nothing, and the next hello declares the new set")
+    void offlineCapabilityChangeIsCarriedByTheNextHello() throws Exception {
+        config.set(Capability.LOGS.getConfigPath(), false);
+        plugin.reloadPluginsAndReport();
+        assertThat(stub.gateway().received(null)).as("nothing sent while offline").isEmpty();
+
+        connect();
+        assertThat(helloCapabilities(0)).doesNotContain("logs");
+        Thread.sleep(1000L);
+        assertThat(hellos()).isEqualTo(1);
+        assertThat(stub.gateway().received("settings.changed")).isEmpty();
+    }
+
+    private int hellos() {
+        return stub.gateway().received("hello").size();
+    }
+
+    private List<String> helloCapabilities(int index) {
+        List<String> names = new ArrayList<>();
+        stub.gateway().received("hello").get(index).getAsJsonObject("payload").getAsJsonArray("capabilities")
+                .forEach(name -> names.add(name.getAsString()));
+        return names;
+    }
+
+    /** @return whether the stub saw the plugin close a connection with 1000 */
+    private boolean pluginClosedNormally() {
+        for (String line : stub.accessLog().lines()) {
+            if (line.contains("WS-CLOSED") && line.contains("code=1000 remote=true")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Test
@@ -182,6 +277,30 @@ class SettingsChangedOnReloadTest {
                 .isEqualTo("{\"powerActionsEnabled\":true}");
         Thread.sleep(1000L);
         assertThat(stub.gateway().received("settings.changed")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("a capability switched after the hello was built and before the welcome: one reconnect, the new hello "
+            + "declares it")
+    void capabilityChangedBetweenHelloAndWelcomeReconnectsOnce() throws Exception {
+        features.shutdown();
+        CloudFeatures.Bindings bindings = CloudFeatures.Bindings.forTesting();
+        final java.util.concurrent.atomic.AtomicInteger logsReads = new java.util.concurrent.atomic.AtomicInteger();
+        // The first hello reads the logs switch first (off); the operator turns it on before the welcome arrives.
+        bindings.switches = capability -> capability == Capability.LOGS ? logsReads.getAndIncrement() > 0
+                : capability.isEnabled();
+        features = CloudFeatures.start(bindings);
+        setField(plugin, "cloudFeatures", features);
+        assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
+        PluginInitiationUtils.initWebsocket();
+
+        await(() -> hellos() == 2, "the second hello");
+        assertThat(helloCapabilities(0)).doesNotContain("logs");
+        assertThat(helloCapabilities(1)).contains("logs");
+        assertThat(pluginClosedNormally()).isTrue();
+        await(() -> CloudAuthManager.status().isConnected(), "reconnected");
+        Thread.sleep(1000L);
+        assertThat(hellos()).as("the second welcome answers the current set: no further reconnect").isEqualTo(2);
     }
 
     private static void await(BooleanSupplier condition, String what) throws InterruptedException {

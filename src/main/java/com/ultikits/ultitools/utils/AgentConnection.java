@@ -619,6 +619,32 @@ final class AgentConnection {
     }
 
     /**
+     * Closes the open attempt with 1000 so the next attempt sends a new {@code hello} (22-22 fix: a reload changed
+     * the capability set, which is negotiated only at the handshake); the normal backoff follows, which is short
+     * after an established connection. Runs on the scheduler, like every socket event, so the close listeners run
+     * on the agent thread. A no-op unless the attempt open now is still the open one when it runs.
+     *
+     * @param reason the reason for the retry line, never carrying payload or credential text
+     */
+    void reconnectForNewHello(final String reason) {
+        final long id;
+        synchronized (this) {
+            if (state != State.OPEN) {
+                return;
+            }
+            id = generation;
+        }
+        post(() -> {
+            synchronized (this) {
+                if (id != generation) {
+                    return;
+                }
+            }
+            abandonAttempt(reason);
+        });
+    }
+
+    /**
      * Stops for good because the {@code welcome} named another server id than the linked one
      * (contract answer 21, SEMANTICS 16): the socket is closed with 1000, no retry is scheduled and
      * the owner is told once through {@link Listener#onServerIdMismatch()}; the credential is kept.
