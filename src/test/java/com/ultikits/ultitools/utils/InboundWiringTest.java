@@ -20,9 +20,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.function.UnaryOperator;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -51,6 +53,9 @@ import com.ultikits.ultitools.manager.RemoteRequestHandlers;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.stub.StubAccessLog;
 import com.ultikits.ultitools.stub.UltiCloudStub;
+import com.ultikits.ultitools.websocket.CloudChannel;
+import com.ultikits.ultitools.websocket.CloudRequest;
+import com.ultikits.ultitools.websocket.CloudRequestHandler;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 
 /**
@@ -82,6 +87,8 @@ class InboundWiringTest {
     private final java.util.concurrent.BlockingQueue<Runnable> mainQueue =
             new java.util.concurrent.LinkedBlockingQueue<>();
     private Path serverRoot;
+    /** Wraps the real files handler of the next {@link #connect()}; identity by default. */
+    private UnaryOperator<CloudRequestHandler> filesDecorator = UnaryOperator.identity();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -149,7 +156,8 @@ class InboundWiringTest {
         };
         bindings.actionLog = actions::add;
         FileOperationManager files = new FileOperationManager();
-        bindings.files = () -> RemoteRequestHandlers.files(files, serverRoot.toFile(), actions::add);
+        bindings.files = () -> filesDecorator.apply(RemoteRequestHandlers.files(files, serverRoot.toFile(),
+                actions::add));
         bindings.properties = () -> RemoteRequestHandlers.properties(
                 new ServerPropertiesManager(serverRoot.toFile()), actions::add);
         bindings.modules = Collections::emptyList;
@@ -305,6 +313,36 @@ class InboundWiringTest {
         assertThat(payload.get("message").getAsString()).contains(Capability.FILE_WRITE.getConfigPath());
         assertThat(stub.gateway().received("files.write.result")).isEmpty();
         assertThat(new File(System.getProperty("user.dir"), "plugins/UltiChat/config.yml")).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("a files.list held on a slow disk does not delay a command.ack sent meanwhile")
+    void slowFileRequestDoesNotDelayOtherRequests() throws Exception {
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        filesDecorator = real -> new CloudRequestHandler() {
+            @Override
+            public void handle(CloudRequest request, CloudChannel reply) {
+                entered.countDown();
+                try {
+                    release.await(60, TimeUnit.SECONDS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                real.handle(request, reply);
+            }
+        };
+        connect();
+        String list = send("files.list", "root", null).get("id").getAsString();
+        assertThat(entered.await(10, TimeUnit.SECONDS)).as("the listing started").isTrue();
+        try {
+            String command = send("command.execute", "say", null).get("id").getAsString();
+            assertThat(reply("command.ack", 1).get("replyTo").getAsString()).isEqualTo(command);
+            assertThat(stub.gateway().received("files.list.result")).as("the listing is still running").isEmpty();
+        } finally {
+            release.countDown();
+        }
+        assertThat(reply("files.list.result", 1).get("replyTo").getAsString()).isEqualTo(list);
     }
 
     @Test

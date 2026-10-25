@@ -51,9 +51,12 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * <p>
  * <b>Threads.</b> The player-link handler of a module runs on one daemon thread, {@code UltiTools-CloudLinks}; the
  * create and handler deadlines run on a second, {@code UltiTools-CloudLinks-Timer}. Both stop in {@link #shutdown()}.
- * The router dispatches every other request on the agent thread, which is never the server thread: the file and
- * {@code server.properties} handlers do their blocking I/O there, and the handlers that call the Bukkit API hand that
- * work to the server thread through {@link Bindings#mainThread}.
+ * The file and {@code server.properties} handlers do blocking disk I/O, so each connection gets one
+ * {@link SerialRequestWorker} ({@code UltiTools-CloudFiles}, daemon, bounded queue, overflow answered
+ * {@code rate_limited}) that runs them in arrival order; heartbeats, acks and every other request never wait behind a
+ * slow listing. The worker closes with its connection (on close, on the next connection, and in {@link #shutdown()}).
+ * The router dispatches every other request on the agent thread, which is never the server thread; the handlers that
+ * call the Bukkit API hand that work to the server thread through {@link Bindings#mainThread}.
  * <p>
  * <b>Registered request types</b> (each only when its port is bound; {@link Bindings#forPlugin} binds every one):
  * {@code command.execute} (22-09), {@code server.power} (22-10), {@code player.action} (22-11), {@code files.*} and
@@ -90,6 +93,9 @@ public final class CloudFeatures {
 
     /** The protocol of the connection the lifetime objects currently use, or {@code null}. */
     private volatile AgentProtocol protocol;
+
+    /** The file-request worker of the current connection, or {@code null}. */
+    private volatile SerialRequestWorker fileWorker;
 
     private CloudFeatures(Bindings bindings) {
         this.bindings = Objects.requireNonNull(bindings, "bindings");
@@ -143,6 +149,11 @@ public final class CloudFeatures {
             installed = null;
         }
         protocol = null;
+        SerialRequestWorker worker = fileWorker;
+        fileWorker = null;
+        if (worker != null) {
+            worker.close();
+        }
         playerLinkChannel.onChannelClosed();
         handlerThread.shutdown();
         timers.shutdown();
@@ -164,11 +175,17 @@ public final class CloudFeatures {
         Objects.requireNonNull(protocol, "protocol");
         Objects.requireNonNull(rotation, "rotation");
         this.protocol = protocol;
+        final SerialRequestWorker worker = new SerialRequestWorker(bindings.fileQueueCapacity);
+        SerialRequestWorker previous = fileWorker;
+        fileWorker = worker;
+        if (previous != null) {
+            previous.close();
+        }
         registerCommands(router);
         registerPower(router);
         registerPlayerActions(router);
-        registerAll(router, RemoteRequestHandlers.FILE_TYPES, bindings.files);
-        registerAll(router, RemoteRequestHandlers.PROPERTY_TYPES, bindings.properties);
+        registerAll(router, RemoteRequestHandlers.FILE_TYPES, bindings.files, worker);
+        registerAll(router, RemoteRequestHandlers.PROPERTY_TYPES, bindings.properties, worker);
         registerConfig(router);
         registerModules(router, protocol);
         router.register("credential.rotate", new CredentialRotationHandler(rotation));
@@ -178,6 +195,7 @@ public final class CloudFeatures {
         protocol.addLifecycleListener(new AgentProtocol.Listener() {
             @Override
             public void closed() {
+                worker.close();
                 if (CloudFeatures.this.protocol == protocol) {
                     playerLinkChannel.onChannelClosed();
                 }
@@ -247,7 +265,7 @@ public final class CloudFeatures {
     }
 
     private static void registerAll(AgentMessageRouter router, List<String> types,
-                                    Supplier<CloudRequestHandler> factory) {
+                                    Supplier<CloudRequestHandler> factory, SerialRequestWorker worker) {
         if (factory == null) {
             return;
         }
@@ -255,8 +273,9 @@ public final class CloudFeatures {
         if (handler == null) {
             return;
         }
+        CloudRequestHandler offThread = worker.wrap(handler);
         for (String type : types) {
-            router.register(type, handler);
+            router.register(type, offThread);
         }
     }
 
@@ -397,6 +416,8 @@ public final class CloudFeatures {
         Supplier<PowerActionHandler.PowerExecutor> power;
         /** Receives one entry per remote player or power action. */
         Consumer<RemoteActionLog.Entry> actionLog;
+        /** How many file and property requests may wait behind the running one (then {@code rate_limited}). */
+        int fileQueueCapacity = SerialRequestWorker.DEFAULT_CAPACITY;
         /** The handler of {@code files.*}. */
         Supplier<CloudRequestHandler> files;
         /** The handler of {@code properties.*}. */
