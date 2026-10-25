@@ -230,6 +230,24 @@ class PowerActionHandlerTest {
                 () -> script.getAbsolutePath(), () -> { }, () -> { });
         assertThat(absolute.restartSupported()).as("an absolute path").isTrue();
 
+        BukkitPowerExecutor withArguments = new BukkitPowerExecutor(mock(Plugin.class), workingDirectory,
+                () -> "./start.sh nogui", () -> { }, () -> { });
+        assertThat(withArguments.restartSupported())
+                .as("Spigot runs the part before the first space; the rest are the script's arguments")
+                .isTrue();
+
+        BukkitPowerExecutor empty = new BukkitPowerExecutor(mock(Plugin.class), workingDirectory,
+                () -> "", () -> { }, () -> { });
+        assertThat(empty.restartSupported())
+                .as("an explicitly empty value is not the absent key; Spigot's new File(\"\") is no file")
+                .isFalse();
+
+        BukkitPowerExecutor leadingSpace = new BukkitPowerExecutor(mock(Plugin.class), workingDirectory,
+                () -> " ./start.sh", () -> { }, () -> { });
+        assertThat(leadingSpace.restartSupported())
+                .as("Spigot does not trim, so the part before the first space is empty")
+                .isFalse();
+
         BukkitPowerExecutor unset = new BukkitPowerExecutor(mock(Plugin.class), workingDirectory,
                 () -> null, () -> { }, () -> { });
         assertThat(unset.restartSupported()).as("the spigot default is ./start.sh").isTrue();

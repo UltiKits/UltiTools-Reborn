@@ -16,11 +16,12 @@ import org.bukkit.plugin.Plugin;
  * single hand-off check every scheduler call reachable from the socket thread uses: while the
  * framework is disabling the work is dropped with one FINE line instead of throwing.
  * <p>
- * Restart is supported only when the file the server would run — {@code settings.restart-script}
- * in {@code spigot.yml}, {@value #DEFAULT_RESTART_SCRIPT} when unset — exists as a regular file,
- * resolved against the server's working directory when the configured value is relative. Spigot's
- * own restart stops the server when that file is missing; this check keeps a requested restart
- * from silently becoming a stop.
+ * Restart is supported only when the file the server would run — the part of
+ * {@code settings.restart-script} in {@code spigot.yml} before its first space, or
+ * {@value #DEFAULT_RESTART_SCRIPT} when the key is absent — exists as a regular file, resolved
+ * against the server's working directory when that path is relative. Spigot's own restart stops
+ * the server when that file is missing; this check keeps a requested restart from silently
+ * becoming a stop.
  * <p>
  * This is the only Bukkit-facing part of the power path; the handler stays unit-testable without a
  * live server. Package-private framework plumbing; not for module use.
@@ -78,17 +79,23 @@ final class BukkitPowerExecutor implements PowerActionHandler.PowerExecutor {
     }
 
     /**
-     * Whether the configured restart script exists as a regular file. A blank value falls back to
-     * the Spigot default; a directory of that name is not a restart script.
+     * Whether the file the platform would actually run exists as a regular file.
+     * <p>
+     * This mirrors Spigot's own rule exactly, because any laxer answer turns a requested restart
+     * into a stop: only the part of the value before the first space names the script (the rest is
+     * passed to it as arguments), the value is never trimmed, and
+     * {@value #DEFAULT_RESTART_SCRIPT} applies only when the key is absent — never to an
+     * explicitly empty value, which names no file at all. A directory of that name is not a
+     * restart script.
      *
      * @return true when a restart would restart rather than stop
      */
     @Override
     public boolean restartSupported() {
         String configured = restartScriptPath.get();
-        String path = configured == null ? DEFAULT_RESTART_SCRIPT : configured.trim();
+        String path = configured == null ? DEFAULT_RESTART_SCRIPT : configured.split(" ")[0];
         if (path.isEmpty()) {
-            path = DEFAULT_RESTART_SCRIPT;
+            return false;
         }
         File script = new File(path);
         if (!script.isAbsolute()) {
