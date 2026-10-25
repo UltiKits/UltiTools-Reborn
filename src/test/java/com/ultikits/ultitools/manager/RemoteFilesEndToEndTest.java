@@ -74,7 +74,7 @@ class RemoteFilesEndToEndTest {
 
         files = new FileOperationManager();
         pointManagerAt(files, tmp, tmp);
-        handler = new RemoteFileOperations(files, tmp.toFile());
+        handler = new RemoteFileOperations(files, tmp.toFile(), null);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("files.read", handler);
         channel = new RecordingChannel();

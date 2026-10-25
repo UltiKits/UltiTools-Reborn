@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -24,6 +25,7 @@ import java.util.regex.Pattern;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.ContractPrimitives;
 import com.ultikits.ultitools.utils.PayloadReader;
 import com.ultikits.ultitools.utils.PosixAttributePreserver;
@@ -41,6 +43,14 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * the remote action log's directory and (since plan 22-07) the framework's own
  * {@code .ultikits/} state directory. This class never builds a {@link File} from a request path
  * on its own; it acts only on the operand the guard returns.</p>
+ *
+ * <p><b>Every write and delete decision is recorded.</b> Protocol v1 recorded one
+ * {@code RemoteActionLog} entry per remote file operation (phase 6 D-22); this handler keeps that
+ * property for {@code files.write} and {@code files.delete}: one entry per request that reached a
+ * decision, ALLOWED when the requested change was carried out and DENIED when it was refused, with
+ * the path as the target, the literal {@code "panel"} as the actor and — for a denial — exactly the
+ * text the panel received. Content is never recorded. The log itself is injected, so the handler
+ * stays testable and the wiring (plan 22-21) binds it to the live {@code RemoteActionLog}.</p>
  *
  * <p>It is package-private on purpose: {@code resolveTarget} and {@code ResolvedTarget} are
  * package-private, and keeping the handler in this package is what makes calling them — rather
@@ -98,6 +108,9 @@ final class RemoteFileOperations implements CloudRequestHandler {
     /** {@code files.list} accepts the empty root path in addition to a {@code ServerPath}. */
     private static final Pattern LIST_PATH = Pattern.compile("^$|" + ContractPrimitives.SERVER_PATH.pattern());
 
+    /** The action-log actor for this surface: protocol v2 carries no per-operator identity. */
+    private static final String PANEL_ACTOR = "panel";
+
     /** The refusal text every {@code file_changed} answer carries. */
     private static final String CHANGED_MESSAGE =
             "The file changed after the panel read it; reload it and try again.";
@@ -106,6 +119,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
 
     private final FileOperationManager files;
     private final File serverRoot;
+    private final Consumer<RemoteActionLog.Entry> actionLog;
 
     /** Test seam; see {@link #setWriteGate(Runnable)}. */
     private volatile Runnable writeGate;
@@ -116,10 +130,14 @@ final class RemoteFileOperations implements CloudRequestHandler {
      * @param files      the v1 file manager whose guard and editable-root configuration this
      *                   handler reuses rather than duplicating
      * @param serverRoot the server's root directory, used to name the editable roots
+     * @param actionLog  receives one entry per write and delete request, or {@code null} when the
+     *                   caller has no action log to write to (tests and headless harnesses)
      */
-    RemoteFileOperations(FileOperationManager files, File serverRoot) {
+    RemoteFileOperations(FileOperationManager files, File serverRoot,
+                         Consumer<RemoteActionLog.Entry> actionLog) {
         this.files = files;
         this.serverRoot = serverRoot;
+        this.actionLog = actionLog;
     }
 
     /**
@@ -398,28 +416,29 @@ final class RemoteFileOperations implements CloudRequestHandler {
         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
         String refusal = contentRefusal(bytes, channel.limits().fileMaxBytes());
         if (refusal != null) {
-            error(channel, request.id(), FILES_WRITE_RESULT, "file_not_editable", refusal);
+            refuseWrite(channel, request.id(), path, "file_not_editable", refusal);
             return;
         }
         if (!decodeUtf8(bytes).equals(content)) {
-            error(channel, request.id(), FILES_WRITE_RESULT, "file_not_editable",
+            refuseWrite(channel, request.id(), path, "file_not_editable",
                     "The content is not representable as UTF-8.");
             return;
         }
 
         FileOperationManager.ResolvedTarget target = files.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
         if (!target.getDecision().isAllowed()) {
-            error(channel, request.id(), FILES_WRITE_RESULT, "path_not_allowed", target.getDecision().getMessage());
+            refuseWrite(channel, request.id(), path, "path_not_allowed", target.getDecision().getMessage());
             return;
         }
 
         WriteOutcome outcome = writeLocked(target.getOperand(), bytes, baseVersion,
                 channel.limits().fileMaxBytes());
         if (outcome.code != null) {
-            error(channel, request.id(), FILES_WRITE_RESULT, outcome.code, outcome.message);
+            refuseWrite(channel, request.id(), path, outcome.code, outcome.message);
             return;
         }
 
+        auditAllowed(Capability.FILE_WRITE, FILES_WRITE, path);
         JsonObject data = new JsonObject();
         data.addProperty("path", path);
         data.addProperty("version", sha256Hex(bytes));
@@ -500,17 +519,17 @@ final class RemoteFileOperations implements CloudRequestHandler {
 
         FileOperationManager.ResolvedTarget target = files.resolveTarget(path, FileOperationManager.ResolveMode.ENTRY);
         if (!target.getDecision().isAllowed()) {
-            error(channel, request.id(), FILES_DELETE_RESULT, "path_not_allowed", target.getDecision().getMessage());
+            refuseDelete(channel, request.id(), path, "path_not_allowed", target.getDecision().getMessage());
             return;
         }
 
         Path entry = target.getOperand().toPath();
         if (!Files.exists(entry, LinkOption.NOFOLLOW_LINKS)) {
-            error(channel, request.id(), FILES_DELETE_RESULT, "not_found", "The requested file does not exist.");
+            refuseDelete(channel, request.id(), path, "not_found", "The requested file does not exist.");
             return;
         }
         if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
-            error(channel, request.id(), FILES_DELETE_RESULT, "is_directory",
+            refuseDelete(channel, request.id(), path, "is_directory",
                     "The requested path is a directory; directories are never deleted remotely.");
             return;
         }
@@ -519,10 +538,11 @@ final class RemoteFileOperations implements CloudRequestHandler {
         } catch (IOException notDeleted) {
             LOGGER.log(Level.WARNING, "UltiCloud: a requested file could not be deleted ("
                     + notDeleted.getClass().getSimpleName() + ").");
-            error(channel, request.id(), FILES_DELETE_RESULT, "write_denied",
+            refuseDelete(channel, request.id(), path, "write_denied",
                     "The requested file could not be deleted.");
             return;
         }
+        auditAllowed(Capability.FILE_DELETE, FILES_DELETE, path);
         channel.replyOk(request.id(), FILES_DELETE_RESULT, new JsonObject());
     }
 
@@ -624,11 +644,59 @@ final class RemoteFileOperations implements CloudRequestHandler {
      * frame would be dropped by the gateway instead of explaining the refusal to the operator.
      */
     private static void error(CloudChannel channel, String replyTo, String type, String code, String message) {
+        channel.replyError(replyTo, type, code, capped(message), null);
+    }
+
+    /**
+     * Answers a refused {@code files.write} and records the same text in the action log, so the
+     * log says what the operator was told.
+     */
+    private void refuseWrite(CloudChannel channel, String replyTo, String path, String code, String message) {
+        String reason = capped(message);
+        error(channel, replyTo, FILES_WRITE_RESULT, code, reason);
+        auditDenied(Capability.FILE_WRITE, FILES_WRITE, path, reason);
+    }
+
+    /** Answers a refused {@code files.delete} and records it, as {@link #refuseWrite} does. */
+    private void refuseDelete(CloudChannel channel, String replyTo, String path, String code, String message) {
+        String reason = capped(message);
+        error(channel, replyTo, FILES_DELETE_RESULT, code, reason);
+        auditDenied(Capability.FILE_DELETE, FILES_DELETE, path, reason);
+    }
+
+    private void auditAllowed(Capability capability, String action, String target) {
+        record(RemoteActionLog.Entry.allowed(capability, action, target, PANEL_ACTOR));
+    }
+
+    private void auditDenied(Capability capability, String action, String target, String reason) {
+        record(RemoteActionLog.Entry.denied(capability, action, target, PANEL_ACTOR, reason));
+    }
+
+    /**
+     * Hands one entry to the action log. A missing sink is a silent no-op (tests, headless
+     * harnesses), and a sink that throws must not cost the panel its reply — the request itself
+     * has already been decided.
+     */
+    private void record(RemoteActionLog.Entry entry) {
+        Consumer<RemoteActionLog.Entry> sink = actionLog;
+        if (sink == null) {
+            return;
+        }
+        try {
+            sink.accept(entry);
+        } catch (RuntimeException unwritable) {
+            LOGGER.log(Level.WARNING, "UltiCloud: an action-log entry could not be recorded ("
+                    + unwritable.getClass().getSimpleName() + ").");
+        }
+    }
+
+    /** The refusal text as the panel receives it: never empty and never above the contract's cap. */
+    private static String capped(String message) {
         String safe = message == null || message.isEmpty() ? "The request was refused." : message;
         if (safe.codePointCount(0, safe.length()) > MAX_MESSAGE_LENGTH) {
             safe = safe.substring(0, safe.offsetByCodePoints(0, MAX_MESSAGE_LENGTH));
         }
-        channel.replyError(replyTo, type, code, safe, null);
+        return safe;
     }
 
     /** One refusal from the locked write section: a contract error code and its message. */

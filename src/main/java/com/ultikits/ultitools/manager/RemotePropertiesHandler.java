@@ -1,16 +1,19 @@
 package com.ultikits.ultitools.manager;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.ContractPrimitives;
 import com.ultikits.ultitools.utils.PayloadReader;
 import com.ultikits.ultitools.websocket.CloudChannel;
@@ -32,6 +35,13 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * reached, and the manager refuses the same keys again per key if a future caller bypasses the
  * payload check. Both paths are pinned by tests (maintainer decision: user decision 15).</p>
  *
+ * <p><b>Every accepted and refused update is recorded.</b> One {@code RemoteActionLog} entry per
+ * {@code properties.update} request that reached a decision: ALLOWED when the update was applied
+ * (fully or partially), DENIED with exactly the text the panel received otherwise. The entry's
+ * target is the sorted list of key names the request named — never a value — because the audit
+ * trail must say which settings were touched without copying server configuration into a log. The
+ * log is injected; plan 22-21 binds it to the live {@code RemoteActionLog}.</p>
+ *
  * <p>Per-key results follow the contract: {@code ok} when every requested key was written,
  * {@code partial} when at least one was refused or is absent from the file while the others were
  * written, and {@code error} with {@code file_changed}, {@code not_found} or {@code write_denied}
@@ -48,6 +58,9 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
     /** The contract's upper bound on a result message, in code points. */
     private static final int MAX_MESSAGE_LENGTH = 500;
 
+    /** The action-log actor for this surface: protocol v2 carries no per-operator identity. */
+    private static final String PANEL_ACTOR = "panel";
+
     /** The contract's upper bound on {@code motd}, and on every other string-typed property value. */
     private static final int MAX_TEXT_LENGTH = 256;
 
@@ -55,14 +68,18 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
     private static final Map<String, KeySpec> READABLE = readableSpecs();
 
     private final ServerPropertiesManager properties;
+    private final Consumer<RemoteActionLog.Entry> actionLog;
 
     /**
      * Creates the handler over the manager that owns the file.
      *
      * @param properties the manager whose read and update operations this handler exposes
+     * @param actionLog  receives one entry per update request, or {@code null} when the caller has
+     *                   no action log to write to (tests and headless harnesses)
      */
-    RemotePropertiesHandler(ServerPropertiesManager properties) {
+    RemotePropertiesHandler(ServerPropertiesManager properties, Consumer<RemoteActionLog.Entry> actionLog) {
         this.properties = properties;
+        this.actionLog = actionLog;
     }
 
     @Override
@@ -141,6 +158,7 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
         List<String> writable = ServerPropertiesManager.writableKeys();
         new PayloadReader(request.id(), changes).keys(new String[0], writable.toArray(new String[writable.size()]));
 
+        String auditTarget = keyNames(changes);
         Map<String, String> values = new LinkedHashMap<>();
         for (Map.Entry<String, JsonElement> change : changes.entrySet()) {
             KeySpec spec = READABLE.get(change.getKey());
@@ -154,16 +172,16 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
                 properties.updateWithBaseVersion(baseVersion, values);
         ServerPropertiesManager.PropertiesUpdateResult.Outcome outcome = result.getOutcome();
         if (outcome == ServerPropertiesManager.PropertiesUpdateResult.Outcome.FILE_CHANGED) {
-            error(channel, request.id(), PROPERTIES_UPDATE_RESULT, "file_changed",
+            refuseUpdate(channel, request.id(), auditTarget, "file_changed",
                     "server.properties changed after the panel read it; reload it and try again.");
             return;
         }
         if (outcome == ServerPropertiesManager.PropertiesUpdateResult.Outcome.NOT_FOUND) {
-            error(channel, request.id(), PROPERTIES_UPDATE_RESULT, "not_found", "There is no server.properties.");
+            refuseUpdate(channel, request.id(), auditTarget, "not_found", "There is no server.properties.");
             return;
         }
         if (outcome == ServerPropertiesManager.PropertiesUpdateResult.Outcome.REFUSED) {
-            error(channel, request.id(), PROPERTIES_UPDATE_RESULT, "write_denied", result.getReason());
+            refuseUpdate(channel, request.id(), auditTarget, "write_denied", result.getReason());
             return;
         }
 
@@ -182,6 +200,7 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
         JsonObject data = new JsonObject();
         data.add("keys", keys);
         data.addProperty("version", result.getVersion());
+        auditAllowed(PROPERTIES_UPDATE, auditTarget);
         if (outcome == ServerPropertiesManager.PropertiesUpdateResult.Outcome.APPLIED) {
             channel.replyOk(request.id(), PROPERTIES_UPDATE_RESULT, data);
         } else {
@@ -293,11 +312,70 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
      * Sends a correlated error for one result type, capped at the contract's 500 code points.
      */
     private static void error(CloudChannel channel, String replyTo, String type, String code, String message) {
+        channel.replyError(replyTo, type, code, capped(message), null);
+    }
+
+    /**
+     * Answers a refused {@code properties.update} and records the same text in the action log, so
+     * the log says what the operator was told.
+     */
+    private void refuseUpdate(CloudChannel channel, String replyTo, String target, String code, String message) {
+        String reason = capped(message);
+        error(channel, replyTo, PROPERTIES_UPDATE_RESULT, code, reason);
+        record(RemoteActionLog.Entry.denied(Capability.SERVER_PROPERTIES, PROPERTIES_UPDATE, target,
+                PANEL_ACTOR, reason));
+    }
+
+    private void auditAllowed(String action, String target) {
+        record(RemoteActionLog.Entry.allowed(Capability.SERVER_PROPERTIES, action, target, PANEL_ACTOR));
+    }
+
+    /**
+     * Hands one entry to the action log. A missing sink is a silent no-op, and a sink that throws
+     * must not cost the panel its reply — the update itself has already been decided.
+     */
+    private void record(RemoteActionLog.Entry entry) {
+        Consumer<RemoteActionLog.Entry> sink = actionLog;
+        if (sink == null) {
+            return;
+        }
+        try {
+            sink.accept(entry);
+        } catch (RuntimeException unwritable) {
+            LOGGER.log(java.util.logging.Level.WARNING,
+                    "UltiCloud: an action-log entry could not be recorded ("
+                            + unwritable.getClass().getSimpleName() + ").");
+        }
+    }
+
+    /**
+     * The audit target of one update: the key names it named, sorted, joined by commas. Sorted so
+     * two requests naming the same keys produce the same target regardless of payload order, and
+     * names only because a property value must never be copied into the action log.
+     *
+     * @param changes the requested changes
+     * @return the comma-joined key names
+     */
+    private static String keyNames(JsonObject changes) {
+        List<String> names = new ArrayList<>(changes.keySet());
+        Collections.sort(names);
+        StringBuilder joined = new StringBuilder();
+        for (String name : names) {
+            if (joined.length() > 0) {
+                joined.append(',');
+            }
+            joined.append(name);
+        }
+        return joined.toString();
+    }
+
+    /** The refusal text as the panel receives it: never empty and never above the contract's cap. */
+    private static String capped(String message) {
         String safe = message == null || message.isEmpty() ? "The request was refused." : message;
         if (safe.codePointCount(0, safe.length()) > MAX_MESSAGE_LENGTH) {
             safe = safe.substring(0, safe.offsetByCodePoints(0, MAX_MESSAGE_LENGTH));
         }
-        channel.replyError(replyTo, type, code, safe, null);
+        return safe;
     }
 
     /** The JSON shape one property key's value takes. */

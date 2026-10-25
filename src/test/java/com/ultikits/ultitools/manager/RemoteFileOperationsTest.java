@@ -33,6 +33,7 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.contract.RecordingChannel;
 import com.ultikits.ultitools.utils.AgentMessageRouter;
@@ -62,6 +63,7 @@ class RemoteFileOperationsTest {
     private RemoteFileOperations handler;
     private AgentMessageRouter router;
     private RecordingChannel channel;
+    private List<RemoteActionLog.Entry> audit;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -79,7 +81,8 @@ class RemoteFileOperationsTest {
         Files.createDirectories(tmp.resolve("logs"));
         files = new FileOperationManager();
         pointManagerAt(files, tmp, tmp.resolve("plugins"), tmp.resolve("logs"));
-        handler = new RemoteFileOperations(files, tmp.toFile());
+        audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
+        handler = new RemoteFileOperations(files, tmp.toFile(), audit::add);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("files.list", handler);
         router.register("files.write", handler);
@@ -349,6 +352,64 @@ class RemoteFileOperationsTest {
     }
 
     // --------------------------------------------------------------------------------------
+    // the action log
+    // --------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a completed write is recorded as allowed with its path and never its content")
+    void completedWriteIsAuditedWithoutContent() throws IOException {
+        Path config = write("plugins/UltiTools/config.yml", "enabled: true\n");
+        String baseVersion = RemoteFilesEndToEndTest.sha256(Files.readAllBytes(config));
+
+        router.dispatch(writeRequest("plugins/UltiTools/config.yml", "secret: hunter2\n", baseVersion).toString(),
+                channel);
+
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(audit).hasSize(1);
+        RemoteActionLog.Entry entry = audit.get(0);
+        assertThat(entry.getCapability()).isEqualTo(Capability.FILE_WRITE.name());
+        assertThat(entry.getAction()).isEqualTo("files.write");
+        assertThat(entry.getTarget()).isEqualTo("plugins/UltiTools/config.yml");
+        assertThat(entry.getActor()).isEqualTo("panel");
+        assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(entry.getReason()).isNull();
+        assertThat(entry.getTarget()).doesNotContain("hunter2");
+    }
+
+    @Test
+    @DisplayName("a refused write is recorded as denied with the text the panel received")
+    void refusedWriteIsAuditedAsDenied() {
+        String any = RemoteFilesEndToEndTest.sha256(new byte[0]);
+
+        router.dispatch(writeRequest(".ultikits/credentials.json", "pwned", any).toString(), channel);
+
+        JsonObject payload = only(channel).getAsJsonObject("payload");
+        assertThat(payload.get("code").getAsString()).isEqualTo("path_not_allowed");
+        assertThat(audit).hasSize(1);
+        RemoteActionLog.Entry entry = audit.get(0);
+        assertThat(entry.getCapability()).isEqualTo(Capability.FILE_WRITE.name());
+        assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(entry.getTarget()).isEqualTo(".ultikits/credentials.json");
+        assertThat(entry.getReason()).isEqualTo(payload.get("message").getAsString());
+    }
+
+    @Test
+    @DisplayName("a stale version is recorded as denied, not as a completed write")
+    void staleVersionIsAuditedAsDenied() throws IOException {
+        Path config = write("plugins/UltiTools/config.yml", "enabled: true\n");
+        String baseVersion = RemoteFilesEndToEndTest.sha256(Files.readAllBytes(config));
+        write("plugins/UltiTools/config.yml", "operator: edit\n");
+
+        router.dispatch(writeRequest("plugins/UltiTools/config.yml", "panel: write\n", baseVersion).toString(),
+                channel);
+
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(audit.get(0).getReason())
+                .isEqualTo(only(channel).getAsJsonObject("payload").get("message").getAsString());
+    }
+
+    // --------------------------------------------------------------------------------------
     // files.delete
     // --------------------------------------------------------------------------------------
 
@@ -382,6 +443,29 @@ class RemoteFileOperationsTest {
         JsonObject frame = only(channel);
         assertThat(frame.get("type").getAsString()).isEqualTo("error");
         assertThat(frame.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+    }
+
+    @Test
+    @DisplayName("a completed delete is allowed in the action log and a refused one is denied")
+    void deleteAuditsItsDecision() throws IOException {
+        write("plugins/UltiTools/config.yml", "enabled: true\n");
+
+        router.dispatch(deleteRequest("plugins/UltiTools/config.yml").toString(), channel);
+
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0).getCapability()).isEqualTo(Capability.FILE_DELETE.name());
+        assertThat(audit.get(0).getAction()).isEqualTo("files.delete");
+        assertThat(audit.get(0).getTarget()).isEqualTo("plugins/UltiTools/config.yml");
+        assertThat(audit.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+
+        Files.createDirectories(tmp.resolve("plugins/UltiTools/lang"));
+        channel.clear();
+        router.dispatch(deleteRequest("plugins/UltiTools/lang").toString(), channel);
+
+        assertThat(audit).hasSize(2);
+        assertThat(audit.get(1).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(audit.get(1).getReason())
+                .isEqualTo(only(channel).getAsJsonObject("payload").get("message").getAsString());
     }
 
     // --------------------------------------------------------------------------------------

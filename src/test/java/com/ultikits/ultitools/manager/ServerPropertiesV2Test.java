@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +29,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.contract.ContractFixtures;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.contract.RecordingChannel;
 import com.ultikits.ultitools.utils.AgentMessageRouter;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
@@ -69,6 +71,7 @@ class ServerPropertiesV2Test {
     private RemotePropertiesHandler handler;
     private AgentMessageRouter router;
     private RecordingChannel channel;
+    private List<RemoteActionLog.Entry> audit;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -85,7 +88,8 @@ class ServerPropertiesV2Test {
         propsFile = tmp.resolve("server.properties");
         Files.write(propsFile, SAMPLE.getBytes(StandardCharsets.UTF_8));
         properties = new ServerPropertiesManager(tmp.toFile());
-        handler = new RemotePropertiesHandler(properties);
+        audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
+        handler = new RemotePropertiesHandler(properties, audit::add);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("properties.get", handler);
         router.register("properties.update", handler);
@@ -267,6 +271,46 @@ class ServerPropertiesV2Test {
         channel.clear();
         router.dispatch(fixture.frame().toString(), channel);
         assertThat(only(channel).getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+    }
+
+    // --------------------------------------------------------------------------------------
+    // the action log
+    // --------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a completed update is allowed in the action log with key names only, never values")
+    void completedUpdateIsAuditedWithKeyNamesOnly() throws IOException {
+        String baseVersion = RemoteFilesEndToEndTest.sha256(Files.readAllBytes(propsFile));
+        JsonObject changes = new JsonObject();
+        changes.addProperty("motd", "secret value");
+        router.dispatch(updateRequest(baseVersion, changes).toString(), channel);
+
+        JsonObject payload = only(channel).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isIn("ok", "partial");
+        assertThat(audit).hasSize(1);
+        RemoteActionLog.Entry entry = audit.get(0);
+        assertThat(entry.getCapability()).isEqualTo(Capability.SERVER_PROPERTIES.name());
+        assertThat(entry.getAction()).isEqualTo("properties.update");
+        assertThat(entry.getTarget()).isEqualTo("motd");
+        assertThat(entry.getActor()).isEqualTo("panel");
+        assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(entry.getTarget()).doesNotContain("secret");
+    }
+
+    @Test
+    @DisplayName("a stale-version update is denied in the action log with the text the panel received")
+    void staleUpdateIsAuditedAsDenied() throws IOException {
+        String stale = RemoteFilesEndToEndTest.sha256(new byte[0]);
+        JsonObject changes = new JsonObject();
+        changes.addProperty("motd", "Welcome");
+        router.dispatch(updateRequest(stale, changes).toString(), channel);
+
+        JsonObject payload = only(channel).getAsJsonObject("payload");
+        assertThat(payload.get("code").getAsString()).isEqualTo("file_changed");
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(audit.get(0).getTarget()).isEqualTo("motd");
+        assertThat(audit.get(0).getReason()).isEqualTo(payload.get("message").getAsString());
     }
 
     // --------------------------------------------------------------------------------------
