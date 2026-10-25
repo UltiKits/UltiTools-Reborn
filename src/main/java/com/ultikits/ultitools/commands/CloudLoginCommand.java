@@ -44,6 +44,14 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     static final String UPGRADE_REQUIRED_KEY = "UltiCloud no longer accepts this UltiTools version. Upgrade UltiTools, then restart the server.";
     static final String RECONNECT_NOT_LINKED_KEY = "This server is not linked to UltiCloud. Use /ulticloud login to link it.";
     static final String RECONNECT_RATE_LIMITED_KEY = "Please wait %d seconds before trying again.";
+    /**
+     * Said when {@code /ulticloud reconnect} finds the connection stopped by a server-ID mismatch
+     * (contract answer 21): the server is still linked, but only a restart or a new login leaves
+     * that state.
+     */
+    static final String RECONNECT_SERVER_ID_MISMATCH_KEY = "Reconnecting stays stopped: UltiCloud answered with a "
+        + "different server ID than this server is linked to. Contact UltiCloud support, or run /ulticloud logout "
+        + "and then /ulticloud login.";
 
     /**
      * Starts the device login. Deliberately <b>not</b> {@code @RunAsync} (#740): since 6.3.0 a
@@ -121,7 +129,10 @@ public class CloudLoginCommand extends BaseCommandExecutor {
                 break;
             case NOT_LINKED:
             default:
-                say(sender, ChatColor.YELLOW, RECONNECT_NOT_LINKED_KEY);
+                // Still linked yet not reconnectable: the server-ID mismatch stop (plan 22-20).
+                CloudAuthManager.CloudStatus status = CloudAuthManager.status();
+                say(sender, ChatColor.YELLOW, status != null && status.isLinked()
+                    ? RECONNECT_SERVER_ID_MISMATCH_KEY : RECONNECT_NOT_LINKED_KEY);
         }
     }
 

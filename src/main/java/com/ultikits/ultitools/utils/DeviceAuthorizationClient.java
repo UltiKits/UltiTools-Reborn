@@ -32,6 +32,8 @@ class DeviceAuthorizationClient {
     private static final int STATUS_BAD_REQUEST = 400;
     private static final int STATUS_TOO_MANY_REQUESTS = 429;
     private static final int STATUS_SERVER_ERROR = 500;
+    /** The longest {@code error.details.retryAfterSeconds} taken from a 429 body. */
+    private static final long MAX_RETRY_AFTER_SECONDS = 3600L;
 
     /**
      * Requests a device code.
@@ -39,8 +41,11 @@ class DeviceAuthorizationClient {
      * @param frameworkVersion        the running framework version, sent verbatim
      * @param suggestedNameOrNull     the default server name for the confirmation page, or
      *                                {@code null} to omit the field
-     * @param legacyServerUuidOrNull  this server's normalised install id, or {@code null} to omit the
-     *                                field
+     * @param legacyServerUuidOrNull  this server's install id, or {@code null} to omit the field; it is
+     *                                sent as {@code legacyServerUuid} only in the contract's
+     *                                {@link LegacyServerId#canonical canonical} form (32 lower-case hex
+     *                                digits) and omitted when it has none, so a hyphenated or otherwise
+     *                                unusable value never reaches UltiCloud (plan 22-20, S-64)
      * @return the grant, or the reason it could not be obtained; never {@code null}
      */
     AuthorizeResult authorize(String frameworkVersion, String suggestedNameOrNull, String legacyServerUuidOrNull) {
@@ -51,8 +56,9 @@ class DeviceAuthorizationClient {
         if (suggestedNameOrNull != null) {
             body.addProperty("suggestedName", suggestedNameOrNull);
         }
-        if (legacyServerUuidOrNull != null) {
-            body.addProperty("legacyServerUuid", legacyServerUuidOrNull);
+        String legacyServerUuid = LegacyServerId.canonical(legacyServerUuidOrNull);
+        if (legacyServerUuid != null) {
+            body.addProperty("legacyServerUuid", legacyServerUuid);
         }
         CloudHttp.Response response = CloudHttp.postJson(AUTHORIZE_PATH, body, null);
         if (response.outcome() == CloudHttp.Outcome.NOT_CONFIGURED) {
@@ -63,6 +69,10 @@ class DeviceAuthorizationClient {
         }
         if (response.status() == STATUS_TOO_MANY_REQUESTS) {
             long wait = response.retryAfterSeconds();
+            if (wait < 0) {
+                // The contract's 429 body repeats the header as error.details.retryAfterSeconds.
+                wait = detailsRetryAfter(response.body());
+            }
             return AuthorizeResult.failed(wait >= 0
                 ? "UltiCloud is limiting device-code requests; try again in " + wait + " seconds"
                 : "UltiCloud is limiting device-code requests; try again later", wait);
@@ -138,6 +148,26 @@ class DeviceAuthorizationClient {
         }
         String safeCode = sanitise(code);
         return PollResult.rejected(safeCode == null ? "unknown" : safeCode, sanitise(string(error, "message")));
+    }
+
+    /**
+     * @param body a 429 body, or {@code null}
+     * @return {@code error.details.retryAfterSeconds} when it is a whole number of at most an hour, or -1
+     */
+    private static long detailsRetryAfter(String body) {
+        JsonObject error = errorObject(body);
+        JsonElement details = error == null ? null : error.get("details");
+        JsonElement value = details != null && details.isJsonObject() ? details.getAsJsonObject().get("retryAfterSeconds")
+                : null;
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+            return -1;
+        }
+        try {
+            long seconds = value.getAsBigDecimal().longValueExact();
+            return seconds >= 0 && seconds <= MAX_RETRY_AFTER_SECONDS ? seconds : -1;
+        } catch (ArithmeticException e) {
+            return -1;
+        }
     }
 
     /** Maps a 200 to {@code GRANTED}, or to {@code TRANSIENT} with a WARNING naming what is missing. */

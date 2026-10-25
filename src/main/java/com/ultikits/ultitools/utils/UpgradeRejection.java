@@ -30,9 +30,10 @@ import com.google.gson.JsonPrimitive;
  * <p>
  * {@link #parse} never throws: a missing, partial, malformed or oversized body yields a value that
  * carries only the status (and the header-derived fields), and the status alone then decides what
- * the connection does. The plan-limit fields of a 402 are read from {@code error.details}, from
- * {@code error} and from the top level, until the contract fixture fixes the shape (plan 22-08
- * narrows this).
+ * the connection does. As in the frozen contract 2.0.0 (PROTOCOL.md section 10, plan 22-20, S-63),
+ * every field is read from inside {@code error} only: a body without that wrapper is status-only,
+ * and the plan-limit fields of a 402 ({@code reason}, {@code graceEndedAt}, {@code manageUrl}) are
+ * read from {@code error.details} only, like the 426 details.
  */
 final class UpgradeRejection {
 
@@ -127,20 +128,22 @@ final class UpgradeRejection {
         if (root == null || !root.isJsonObject()) {
             return;
         }
-        JsonObject top = root.getAsJsonObject();
-        JsonObject error = object(top, "error");
-        JsonObject details = error == null ? null : object(error, "details");
-        JsonObject primary = error == null ? top : error;
-        b.code = token(string(primary, "code"));
-        b.message = message(string(primary, "message"));
-        b.requestId = token(string(primary, "requestId"));
+        JsonObject error = object(root.getAsJsonObject(), "error");
+        if (error == null) {
+            // Every refusal body of the contract is {error: {...}}; anything else says nothing.
+            return;
+        }
+        b.code = token(string(error, "code"));
+        b.message = message(string(error, "message"));
+        b.requestId = token(string(error, "requestId"));
+        JsonObject details = object(error, "details");
         if (details != null) {
             b.minFramework = version(string(details, "minFramework"));
             b.supportedProtocols.addAll(protocols(details.get("supportedProtocols")));
+            b.planReason = token(string(details, "reason"));
+            b.graceEndedAt = timestamp(string(details, "graceEndedAt"));
+            b.manageUrl = manageUrl(string(details, "manageUrl"));
         }
-        b.planReason = token(firstString("reason", details, error, top));
-        b.graceEndedAt = timestamp(firstString("graceEndedAt", details, error, top));
-        b.manageUrl = manageUrl(firstString("manageUrl", details, error, top));
     }
 
     private static void readHeaders(Builder b, Map<String, String> headers) {
@@ -195,16 +198,6 @@ final class UpgradeRejection {
         }
         JsonPrimitive p = e.getAsJsonPrimitive();
         return p.isString() ? p.getAsString() : null;
-    }
-
-    private static String firstString(String name, JsonObject... candidates) {
-        for (JsonObject candidate : candidates) {
-            String value = string(candidate, name);
-            if (value != null) {
-                return value;
-            }
-        }
-        return null;
     }
 
     private static List<Integer> protocols(JsonElement e) {

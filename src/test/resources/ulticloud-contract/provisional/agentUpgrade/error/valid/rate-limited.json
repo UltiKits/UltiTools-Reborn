@@ -1,7 +1,0 @@
-{
-  "error": {
-    "code": "rate_limited",
-    "message": "request refused",
-    "requestId": "req_01"
-  }
-}

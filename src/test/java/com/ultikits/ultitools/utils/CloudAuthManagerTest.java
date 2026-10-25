@@ -1372,10 +1372,15 @@ class CloudAuthManagerTest {
         void connectedReportsServerIdentityWithoutUserToken() throws Exception {
             CloudReconnectStateMachineTest.AgentRuntime runtime = new CloudReconnectStateMachineTest.AgentRuntime();
             runtime.install();
-            CloudSession.current().commitCredential(DeviceLoginTestSupport.credential("Survival"));
+            // Plan 22-20: connected means welcomed, and the welcome must name the linked server id
+            // (a real ULID), so this test links one.
+            CloudSession.current().commitCredential(new ServerCredential("ucs_TESTSECRET", "cred-1",
+                    HandshakeEndToEndTest.SERVER_ID, "u-1", "Survival", 1_700_000_000_000L));
             CloudSession.current().startConnection();
             runtime.runDue();
             runtime.last().accept();
+            assertThat(CloudAuthManager.status().isConnected()).as("upgraded, not yet welcomed").isFalse();
+            runtime.last().welcome();
             CloudAuthManager.CloudStatus status = CloudAuthManager.status();
             assertThat(status.isConnected()).isTrue();
             assertThat(status.isLinked()).isTrue();

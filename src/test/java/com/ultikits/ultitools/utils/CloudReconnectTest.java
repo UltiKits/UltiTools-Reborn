@@ -158,6 +158,10 @@ class CloudReconnectTest {
         assertThat(CloudAuthManager.reconnect().getKind()).isEqualTo(Kind.ALREADY_CONNECTING);
         runtime.last().accept();
         ApiRateLimiter.reset("reconnect");
+        assertThat(CloudAuthManager.reconnect().getKind()).as("upgraded, not yet welcomed (plan 22-20)")
+                .isEqualTo(Kind.ALREADY_CONNECTING);
+        runtime.last().welcome();
+        ApiRateLimiter.reset("reconnect");
         assertThat(CloudAuthManager.reconnect().getKind()).isEqualTo(Kind.ALREADY_CONNECTED);
         runtime.runDue();
         assertThat(runtime.attempts).hasSize(1);
@@ -260,7 +264,9 @@ class CloudReconnectTest {
             if (opens.incrementAndGet() == 1) { peer.close(1011, "retry-test"); }
         }
         @Override public void onClose(WebSocket peer, int code, String reason, boolean remote) { }
-        @Override public void onMessage(WebSocket peer, String text) { if ("ping".equals(text)) { peer.send("pong"); } }
+        @Override public void onMessage(WebSocket peer, String text) {
+            if ("ping".equals(text)) { peer.send("pong"); } else { HandshakeEndToEndTest.answerHello(peer, text); }
+        }
         @Override public void onError(WebSocket peer, Exception error) { }
         @Override public void onStart() { started.countDown(); }
     }

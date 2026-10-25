@@ -3,19 +3,10 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,52 +15,37 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import com.google.gson.JsonParser;
+import com.google.gson.JsonObject;
+import com.ultikits.ultitools.contract.ContractFixtures;
+import com.ultikits.ultitools.contract.ContractFixtures.Fixture;
 
 /**
- * The refused-upgrade parser against sample bodies.
- * <p>
- * The files under {@link #SAMPLE_ROOT} are <b>provisional stand-ins</b> for the contract fixtures
- * {@code fixtures/protocol/v2/agent-rest/agentUpgrade/error/} (laid out the same way, {@code valid/}
- * and {@code invalid/}), written from the documented bodies (contract answer 23 and the plan-limit
- * shape of contract 2.0.0). Plan 22-08 repoints {@code SAMPLE_ROOT} at the vendored fixtures and
- * deletes {@code provisional/}. The expected status comes from each body's error code, not from
- * the file name.
+ * The refused-upgrade parser against the vendored contract 2.0.0 fixtures
+ * {@code fixtures/agent-rest/agentUpgrade/error/} (plan 22-20, S-44 narrowed by S-63). As PROTOCOL.md
+ * section 2 states, each valid file name starts with the HTTP status it answers; an invalid file
+ * without a status prefix must be refused by every status's schema, so it is parsed under all four.
  */
 @DisplayName("UpgradeRejection parsing and sanitising")
 class UpgradeRejectionTest {
 
-    static final String SAMPLE_ROOT = "ulticloud-contract/provisional/agentUpgrade/error/";
+    private static final int[] STATUSES = {401, 402, 426, 429};
 
-    private static final Map<String, Integer> STATUS_BY_CODE;
-
-    static {
-        Map<String, Integer> m = new HashMap<>();
-        m.put("upgrade_required", 426);
-        m.put("invalid_credential", 401);
-        m.put("rate_limited", 429);
-        m.put("plan_limit", 402);
-        STATUS_BY_CODE = Collections.unmodifiableMap(m);
+    static List<Fixture> validSamples() {
+        return ContractFixtures.restBodies("agentUpgrade", "error", true);
     }
 
-    static List<Path> samples(String kind) throws IOException, URISyntaxException {
-        URL root = UpgradeRejectionTest.class.getClassLoader().getResource(SAMPLE_ROOT + kind);
-        assertThat(root).as("sample directory " + SAMPLE_ROOT + kind).isNotNull();
-        try (Stream<Path> files = Files.walk(Paths.get(root.toURI()))) {
-            return files.filter(p -> p.toString().endsWith(".json")).sorted().collect(Collectors.toList());
-        }
+    static List<Fixture> invalidSamples() {
+        return ContractFixtures.restBodies("agentUpgrade", "error", false);
     }
 
-    static List<Path> validSamples() throws IOException, URISyntaxException {
-        return samples("valid");
+    /** @return the HTTP status a fixture's file name starts with, or -1 when it has none */
+    static int statusOf(Fixture fixture) {
+        String name = fixture.path().substring(fixture.path().lastIndexOf('/') + 1);
+        return name.matches("\\d{3}-.*") ? Integer.parseInt(name.substring(0, 3)) : -1;
     }
 
-    static List<Path> invalidSamples() throws IOException, URISyntaxException {
-        return samples("invalid");
-    }
-
-    private static String read(Path p) throws IOException {
-        return new String(Files.readAllBytes(p), StandardCharsets.UTF_8);
+    private static UpgradeRejection parse(int status, Fixture fixture) {
+        return UpgradeRejection.parse(status, Collections.emptyMap(), fixture.body().toString());
     }
 
     private static void assertStatusOnly(UpgradeRejection r, int status) {
@@ -86,21 +62,23 @@ class UpgradeRejectionTest {
     }
 
     @Test
-    @DisplayName("both sample directories hold samples (control for the parameterised tests)")
-    void sampleDirectoriesAreNotEmpty() throws Exception {
-        assertThat(validSamples()).hasSize(4);
-        assertThat(invalidSamples()).isNotEmpty();
+    @DisplayName("the vendored directories hold the four valid and six invalid bodies (control)")
+    void fixtureDirectoriesAreComplete() {
+        assertThat(validSamples()).extracting(UpgradeRejectionTest::statusOf).containsExactlyInAnyOrder(401, 402, 426, 429);
+        assertThat(invalidSamples()).hasSize(6);
+        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/v2/2.0.0")).as("control").isDirectory();
+        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/provisional"))
+                .as("the Wave A stand-in samples are gone").doesNotExist();
     }
 
-    @ParameterizedTest(name = "valid sample {0}")
+    @ParameterizedTest(name = "valid {0}")
     @MethodSource("validSamples")
-    void validSampleParses(Path sample) throws IOException {
-        String body = read(sample);
-        String code = JsonParser.parseString(body).getAsJsonObject().getAsJsonObject("error").get("code").getAsString();
-        int status = STATUS_BY_CODE.get(code);
-        UpgradeRejection r = UpgradeRejection.parse(status, Collections.emptyMap(), body);
+    void validSampleParses(Fixture sample) {
+        int status = statusOf(sample);
+        JsonObject error = sample.body().getAsJsonObject("error");
+        UpgradeRejection r = parse(status, sample);
         assertThat(r.status()).isEqualTo(status);
-        assertThat(r.code()).isEqualTo(code);
+        assertThat(r.code()).isEqualTo(error.get("code").getAsString());
         assertThat(r.message()).isNotNull();
         assertThat(r.requestId()).isEqualTo("req_01");
         if (status == 426) {
@@ -111,16 +89,53 @@ class UpgradeRejectionTest {
             assertThat(r.planReason()).isEqualTo("pro_expired_over_limit");
             assertThat(r.graceEndedAt()).isEqualTo("2026-11-01T00:00:00.000Z");
             assertThat(r.manageUrl()).isEqualTo("https://panel.ultikits.com/owner/billing");
+        } else {
+            assertThat(r.planReason()).isNull();
+            assertThat(r.manageUrl()).isNull();
         }
     }
 
-    @ParameterizedTest(name = "invalid sample {0}")
+    @ParameterizedTest(name = "invalid {0}")
     @MethodSource("invalidSamples")
-    void invalidSampleIsStatusOnly(Path sample) throws IOException {
-        String body = read(sample);
-        for (int status : new int[]{401, 402, 426, 429}) {
-            assertStatusOnly(UpgradeRejection.parse(status, Collections.emptyMap(), body), status);
+    @DisplayName("an invalid body never throws and never yields a field the contract forbids")
+    void invalidSampleIsHarmless(Fixture sample) {
+        int prefix = statusOf(sample);
+        for (int status : prefix > 0 ? new int[]{prefix} : STATUSES) {
+            assertThatCode(() -> parse(status, sample)).doesNotThrowAnyException();
+            UpgradeRejection r = parse(status, sample);
+            assertThat(r.status()).isEqualTo(status);
+            assertThat(r.retryAfterSeconds()).as("Retry-After only comes from the header").isEqualTo(-1);
         }
+    }
+
+    @Test
+    @DisplayName("402 with top-level fields (not wrapped in error) is a status-only rejection")
+    void topLevelPlanFieldsAreStatusOnly() {
+        Fixture sample = invalid("402-top-level-fields.json");
+        assertStatusOnly(parse(402, sample), 402);
+    }
+
+    @Test
+    @DisplayName("402 with an http manageUrl keeps every field but the link")
+    void httpManageUrlIsDropped() {
+        UpgradeRejection r = parse(402, invalid("402-http-manage-url.json"));
+        assertThat(r.manageUrl()).isNull();
+        assertThat(r.planReason()).isEqualTo("pro_expired_over_limit");
+        assertThat(r.code()).isEqualTo("plan_limit");
+    }
+
+    @Test
+    @DisplayName("426 without details carries no minimum version")
+    void upgradeWithoutDetails() {
+        UpgradeRejection r = parse(426, invalid("426-missing-details.json"));
+        assertThat(r.code()).isEqualTo("upgrade_required");
+        assertThat(r.minFramework()).isNull();
+        assertThat(r.supportedProtocols()).isEmpty();
+    }
+
+    private static Fixture invalid(String name) {
+        return invalidSamples().stream().filter(f -> f.path().endsWith("/" + name)).findFirst()
+                .orElseThrow(() -> new AssertionError("missing fixture " + name));
     }
 
     @ParameterizedTest(name = "generated body #{index}")
@@ -206,19 +221,18 @@ class UpgradeRejectionTest {
     }
 
     @Test
-    @DisplayName("the 402 fields are also accepted wrapped in error and at the top level until 22-08 narrows it")
-    void planShapesTolerated() {
+    @DisplayName("the 402 fields are read only from error.details (S-63): wrapped in error or at the top level they are ignored")
+    void planFieldsOnlyFromDetails() {
         String inError = "{\"error\":{\"code\":\"plan_limit\",\"reason\":\"pro_expired_over_limit\","
                 + "\"graceEndedAt\":\"2026-11-01T00:00:00.000Z\",\"manageUrl\":\"https://panel.ultikits.com/b\"}}";
+        UpgradeRejection wrapped = UpgradeRejection.parse(402, null, inError);
+        assertThat(wrapped.code()).isEqualTo("plan_limit");
+        assertThat(wrapped.planReason()).isNull();
+        assertThat(wrapped.graceEndedAt()).isNull();
+        assertThat(wrapped.manageUrl()).isNull();
         String topLevel = "{\"code\":\"plan_limit\",\"reason\":\"pro_expired_over_limit\","
                 + "\"graceEndedAt\":\"2026-11-01T00:00:00.000Z\",\"manageUrl\":\"https://panel.ultikits.com/b\"}";
-        for (String body : new String[]{inError, topLevel}) {
-            UpgradeRejection r = UpgradeRejection.parse(402, null, body);
-            assertThat(r.code()).isEqualTo("plan_limit");
-            assertThat(r.planReason()).isEqualTo("pro_expired_over_limit");
-            assertThat(r.graceEndedAt()).isEqualTo("2026-11-01T00:00:00.000Z");
-            assertThat(r.manageUrl()).isEqualTo("https://panel.ultikits.com/b");
-        }
+        assertStatusOnly(UpgradeRejection.parse(402, null, topLevel), 402);
         String badTime = planBody("https://panel.ultikits.com/b").replace("2026-11-01T00:00:00.000Z", "tomorrow");
         assertThat(UpgradeRejection.parse(402, null, badTime).graceEndedAt()).isNull();
     }

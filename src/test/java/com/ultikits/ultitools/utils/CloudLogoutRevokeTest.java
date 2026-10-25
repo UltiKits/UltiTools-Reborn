@@ -235,7 +235,7 @@ class CloudLogoutRevokeTest {
 
     static ServerCredential credential(String suffix) {
         return new ServerCredential("ucs_" + suffix, "cred-" + suffix,
-                "01JTESTSERVER00000000000000", "test-user", "Survival", 1L);
+                HandshakeEndToEndTest.SERVER_ID, "test-user", "Survival", 1L);
     }
 
     private void answer(HttpExchange exchange) throws IOException {
@@ -270,7 +270,9 @@ class CloudLogoutRevokeTest {
         Gateway() { super(new InetSocketAddress("127.0.0.1", 0), 1); }
         @Override public void onOpen(WebSocket peer, ClientHandshake handshake) { opens.incrementAndGet(); }
         @Override public void onClose(WebSocket peer, int code, String reason, boolean remote) { events.add("closed"); }
-        @Override public void onMessage(WebSocket peer, String text) { if ("ping".equals(text)) { peer.send("pong"); } }
+        @Override public void onMessage(WebSocket peer, String text) {
+            if ("ping".equals(text)) { peer.send("pong"); } else { HandshakeEndToEndTest.answerHello(peer, text); }
+        }
         @Override public void onError(WebSocket peer, Exception error) { }
         @Override public void onStart() { started.countDown(); }
     }

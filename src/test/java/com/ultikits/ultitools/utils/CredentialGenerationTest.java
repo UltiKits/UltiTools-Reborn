@@ -188,6 +188,8 @@ class CredentialGenerationTest {
         session.startConnection();
         runtime.runDue();
         runtime.last().accept();
+        // Plan 22-20: connected means welcomed.
+        runtime.last().welcome();
         assertThat(CloudAuthManager.status().isConnected()).isTrue();
         session.invalidate();
         assertThat(CloudAuthManager.status().isConnected()).isFalse();

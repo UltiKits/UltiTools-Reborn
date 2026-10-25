@@ -2,11 +2,6 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
@@ -20,32 +15,21 @@ import org.junit.jupiter.params.provider.MethodSource;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.ultikits.ultitools.contract.ContractFixtures;
 
 /**
  * {@link LegacyServerId#canonical(String)} must equal the backend's {@code canonicalLegacyUuid}
  * (backend schema decision 22) case for case.
  * <p>
- * The cases are the backend's own golden table, {@link #FIXTURE}: a pre-freeze copy of contract
- * 2.0.0's {@code legacy-uuid-canonicalization.json} (provenance in that directory's
- * {@code PROVENANCE.md}), read as {@code {cases: [{name, input, expected}]}} or as a bare array of the
- * same objects. Plan 22-08 points {@link #FIXTURE} at the frozen, vendored copy.
+ * The cases are the backend's own golden table, the vendored contract 2.0.0
+ * {@code fixtures/legacy-uuid-canonicalization.json} ({@code {rule, cases: [{name, input, expected}]}},
+ * frozen and hash-checked by {@code ContractSyncTest}; plan 22-20, S-64).
  */
 @DisplayName("LegacyServerId: the legacyServerUuid rule equals the backend's canonicalLegacyUuid")
 class LegacyServerIdTest {
 
-    /** The backend's case table; repointed at the frozen contract copy by plan 22-08. */
-    static final String FIXTURE = "/ulticloud-contract-prerelease/legacy-uuid-canonicalization.json";
-
-    static Stream<Arguments> cases() throws IOException {
-        JsonElement root;
-        try (InputStream in = LegacyServerIdTest.class.getResourceAsStream(FIXTURE)) {
-            assertThat(in).as("fixture %s on the test classpath", FIXTURE).isNotNull();
-            try (Reader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
-                root = JsonParser.parseReader(reader);
-            }
-        }
-        JsonArray array = root.isJsonArray() ? root.getAsJsonArray() : root.getAsJsonObject().getAsJsonArray("cases");
+    static Stream<Arguments> cases() {
+        JsonArray array = ContractFixtures.legacyUuidCases();
         List<Arguments> cases = new ArrayList<>();
         for (JsonElement element : array) {
             JsonObject row = element.getAsJsonObject();
@@ -67,10 +51,11 @@ class LegacyServerIdTest {
     }
 
     @Test
-    @DisplayName("the backend table is complete (26 cases) and covers accepted and rejected inputs")
-    void theTableIsNotEmpty() throws IOException {
+    @DisplayName("the vendored table is complete (26 cases, null input included) and covers accepted and rejected inputs")
+    void theTableIsComplete() {
         List<Arguments> all = new ArrayList<>();
         cases().forEach(all::add);
-        assertThat(all).hasSize(26).anyMatch(a -> a.get()[2] == null).anyMatch(a -> a.get()[2] != null);
+        assertThat(all).hasSize(26).anyMatch(a -> a.get()[1] == null)
+                .anyMatch(a -> a.get()[2] == null).anyMatch(a -> a.get()[2] != null);
     }
 }
