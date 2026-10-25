@@ -11,6 +11,7 @@ import com.ultikits.ultitools.config.document.ConfigLoadResult;
 import com.ultikits.ultitools.config.document.OperatorFileWriter;
 import com.ultikits.ultitools.config.document.OwnedPaths;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
@@ -26,6 +27,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -92,6 +94,7 @@ final class RemoteConfigHandler {
     private static final String UNREADABLE = "The configuration file cannot be read.";
     private static final String FILE_CHANGED = "The file changed since it was read; read its entries again.";
     private static final String WRITE_DENIED = "The server cannot write this configuration file.";
+    private static final String NOT_RELOADED = "Saved to the file, but the module did not reload it (";
     private static final String INTERNAL = "The request could not be processed.";
 
     private final Supplier<List<UltiToolsPlugin>> modules;
@@ -329,6 +332,7 @@ final class RemoteConfigHandler {
             }
         }
         String version = loaded.fingerprint();
+        String notReloaded = null;
         if (!accepted.isEmpty()) {
             OperatorFileWriter.Result result;
             try {
@@ -350,25 +354,42 @@ final class RemoteConfigHandler {
                 return;
             }
             if (!result.applied()) {
-                channel.replyError(replyTo, "config.update.result", "write_denied", WRITE_DENIED, null);
+                channel.replyError(replyTo, "config.update.result", "write_denied", writeDenied(result.reason()),
+                        null);
                 return;
             }
             version = result.fingerprint();
-            reload(registered.module);
+            notReloaded = reload(registered);
         }
         JsonObject data = keysData(results, version);
         boolean allOk = accepted.size() == results.size();
         if (allOk) {
-            channel.replyOk(replyTo, "config.update.result", data);
+            channel.replyOk(replyTo, "config.update.result", data, notReloaded);
         } else {
-            channel.replyPartial(replyTo, "config.update.result", data, null, null);
+            channel.replyPartial(replyTo, "config.update.result", data, null, notReloaded);
         }
     }
 
     /**
+     * The panel's explanation of a write the gate refused: the gate's own reason, which names the line an
+     * operator has to fix and never a value. The fixed sentence it replaces read like a permission problem
+     * and left the actionable part in the server log only.
+     *
+     * @param reason the gate's value-free reason, empty when it wrote or found nothing to write
+     * @return the message for the {@code write_denied} error
+     */
+    private static String writeDenied(String reason) {
+        return reason == null || reason.isEmpty() ? WRITE_DENIED : bounded("Nothing was written: " + reason + ".");
+    }
+
+    /**
      * The entity's own check of one change: it applies the value to the declared field in memory, runs
-     * the same validators and converters a load runs, and restores every field before returning. The
-     * refusal's text names the setting, never a value.
+     * the same validators and converters a load runs, and restores every field before returning.
+     *
+     * <p>The text handed to the panel names the rule, never the value and never the load-time wording:
+     * the configuration layer's own message echoes the offending value and speaks of a module that
+     * refused to load, which is not what happened to a panel edit. Only the error code - the class of
+     * rule that refused - is forwarded.</p>
      */
     private String entityRefusal(AbstractConfigEntity entity, Change change, RemoteConfigEntries.Entry entry) {
         JsonObject proposal = new JsonObject();
@@ -377,13 +398,20 @@ final class RemoteConfigHandler {
             entity.validateProposedProperties(proposal);
             return null;
         } catch (ConfigurationException refusal) {
-            String message = refusal.getMessage();
-            return message == null || message.isEmpty() ? "the entity refused this value" : message;
+            LOGGER.fine("UltiCloud: configuration value refused for " + entry.key() + ": "
+                    + refusal.getErrorCode());
+            return refusalText(refusal);
         } catch (RuntimeException failure) {
             LOGGER.fine("UltiCloud: configuration value check failed for " + entry.key() + ": "
                     + failure.getClass().getName());
             return "the value could not be used";
         }
+    }
+
+    private static String refusalText(ConfigurationException refusal) {
+        ErrorCode code = refusal.getErrorCode();
+        return code == null ? "the module refused this value"
+                : "the module refused this value (" + code.getDefaultMessage().toLowerCase(Locale.ROOT) + ")";
     }
 
     private static OwnedPaths owned(List<Accepted> accepted) {
@@ -394,13 +422,26 @@ final class RemoteConfigHandler {
         return owned.build();
     }
 
-    private void reload(UltiToolsPlugin module) {
+    /**
+     * Makes the module take the values just written, by reloading the one entity that owns the written
+     * file. Only that entity is reloaded: reloading every file of the module would let a broken file this
+     * write never touched block the reload of the edited one
+     * ({@link ConfigManager#reloadConfigs} stops at the first failure), and the panel would be told the
+     * edit failed when the file it edited was written and readable.
+     *
+     * @param registered the file that was written and its owning entity
+     * @return the panel's explanation when the module did not take the new values, or null when it did
+     */
+    private String reload(Registered registered) {
         try {
-            configs.reloadConfigs(module);
-        } catch (RuntimeException failure) {
+            registered.entity.reload();
+            return null;
+        } catch (IOException | RuntimeException failure) {
             // The file holds the accepted values; the module keeps its running ones. Never a value in the log.
-            LOGGER.warning("UltiCloud: configuration saved but module " + module.getPluginName()
-                    + " did not reload it: " + failure.getClass().getSimpleName());
+            LOGGER.warning("UltiCloud: configuration saved but module " + registered.module.getPluginName()
+                    + " did not reload it: " + registered.file.getName() + ": " + failure.getClass().getSimpleName());
+            return bounded(NOT_RELOADED + registered.file.getName() + ": " + failure.getClass().getSimpleName()
+                    + "); it keeps running its previous values until the file is fixed and reloaded.");
         }
     }
 

@@ -3,12 +3,14 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.contract.RecordingChannel;
@@ -39,10 +41,13 @@ class RemoteConfigUpdateTest {
     private static final String CONFIG = "# Operator note\n"
             + "prefix: \"[Chat]\"\n"
             + "cooldown: 3\n"
-            + "enabled: true\n";
+            + "enabled: true\n"
+            + "mode: fast\n"
+            + "code: abc\n";
 
     @TempDir
     Path root;
+    private Path folder;
     private Path file;
     private PatchConfig entity;
     private UltiToolsPlugin module;
@@ -52,7 +57,7 @@ class RemoteConfigUpdateTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        Path folder = root.resolve("plugins").resolve("UltiTools").resolve("pluginConfig").resolve("Patch");
+        folder = root.resolve("plugins").resolve("UltiTools").resolve("pluginConfig").resolve("Patch");
         Files.createDirectories(folder);
         file = folder.resolve("config.yml");
         Files.write(file, CONFIG.getBytes(StandardCharsets.UTF_8));
@@ -230,6 +235,134 @@ class RemoteConfigUpdateTest {
         }
     }
 
+    @Test
+    void aWriteTheModuleCouldNotReloadIsAnsweredOkSayingSo() throws Exception {
+        // The operator hand-edited another key of this file to a value its @Range refuses and did not
+        // reload: the write is correct, but the module cannot take the new values until the file is fixed.
+        Files.write(file, CONFIG.replace("cooldown: 3", "cooldown: 99").getBytes(StandardCharsets.UTF_8));
+        String readVersion = version();
+
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWM", readVersion,
+                "[{\"key\":\"prefix\",\"value\":\"[C]\"}]");
+
+        JsonObject payload = payload("config.update.result");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+        assertThat(payload.get("message").getAsString())
+                .as("the panel is told the module kept its previous values, naming the file and the cause")
+                .contains("config.yml").contains("ConfigurationException")
+                .doesNotContain("99").doesNotContain("[C]");
+        assertThat(payload.getAsJsonObject("data").getAsJsonArray("keys").get(0).getAsJsonObject()
+                .get("ok").getAsBoolean()).isTrue();
+        assertThat(payload.getAsJsonObject("data").get("version").getAsString()).isEqualTo(version());
+        assertThat(read()).contains("prefix: \"[C]\"").contains("cooldown: 99");
+        assertThat(entity.prefix).as("the module keeps running its previous values").isEqualTo("[Chat]");
+    }
+
+    @Test
+    void onlyTheEditedFilesEntityIsReloaded() throws Exception {
+        Path other = folder.resolve("other.yml");
+        Files.write(other, "value: ok\n".getBytes(StandardCharsets.UTF_8));
+        configs.register(module, new OtherConfig("other.yml"));
+        // A file of the same module this write never touches is broken on disk: reloading the whole
+        // module would stop at it and report a failure the edited file does not have.
+        Files.write(other, "value: [unclosed\n  - x\n".getBytes(StandardCharsets.UTF_8));
+
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWN", version(),
+                "[{\"key\":\"prefix\",\"value\":\"[C]\"}]");
+
+        JsonObject payload = payload("config.update.result");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+        assertThat(payload.has("message")).as("an unrelated broken file is not a reload failure").isFalse();
+        assertThat(entity.prefix).isEqualTo("[C]");
+        assertThat(read()).contains("prefix: \"[C]\"");
+    }
+
+    @Test
+    void aValueOfTheWrongTypeOrOutsideTheEnumIsRefusedAtTheHandler() throws Exception {
+        byte[] before = Files.readAllBytes(file);
+
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWP", version(),
+                "[{\"key\":\"cooldown\",\"value\":\"three\"},{\"key\":\"mode\",\"value\":\"turbo\"}]");
+
+        JsonObject payload = payload("config.update.result");
+        assertThat(payload.get("status").getAsString()).isEqualTo("partial");
+        JsonArray keys = payload.getAsJsonObject("data").getAsJsonArray("keys");
+        assertThat(keys.get(0).getAsJsonObject().get("message").getAsString()).isEqualTo("expected a whole number");
+        assertThat(keys.get(1).getAsJsonObject().get("message").getAsString()).isEqualTo("expected one of: fast, slow");
+        assertThat(keys.get(0).getAsJsonObject().get("ok").getAsBoolean()).isFalse();
+        assertThat(keys.get(1).getAsJsonObject().get("ok").getAsBoolean()).isFalse();
+        assertThat(Files.readAllBytes(file)).isEqualTo(before);
+        assertThat(entity.mode).isEqualTo(Mode.fast);
+    }
+
+    @Test
+    void aValidatorOnlyRefusalIsValueFreeAndLeavesTheFileAndTheModule() throws Exception {
+        byte[] before = Files.readAllBytes(file);
+
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWR", version(),
+                "[{\"key\":\"code\",\"value\":\"ABC\"}]");
+
+        JsonObject refused = payload("config.update.result").getAsJsonObject("data")
+                .getAsJsonArray("keys").get(0).getAsJsonObject();
+        assertThat(refused.get("ok").getAsBoolean()).isFalse();
+        assertThat(refused.get("message").getAsString())
+                .as("the rule, never the value it echoed and never load-time wording")
+                .isNotEmpty().doesNotContain("ABC").doesNotContain("refused to load").doesNotContain("restart");
+        assertThat(Files.readAllBytes(file)).isEqualTo(before);
+        assertThat(entity.code).isEqualTo("abc");
+    }
+
+    @Test
+    void aLayoutTheWriteGateCannotKeepNamesTheLineToFix() throws Exception {
+        // A trailing space on a line this write does not own is a layout the 6.3.0 gate refuses rather
+        // than normalises; the operator needs the reason, not a sentence that reads like a permission error.
+        Files.write(file, (CONFIG + "note: x   \n").getBytes(StandardCharsets.UTF_8));
+        byte[] before = Files.readAllBytes(file);
+
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWS", version(),
+                "[{\"key\":\"prefix\",\"value\":\"[C]\"}]");
+
+        JsonObject payload = payload("config.update.result");
+        assertThat(payload.get("status").getAsString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).isEqualTo("write_denied");
+        assertThat(payload.get("message").getAsString())
+                .as("the gate's own value-free reason, naming the line")
+                .contains("layout").contains("(line ").doesNotContain("[C]");
+        assertThat(Files.readAllBytes(file)).isEqualTo(before);
+        assertThat(entity.prefix).isEqualTo("[Chat]");
+    }
+
+    @Test
+    void fileWorkRunsOnlyOnTheInjectedExecutor() throws Exception {
+        List<Runnable> queued = new ArrayList<>();
+        RemoteConfigHandler handler = new RemoteConfigHandler(
+                () -> Collections.singletonList(module), configs, queued::add, root.toFile());
+        AgentMessageRouter ownRouter = new AgentMessageRouter(capability -> true, capability -> "denied");
+        handler.register(ownRouter);
+        RecordingChannel ownChannel = new RecordingChannel();
+
+        ownRouter.dispatch(updateFrame("01JB2Z8Y3K4M5N6P7Q8R9S0TWT", version(),
+                "[{\"key\":\"prefix\",\"value\":\"[C]\"}]"), ownChannel);
+        assertThat(ownChannel.frames()).as("no reply before the server thread runs the task").isEmpty();
+        assertThat(read()).as("no write before the server thread runs the task").isEqualTo(CONFIG);
+        assertThat(queued).hasSize(1);
+
+        ownRouter.dispatch("{\"v\":2,\"id\":\"01JB2Z8Y3K4M5N6P7Q8R9S0TWV\",\"type\":\"config.update\","
+                + "\"ts\":1761274800000,\"payload\":{\"path\":\"" + PATH + "\","
+                + "\"changes\":[{\"key\":\"prefix\",\"value\":\"[C]\"}]}}", ownChannel);
+        assertThat(ownChannel.frames()).as("a malformed payload is answered on the dispatching thread")
+                .hasSize(1);
+        assertThat(ownChannel.frames().get(0).getAsJsonObject("payload").get("code").getAsString())
+                .isEqualTo("invalid_message");
+        assertThat(queued).hasSize(1);
+
+        ownChannel.clear();
+        queued.get(0).run();
+        assertThat(entity.prefix).isEqualTo("[C]");
+        assertThat(ownChannel.frames().get(0).getAsJsonObject("payload").get("status").getAsString())
+                .isEqualTo("ok");
+    }
+
     private JsonObject payload(String type) {
         List<JsonObject> frames = framesOfType(type);
         assertThat(frames).as(type).hasSize(1);
@@ -287,7 +420,7 @@ class RemoteConfigUpdateTest {
                 + "\",\"ts\":1761274800000,\"payload\":" + payload + "}";
     }
 
-    /** One module configuration whose two settable entries are a text and a bounded number. */
+    /** One module configuration whose settable entries cover a text, a bounded number, an enum and a pattern. */
     @ConfigEntity("config.yml")
     public static final class PatchConfig extends AbstractConfigEntity {
         @ConfigEntry(path = "prefix")
@@ -297,9 +430,31 @@ class RemoteConfigUpdateTest {
         public int cooldown = 3;
         @ConfigEntry(path = "enabled")
         public boolean enabled = true;
+        @ConfigEntry(path = "mode")
+        public Mode mode = Mode.fast;
+        @ConfigEntry(path = "code")
+        @Pattern(regex = "[a-z]+")
+        public String code = "abc";
 
         public PatchConfig(String configFilePath) {
             super(configFilePath);
         }
+    }
+
+    /** A second configuration of the same module, for the reload scope. */
+    @ConfigEntity("other.yml")
+    public static final class OtherConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "value")
+        public String value = "ok";
+
+        public OtherConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** The enum entry's allowed values. */
+    public enum Mode {
+        fast,
+        slow
     }
 }
