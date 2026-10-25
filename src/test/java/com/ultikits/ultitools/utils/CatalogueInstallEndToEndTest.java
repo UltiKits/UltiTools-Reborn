@@ -305,4 +305,47 @@ class CatalogueInstallEndToEndTest {
                     "Could not download demo 1.1 (the download did not complete); nothing was installed.");
         }
     }
+
+    /**
+     * A catalogue answer may point a download only at the catalogue's own origin (plan 22-18 fix
+     * round, gap 4). Every other spelling -- another host, a user-info host, a protocol-relative
+     * path, a scheme change -- resolves to nothing, and the install then requests no download.
+     */
+    @Nested
+    @DisplayName("a download URL is accepted only on the catalogue's own origin")
+    class DownloadOrigin {
+
+        @Test
+        @DisplayName("a relative path is joined; an absolute URL is accepted only on the same origin")
+        void onlyTheSameOriginIsAccepted() {
+            String base = catalogue.baseUrl();
+            String path = "/v1/catalogue/modules/demo/versions/1.1/download";
+
+            assertThat(CatalogueClient.absoluteDownloadUrl(path)).isEqualTo(base + path);
+            assertThat(CatalogueClient.absoluteDownloadUrl(base + path)).isEqualTo(base + path);
+
+            String host = base.substring("http://".length());
+            for (String foreign : new String[]{
+                    "https://evil.example/module.jar",
+                    "//evil.example/module.jar",
+                    "http://evil.example" + path,
+                    base + "@evil.example" + path,
+                    "https://" + host + path,
+                    "https://" + host + ".evil.example" + path,
+                    "evil.example/module.jar"}) {
+                assertThat(CatalogueClient.absoluteDownloadUrl(foreign)).as(foreign).isNull();
+            }
+        }
+
+        @Test
+        @DisplayName("a foreign download URL makes the install stop before any download request")
+        void foreignUrlMakesNoRequest() {
+            catalogue.mode(StubCatalogue.Mode.FOREIGN_URL);
+
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1").isInstalled()).isFalse();
+
+            assertThat(catalogue.paths()).as("only the metadata routes were asked")
+                    .noneMatch(requested -> requested.endsWith("/download"));
+        }
+    }
 }

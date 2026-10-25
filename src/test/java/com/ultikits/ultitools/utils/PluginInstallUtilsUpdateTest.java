@@ -301,4 +301,70 @@ class PluginInstallUtilsUpdateTest {
             }
         }
     }
+
+    /**
+     * {@code /upm update} hands the transaction the verifying downloader (plan 22-18 fix round, gap
+     * 4). The transaction's own downloader argument is captured here, so what is exercised is the
+     * one {@code stageUpdate} actually binds -- not a copy of that line in the test.
+     */
+    @Nested
+    @DisplayName("stageUpdate binds the verifying downloader")
+    class VerifiedStageUpdate {
+
+        @Test
+        @DisplayName("the bound downloader refuses a tampered JAR and leaves nothing in the staging folder")
+        void boundDownloaderIsTheVerifyingOne() throws IOException {
+            File serverRoot = new File(tempDir, "server-staged");
+            File dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
+            com.ultikits.ultitools.abstracts.UltiToolsPlugin loaded =
+                    ModuleUpdateFixtures.loadedModule("Demo", "1.0", "demo");
+            java.util.concurrent.atomic.AtomicReference<ModuleFileTransactions.Downloader> bound =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            File staging = new File(tempDir, "staged-work");
+            assertThat(staging.mkdirs()).isTrue();
+
+            try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> ultiTools =
+                         org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class);
+                 org.mockito.MockedConstruction<ModuleFileTransactions> transactions =
+                         org.mockito.Mockito.mockConstruction(ModuleFileTransactions.class,
+                                 (mock, context) -> org.mockito.Mockito.when(mock.stageUpdate(
+                                         org.mockito.ArgumentMatchers.anyString(),
+                                         org.mockito.ArgumentMatchers.any(java.util.function.Supplier.class),
+                                         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                                         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                                         .thenAnswer(invocation -> {
+                                             bound.set(invocation.getArgument(4));
+                                             return ModuleFileTransactions.StageResult.of(
+                                                     ModuleFileTransactions.StageResult.Outcome.FAILED,
+                                                     null, null, null, null);
+                                         }));
+                 com.ultikits.ultitools.stub.StubCatalogue catalogue =
+                         com.ultikits.ultitools.stub.StubCatalogue.start()) {
+                com.ultikits.ultitools.UltiTools instance =
+                        org.mockito.Mockito.mock(com.ultikits.ultitools.UltiTools.class);
+                com.ultikits.ultitools.manager.PluginManager pluginManager =
+                        org.mockito.Mockito.mock(com.ultikits.ultitools.manager.PluginManager.class);
+                org.mockito.Mockito.when(pluginManager.getPluginList())
+                        .thenReturn(java.util.Collections.singletonList(loaded));
+                org.mockito.Mockito.when(pluginManager.getModuleJarIndex()).thenReturn(null);
+                org.mockito.Mockito.when(instance.getPluginManager()).thenReturn(pluginManager);
+                org.mockito.Mockito.when(instance.getDataFolder()).thenReturn(dataFolder);
+                ultiTools.when(com.ultikits.ultitools.UltiTools::getInstance).thenReturn(instance);
+                ultiTools.when(com.ultikits.ultitools.UltiTools::getPluginVersion).thenReturn(630);
+                catalogue.mode(com.ultikits.ultitools.stub.StubCatalogue.Mode.TAMPER_HASH);
+                PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
+
+                ModuleFileTransactions.StageResult result = PluginInstallUtils.stageUpdate("demo");
+
+                assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+                assertThat(bound.get()).as("stageUpdate bound a downloader").isNotNull();
+                String link = PluginInstallUtils.getPluginVersionDownloadLink(
+                        "demo", com.ultikits.ultitools.stub.StubCatalogue.VERSION);
+                assertThatThrownBy(() -> bound.get().download(link, "demo-1.1.jar", staging))
+                        .isInstanceOf(IOException.class)
+                        .hasMessageContaining("hash mismatch");
+                assertThat(staging.list()).as("the refused download left nothing behind").isEmpty();
+            }
+        }
+    }
 }

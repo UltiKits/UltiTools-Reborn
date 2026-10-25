@@ -86,22 +86,45 @@ class VerifiedDownloadTest {
     }
 
     @Test
-    @DisplayName("a body larger than sizeBytes is cut off while streaming, not read to the end")
-    void largerBody_isAbortedWhileStreaming() {
-        catalogue.mode(StubCatalogue.Mode.HUGE_BODY);
-        String url = downloadUrl();
+    @DisplayName("a body larger than sizeBytes is cut at the HTTP cap, which reports it as oversized")
+    void oversizedBody_isCutAtTheHttpCap() throws IOException {
+        try (StubCatalogue fresh = StubCatalogue.start()) {
+            PluginInstallUtils.setBaseUrlForTesting(fresh.baseUrl());
+            fresh.mode(StubCatalogue.Mode.HUGE_BODY);
+            CatalogueClient.Version version = CatalogueClient.version("demo", StubCatalogue.VERSION);
 
-        CatalogueHttp.Download capped = CatalogueHttp.download(url, part, 1024);
+            CatalogueHttp.Download capped = CatalogueHttp.download(
+                    CatalogueClient.absoluteDownloadUrl(version.downloadUrl()), part, 1024);
 
-        assertThat(capped.kind()).isEqualTo(CatalogueHttp.Kind.OVERSIZE);
-        assertThat(capped.bytes()).as("only the cap was kept").isEqualTo(1024);
+            assertThat(capped.kind()).isEqualTo(CatalogueHttp.Kind.OVERSIZE);
+            assertThat(capped.bytes()).as("only the cap was kept").isEqualTo(1024);
+        }
+    }
 
-        VerifiedDownload.Result result = fetchWith(StubCatalogue.Mode.HUGE_BODY);
-        assertThat(result.kind()).isEqualTo(VerifiedDownload.Kind.SIZE_MISMATCH);
-        assertThat(catalogue.clientAborted())
-                .as("the client closed the connection instead of reading all 10 MiB")
-                .isTrue();
-        assertNothingLeft();
+    @Test
+    @DisplayName("fetch itself aborts an oversized body while streaming: a fresh stub never serves all 10 MiB")
+    void largerBody_isAbortedWhileStreaming() throws IOException {
+        // A fresh stub, so the sticky clientAborted flag can only be set by this call: the earlier
+        // version of this test called CatalogueHttp.download first and then asserted a flag that
+        // call had already set, so it held even when fetch read the whole body.
+        try (StubCatalogue fresh = StubCatalogue.start()) {
+            PluginInstallUtils.setBaseUrlForTesting(fresh.baseUrl());
+            fresh.mode(StubCatalogue.Mode.HUGE_BODY);
+            CatalogueClient.Version version = CatalogueClient.version("demo", StubCatalogue.VERSION);
+
+            VerifiedDownload.Result result = VerifiedDownload.fetch(
+                    CatalogueClient.absoluteDownloadUrl(version.downloadUrl()), version.sha256(),
+                    version.sizeBytes(), part);
+
+            assertThat(result.kind()).isEqualTo(VerifiedDownload.Kind.SIZE_MISMATCH);
+            assertThat(fresh.clientAborted())
+                    .as("the client closed the connection instead of reading all 10 MiB")
+                    .isTrue();
+            assertThat(fresh.servedBytes())
+                    .as("the stub stopped writing: the client read at most sizeBytes + 1")
+                    .isLessThan(StubCatalogue.HUGE_BODY_BYTES);
+            assertNothingLeft();
+        }
     }
 
     @Test
