@@ -235,8 +235,14 @@ final class CloudSession {
     private volatile boolean pendingAuthenticationCancelled;
 
     /**
-     * The protocol v2 server credential this session committed, or {@code null}. Written only by
-     * {@link #commitCredential(ServerCredential)}.
+     * The protocol v2 server credential this session holds, or {@code null} -- the one owner of the current server
+     * credential (plan 22-21 fix). Every change of the stored {@code cloud_credential} entry is made under this
+     * session's monitor together with this field: {@link #loadServerCredential()} (adopt from disk),
+     * {@link #commitCredential(ServerCredential)} (device login), {@link #rotateCredential(String, String)}
+     * ({@code credential.rotate}, disk first), {@link #completeCredentialLogout(ServerCredential)} and the listener's
+     * rejection path (delete-if-matches, then cleared). Every reader in the session -- the bearer of each attempt, the
+     * protocol's server id, the linked checks -- and {@code CloudAuthManager}'s status, login and logout read this
+     * field; they read the file only while the session holds no credential.
      */
     private volatile ServerCredential credential;
 
@@ -978,8 +984,9 @@ final class CloudSession {
         AgentProtocol protocol = new AgentProtocol(connection, cloudOutbox, commandDedupe, serverId,
                 capabilities::helloCapabilities, features::helloSettings, capabilities::enabled,
                 capabilities::refusal, agentClock);
-        // The inbound handlers of this connection, registered before its hello is sent.
-        features.register(protocol.router(), protocol.channel(), protocol);
+        // The inbound handlers of this connection, registered before its hello is sent. A rotation goes through
+        // this session, the one owner of the current credential (plan 22-21 fix).
+        features.register(protocol.router(), protocol.channel(), protocol, this::rotateCredential);
         return protocol;
     }
 
@@ -1321,14 +1328,19 @@ final class CloudSession {
             return !invalidated && CloudSession.this == current() && agentConnection == connection;
         }
 
+        /**
+         * The bearer of the next attempt: the session's own {@link #credential}, the one owner of the current
+         * credential (plan 22-21 fix), so an attempt after a rotation authenticates with the rotated secret and
+         * {@link #attemptCredentialId} names the credential this attempt really used.
+         */
         private String readBearer() {
             synchronized (CloudSession.this) {
                 if (!live()) {
                     return null;
                 }
-                ServerCredential stored = ServerCredentialStore.load();
-                attemptCredentialId = stored == null ? null : stored.getCredentialId();
-                return stored == null ? null : stored.bearerValue();
+                ServerCredential held = credential;
+                attemptCredentialId = held == null ? null : held.getCredentialId();
+                return held == null ? null : held.bearerValue();
             }
         }
 
@@ -1506,6 +1518,32 @@ final class CloudSession {
         ServerCredentialStore.save(newCredential);
         this.credential = newCredential;
         adoptCloudState(newCredential);
+        return true;
+    }
+
+    /**
+     * Rotates this session's credential (plan 22-21, D-10): the {@code credential.rotate} persister of every
+     * connection this session owns. Under this session's monitor, {@link ServerCredentialStore#replace} first makes
+     * the new secret durable (one atomic, owner-only write) and only then is {@link #credential} replaced, so the
+     * in-memory credential and the file change in one step and the caller acknowledges only a durable rotation. The
+     * next connection attempt ({@code readBearer}) and {@code /ulticloud logout} both read {@link #credential}, so
+     * neither can use the retired secret. Nothing is written, and the gateway gets no acknowledgement, when this
+     * session was invalidated or replaced, holds no credential, or the file holds another server identity.
+     *
+     * @param secret       the new {@code ucs_} secret
+     * @param credentialId the new credential's public id
+     * @return {@code true} when the new credential is durable and held
+     * @throws DataAccessException if the write fails; the old credential then stays in place in memory and on disk
+     */
+    synchronized boolean rotateCredential(String secret, String credentialId) {
+        ServerCredential held = credential;
+        if (invalidated || this != current() || held == null) {
+            return false;
+        }
+        if (!ServerCredentialStore.replace(held.getServerId(), secret, credentialId)) {
+            return false;
+        }
+        credential = held.rotated(secret, credentialId);
         return true;
     }
 

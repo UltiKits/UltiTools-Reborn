@@ -44,8 +44,10 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * {@link CloudPlayerLinks} API and the {@link PlayerLinkChannel} behind it (so a handler a module set at startup
  * survives every reconnect), and the one {@link SessionDedupeLedger} every handler shares (so the ledger monitor is
  * the same across connections). Each upgraded connection gets its own {@link AgentProtocol}; {@link CloudSession}
- * calls {@link #register(AgentMessageRouter, CloudChannel, AgentProtocol)} once for it, which registers the request
- * handlers on that connection's router and points the lifetime objects at that connection.
+ * calls {@link #register(AgentMessageRouter, CloudChannel, AgentProtocol, CredentialRotationHandler.CredentialPersister)}
+ * once for it, which registers the request handlers on that connection's router and points the lifetime objects at
+ * that connection. A {@code credential.rotate} is persisted through the session that owns the connection, never
+ * through the store directly, because that session is the one owner of the current credential.
  * <p>
  * <b>Threads.</b> The player-link handler of a module runs on one daemon thread, {@code UltiTools-CloudLinks}; the
  * create and handler deadlines run on a second, {@code UltiTools-CloudLinks-Timer}. Both stop in {@link #shutdown()}.
@@ -153,11 +155,14 @@ public final class CloudFeatures {
      * @param router   the connection's router
      * @param channel  the connection's live channel (open between welcome and close)
      * @param protocol the connection's protocol layer
+     * @param rotation persists a {@code credential.rotate} through the session that owns this connection
      */
-    void register(AgentMessageRouter router, CloudChannel channel, final AgentProtocol protocol) {
+    void register(AgentMessageRouter router, CloudChannel channel, final AgentProtocol protocol,
+                  CredentialRotationHandler.CredentialPersister rotation) {
         Objects.requireNonNull(router, "router");
         Objects.requireNonNull(channel, "channel");
         Objects.requireNonNull(protocol, "protocol");
+        Objects.requireNonNull(rotation, "rotation");
         this.protocol = protocol;
         registerCommands(router);
         registerPower(router);
@@ -166,9 +171,7 @@ public final class CloudFeatures {
         registerAll(router, RemoteRequestHandlers.PROPERTY_TYPES, bindings.properties);
         registerConfig(router);
         registerModules(router, protocol);
-        if (bindings.credentials != null) {
-            router.register("credential.rotate", new CredentialRotationHandler(bindings.credentials));
-        }
+        router.register("credential.rotate", new CredentialRotationHandler(rotation));
         playerLinkChannel.register(router);
         // The protocol layer consumes inbound error frames itself; the link channel hears them as reply listener.
         protocol.addReplyListener(playerLinkChannel::onErrorReply);
@@ -384,8 +387,6 @@ public final class CloudFeatures {
         BooleanSupplier errorReporting = Bindings::errorReportingEnabled;
         /** The {@code power-actions} switch, read on every {@code server.power}. */
         BooleanSupplier powerEnabled = Capability.POWER_ACTIONS::isEnabled;
-        /** Persists a rotated credential (22-17); {@code null} leaves {@code credential.rotate} unregistered. */
-        CredentialRotationHandler.CredentialPersister credentials = ServerCredentialStore::replace;
         /** The command manager of {@code command.execute}. */
         Supplier<CommandExecutionManager> commands;
         /** Runs Bukkit work on the server thread, in submission order. */
@@ -409,7 +410,7 @@ public final class CloudFeatures {
         /** A loaded module's {@code plugin.yml} version by module name, for its capability name. */
         Function<String, String> moduleVersion;
 
-        /** @return bindings with no server behind them: only the switches, the credential store and links */
+        /** @return bindings with no server behind them: only the switches, the credential rotation and links */
         static Bindings forTesting() {
             return new Bindings();
         }

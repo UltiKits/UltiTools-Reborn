@@ -99,6 +99,18 @@ final class ServerCredential {
         return entry;
     }
 
+    /**
+     * The same link with a rotated secret (plan 22-21, D-10): server id, owner, name and link time are kept, exactly
+     * as {@link ServerCredentialStore#replace} keeps them on disk.
+     *
+     * @param rotatedSecret the new {@code ucs_} secret
+     * @param rotatedId     the new credential's public id
+     * @return the rotated credential
+     */
+    ServerCredential rotated(String rotatedSecret, String rotatedId) {
+        return new ServerCredential(rotatedSecret, rotatedId, serverId, userId, serverName, linkedAt);
+    }
+
     /** @return the secret, for the {@code Authorization: Bearer} header only -- never log it */
     String bearerValue() {
         return credential;

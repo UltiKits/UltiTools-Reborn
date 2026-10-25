@@ -86,24 +86,36 @@ final class ServerCredentialStore {
     /**
      * Replaces the secret and its public id of the stored credential with a rotated pair (plan 22-21, D-10), in one
      * {@link CredentialStore#update} -- one atomic, owner-only write. Every other field of the entry (the server id
-     * among them) and every other key of the file is kept. Nothing is written when no valid credential is stored,
-     * because a rotation can only replace a credential this server holds. Framework-owned state only; see the class
-     * javadoc for why this cannot overwrite operator content. The secret is never logged.
+     * among them) and every other key of the file is kept. Nothing is written when no valid credential is stored, or
+     * when the stored one belongs to another server identity, because a rotation can only replace the credential the
+     * rotating session holds. Called only by {@link CloudSession#rotateCredential}, which updates its in-memory
+     * credential in the same monitor region (the session is the one owner of the current credential). Framework-owned
+     * state only; see the class javadoc for why this cannot overwrite operator content. The secret is never logged.
      *
+     * @param serverId     the server id of the credential being rotated
      * @param credential   the new {@code ucs_} secret
      * @param credentialId the new credential's public id
      * @return {@code true} when the new credential is stored
      * @throws com.ultikits.ultitools.exceptions.DataAccessException if the write fails or the current file cannot be
      *         parsed
      */
-    static boolean replace(String credential, String credentialId) {
-        if (!ServerCredential.isWellFormedSecret(credential) || credentialId == null || credentialId.isEmpty()) {
+    static boolean replace(String serverId, String credential, String credentialId) {
+        if (serverId == null || !ServerCredential.isWellFormedSecret(credential) || credentialId == null
+                || credentialId.isEmpty()) {
+            return false;
+        }
+        // Like delete(): no matching entry means no update, preserving the file's exact bytes. The check is
+        // repeated inside the update, under the store's lock, for a change in between.
+        CredentialStore.ReadResult current = CredentialStore.read();
+        ServerCredential present = current.isParsed() ? ServerCredential.fromDocument(current.data().get(KEY)) : null;
+        if (present == null || !serverId.equals(present.getServerId())) {
             return false;
         }
         AtomicBoolean replaced = new AtomicBoolean();
         CredentialStore.update(document -> {
             Object entry = document.get(KEY);
-            if (ServerCredential.fromDocument(entry) != null) {
+            ServerCredential stored = ServerCredential.fromDocument(entry);
+            if (stored != null && serverId.equals(stored.getServerId())) {
                 java.util.Map<String, Object> updated = new java.util.LinkedHashMap<>();
                 for (java.util.Map.Entry<?, ?> field : ((java.util.Map<?, ?>) entry).entrySet()) {
                     updated.put(String.valueOf(field.getKey()), field.getValue());

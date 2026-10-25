@@ -349,7 +349,6 @@ class InboundWiringTest {
         assertThat(bindings.configs).isNotNull();
         assertThat(bindings.responders).isNotNull();
         assertThat(bindings.moduleVersion).isNotNull();
-        assertThat(bindings.credentials).isNotNull();
         RemoteActionLog.Entry entry = RemoteActionLog.Entry.allowed(Capability.PLAYER_ACTIONS, "player.action.kick",
                 "Steve", "panel");
         bindings.actionLog.accept(entry);
