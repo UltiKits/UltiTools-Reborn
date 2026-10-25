@@ -165,6 +165,61 @@ class CloudConnectionLifecycleTest {
     }
 
     @Test
+    void serverIdMismatchStopsKeepsTheCredentialAndExplainsOnce() throws Exception {
+        openGateway();
+        fastTiming();
+        gateway.welcomeServerId = "01JXXXXSERVER0000000000000";
+        startSaved();
+        byte[] before = Files.readAllBytes(credentialFile);
+        await(() -> CloudSession.current().connectionState() == AgentConnection.State.SERVER_ID_MISMATCH,
+                "server-ID mismatch stop");
+        // fastPolicy() retries within 40 ms; ten times that passes with no further connection.
+        Thread.sleep(500);
+        assertThat(gateway.headers).hasSize(1);
+        assertThat(Files.readAllBytes(credentialFile)).as("credential file unchanged").isEqualTo(before);
+        assertThat(ServerCredentialStore.load()).isNotNull();
+        assertThat(records.stream().filter(r -> r.getLevel() == Level.SEVERE)).singleElement()
+                .satisfies(r -> assertThat(r.getMessage()).isEqualTo(CloudSession.SERVER_ID_MISMATCH_KEY));
+        assertThat(CloudAuthManager.status().isConnected()).isFalse();
+        assertThat(CloudAuthManager.status().getConnectionDescription()).isEqualTo(
+                "stopped — UltiCloud answered with a different server ID than this server is linked to; "
+                + "contact UltiCloud support, or run /ulticloud logout and then /ulticloud login");
+
+        List<String> lines = new CopyOnWriteArrayList<>();
+        org.bukkit.command.ConsoleCommandSender sender = org.mockito.Mockito.mock(org.bukkit.command.ConsoleCommandSender.class);
+        org.mockito.Mockito.doAnswer(call -> { lines.add(call.getArgument(0)); return null; })
+                .when(sender).sendMessage(org.mockito.ArgumentMatchers.anyString());
+        com.ultikits.ultitools.commands.CloudLoginCommand command = new com.ultikits.ultitools.commands.CloudLoginCommand();
+        command.status(sender);
+        assertThat(lines).anyMatch(line -> line.contains("Connection: stopped — UltiCloud answered with a different server ID"));
+        command.reconnect(sender);
+        assertThat(lines.get(lines.size() - 1)).contains(
+                "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to.");
+        Thread.sleep(200);
+        assertThat(gateway.headers).as("reconnect does not leave the mismatch").hasSize(1);
+        assertNoSecrets();
+    }
+
+    @Test
+    void serverIdMismatchLinesAreInBothCatalogues() throws Exception {
+        for (String key : new String[]{CloudSession.SERVER_ID_MISMATCH_KEY,
+                "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. "
+                        + "Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login."}) {
+            com.google.gson.JsonObject en = catalogue("en");
+            com.google.gson.JsonObject zh = catalogue("zh");
+            assertThat(en.has(key)).as("en.json: " + key).isTrue();
+            assertThat(en.get(key).getAsString()).isEqualTo(key);
+            assertThat(zh.has(key)).as("zh.json: " + key).isTrue();
+            assertThat(zh.get(key).getAsString()).isNotEqualTo(key).contains("/ulticloud login");
+        }
+    }
+
+    private static com.google.gson.JsonObject catalogue(String language) throws java.io.IOException {
+        return com.google.gson.JsonParser.parseString(new String(Files.readAllBytes(java.nio.file.Paths.get(
+                "src/main/resources/lang/" + language + ".json")), StandardCharsets.UTF_8)).getAsJsonObject();
+    }
+
+    @Test
     void thirdSupersessionStopsWithoutDeletingCredential() throws Exception {
         openGateway();
         fastTiming();
@@ -389,6 +444,7 @@ class CloudConnectionLifecycleTest {
         private final List<String> paths = new CopyOnWriteArrayList<>();
         private volatile WebSocket peer;
         private volatile int closeCode;
+        private volatile String welcomeServerId = HandshakeEndToEndTest.SERVER_ID;
 
         Gateway() {
             super(new InetSocketAddress("127.0.0.1", 0), 1);
@@ -402,7 +458,11 @@ class CloudConnectionLifecycleTest {
         }
         @Override public void onClose(WebSocket conn, int code, String reason, boolean remote) { }
         @Override public void onMessage(WebSocket conn, String message) {
-            if ("ping".equals(message)) { conn.send("pong"); } else { HandshakeEndToEndTest.answerHello(conn, message); }
+            if ("ping".equals(message)) {
+                conn.send("pong");
+            } else {
+                HandshakeEndToEndTest.answerHello(conn, message, welcomeServerId);
+            }
         }
         @Override public void onError(WebSocket conn, Exception error) { }
         @Override public void onStart() { started.countDown(); }

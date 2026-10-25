@@ -14,6 +14,8 @@
   "A connection attempt to UltiCloud is already in progress.": "A connection attempt to UltiCloud is already in progress.",
   "UltiCloud no longer accepts this UltiTools version. Upgrade UltiTools, then restart the server.": "UltiCloud no longer accepts this UltiTools version. Upgrade UltiTools, then restart the server.",
   "This server is not linked to UltiCloud. Use /ulticloud login to link it.": "This server is not linked to UltiCloud. Use /ulticloud login to link it.",
+  "UltiCloud answered this server's connection with a different server ID than the one it is linked to. Reconnecting has stopped and the credential is kept. Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login to link this server again.": "UltiCloud answered this server's connection with a different server ID than the one it is linked to. Reconnecting has stopped and the credential is kept. Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login to link this server again.",
+  "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login.": "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login.",
   "Please wait %d seconds before trying again.": "Please wait %d seconds before trying again.",
   "更新检查未完成：无法确认 %s 的最新版本。": "Update check incomplete: could not confirm the latest version of %s.",
   "卸载完成：已删除识别为该模块的 JAR 文件：%s": "Uninstall done: the JAR files identified as this module's have been deleted: %s",

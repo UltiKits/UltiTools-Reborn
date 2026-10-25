@@ -36,8 +36,11 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  *   <tr><td>CONNECTING</td><td>refused 426</td><td>UPGRADE_REQUIRED</td></tr>
  *   <tr><td>CONNECTING</td><td>refused 402</td><td>PLAN_LIMITED (fixed plan-limit interval)</td></tr>
  *   <tr><td>CONNECTING</td><td>refused 429</td><td>BACKOFF (long, at least {@code Retry-After})</td></tr>
- *   <tr><td>CONNECTING</td><td>other refusal, close, handshake deadline</td><td>BACKOFF (normal)</td></tr>
- *   <tr><td>OPEN, not established</td><td>handshake deadline (no {@code welcome})</td><td>BACKOFF (normal)</td></tr>
+ *   <tr><td>CONNECTING</td><td>refused with another 4xx</td><td>BACKOFF (long)</td></tr>
+ *   <tr><td>CONNECTING</td><td>refused with 5xx, network error, close, handshake deadline</td><td>BACKOFF (normal)</td></tr>
+ *   <tr><td>OPEN, not established</td><td>handshake deadline (no {@code welcome}), {@link #abandonAttempt(String)}</td>
+ *   <td>BACKOFF (normal)</td></tr>
+ *   <tr><td>OPEN</td><td>{@link #stopForServerIdMismatch()}</td><td>SERVER_ID_MISMATCH</td></tr>
  *   <tr><td>OPEN, CONNECTING</td><td>close 4401 / 4426</td><td>CREDENTIAL_REJECTED / UPGRADE_REQUIRED</td></tr>
  *   <tr><td>OPEN, CONNECTING</td><td>close 4402</td><td>PLAN_LIMITED (one probe after the attempt-0 delay)</td></tr>
  *   <tr><td>OPEN, CONNECTING</td><td>close 4400, 4429</td><td>BACKOFF (long)</td></tr>
@@ -66,15 +69,15 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  * below the session monitor; nothing here blocks or waits (no {@code connectBlocking}, no
  * {@code Future#get}).
  * <p>
- * Every contract number lives in the one {@code PROVISIONAL} section below.
+ * Every contract number lives in the one contract section below.
  */
 final class AgentConnection {
 
     // =====================================================================================
-    // PROVISIONAL: the codes, classes and numbers below mirror the backend's contract answers of
-    // 2026-10-24 (FW-contract-answers.md answers 2, 7, 8 and 23, and protocol-v2-decisions.md
-    // section i). Plan 22-08 aligns them with the generated contract (close-codes.ts, upgrade.ts,
-    // limits.ts) when the fixtures arrive. Nothing outside this section names a raw code.
+    // Contract: the codes, classes and numbers below are those of the frozen protocol contract
+    // 2.0.0 (PROTOCOL.md section 7, "close codes and client actions", and section 9's timing
+    // constants), vendored under src/test/resources/ulticloud-contract/v2/2.0.0. AgentConnectionTest
+    // holds one case per row of that table. Nothing outside this section names a raw code.
     // =====================================================================================
 
     /** Upgrade refused: the credential is invalid. Stop and delete the credential. */
@@ -85,6 +88,10 @@ final class AgentConnection {
     static final int HTTP_UPGRADE_REQUIRED = 426;
     /** Upgrade refused: rate limited. Long backoff, at least {@code Retry-After}. */
     static final int HTTP_TOO_MANY_REQUESTS = 429;
+    /** The first 4xx status; every 4xx not named above backs off long. */
+    static final int HTTP_CLIENT_ERROR_MIN = 400;
+    /** The last 4xx status. */
+    static final int HTTP_CLIENT_ERROR_MAX = 499;
 
     /** Closed: the server's plan limit applies; same handling as HTTP 402. */
     static final int CLOSE_PLAN_LIMIT = 4402;
@@ -155,7 +162,7 @@ final class AgentConnection {
      * Classifies a refused upgrade.
      *
      * @param httpStatus the HTTP status of the refused upgrade
-     * @return its disposition; every status not named here retries normally
+     * @return its disposition; another 4xx retries long, a 5xx (and anything else) normally
      */
     static Disposition forRefusal(int httpStatus) {
         switch (httpStatus) {
@@ -168,7 +175,8 @@ final class AgentConnection {
             case HTTP_TOO_MANY_REQUESTS:
                 return Disposition.RETRY_LONG;
             default:
-                return Disposition.RETRY;
+                return httpStatus >= HTTP_CLIENT_ERROR_MIN && httpStatus <= HTTP_CLIENT_ERROR_MAX
+                        ? Disposition.RETRY_LONG : Disposition.RETRY;
         }
     }
 
@@ -196,7 +204,7 @@ final class AgentConnection {
         }
     }
 
-    // ============================== end of the PROVISIONAL section ==============================
+    // ============================== end of the contract section ==============================
 
     /** The states of the connection. */
     enum State {
@@ -217,7 +225,12 @@ final class AgentConnection {
         /** Terminal: the framework or protocol is too old (426, 4426); credential kept. */
         UPGRADE_REQUIRED,
         /** Terminal: replaced by another connection with the same credential too often. */
-        SUPERSEDED
+        SUPERSEDED,
+        /**
+         * Terminal: the gateway's {@code welcome} named another server id than the linked one
+         * (contract SEMANTICS 16); credential kept. Only a restart or a new login leaves it.
+         */
+        SERVER_ID_MISMATCH
     }
 
     /** What {@link #reconnectNow()} did. */
@@ -256,6 +269,10 @@ final class AgentConnection {
 
         /** Too many consecutive supersessions; retrying stopped, credential kept. */
         default void onSuperseded() {
+        }
+
+        /** The {@code welcome} named another server id; retrying stopped, credential kept. */
+        default void onServerIdMismatch() {
         }
 
         /** @param notice the first 402 response of a plan-limit episode; once per episode */
@@ -577,6 +594,52 @@ final class AgentConnection {
         }
     }
 
+    /**
+     * Ends the open attempt because the protocol layer refused what the gateway sent (an invalid
+     * {@code welcome}, S-51): the socket is closed with 1000 and the normal backoff follows. A
+     * no-op unless OPEN.
+     *
+     * @param reason the reason for the retry line, never carrying payload or credential text
+     */
+    void abandonAttempt(String reason) {
+        Effects out = new Effects();
+        Handle toClose;
+        synchronized (this) {
+            if (state != State.OPEN) {
+                return;
+            }
+            toClose = handle;
+            handle = null;
+            retryNormal(reason, out);
+        }
+        if (toClose != null) {
+            toClose.closeAttempt(CLOSE_NORMAL, reason);
+        }
+        out.run();
+    }
+
+    /**
+     * Stops for good because the {@code welcome} named another server id than the linked one
+     * (contract answer 21, SEMANTICS 16): the socket is closed with 1000, no retry is scheduled and
+     * the owner is told once through {@link Listener#onServerIdMismatch()}; the credential is kept.
+     * {@link #reconnectNow()} does not leave the resulting state. A no-op unless OPEN.
+     */
+    void stopForServerIdMismatch() {
+        Effects out = new Effects();
+        Handle toClose;
+        synchronized (this) {
+            if (state != State.OPEN) {
+                return;
+            }
+            toClose = handle;
+            terminal(State.SERVER_ID_MISMATCH, listener::onServerIdMismatch, out);
+        }
+        if (toClose != null) {
+            toClose.closeAttempt(CLOSE_NORMAL, "server id mismatch");
+        }
+        out.run();
+    }
+
     /** @return the running framework version this connection sends in its upgrade headers */
     String frameworkVersion() {
         return frameworkVersion;
@@ -623,7 +686,7 @@ final class AgentConnection {
 
     private static boolean isStartable(State s) {
         return s == State.IDLE || s == State.STOPPED || s == State.CREDENTIAL_REJECTED
-                || s == State.UPGRADE_REQUIRED || s == State.SUPERSEDED;
+                || s == State.UPGRADE_REQUIRED || s == State.SUPERSEDED || s == State.SERVER_ID_MISMATCH;
     }
 
     private void resetCycle() {

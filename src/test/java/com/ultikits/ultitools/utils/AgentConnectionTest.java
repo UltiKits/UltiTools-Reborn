@@ -379,27 +379,43 @@ class AgentConnectionTest {
         assertThat(pendingDelay()).isEqualTo(1000);
         fireRetry().refuse(502);
         assertThat(pendingDelay()).isEqualTo(2000);
-        fireRetry().refuse(404);
+        fireRetry().refuse(503);
         assertThat(pendingDelay()).isEqualTo(4000);
     }
 
-    // ------------------------------------------------------------------ the provisional table
+    // ------------------------------------------------------------------ the contract table (PROTOCOL.md section 7)
 
+    @Test
+    @DisplayName("the close and refusal table is the contract's: the source carries no PROVISIONAL marker")
+    void tableIsNoLongerProvisional() throws java.io.IOException {
+        String source = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+                "src/main/java/com/ultikits/ultitools/utils/AgentConnection.java")),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(source).as("control: the file was read").contains("static Disposition forClose(int code)");
+        assertThat(source).doesNotContain("PROVISIONAL").contains("PROTOCOL.md section 7");
+    }
+
+    /** The upgrade-refusal rows of PROTOCOL.md section 7, plus its defaults: other 4xx long, 5xx normal. */
     @ParameterizedTest(name = "refusal {0} -> {1}")
     @CsvSource({
             "401, STOP_DELETE_CREDENTIAL",
-            "426, STOP_KEEP_CREDENTIAL",
             "402, PLAN_LIMIT",
+            "426, STOP_KEEP_CREDENTIAL",
             "429, RETRY_LONG",
-            "403, RETRY",
-            "404, RETRY",
+            "400, RETRY_LONG",
+            "403, RETRY_LONG",
+            "404, RETRY_LONG",
+            "418, RETRY_LONG",
+            "499, RETRY_LONG",
             "500, RETRY",
-            "502, RETRY"
+            "502, RETRY",
+            "503, RETRY"
     })
     void refusalTable(int status, Disposition expected) {
         assertThat(AgentConnection.forRefusal(status)).isEqualTo(expected);
     }
 
+    /** The close-code rows of PROTOCOL.md section 7, plus its default: an unknown code backs off. */
     @ParameterizedTest(name = "close {0} -> {1}")
     @CsvSource({
             "4401, STOP_DELETE_CREDENTIAL",
@@ -414,7 +430,8 @@ class AgentConnectionTest {
             "1006, RETRY",
             "1009, RETRY",
             "1011, RETRY",
-            "4999, RETRY"
+            "4999, RETRY",
+            "3000, RETRY"
     })
     void closeTable(int code, Disposition expected) {
         assertThat(AgentConnection.forClose(code)).isEqualTo(expected);
@@ -426,10 +443,12 @@ class AgentConnectionTest {
             "426, UPGRADE_REQUIRED, -1",
             "402, PLAN_LIMITED, 900000",
             "429, BACKOFF, 60000",
-            "403, BACKOFF, 1000",
-            "404, BACKOFF, 1000",
+            "403, BACKOFF, 60000",
+            "404, BACKOFF, 60000",
+            "418, BACKOFF, 60000",
             "500, BACKOFF, 1000",
-            "502, BACKOFF, 1000"
+            "502, BACKOFF, 1000",
+            "503, BACKOFF, 1000"
     })
     void refusalReachesItsState(int status, State expected, long delay) {
         connection.start();
@@ -808,14 +827,14 @@ class AgentConnectionTest {
         connection.start();
         sockets.last().refuse(500);
         FakeSocket second = fireRetry();
-        second.refuse(rejection(403, null, "{\"error\":{\"code\":\"forbidden\",\"message\":\"m\",\"requestId\":\"r\"}}"));
+        second.refuse(rejection(503, null, "{\"error\":{\"code\":\"unavailable\",\"message\":\"m\",\"requestId\":\"r\"}}"));
         fireRetry().accept();
         sockets.last().close(1011);
         assertThat(logs).containsExactly(
                 "INFO UltiCloud: connecting to " + ENDPOINT + " (attempt 1).",
                 "INFO UltiCloud: connection attempt 1 failed (HTTP 500); retrying in 1 s.",
                 "INFO UltiCloud: connecting to " + ENDPOINT + " (attempt 2).",
-                "INFO UltiCloud: connection attempt 2 failed (HTTP 403 forbidden); retrying in 2 s.",
+                "INFO UltiCloud: connection attempt 2 failed (HTTP 503 unavailable); retrying in 2 s.",
                 "INFO UltiCloud: connecting to " + ENDPOINT + " (attempt 3).",
                 "INFO UltiCloud: connection attempt 3 failed (closed 1011); retrying in 3 s.");
 

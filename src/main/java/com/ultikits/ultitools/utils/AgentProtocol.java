@@ -327,7 +327,15 @@ final class AgentProtocol {
             try {
                 welcome = Welcome.read(envelope, helloId);
             } catch (InvalidFrameException | IllegalArgumentException invalid) {
-                log.accept(Level.FINE, "UltiCloud: ignored an invalid welcome.");
+                sendErrorUnlocked(envelope.id, "invalid_message",
+                        "The welcome does not answer the hello or breaks the contract's limits.");
+                notice(Level.WARNING, "invalid-welcome",
+                        "UltiCloud: refused the gateway's welcome (invalid_message); the connection is retried.");
+                after.add(() -> connection.abandonAttempt("invalid welcome"));
+                return;
+            }
+            if (expectedServerId != null && !expectedServerId.equals(welcome.serverId)) {
+                after.add(connection::stopForServerIdMismatch);
                 return;
             }
             limits = welcome.limits;
@@ -335,9 +343,11 @@ final class AgentProtocol {
             granted.retainAll(declared);
             accepted = Collections.unmodifiableSet(granted);
             gatewayClockOffsetMillis = welcome.serverTime - clock.getAsLong();
+            applyLimits(welcome.limits);
             established = true;
             connection.markEstablished();
             resendUnacked();
+            reportOverflow();
             notify = new ArrayList<>(lifecycleListeners);
         }
         log.accept(Level.INFO, "UltiCloud: connected.");
@@ -447,7 +457,24 @@ final class AgentProtocol {
             log.accept(Level.FINE, "UltiCloud: discarded an invalid error frame.");
             return;
         }
-        log.accept(Level.FINE, "UltiCloud: the gateway reported error " + code + ".");
+        if (envelope.replyTo != null) {
+            CloudRequest request = envelope.request();
+            for (Consumer<CloudRequest> listener : replyListeners) {
+                after.add(() -> listener.accept(request));
+            }
+            synchronized (lock) {
+                notice(Level.WARNING, "reply:" + code, "UltiCloud: the gateway answered a frame with error " + code + ".");
+            }
+        } else if ("rate_limited".equals(code)) {
+            synchronized (lock) {
+                notice(Level.INFO, "rate_limited", "UltiCloud: the gateway is limiting this server's log lines "
+                        + "(rate_limited); lines over the limit are dropped.");
+            }
+        } else {
+            synchronized (lock) {
+                notice(Level.WARNING, "notice:" + code, "UltiCloud: the gateway reported error " + code + ".");
+            }
+        }
     }
 
     /**
@@ -592,7 +619,8 @@ final class AgentProtocol {
     private final class LiveChannel implements CloudChannel {
 
         private boolean blocked(String type) {
-            return false;
+            AgentMessageTypes.Spec spec = AgentMessageTypes.spec(type);
+            return spec != null && spec.capability() != null && !accepted.contains(spec.capability());
         }
 
         @Override

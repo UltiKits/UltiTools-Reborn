@@ -152,6 +152,14 @@ final class CloudSession {
      */
     private static final long STATE_FLUSH_INTERVAL_MS = 30_000L;
 
+    /**
+     * The language-catalogue key of the one SEVERE line printed when the gateway's welcome names a
+     * different server id than the linked one (contract answer 21, SEMANTICS 16).
+     */
+    static final String SERVER_ID_MISMATCH_KEY = "UltiCloud answered this server's connection with a different "
+            + "server ID than the one it is linked to. Reconnecting has stopped and the credential is kept. "
+            + "Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login to link this server again.";
+
     /** Added to the device poll interval for each {@code slow_down} answer (RFC 8628 section 3.5). */
     private static final long DEVICE_SLOW_DOWN_INCREMENT_MS = 5_000L;
 
@@ -1191,6 +1199,8 @@ final class CloudSession {
             case UPGRADE_REQUIRED:
                 return CloudAuthManager.ReconnectResult.Kind.UPGRADE_REQUIRED;
             case CREDENTIAL_REJECTED:
+            case SERVER_ID_MISMATCH:
+                // A server-ID mismatch is left only by a restart or a new login (contract answer 21).
                 return CloudAuthManager.ReconnectResult.Kind.NOT_LINKED;
             case IDLE:
             case STOPPED:
@@ -1232,6 +1242,9 @@ final class CloudSession {
                 return "stopped — this UltiTools version is no longer accepted; upgrade UltiTools";
             case SUPERSEDED:
                 return "stopped — another connection is using this server's credential";
+            case SERVER_ID_MISMATCH:
+                return "stopped — UltiCloud answered with a different server ID than this server is linked to; "
+                        + "contact UltiCloud support, or run /ulticloud logout and then /ulticloud login";
             case PLAN_LIMITED:
                 return "paused — plan limit reached; retrying every 15 minutes (next in "
                         + retryDelayUnits(60000L) + " min). Run /ulticloud reconnect after renewing.";
@@ -1267,6 +1280,7 @@ final class CloudSession {
         private boolean rejectionReported;
         private boolean upgradeReported;
         private boolean supersededReported;
+        private boolean mismatchReported;
 
         private boolean live() {
             return !invalidated && CloudSession.this == current() && agentConnection == connection;
@@ -1372,6 +1386,19 @@ final class CloudSession {
                         + (notice.graceEndedAt() == null ? "" : " Grace period ended at " + notice.graceEndedAt() + ".")
                         + (notice.manageUrl() == null ? "" : " Manage the plan: " + notice.manageUrl())
                         + requestSuffix(notice.requestId()));
+            }
+        }
+
+        @Override
+        public void onServerIdMismatch() {
+            synchronized (CloudSession.this) {
+                if (!live() || mismatchReported) {
+                    return;
+                }
+                mismatchReported = true;
+                UltiTools plugin = UltiTools.getInstance();
+                String text = plugin == null ? null : plugin.i18n(SERVER_ID_MISMATCH_KEY);
+                PanelConnectionLog.log(Level.SEVERE, text == null ? SERVER_ID_MISMATCH_KEY : text);
             }
         }
 

@@ -239,10 +239,19 @@ class HandshakeEndToEndTest {
      * @param text a frame the client sent
      */
     static void answerHello(WebSocket peer, String text) {
+        answerHello(peer, text, SERVER_ID);
+    }
+
+    /**
+     * @param peer     the gateway's side of the socket
+     * @param text     a frame the client sent
+     * @param serverId the server id the welcome names
+     */
+    static void answerHello(WebSocket peer, String text, String serverId) {
         try {
             JsonObject frame = JsonParser.parseString(text).getAsJsonObject();
             if ("hello".equals(frame.get("type").getAsString())) {
-                peer.send(welcomeFor(text, SERVER_ID).toString());
+                peer.send(welcomeFor(text, serverId).toString());
             }
         } catch (RuntimeException notAFrame) {
             // Not an envelope (for example the heartbeat): nothing to answer.
