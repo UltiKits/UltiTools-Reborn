@@ -69,6 +69,8 @@ public final class StubFrontDoor {
     private static final int END_OF_HEAD = 0x0D0A0D0A;
     private static final int HEAD_TIMEOUT_MS = 15_000;
     private static final int HTTP_TIMEOUT_MS = 60_000;
+    /** The {@code Retry-After} of a forced 429 when none is given: BACKOFF_LONG's initial 60 s. */
+    static final long DEFAULT_RETRY_AFTER_SECONDS = 60;
 
     private final UltiCloudStub.Contract contract;
     private final StubAccessLog log;
@@ -81,6 +83,11 @@ public final class StubFrontDoor {
     private final Set<Socket> open = Collections.newSetFromMap(new ConcurrentHashMap<Socket, Boolean>());
     private volatile ServerSocket listener;
     private volatile int port;
+    private volatile int forcedStatus;
+    private volatile String forcedMinFramework;
+    private volatile long retryAfterSeconds = DEFAULT_RETRY_AFTER_SECONDS;
+    private volatile boolean unreachable;
+    private volatile boolean revokeDown;
 
     StubFrontDoor(int port, UltiCloudStub.Contract contract, StubAccessLog log, UltiCloudStub.Credentials credentials,
                   int gatewayPort, int httpPort, int cataloguePort) {
@@ -102,6 +109,77 @@ public final class StubFrontDoor {
         Thread acceptor = new Thread(() -> accept(socket), "ulticloud-stub-acceptor-" + port);
         acceptor.setDaemon(true);
         acceptor.start();
+    }
+
+    // ------------------------------------------------------------------ modes
+
+    /**
+     * Makes every later upgrade get {@code status} at its step of the contract's order, until it is
+     * set to {@code 0}: 429 before every check (it "may come at any point"), 426 at the framework
+     * step, 401 at the credential step, 402 at the plan step.
+     *
+     * @param status            426, 401, 402, 429, or 0 for none
+     * @param minFramework      for 426, the minimum the body and the {@code X-UltiCloud-Min-Framework}
+     *                          header name; {@code null} keeps the vendored body's value
+     * @param retryAfterSeconds for 429, the {@code Retry-After} value; 0 or less for the default
+     */
+    public void setRefusal(int status, String minFramework, long retryAfterSeconds) {
+        if (status != 0 && status != 401 && status != 402 && status != 426 && status != 429) {
+            throw new IllegalArgumentException("refusal must be 426, 401, 402, 429 or none");
+        }
+        if (minFramework != null && !SEMVER.matcher(minFramework).matches()) {
+            throw new IllegalArgumentException("minFramework must be a semantic version");
+        }
+        this.forcedMinFramework = minFramework;
+        this.retryAfterSeconds = retryAfterSeconds > 0 ? retryAfterSeconds : DEFAULT_RETRY_AFTER_SECONDS;
+        this.forcedStatus = status;
+    }
+
+    /** @return the forced refusal status, or 0 for none */
+    public int refusal() {
+        return forcedStatus;
+    }
+
+    /**
+     * Closes the public port (connections are refused) and drops every open connection, or opens
+     * the port again on the same number.
+     *
+     * @param on whether the stub is to be unreachable
+     * @throws IOException when the port cannot be bound again
+     */
+    public synchronized void setUnreachable(boolean on) throws IOException {
+        if (on == unreachable) {
+            return;
+        }
+        unreachable = on;
+        if (on) {
+            ServerSocket socket = listener;
+            listener = null;
+            closeQuietly(socket);
+            dropOpenConnections();
+            log.log("STUB", "public port " + port + " closed: unreachable");
+        } else {
+            start();
+            log.log("STUB", "public port " + port + " open again");
+        }
+    }
+
+    /** @return whether the public port is closed on purpose */
+    public boolean unreachable() {
+        return unreachable;
+    }
+
+    /**
+     * @param down whether a credential-revoke request is cut off with a TCP reset (the offline
+     *             logout row) instead of being answered
+     */
+    public void setRevokeDown(boolean down) {
+        this.revokeDown = down;
+    }
+
+    /** @return whether the revoke endpoint is down */
+    public boolean revokeDown() {
+        return revokeDown;
     }
 
     synchronized void stop() {
@@ -166,6 +244,11 @@ public final class StubFrontDoor {
                 return;
             }
             log.log("HTTP", head.method + " " + head.target + " auth=" + describeAuth(head));
+            if (revokeDown && StubDeviceAuthority.REVOKE_PATH.equals(path)) {
+                log.log("TCP-RESET", head.method + " " + head.target + " (the revoke endpoint is down)");
+                client.setSoLinger(true, 0);
+                return;
+            }
             relayHttp(client, in, head, path.startsWith(CATALOGUE_PREFIX) ? cataloguePort : httpPort);
         } catch (IOException | RuntimeException failure) {
             // A client that went away mid-request ends its own connection; nothing else is affected.
@@ -204,6 +287,10 @@ public final class StubFrontDoor {
      * @return the refusal, or {@code null} to accept
      */
     Refusal decide(Head head) {
+        int forced = forcedStatus;
+        if (forced == 429) {
+            return Refusal.rateLimited("refusal mode 429", retryAfterSeconds);
+        }
         String protocol = head.header(PROTOCOL_HEADER);
         if (protocol == null || !"2".equals(protocol.trim())) {
             return Refusal.upgradeRequired(protocol == null ? "no " + PROTOCOL_HEADER + " header"
@@ -214,9 +301,18 @@ public final class StubFrontDoor {
             return Refusal.upgradeRequired(framework == null ? "no " + FRAMEWORK_HEADER + " header"
                     : FRAMEWORK_HEADER + " is not a semantic version", null);
         }
+        if (forced == 426) {
+            return Refusal.upgradeRequired("refusal mode 426", forcedMinFramework);
+        }
         String credential = StubDeviceAuthority.bearer(head.header("Authorization"));
         if (credentials.serverIdOf(credential) == null) {
             return Refusal.of(401, "the credential is unknown or revoked");
+        }
+        if (forced == 401) {
+            return Refusal.of(401, "refusal mode 401");
+        }
+        if (forced == 402) {
+            return Refusal.of(402, "refusal mode 402: the server is suspended over its plan limit");
         }
         return null;
     }
@@ -370,6 +466,10 @@ public final class StubFrontDoor {
 
         static Refusal upgradeRequired(String reason, String minFramework) {
             return new Refusal(426, reason, minFramework, 0);
+        }
+
+        static Refusal rateLimited(String reason, long retryAfterSeconds) {
+            return new Refusal(429, reason, null, retryAfterSeconds);
         }
 
         void write(OutputStream out, UltiCloudStub.Contract contract, StubAccessLog log) throws IOException {

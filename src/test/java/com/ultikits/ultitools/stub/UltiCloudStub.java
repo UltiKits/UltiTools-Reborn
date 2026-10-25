@@ -100,6 +100,7 @@ public final class UltiCloudStub {
     /** How a stub is started; every setter returns this object. */
     public static final class Options {
         private int httpPort;
+        private int adminPort;
         private Path accessLog;
         private Path fixturesRoot;
         private long helloTimeoutMs = -1;
@@ -120,6 +121,15 @@ public final class UltiCloudStub {
          */
         public Options httpPort(int port) {
             this.httpPort = port;
+            return this;
+        }
+
+        /**
+         * @param port the admin port, bound to loopback only; {@code 0} picks a free one
+         * @return these options
+         */
+        public Options adminPort(int port) {
+            this.adminPort = port;
             return this;
         }
 
@@ -198,6 +208,7 @@ public final class UltiCloudStub {
         private StubDeviceAuthority deviceAuthority;
         private StubGateway gateway;
         private StubFrontDoor frontDoor;
+        private StubAdminApi admin;
 
         private Handle(Options options) {
             this.options = options;
@@ -224,7 +235,9 @@ public final class UltiCloudStub {
             frontDoor = new StubFrontDoor(options.httpPort(), contract, log, credentials,
                     gateway.port(), http.getAddress().getPort(), portOf(catalogue.baseUrl()));
             frontDoor.start();
-            log.log("STUB", "started http=" + baseUrl() + " gateway=127.0.0.1:" + gateway.port()
+            admin = new StubAdminApi(options.adminPort, this, log);
+            admin.start();
+            log.log("STUB", "started http=" + baseUrl() + " admin=" + adminUrl() + " gateway=127.0.0.1:" + gateway.port()
                     + " internal-http=127.0.0.1:" + http.getAddress().getPort()
                     + " catalogue=" + catalogue.baseUrl()
                     + " contract=" + contract.describe());
@@ -243,6 +256,21 @@ public final class UltiCloudStub {
         /** @return the bound public address, always a loopback address */
         public InetSocketAddress httpAddress() {
             return frontDoor.address();
+        }
+
+        /** @return the admin port, bound to loopback only */
+        public int adminPort() {
+            return admin.address().getPort();
+        }
+
+        /** @return the admin API's base URL; every endpoint is below {@code /_stub} */
+        public String adminUrl() {
+            return "http://127.0.0.1:" + adminPort();
+        }
+
+        /** @return the bound admin address, always the loopback address */
+        public InetSocketAddress adminAddress() {
+            return admin.address();
         }
 
         /** @return the access-log file, or {@code null} when the log is kept in memory only */
@@ -280,6 +308,31 @@ public final class UltiCloudStub {
             return contract;
         }
 
+        /** @return the credentials the stub knows */
+        public Credentials credentials() {
+            return credentials;
+        }
+
+        /**
+         * Closes the live connection with a contract close code, with that code's consequence on the
+         * gateway side: 4401 revokes the connection's credential (the next upgrade gets 401), 4402
+         * suspends the server (every later upgrade gets 402 until the refusal mode is cleared), as
+         * {@code PROTOCOL.md} section 7 and semantics item 23 describe the gateway.
+         *
+         * @param code   the close code
+         * @param reason the close reason, or {@code null}
+         * @throws IllegalArgumentException when the code is not a contract close code
+         * @throws IllegalStateException    when no plugin is connected
+         */
+        public void closeLive(int code, String reason) {
+            String credential = gateway.closeLive(code, reason);
+            if (code == 4401 && credential != null) {
+                credentials.revoke(credential, "revoked by close 4401");
+            } else if (code == 4402) {
+                frontDoor.setRefusal(402, null, 0);
+            }
+        }
+
         /**
          * Accepts a stored server credential the stub did not issue.
          *
@@ -292,6 +345,9 @@ public final class UltiCloudStub {
 
         @Override
         public void close() {
+            if (admin != null) {
+                admin.stop();
+            }
             if (frontDoor != null) {
                 frontDoor.stop();
             }
@@ -393,8 +449,8 @@ public final class UltiCloudStub {
         public static final Pattern ULID = Pattern.compile("^[0-9A-HJKMNP-TV-Z]{26}$");
 
         /** The contract's reliable-flag and empty-cell markers in {@code PROTOCOL.md}. */
-        private static final String YES = "是";
-        private static final String NONE = "—";
+        private static final String YES = "\u662f";
+        private static final String NONE = "\u2014";
         private static final Pattern BACKTICKED = Pattern.compile("`([^`]+)`");
         private static final char[] CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ".toCharArray();
         private static final SecureRandom RANDOM = new SecureRandom();

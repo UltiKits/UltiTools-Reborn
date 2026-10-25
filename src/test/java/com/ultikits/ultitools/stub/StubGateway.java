@@ -97,6 +97,7 @@ public final class StubGateway {
     private final CountDownLatch started = new CountDownLatch(1);
     private volatile Exception startFailure;
     private volatile boolean acking = true;
+    private volatile String nextWelcomeServerId;
 
     StubGateway(UltiCloudStub.Contract contract, StubAccessLog log, UltiCloudStub.Credentials credentials,
                 long helloTimeoutMs) {
@@ -317,9 +318,24 @@ public final class StubGateway {
                     "capability " + message.capability() + " was not accepted at the handshake", details);
             return;
         }
-        connection.lastRequestIds.put(type, id);
+        connection.requests.add(new String[]{type, id});
         if (message.reliable()) {
             acknowledge(connection, id);
+        }
+        if ("credential.rotate.ack".equals(type)) {
+            rotationAcknowledged(connection, string(frame, "replyTo"));
+        }
+    }
+
+    private void rotationAcknowledged(Connection connection, String replyTo) {
+        String rotated = connection.rotations.remove(replyTo);
+        if (rotated == null) {
+            log.log("WS-NOTE", connection + " credential.rotate.ack names no rotation sent on this connection");
+            return;
+        }
+        if (!rotated.equals(connection.credential)) {
+            credentials.revoke(connection.credential, "retired by credential.rotate.ack (rotated to "
+                    + StubAccessLog.mask(rotated) + ")");
         }
     }
 
@@ -341,7 +357,7 @@ public final class StubGateway {
         if (connection.helloTimer != null) {
             connection.helloTimer.cancel(false);
         }
-        connection.lastRequestIds.put(HELLO, string(frame, "id"));
+        connection.requests.add(new String[]{HELLO, string(frame, "id")});
         welcome(connection, frame);
     }
 
@@ -366,8 +382,15 @@ public final class StubGateway {
         sendFrame(connection, welcome);
     }
 
-    /** The serverId the next welcome carries; Task 2's admin override hooks in here. */
-    String welcomeServerId(Connection connection) {
+    /** @return the serverId this welcome carries: a pending one-shot override, else the credential's */
+    private String welcomeServerId(Connection connection) {
+        String override = nextWelcomeServerId;
+        if (override != null) {
+            nextWelcomeServerId = null;
+            log.log("WS-NOTE", connection + " welcome carries the overridden serverId " + override
+                    + " instead of " + connection.serverId);
+            return override;
+        }
         return connection.serverId;
     }
 
@@ -442,6 +465,184 @@ public final class StubGateway {
         }
         error.add("payload", payload);
         sendFrame(connection, error);
+    }
+
+    // ------------------------------------------------------------------ admin operations
+
+    /**
+     * Sends one gateway-to-plugin frame on the live connection, built from its vendored valid
+     * fixture.
+     *
+     * @param type    a type the gateway sends ({@code down} or {@code both})
+     * @param fixture the fixture's name under {@code fixtures/agent/<type>/valid/} (with or without
+     *                {@code .json}); {@code null} for the first one
+     * @param payload keys that replace the fixture payload's keys (a JSON null removes the key);
+     *                {@code null} for none
+     * @param id      the envelope id to use, for a replay; {@code null} for a new one
+     * @param replyTo the envelope replyTo; {@code null} defaults it, for a type that requires one, to
+     *                the newest request on the connection that this type answers
+     * @return the frame as sent, masked
+     * @throws IllegalArgumentException when the type, fixture, overrides or resulting frame are not
+     *                                  what the contract allows; nothing is sent
+     * @throws IllegalStateException    when no plugin is connected
+     */
+    public JsonObject send(String type, String fixture, JsonObject payload, String id, String replyTo) {
+        UltiCloudStub.MessageType message = contract.message(type);
+        if (message == null) {
+            throw new IllegalArgumentException("type " + type + " is not registered in the contract");
+        }
+        if (!message.down()) {
+            throw new IllegalArgumentException("type " + type + " is not sent by the gateway");
+        }
+        Connection connection = live();
+        if (connection == null) {
+            throw new IllegalStateException("no plugin is connected");
+        }
+        String directory = "fixtures/agent/" + type + "/valid/";
+        List<String> names = contract.fileNames(directory);
+        String name = fixture == null ? (names.isEmpty() ? null : names.get(0))
+                : (fixture.endsWith(".json") ? fixture : fixture + ".json");
+        if (name == null || !names.contains(name)) {
+            throw new IllegalArgumentException("no vendored valid fixture " + fixture + " for " + type
+                    + "; the fixtures are " + names);
+        }
+        JsonObject frame = contract.object(directory + name);
+        if (payload != null) {
+            JsonElement current = frame.get("payload");
+            JsonObject merged = current != null && current.isJsonObject() ? current.getAsJsonObject() : new JsonObject();
+            for (Map.Entry<String, JsonElement> entry : payload.entrySet()) {
+                if (entry.getValue().isJsonNull()) {
+                    merged.remove(entry.getKey());
+                } else {
+                    merged.add(entry.getKey(), entry.getValue());
+                }
+            }
+            frame.add("payload", merged);
+        }
+        frame.addProperty("id", id == null ? UltiCloudStub.Contract.newUlid() : id);
+        frame.addProperty("ts", System.currentTimeMillis());
+        synchronized (connection) {
+            frame.remove("replyTo");
+            String answering = replyTo != null ? replyTo
+                    : "required".equals(message.replyTo()) ? newestRequestAnsweredBy(connection, type) : null;
+            if ("required".equals(message.replyTo()) && answering == null) {
+                throw new IllegalArgumentException("no request on " + connection + " that " + type
+                        + " answers; give replyTo");
+            }
+            if (answering != null) {
+                frame.addProperty("replyTo", answering);
+            }
+            String issue = contract.firstIssue(UltiCloudStub.Contract.frameSchema(type), frame);
+            if (issue != null) {
+                throw new IllegalArgumentException("the frame fails its schema: " + issue);
+            }
+            if (message.capability() != null && !connection.accepted.contains(message.capability())) {
+                log.log("WS-NOTE", connection + " " + type + " sent although its capability "
+                        + message.capability() + " was not accepted (admin send)");
+            }
+            if ("credential.rotate".equals(type)) {
+                String delivered = string(frame.getAsJsonObject("payload"), "credential");
+                credentials.accept(delivered, connection.serverId, "delivered by credential.rotate "
+                        + string(frame, "id") + " to");
+                connection.rotations.put(string(frame, "id"), delivered);
+            }
+            if ("welcome".equals(type)) {
+                connection.welcomed = true;
+            }
+            sendFrame(connection, frame);
+        }
+        return JsonParser.parseString(StubAccessLog.mask(frame.toString())).getAsJsonObject();
+    }
+
+    /**
+     * Closes the live connection with a close code of the contract's section 7.
+     *
+     * @param code   the close code
+     * @param reason the close reason, or {@code null}
+     * @return the credential the closed connection was authenticated with
+     * @throws IllegalArgumentException when the code is not a contract close code
+     * @throws IllegalStateException    when no plugin is connected
+     */
+    public String closeLive(int code, String reason) {
+        if (!contract.closeCodes().contains(code)) {
+            throw new IllegalArgumentException(code + " is not a close code of the contract: " + contract.closeCodes());
+        }
+        Connection connection = live();
+        if (connection == null) {
+            throw new IllegalStateException("no plugin is connected");
+        }
+        synchronized (connection) {
+            closeByStub(connection, code, reason == null ? "closed by the stub admin" : reason);
+        }
+        return connection.credential;
+    }
+
+    /** @param enabled whether reliable events are acknowledged; off leaves later events unacknowledged */
+    public void setAcking(boolean enabled) {
+        this.acking = enabled;
+    }
+
+    /** @return whether reliable events are acknowledged */
+    public boolean acking() {
+        return acking;
+    }
+
+    /**
+     * @param serverId the serverId the next welcome (one) carries instead of the credential's, or
+     *                 {@code null} to clear a pending override
+     * @throws IllegalArgumentException when it is not a ULID
+     */
+    public void overrideNextWelcomeServerId(String serverId) {
+        if (serverId != null && !UltiCloudStub.Contract.isUlid(serverId)) {
+            throw new IllegalArgumentException("serverId must be a ULID");
+        }
+        this.nextWelcomeServerId = serverId;
+    }
+
+    /** @return the open connections as JSON, for the admin status (no credential in it) */
+    public JsonArray describeConnections() {
+        JsonArray array = new JsonArray();
+        List<Connection> open = new ArrayList<>(connections.values());
+        open.sort((a, b) -> Integer.compare(a.id, b.id));
+        for (Connection connection : open) {
+            synchronized (connection) {
+                JsonObject item = new JsonObject();
+                item.addProperty("conn", connection.id);
+                item.addProperty("serverId", connection.serverId);
+                item.addProperty("credential", connection.credential == null ? null
+                        : StubAccessLog.mask(connection.credential));
+                item.addProperty("welcomed", connection.welcomed);
+                JsonArray accepted = new JsonArray();
+                for (String capability : connection.accepted) {
+                    accepted.add(capability);
+                }
+                item.add("accepted", accepted);
+                array.add(item);
+            }
+        }
+        return array;
+    }
+
+    /** @return the newest open connection, or {@code null} */
+    private Connection live() {
+        Connection newest = null;
+        for (Connection connection : connections.values()) {
+            if (connection.socket.isOpen() && (newest == null || connection.id > newest.id)) {
+                newest = connection;
+            }
+        }
+        return newest;
+    }
+
+    private String newestRequestAnsweredBy(Connection connection, String type) {
+        for (int i = connection.requests.size() - 1; i >= 0; i--) {
+            String[] request = connection.requests.get(i);
+            UltiCloudStub.MessageType asked = contract.message(request[0]);
+            if (asked != null && asked.replies().contains(type)) {
+                return request[1];
+            }
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------ sending
@@ -587,7 +788,10 @@ public final class StubGateway {
         final String credential;
         final String serverId;
         final Set<String> accepted = new LinkedHashSet<>();
-        final Map<String, String> lastRequestIds = new HashMap<>();
+        /** Every accepted inbound request as {type, id}, oldest first, for replyTo defaults. */
+        final List<String[]> requests = new ArrayList<>();
+        /** credential.rotate envelope id to the credential it delivered. */
+        final Map<String, String> rotations = new HashMap<>();
         final List<String> pendingAcks = new ArrayList<>();
         final Deque<Long> invalidAt = new ArrayDeque<>();
         boolean welcomed;
