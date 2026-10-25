@@ -79,8 +79,10 @@ public final class CloudPlayerLinks {
      * @param gameAuth what this server knows about the player's game authentication
      * @param offeredProofs the identity proofs this server can support, one to three of them
      * @return a future that completes with the answer, never null
-     * @throws IllegalArgumentException if an argument is null, the name is empty, or the offered
-     *         proofs are empty or contain more than three entries
+     * @throws NullPointerException if {@code requester}, {@code playerUuid} or {@code gameAuth} is
+     *         null, or if {@code offeredProofs} holds a null proof
+     * @throws IllegalArgumentException if the name is null or empty, or the offered proofs are null,
+     *         empty or hold more than three entries
      * @since 6.3.1
      */
     public CompletableFuture<LinkCreation> create(UltiToolsPlugin requester, UUID playerUuid, String playerName,
