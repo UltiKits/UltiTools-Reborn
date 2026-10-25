@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.manager;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -8,6 +10,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
@@ -47,6 +53,27 @@ public class CommandExecutionManager {
     private static final String ACTION_EXECUTE_COMMAND = "execute_command";
 
     /**
+     * {@code command.result.data.output} maxItems in the frozen 2.0.0 contract.
+     */
+    private static final int MAX_OUTPUT_LINES = 1000;
+
+    /**
+     * {@code command.result.data.output} items maxLength, counted in Unicode code points as the
+     * schema and {@link com.ultikits.ultitools.utils.PayloadReader} count it.
+     */
+    private static final int MAX_OUTPUT_LINE_CHARS = 4096;
+
+    /**
+     * {@code command.result} payload message maxLength, counted in Unicode code points.
+     */
+    private static final int MAX_RESULT_MESSAGE_CHARS = 500;
+
+    /**
+     * {@code command.result.data.executionMs} maximum in the frozen contract.
+     */
+    private static final long MAX_EXECUTION_MS = 86400000L;
+
+    /**
      * The {@code command_result} text for a command the server console accepted. A panel command
      * is typed into the server console (maintainer decision, 6.3.0): it runs as the console sender,
      * and Paper sends a console command's replies to the console itself, never to a sender the
@@ -57,12 +84,23 @@ public class CommandExecutionManager {
             + "Its output appears in the server log stream.";
 
     /**
-     * The {@code command_result} text for a command the server console did not accept
+     * The v1 {@code command_result} text for a command the server console did not accept
      * ({@code Bukkit.dispatchCommand} returned {@code false}: an unknown command, or a command
-     * whose executor reported a usage error).
+     * whose executor reported a usage error). The v1 path still dispatches as the real console, so
+     * Paper writes the reply to the console and this sentence stays true there. The v2 path
+     * captures that reply instead and sends it — see {@link #executeCaptured} and
+     * {@link #NOT_ACCEPTED_WITHOUT_REPLY}.
      */
     static final String NOT_ACCEPTED_OUTPUT = "The server console did not accept the command. "
             + "Any message it printed appears in the server log stream.";
+
+    /**
+     * The v2 {@code command_result} text for a command the server did not accept while printing
+     * nothing the capturing sender could read — an unknown command whose refusal goes elsewhere,
+     * or an executor that reports a usage error silently. When the server did print something,
+     * {@link #rejectionMessage} sends those lines instead of this sentence.
+     */
+    static final String NOT_ACCEPTED_WITHOUT_REPLY = "The server console did not accept the command.";
 
     /**
      * Blocklist of dangerous commands that should not be executed remotely. This is the shipped
@@ -252,6 +290,200 @@ public class CommandExecutionManager {
         this.webSocketClient = client;
     }
     
+    /**
+     * Receives one v2 command outcome, independently of the transport framing.
+     * Framework failures propagate to the caller; only dispatch failures call {@link #failed(String)}.
+     * Messages are non-empty and at most
+     * {@value CommandExecutionManager#MAX_RESULT_MESSAGE_CHARS} code points, the
+     * {@code command.result} payload bound.
+     *
+     * @since 6.3.1
+     */
+    @ApiStatus.Internal
+    public interface CommandResultSink {
+        /** Reports a blocklist refusal with the normalized matched entry and existing policy message. */
+        void blocked(String matched, String message);
+
+        /** Reports synchronous feedback captured before dispatch returned, and main-thread execution time. */
+        void completed(List<String> lines, boolean truncated, long executionMs);
+
+        /**
+         * Reports an empty command, a disabled capability, a refused command's captured reply or a
+         * dispatch exception's message — never a stack trace.
+         */
+        void failed(String message);
+    }
+
+    /**
+     * Executes a v2 request using Paper's console-permission feedback sender.
+     * The caller owns acknowledgement, deduplication, lifecycle checks and transport byte limits.
+     * The 6.3.0 validation order runs on the calling thread, so a refusal is answered without
+     * waiting for the main thread; only the dispatch and its feedback capture are handed to the
+     * injected executor, which must enqueue work onto the server main thread in arrival order.
+     * Output is cut to the {@code command.result} schema bounds — {@value #MAX_OUTPUT_LINES} lines
+     * of {@value #MAX_OUTPUT_LINE_CHARS} code points — and the flag reports that cut.
+     * This method only reads operator configuration and never rewrites it.
+     *
+     * @param commandLine command text, optionally prefixed with a slash
+     * @param actor audit actor, or null for the panel
+     * @param mainThread ordered server-main-thread executor
+     * @param sink receives the command outcome
+     * @since 6.3.1
+     */
+    public void execute(String commandLine, String actor, Executor mainThread, CommandResultSink sink) {
+        if (commandLine == null || commandLine.trim().isEmpty()) {
+            sink.failed("Command cannot be empty");
+            return;
+        }
+        AccessDecision decision = isCommandAllowed(commandLine);
+        if (!decision.isAllowed()) {
+            // Keep this WARNING line — the same control the v1 path carries.
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    FrameworkText.format("[远程命令] 已拦截: %s", commandLine));
+            recordCommandDecision(commandLine, actor, decision.getMessage());
+            sink.blocked(baseCommandName(commandLine), resultMessage(decision.getMessage()));
+            return;
+        }
+        // Defensive: the router gates the capability before this handler runs. A wiring mistake
+        // must not turn into an execution path, so the switch is checked here as well.
+        if (!Capability.COMMANDS.isEnabled()) {
+            String refusal = resultMessage(Capability.COMMANDS.refusalMessage());
+            recordCommandDecision(commandLine, actor, refusal);
+            sink.failed(refusal);
+            return;
+        }
+        UltiTools.getInstance().getLogger().log(Level.INFO,
+                FrameworkText.format("[远程命令] > %s", commandLine));
+        recordCommandDecision(commandLine, actor, null);
+        mainThread.execute(() -> executeCaptured(commandLine, sink));
+    }
+
+    /**
+     * The blocklist key from a command line: first word, leading slash and namespace prefix
+     * stripped, lower-cased — the same normalization {@link #isCommandAllowed(String)} applies.
+     */
+    private static String baseCommandName(String commandLine) {
+        String name = commandLine.trim();
+        if (name.startsWith("/")) {
+            name = name.substring(1);
+        }
+        name = name.split("\\s+")[0].toLowerCase(Locale.ROOT);
+        return name.substring(name.indexOf(':') + 1);
+    }
+
+    /**
+     * Fits a result message inside the schema bound and never returns a blank one.
+     */
+    private static String resultMessage(String message) {
+        if (message == null || message.trim().isEmpty()) {
+            return "The command could not be completed.";
+        }
+        if (message.codePointCount(0, message.length()) <= MAX_RESULT_MESSAGE_CHARS) {
+            return message;
+        }
+        return message.substring(0, message.offsetByCodePoints(0, MAX_RESULT_MESSAGE_CHARS));
+    }
+
+    private void recordCommandDecision(String command, String actor, String refusal) {
+        RemoteActionLog log = UltiTools.getInstance().getRemoteActionLog();
+        if (log != null) {
+            log.record(refusal == null
+                    ? RemoteActionLog.Entry.allowed(Capability.COMMANDS, ACTION_EXECUTE_COMMAND,
+                            command, resolveActor(actor))
+                    : RemoteActionLog.Entry.denied(Capability.COMMANDS, ACTION_EXECUTE_COMMAND,
+                            command, resolveActor(actor), refusal));
+        }
+    }
+
+    private void executeCaptured(String commandLine, CommandResultSink sink) {
+        List<String> lines = new ArrayList<>();
+        // Paper's feedback sender shares the console's PermissibleBase, so the command runs with
+        // console-equivalent permissions; both sendMessage(String) and sendMessage(Component)
+        // arrive here. A component is split into one entry per printed line.
+        CommandSender sender = Bukkit.getServer().createCommandSender(component -> {
+            String text = PlainTextComponentSerializer.plainText().serialize(component);
+            if (!text.isEmpty()) {
+                Collections.addAll(lines, text.split("\\r\\n|\\r|\\n"));
+            }
+        });
+        String command = commandLine.trim();
+        if (command.startsWith("/")) {
+            command = command.substring(1);
+        }
+        long started = System.nanoTime();
+        boolean accepted;
+        try {
+            accepted = Bukkit.dispatchCommand(sender, command);
+        } catch (Exception ex) {
+            // The panel receives the message only, so the stack trace lives here or nowhere. The
+            // command name is logged without its arguments: an argument can carry a secret.
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    FrameworkText.format("[远程命令] 命令执行异常: %s", baseCommandName(commandLine)), ex);
+            sink.failed(resultMessage(ex.getMessage()));
+            return;
+        }
+        long elapsed = Math.min(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), MAX_EXECUTION_MS);
+        if (!accepted) {
+            sink.failed(rejectionMessage(lines));
+            return;
+        }
+        BoundedLines bounded = boundLines(lines);
+        sink.completed(bounded.lines, bounded.truncated, elapsed);
+    }
+
+    /**
+     * Turns the feedback a refused command printed into the failure message.
+     * <p>
+     * With the capturing sender the server's own reply — Paper's unknown-command line, a Bukkit
+     * command's usage text — arrives here instead of reaching the console, so it is the only reply
+     * the panel can get and it must not be dropped. The lines are bounded exactly as successful
+     * output is ({@value #MAX_OUTPUT_LINE_CHARS} code points per line, at most
+     * {@value #MAX_OUTPUT_LINES} lines) and then cut to the message bound, which is the schema
+     * slot they travel in.
+     *
+     * @param lines feedback captured before {@code dispatchCommand} returned
+     * @return the joined reply, or {@link #NOT_ACCEPTED_WITHOUT_REPLY} when nothing was printed
+     */
+    private static String rejectionMessage(List<String> lines) {
+        if (lines.isEmpty()) {
+            return NOT_ACCEPTED_WITHOUT_REPLY;
+        }
+        return resultMessage(String.join("\n", boundLines(lines).lines));
+    }
+
+    /**
+     * Copies {@code lines} under the {@code command.result} output caps: every line cut to
+     * {@value #MAX_OUTPUT_LINE_CHARS} code points and the list to {@value #MAX_OUTPUT_LINES}
+     * entries, reporting whether anything was cut.
+     */
+    private static BoundedLines boundLines(List<String> lines) {
+        boolean truncated = false;
+        List<String> bounded = new ArrayList<>(lines.size());
+        for (String line : lines) {
+            if (line.codePointCount(0, line.length()) > MAX_OUTPUT_LINE_CHARS) {
+                bounded.add(line.substring(0, line.offsetByCodePoints(0, MAX_OUTPUT_LINE_CHARS)));
+                truncated = true;
+            } else {
+                bounded.add(line);
+            }
+        }
+        if (bounded.size() > MAX_OUTPUT_LINES) {
+            return new BoundedLines(new ArrayList<>(bounded.subList(0, MAX_OUTPUT_LINES)), true);
+        }
+        return new BoundedLines(bounded, truncated);
+    }
+
+    /** Output lines inside the schema caps, plus whether the caps forced a cut. */
+    private static final class BoundedLines {
+        private final List<String> lines;
+        private final boolean truncated;
+
+        private BoundedLines(List<String> lines, boolean truncated) {
+            this.lines = lines;
+            this.truncated = truncated;
+        }
+    }
+
     /**
      * Executes a command received from the panel.
      */
