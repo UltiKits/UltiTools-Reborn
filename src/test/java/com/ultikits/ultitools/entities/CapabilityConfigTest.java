@@ -27,7 +27,7 @@ import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
- * The eight config-backed {@link Capability} constants' defaults and independence, plus the
+ * The ten config-backed {@link Capability} constants' defaults and independence, plus the
  * comment-preserving {@code config.yml} migration and {@link RemoteActionLog}'s rotation-config
  * load — both reached via reflection since {@code UltiTools.migrateCapabilitiesConfig(File, Logger)}
  * and {@code RemoteActionLog.loadConfiguration()} are private, and this test's package differs from
@@ -74,16 +74,16 @@ class CapabilityConfigTest {
     class CapabilityDefaultsAndIndependence {
 
         @Test
-        @DisplayName("除 NONE 外恰好八个绑定配置的常量")
-        void exactlyEightConfigBackedConstants() {
+        @DisplayName("除 NONE 外恰好十个绑定配置的常量")
+        void exactlyTenConfigBackedConstants() {
             long configBacked = java.util.Arrays.stream(Capability.values())
                     .filter(c -> c != Capability.NONE)
                     .count();
-            assertThat(configBacked).isEqualTo(8);
+            assertThat(configBacked).isEqualTo(10);
         }
 
         @Test
-        @DisplayName("D-08 拆分默认值：读类为真，写类为假")
+        @DisplayName("D-08 拆分默认值：读类为真，写类与远程控制为假")
         void splitDefaults() {
             assertThat(Capability.MONITORING.getDefaultEnabled()).isTrue();
             assertThat(Capability.LOGS.getDefaultEnabled()).isTrue();
@@ -93,10 +93,12 @@ class CapabilityConfigTest {
             assertThat(Capability.FILE_DELETE.getDefaultEnabled()).isFalse();
             assertThat(Capability.COMMANDS.getDefaultEnabled()).isFalse();
             assertThat(Capability.SERVER_PROPERTIES.getDefaultEnabled()).isFalse();
+            assertThat(Capability.POWER_ACTIONS.getDefaultEnabled()).isFalse();
+            assertThat(Capability.PLAYER_ACTIONS.getDefaultEnabled()).isFalse();
         }
 
         @Test
-        @DisplayName("每个能力独立解析自己的键——关掉一个不影响其余七个")
+        @DisplayName("每个能力独立解析自己的键——关掉一个不影响其余九个")
         void eachCapabilityResolvesIndependently() {
             YamlConfiguration config = new YamlConfiguration();
             config.set("ultipanel.capabilities.commands", false);
@@ -108,7 +110,7 @@ class CapabilityConfigTest {
             assertThat(Capability.MONITORING.isEnabled())
                     .as("commands 被显式设为 false 不应影响 monitoring 自己的解析")
                     .isTrue();
-            // 未在 config 中出现的其余六个各自解析到自己的出厂默认值，互不干扰。
+            // 未在 config 中出现的其余八个各自解析到自己的出厂默认值，互不干扰。
             assertThat(Capability.LOGS.isEnabled()).isTrue();
             assertThat(Capability.FILE_WRITE.isEnabled()).isFalse();
         }
@@ -130,8 +132,8 @@ class CapabilityConfigTest {
     class Migration {
 
         @Test
-        @DisplayName("完全没有 capabilities 块：新增全部八个键，各带注释，其余内容不变")
-        void addsAllEightKeysWhenBlockAbsent() throws Exception {
+        @DisplayName("完全没有 capabilities 块：新增全部十个键，各带注释，其余内容不变")
+        void addsAllTenKeysWhenBlockAbsent() throws Exception {
             File configFile = writeConfig(tempDir, "language: \"en\"\n");
             Logger logger = mock(Logger.class);
 
@@ -153,7 +155,7 @@ class CapabilityConfigTest {
         }
 
         @Test
-        @DisplayName("操作员已设置 commands: true：迁移后原样保留，其余七个被补上")
+        @DisplayName("操作员已设置 commands: true：迁移后原样保留，其余九个被补上")
         void preservesOperatorSetValueAndAddsTheRest() throws Exception {
             String original = "ultipanel:\n  capabilities:\n    commands: true\n";
             File configFile = writeConfig(tempDir, original);

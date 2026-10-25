@@ -253,6 +253,58 @@ class FrameworkConfigMigrationGateTest {
         assertThat(gateWarnings).isEmpty();
     }
 
+    /**
+     * The two operator switches this plan adds reach an existing file the same way every other
+     * capability does: inserted with the framework's comments, and nothing else touched.
+     */
+    @Test
+    void aConfigWithoutTheRemoteActionSwitchesGainsExactlyThoseTwoKeys() throws Exception {
+        String shipped = new String(resource("/config.yml"), StandardCharsets.UTF_8);
+        String without = shipped
+                .replace(switchBlock(Capability.POWER_ACTIONS), "")
+                .replace(switchBlock(Capability.PLAYER_ACTIONS), "");
+        assertThat(without).doesNotContain("power-actions").doesNotContain("player-actions");
+
+        Path written = assertInsertedOnly(without.getBytes(StandardCharsets.UTF_8));
+
+        YamlConfiguration server = YamlConfiguration.loadConfiguration(written.toFile());
+        assertThat(server.getBoolean(Capability.POWER_ACTIONS.getConfigPath(), true)).isFalse();
+        assertThat(server.getBoolean(Capability.PLAYER_ACTIONS.getConfigPath(), true)).isFalse();
+        assertThat(server.getComments(Capability.POWER_ACTIONS.getConfigPath()))
+                .containsExactlyElementsOf(Capability.POWER_ACTIONS.getCommentLines());
+        assertThat(server.getComments(Capability.PLAYER_ACTIONS.getConfigPath()))
+                .containsExactlyElementsOf(Capability.PLAYER_ACTIONS.getCommentLines());
+    }
+
+    /**
+     * An operator who already turned the switch on keeps that value: the migration inserts missing
+     * keys only and never rewrites a value it finds.
+     */
+    @Test
+    void anOperatorSetRemoteActionSwitchIsNeverRewritten() throws Exception {
+        byte[] original = "ultipanel:\n  capabilities:\n    power-actions: true\n"
+                .getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+
+        assertThat(migrate(file)).isTrue();
+
+        YamlConfiguration server = YamlConfiguration.loadConfiguration(file);
+        assertThat(server.getBoolean(Capability.POWER_ACTIONS.getConfigPath())).isTrue();
+        assertThat(server.getBoolean(Capability.PLAYER_ACTIONS.getConfigPath(), true)).isFalse();
+        assertThat(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8))
+                .startsWith(new String(original, StandardCharsets.UTF_8).trim());
+    }
+
+    /** The comment and key lines the capability migration writes for one switch. */
+    private static String switchBlock(Capability capability) {
+        StringBuilder text = new StringBuilder();
+        for (String line : capability.getCommentLines()) {
+            text.append("    # ").append(line).append('\n');
+        }
+        return text.append("    ").append(capability.getConfigKey()).append(": ")
+                .append(capability.getDefaultEnabled()).append('\n').toString();
+    }
+
     /** Runs the migration on {@code original}; asserts written, every original line kept in order, values = original + keys. */
     private Path assertInsertedOnly(byte[] original) throws Exception {
         File file = write(original);
