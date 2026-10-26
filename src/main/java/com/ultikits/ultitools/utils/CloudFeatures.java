@@ -81,6 +81,11 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * CPU and the server state and advances the telemetry cadence. {@code snapshot.request} is registered on every
  * connection. A {@code /ul reload} that changes an operator setting sends {@code settings.changed} once
  * ({@link #onReload()}).
+ * <p>
+ * <b>Shutdown (22-23 shutdown-window round).</b> Every connection's router and file worker share one
+ * {@link ShutdownGate} built from {@link Bindings#shutdown}: from the first step of {@code UltiTools#onDisable} every
+ * state-changing request is answered with its shutting-down failure and runs nothing, and a change already running
+ * holds the gate's permit until it is answered, so {@code onDisable} closes the action log only after it.
  *
  * @since 6.3.1
  */
@@ -216,7 +221,12 @@ public final class CloudFeatures {
         Objects.requireNonNull(rotation, "rotation");
         Objects.requireNonNull(agent, "agent");
         this.protocol = protocol;
-        final SerialRequestWorker worker = new SerialRequestWorker(bindings.fileQueueCapacity);
+        // The shutdown gate first (22-23 shutdown-window round): every state-changing request on this connection asks
+        // the one signal bindings.shutdown -- the router before the switch gate, the file worker again when it runs a
+        // queued write -- and the command handler reads the same flag through bindings.disabling.
+        ShutdownGate shutdown = new ShutdownGate(bindings.shutdown, ledger);
+        router.onShutdown(shutdown);
+        final SerialRequestWorker worker = new SerialRequestWorker(bindings.fileQueueCapacity, shutdown);
         SerialRequestWorker previous = fileWorker;
         fileWorker = worker;
         if (previous != null) {
@@ -624,6 +634,11 @@ public final class CloudFeatures {
         Executor mainThread;
         /** Whether the plugin is being disabled. */
         BooleanSupplier disabling;
+        /**
+         * The shutdown signal every state-changing request asks ({@link ShutdownGate}); never refuses unless bound.
+         * {@link #forPlugin} binds it to the flag {@link #disabling} reads.
+         */
+        ShutdownGate.Signal shutdown = ShutdownGate.Signal.OPEN;
         /** The stop and restart of {@code server.power}. */
         Supplier<PowerActionHandler.PowerExecutor> power;
         /** Receives one entry per remote player or power action. */
@@ -674,6 +689,7 @@ public final class CloudFeatures {
             bindings.mainThread = runnable -> PluginInitiationUtils.scheduleUnlessDisabling("UltiCloud request",
                     () -> Bukkit.getScheduler().runTask(plugin, runnable));
             bindings.disabling = () -> !PluginInitiationUtils.isAcceptingPanelMessages();
+            bindings.shutdown = PluginInitiationUtils.PANEL_CHANGE_SIGNAL;
             bindings.monitor = plugin::getServerMonitorManager;
             bindings.errors = plugin::getErrorReportCollector;
             bindings.mainTimer = task -> {

@@ -36,7 +36,8 @@ import com.ultikits.ultitools.entities.Capability;
 /**
  * Tracer for UltiTools-Reborn#621 on the protocol v2 path (rewritten in plan 22-23; the v1 tracer drove the removed v1
  * inbound dispatch): a remote request that arrives while UltiTools is disabling must not make the connection's
- * threads schedule work for the disabled plugin, and no new remote action may run. Bukkit flips {@code isEnabled()}
+ * threads schedule work for the disabled plugin, and no new remote action may be accepted: each state-changing request
+ * is answered with a failure saying the server is shutting down (22-23 shutdown-window round). Bukkit flips {@code isEnabled()}
  * to {@code false} before it calls {@code onDisable()}, and Paper's {@code CraftScheduler} then rejects every task with
  * {@link IllegalPluginAccessException}; the scheduler here does exactly that, so a regression shows as a recorded
  * call for the disabled plugin instead of the WARNING with a stack trace a real server prints. The framework runs the
@@ -102,6 +103,14 @@ class ShutdownPanelMessageTracerTest {
         return session.pluginLog().stream().filter(r -> r.getLevel().equals(level)).collect(Collectors.toList());
     }
 
+    private static void assertShuttingDown(JsonObject reply, String id) {
+        assertThat(reply.get("replyTo").getAsString()).isEqualTo(id);
+        JsonObject payload = reply.getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).as(reply.toString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).as(reply.toString()).isEqualTo("internal_error");
+        assertThat(payload.get("message").getAsString()).contains("shutting down");
+    }
+
     private void assertQuiet(String what) {
         assertThat(at(Level.WARNING)).as("WARNING lines (%s)", what)
                 .extracting(r -> r.getMessage() + " | thrown: " + r.getThrown()).isEmpty();
@@ -115,31 +124,32 @@ class ShutdownPanelMessageTracerTest {
     class Tracer {
 
         @Test
-        @DisplayName("a command.execute while disabling: acknowledged, never executed, nothing scheduled, no WARNING")
-        void commandWhileDisablingIsDroppedQuietly() throws Exception {
+        @DisplayName("a command.execute while disabling: acknowledged, answered with a failed command.result, never "
+                + "executed, nothing scheduled, no WARNING")
+        void commandWhileDisablingIsRefusedWithAFailedResult() throws Exception {
             disabling();
 
             String id = session.send("command.execute", "say", null).get("id").getAsString();
             assertThat(session.reply("command.ack", 1).get("replyTo").getAsString()).isEqualTo(id);
+            assertShuttingDown(session.reply("command.result", 1), id);
             session.pass(500L);
 
             assertThat(session.executions()).isZero();
-            assertThat(session.stub().gateway().received("command.result")).isEmpty();
             assertQuiet("command.execute");
         }
 
         @Test
-        @DisplayName("the accepting flag alone, cleared first in onDisable, drops the command too")
-        void clearedFlagDropsEvenBeforeBukkitReportsDisabled() throws Exception {
+        @DisplayName("the accepting flag alone, cleared first in onDisable, refuses the command too")
+        void clearedFlagRefusesEvenBeforeBukkitReportsDisabled() throws Exception {
             PluginInitiationUtils.stopAcceptingPanelMessages();
             int scheduledBefore = server.getScheduler().enabledCalls.size();
 
-            session.send("command.execute", "say", null);
+            String id = session.send("command.execute", "say", null).get("id").getAsString();
             session.reply("command.ack", 1);
+            assertShuttingDown(session.reply("command.result", 1), id);
             session.pass(500L);
 
             assertThat(session.executions()).isZero();
-            assertThat(session.stub().gateway().received("command.result")).isEmpty();
             assertThat(server.getScheduler().enabledCalls.subList(scheduledBefore,
                     server.getScheduler().enabledCalls.size())).as("nothing new scheduled at all").isEmpty();
             assertQuiet("command.execute");
@@ -163,45 +173,48 @@ class ShutdownPanelMessageTracerTest {
     class Sweep {
 
         /**
-         * The requests that need the server thread (power, player action, configuration, command) run nothing while
-         * disabling: their hand-off goes through {@code scheduleUnlessDisabling}. The requests served off the server
-         * thread -- {@code properties.*} and {@code files.*} on the connection's file worker, {@code module.request} on
-         * the responder registry's workers -- are still served until {@code onDisable} closes the connection a moment
-         * later; for them this case pins only the #621 guarantee (nothing is scheduled for the disabled plugin, no
-         * WARNING). Recorded as an open question in 22-23-SUMMARY.md, not changed here.
+         * No new remote action is accepted after the disable starts (maintainer decision of 2026-10-26): every
+         * state-changing request is answered with its shutting-down failure and runs nothing, wherever it would have
+         * run (server thread, file worker, responder registry); the read-only requests are not refused. The #621
+         * guarantee holds throughout: nothing is scheduled for the disabled plugin, no WARNING.
          */
         @Test
-        @DisplayName("every remote request while disabling: nothing scheduled for the disabled plugin, no WARNING; "
-                + "server-thread actions do not run")
-        void everyRemoteRequestWhileDisablingIsQuiet() throws Exception {
+        @DisplayName("every remote request while disabling: no new remote action accepted, each state change answered "
+                + "with a failure, nothing scheduled, no WARNING")
+        void noNewRemoteActionIsAcceptedAfterDisableStarts() throws Exception {
             PlayerActionEndToEndTest.KickablePlayer player =
                     new PlayerActionEndToEndTest.KickablePlayer(server, "Notch_fan");
             server.addPlayer(player);
             disabling();
             int scheduledBefore = server.getScheduler().enabledCalls.size();
 
-            String[][] requests = {
-                    {"server.power", "stop"},
-                    {"player.action", "kick-with-reason"},
-                    {"config.update", "two-changes"},
-                    {"command.execute", "say"},
-                    {"files.list", "root"},
-                    {"properties.get", "all"},
-                    {"module.request", "ultimail"},
-                    {"snapshot.request", "all"},
+            int actionsBefore = session.actions().size();
+            String[][] changes = {
+                    {"server.power", "stop", "server.power.result"},
+                    {"player.action", "kick-with-reason", "player.action.result"},
+                    {"config.update", "two-changes", "config.update.result"},
+                    {"command.execute", "say", "command.result"},
+                    {"files.write", "with-base-version", "files.write.result"},
+                    {"properties.update", "motd-and-view-distance", "properties.update.result"},
+                    {"module.request", "ultimail", "module.response"},
             };
-            for (String[] request : requests) {
-                session.send(request[0], request[1], null);
+            for (String[] change : changes) {
+                String id = session.send(change[0], change[1], null).get("id").getAsString();
+                assertShuttingDown(session.reply(change[2], 1), id);
             }
+            session.send("files.list", "root", null);
+            session.send("properties.get", "all", null);
+            session.send("snapshot.request", "all", null);
             session.pass(1500L);
 
             assertThat(session.executions()).as("command executed").isZero();
             assertThat(player.isOnline()).as("the player was not kicked").isTrue();
+            assertThat(responderCalls.get()).as("the module responder ran").isZero();
+            assertThat(session.actions().subList(actionsBefore, session.actions().size()))
+                    .as("no remote action recorded after the disable started").isEmpty();
             assertThat(server.getScheduler().enabledCalls.subList(scheduledBefore,
                     server.getScheduler().enabledCalls.size())).as("no power stop or other task was scheduled")
                     .isEmpty();
-            assertThat(session.stub().gateway().received("player.action.result")).isEmpty();
-            assertThat(session.stub().gateway().received("config.update.result")).isEmpty();
             assertQuiet("sweep");
         }
 

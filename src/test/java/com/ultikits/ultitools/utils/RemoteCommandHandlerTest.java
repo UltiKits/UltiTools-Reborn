@@ -219,17 +219,26 @@ class RemoteCommandHandlerTest {
         assertThat(data.get("truncated").getAsBoolean()).isFalse();
     }
 
+    /** 22-23 shutdown-window round: a command stopped by the disabling check gets a failed result, not a silent ack. */
+    private void assertShuttingDownResult(JsonObject frame) {
+        assertThat(frame.get("type").getAsString()).isEqualTo("command.result");
+        assertThat(frame.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("internal_error");
+        assertThat(frame.getAsJsonObject("payload").get("message").getAsString()).contains("shutting down");
+    }
+
     @Test
-    void disablingBetweenAckAndExecutionSendsNoResultAndLogsOnceAtFine() {
+    void disablingBetweenAckAndExecutionSendsAFailedResultAndLogsOnceAtFine() {
         AtomicInteger dispatches = countDispatches("list");
         List<LogRecord> fine = captureRecords(RemoteCommandHandler.class.getName());
         RemoteCommandHandler handler = handler(new CommandExecutionManager(), () -> true);
 
         handler.handle(request("list"), channel);
-        assertThat(channel.frames()).hasSize(1);
+        assertThat(channel.frames()).hasSize(2);
         drainMainThread();
 
-        assertThat(channel.frames()).hasSize(1);
+        assertThat(channel.frames()).hasSize(2);
+        assertThat(channel.frames().get(0).get("type").getAsString()).isEqualTo("command.ack");
+        assertShuttingDownResult(channel.frames().get(1));
         assertThat(dispatches.get()).isZero();
         assertThat(fine).anySatisfy(record -> assertThat(record.getMessage()).contains("disabling"));
     }
@@ -247,23 +256,25 @@ class RemoteCommandHandlerTest {
         disabling.set(true);
         drainMainThread();
 
-        assertThat(channel.frames()).hasSize(1);
+        assertThat(channel.frames()).hasSize(2);
         assertThat(channel.frames().get(0).get("type").getAsString()).isEqualTo("command.ack");
+        assertShuttingDownResult(channel.frames().get(1));
         assertThat(dispatches.get()).isZero();
         assertThat(fine).anySatisfy(record -> assertThat(record.getMessage()).contains("disabling"));
     }
 
     @Test
-    void aDisabledPluginSendsNoResultEvenForABlockedCommand() {
+    void aDisabledPluginAnswersShuttingDownEvenForABlockedCommand() {
         AtomicInteger dispatches = countDispatches("stop");
         RemoteCommandHandler handler = handler(new CommandExecutionManager(), () -> true);
 
         handler.handle(request("minecraft:stop"), channel);
         drainMainThread();
 
-        // The acknowledgement is owed before execution; no outcome may follow it while disabling.
-        assertThat(channel.frames()).hasSize(1);
+        // The acknowledgement is owed before execution; while disabling the only outcome is the shutting-down failure.
+        assertThat(channel.frames()).hasSize(2);
         assertThat(channel.frames().get(0).get("type").getAsString()).isEqualTo("command.ack");
+        assertShuttingDownResult(channel.frames().get(1));
         assertThat(dispatches.get()).isZero();
     }
 

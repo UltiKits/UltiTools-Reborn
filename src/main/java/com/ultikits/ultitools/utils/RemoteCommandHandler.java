@@ -121,14 +121,18 @@ final class RemoteCommandHandler implements CloudRequestHandler {
 
     /**
      * Runs one step of the acknowledged request unless the plugin is disabling. The check is
-     * applied twice — once before validation, so a shutting-down plugin sends no outcome at all
-     * after the acknowledgement, and once on the main thread, for the window between validation
-     * and the dispatch itself (D-16's disabling clause).
+     * applied twice — once after the acknowledgement, and once on the main thread, for the window
+     * between validation and the dispatch itself (D-16's disabling clause). A command the check
+     * stops is answered with a failed {@code command.result} ({@code internal_error}, the server is
+     * shutting down; maintainer decision of 2026-10-26), never left acknowledged without a result.
+     * A command that arrives once disabling started never gets here: the router's
+     * {@link ShutdownGate} answers it the same way.
      */
     private void runUnlessDisabling(Runnable action, CloudRequest request, CloudChannel channel) {
         try {
             if (disabling.getAsBoolean()) {
-                LOGGER.fine("UltiCloud: dropped remote command while the plugin is disabling.");
+                LOGGER.fine("UltiCloud: refused a remote command while the plugin is disabling.");
+                channel.replyError(request.id(), "command.result", "internal_error", ShutdownGate.MESSAGE, null);
                 return;
             }
             action.run();

@@ -40,6 +40,7 @@ public final class AgentMessageRouter {
     private final Function<String, String> refusalForCapability;
     private final LongSupplier clock;
     private volatile SwitchRefusalListener switchRefusals;
+    private volatile ShutdownGate shutdown;
 
     /**
      * Hears every request the capability gate refused because the operator's switch (or the handshake) does not
@@ -87,6 +88,16 @@ public final class AgentMessageRouter {
     }
 
     /**
+     * Sets the shutdown gate ({@link ShutdownGate}): from the moment it refuses, every state-changing type it covers is
+     * answered with its shutting-down failure before the switch gate or a handler sees it; a request it lets in keeps
+     * the gate's permit for the whole switch check and handler call. {@code null} removes it.
+     * @param gate the gate, or {@code null}
+     */
+    void onShutdown(ShutdownGate gate) {
+        shutdown = gate;
+    }
+
+    /**
      * Registers or replaces the handler for one frozen-contract message type.
      * @param type the exact registered protocol type
      * @param handler the non-null handler, invoked on the dispatching thread
@@ -129,6 +140,24 @@ public final class AgentMessageRouter {
     }
 
     private void dispatch(Envelope envelope, CloudChannel channel) {
+        ShutdownGate gate = shutdown;
+        if (gate == null || !ShutdownGate.covers(envelope.type)) {
+            dispatchAdmitted(envelope, channel);
+            return;
+        }
+        // The shutdown gate is separate from, and ahead of, the switch gate (22-23 shutdown-window round).
+        if (!gate.enter()) {
+            gate.refuse(envelope.request(), channel);
+            return;
+        }
+        try {
+            dispatchAdmitted(envelope, channel);
+        } finally {
+            gate.exit();
+        }
+    }
+
+    private void dispatchAdmitted(Envelope envelope, CloudChannel channel) {
         AgentMessageTypes.Spec spec = AgentMessageTypes.spec(envelope.type);
         String capability = spec.capability();
         if (spec.direction() == AgentMessageTypes.Direction.DOWN && capability != null
