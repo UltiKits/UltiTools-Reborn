@@ -36,14 +36,15 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  * message type the framework itself does not own (WIRE-16, D-26/D-27).
  * <p>
  * A module owns at most one responder per message type. Ownership is decided against exactly one
- * source of truth for the framework's own types — {@link PluginInitiationUtils#isFrameworkOwnedType}
- * — so a module can never silently take over {@code execute_command} or any of the framework's other
- * 23 inbound message types; that check runs before the module-owner check, and both refusals throw a
- * typed {@link PluginModuleException} naming the offender rather than a raw {@code RuntimeException}.
+ * source of truth for the framework's own types — {@link PluginInitiationUtils#isFrameworkOwnedType},
+ * which as of 6.3.1 answers from the UltiCloud protocol v2 message registry — so a module can never
+ * silently take over {@code command.execute} or any other message type of the framework's protocol;
+ * that check runs before the module-owner check, and both refusals throw a typed
+ * {@link PluginModuleException} naming the offender rather than a raw {@code RuntimeException}.
  * <p>
- * A module-owned type is served from the exact same lookup {@code PluginInitiationUtils
- * #handleInboundMessage} already uses for the framework's own 24 types — its unknown-type branch
- * consults this registry, not a second dispatch mechanism (01-CONTEXT D-10/D-11).
+ * A module-owned type ({@code <module>.<action>}) is served by the protocol v2 {@code module.request}
+ * handler, which looks the type up in this registry, not through a second dispatch mechanism
+ * (01-CONTEXT D-10/D-11). The protocol v1 inbound dispatch that used to consult it was removed in 6.3.1.
  * <p>
  * Deliberately does not require a {@code <module>:<type>} namespace prefix — D-26 rejected that as a
  * cross-repository protocol convention the panel would also have to honour, rather than an in-repo
@@ -246,7 +247,7 @@ public class PanelResponderRegistry {
      * <p>
      * Validates all three arguments first. Then checks
      * {@link PluginInitiationUtils#isFrameworkOwnedType(String)} before checking module ownership —
-     * deliberately in that order, so a module attempting {@code execute_command} is told the
+     * deliberately in that order, so a module attempting {@code command.execute} is told the
      * framework owns it, not that some other module does. Finally uses an atomic
      * {@code putIfAbsent}-shaped check so a collision — with the framework, with another module, or
      * with the same module registering twice — always throws rather than silently displacing an

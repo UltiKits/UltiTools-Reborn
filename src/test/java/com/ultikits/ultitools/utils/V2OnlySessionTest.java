@@ -194,6 +194,19 @@ class V2OnlySessionTest {
     }
 
     @Test
+    @DisplayName("isFrameworkOwnedType answers from the v2 registry: framework types yes, module keys and v1 names no")
+    void frameworkOwnedTypesAreTheV2Types() {
+        for (String type : AgentMessageTypes.types()) {
+            assertThat(PluginInitiationUtils.isFrameworkOwnedType(type)).as(type).isTrue();
+        }
+        assertThat(PluginInitiationUtils.isFrameworkOwnedType("ultimail.inbox.list")).isFalse();
+        assertThat(PluginInitiationUtils.isFrameworkOwnedType("execute_command")).isFalse();
+        assertThat(PluginInitiationUtils.isFrameworkOwnedType("ping")).isFalse();
+        assertThat(PluginInitiationUtils.isFrameworkOwnedType("Command.Execute")).isFalse();
+        assertThat(PluginInitiationUtils.isFrameworkOwnedType(null)).isFalse();
+    }
+
+    @Test
     @DisplayName("resolveFileOperationCapability keeps its 6.3.0 mapping for the v2 operation names")
     void fileOperationCapabilityKeepsItsMapping() {
         assertThat(PluginInitiationUtils.resolveFileOperationCapability("write")).isEqualTo(Capability.FILE_WRITE);

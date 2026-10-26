@@ -91,106 +91,6 @@ class PluginInitiationUtilsWebSocketTest {
     class PrivateMethodSignatureTests {
 
         @Test
-        @DisplayName("handlePing 方法应该存在")
-        void handlePingMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handlePing", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handlePong 方法应该存在")
-        void handlePongMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handlePong", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handleSubscribe 方法应该存在")
-        void handleSubscribeMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleSubscribe", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handleUnsubscribe 方法应该存在")
-        void handleUnsubscribeMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleUnsubscribe", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handleNotification 方法应该存在")
-        void handleNotificationMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleNotification", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handleError 方法应该存在")
-        void handleErrorMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleError", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handlePlayerEvent 方法应该存在")
-        void handlePlayerEventMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handlePlayerEvent", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handleCommandResult 方法应该存在")
-        void handleCommandResultMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleCommandResult", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handleFileOperationResult 方法应该存在")
-        void handleFileOperationResultMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleFileOperationResult", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("handleConfigUpload 方法应该存在")
-        void handleConfigUploadMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleConfigUpload", com.google.gson.JsonObject.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
         @DisplayName("initializeManagers 方法应该存在")
         void initializeManagersMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod("initializeManagers");
@@ -214,55 +114,38 @@ class PluginInitiationUtilsWebSocketTest {
 
     }
 
+    /**
+     * Plan 22-23 (D-01, checker B-W6): the protocol v1 inbound dispatch is gone from this class, by reference, not
+     * renamed. Replaces the former "every v1 handler exists" coverage, which pinned the opposite.
+     */
     @Nested
-    @DisplayName("WebSocket 消息类型覆盖测试")
-    class WebSocketMessageTypeCoverageTests {
+    @DisplayName("protocol v1 inbound dispatch removed (22-23)")
+    class V1InboundDispatchRemovedTests {
 
-        private List<String> getHandlerMethodNames() {
-            return Arrays.stream(PluginInitiationUtils.class.getDeclaredMethods())
-                .filter(m -> m.getName().startsWith("handle"))
+        @Test
+        @DisplayName("no v1 inbound handler, dispatch table, gate or handshake callback remains")
+        void noV1InboundMemberRemains() {
+            List<String> methods = Arrays.stream(PluginInitiationUtils.class.getDeclaredMethods())
                 .map(Method::getName)
                 .collect(Collectors.toList());
-        }
-
-        @Test
-        @DisplayName("应该有处理 ping/pong 的方法")
-        void shouldHaveHandlePingAndHandlePongMethods() {
-            List<String> handlers = getHandlerMethodNames();
-
-            assertThat(handlers).contains("handlePing", "handlePong");
-        }
-
-        @Test
-        @DisplayName("应该有处理订阅消息的方法")
-        void shouldHaveSubscriptionHandlers() {
-            List<String> handlers = getHandlerMethodNames();
-            
-            assertThat(handlers).contains("handleSubscribe", "handleUnsubscribe");
-        }
-
-        @Test
-        @DisplayName("应该有处理系统消息的方法")
-        void shouldHaveSystemMessageHandlers() {
-            List<String> handlers = getHandlerMethodNames();
-            
-            assertThat(handlers).contains("handleNotification", "handleError");
-        }
-
-        @Test
-        @DisplayName("应该有处理服务器操作结果的方法")
-        void shouldHaveOperationResultHandlers() {
-            List<String> handlers = getHandlerMethodNames();
-            
-            assertThat(handlers).contains("handleCommandResult", "handleFileOperationResult");
-        }
-
-        @Test
-        @DisplayName("应该有处理配置相关的方法")
-        void shouldHaveConfigHandlers() {
-            List<String> handlers = getHandlerMethodNames();
-            
-            assertThat(handlers).contains("handleConfigUpload", "handleConfigUpdate");
+            assertThat(methods).doesNotContain("handleInboundMessage", "buildInboundHandlers",
+                "inboundDispatchTable", "dispatchWithCapabilityGate", "sendCapabilityRefusal", "dispatchToResponder",
+                "responderReplyPayload", "handlePing", "handlePong", "handleSubscribe", "handleUnsubscribe",
+                "handleNotification", "handleError", "handlePlayerEvent", "handleCommandResult",
+                "handleFileOperationResult", "handleBackupOperation", "handleBackupProgress", "handleConfigUpload",
+                "handleConfigUploadLogic", "handleConfigUpdate", "handlePluginListRequest",
+                "handleServerStatusRequest", "handleMetricsRequest", "onWebSocketOpened", "onWebSocketConnected",
+                "uploadConfig", "uploadServerProperties", "currentWebSocketClient");
+            assertThat(methods).as("control: the reflection sees this class's members")
+                .contains("isFrameworkOwnedType", "publishPanelMessageEvent");
+            List<String> nested = Arrays.stream(PluginInitiationUtils.class.getDeclaredClasses())
+                .map(Class::getSimpleName)
+                .collect(Collectors.toList());
+            assertThat(nested).doesNotContain("InboundHandlerEntry", "VerdictRecorder");
+            List<String> fields = Arrays.stream(PluginInitiationUtils.class.getDeclaredFields())
+                .map(Field::getName)
+                .collect(Collectors.toList());
+            assertThat(fields).doesNotContain("INBOUND_HANDLERS", "SERVER_PROPERTIES_FILE");
         }
     }
 

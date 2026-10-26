@@ -62,11 +62,12 @@ class PanelResponderRegistryTest {
     void shouldRefuseFrameworkOwnedType() {
         PanelResponderRegistry registry = new PanelResponderRegistry();
 
-        assertThatThrownBy(() -> registry.registerResponder("execute_command", echoResponder(), "module-a"))
+        // As of 6.3.1 (plan 22-23) the framework's own types are the protocol v2 message types.
+        assertThatThrownBy(() -> registry.registerResponder("command.execute", echoResponder(), "module-a"))
                 .isInstanceOfSatisfying(PluginModuleException.class, e -> {
                     assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBSOCKET_RESPONDER_TYPE_OWNED_BY_FRAMEWORK);
                     assertThat(e.getMessage())
-                            .contains("execute_command")
+                            .contains("command.execute")
                             .containsIgnoringCase("framework");
                 });
         registry.shutdown();

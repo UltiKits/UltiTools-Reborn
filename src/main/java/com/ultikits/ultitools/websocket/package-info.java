@@ -7,10 +7,11 @@
  * client and the panel worker, and both sides change together — nothing here is a stable
  * extension point.
  * <p>
- * The live dispatch path is {@link UltiPanelWebSocketClient} plus the inbound-message dispatch
- * table {@code PluginInitiationUtils#handleInboundMessage} builds for the framework's own message
- * types, with {@link PanelResponderRegistry} as the single-owner extension point a module uses to
- * claim a request/response responder for a type the framework does not own (WIRE-16).
+ * As of 6.3.1 the live dispatch path is the UltiCloud protocol v2 agent connection in
+ * {@code com.ultikits.ultitools.utils}, with {@link PanelResponderRegistry} as the single-owner
+ * extension point a module uses to claim a request/response responder for a type the framework does
+ * not own (WIRE-16). {@link UltiPanelWebSocketClient} and the protocol v1 inbound-message dispatch
+ * table that used to serve it are no longer used; the dispatch table was removed in 6.3.1.
  * <p>
  * <b>This package previously also held a second, superseded dispatch mechanism</b> — a
  * registry-plus-interface pair with five per-message-type implementations, formerly the sole
