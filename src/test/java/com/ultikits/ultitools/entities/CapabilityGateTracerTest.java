@@ -108,6 +108,12 @@ class CapabilityGateTracerTest {
                 session.config().set(capability.getConfigPath(), true);
             }
             session.start(null);
+            // Settle the handshake before a switch is turned off: "connected" is reported when the welcome is
+            // accepted, before the connection's established listeners run, and a listener that already sees a
+            // switch turned off reconnects so the next hello declares the new set (22-22 fix). A request sent on that
+            // closing connection is refused but its reply cannot be delivered (22-23 fix, gap 5). The welcome's
+            // status frame is sent by those listeners, after the reconnect check, so it marks the settled session.
+            session.reply("status", 1);
         }
 
         /** Each operator switch and the gateway request types it governs (the contract's capability names). */
