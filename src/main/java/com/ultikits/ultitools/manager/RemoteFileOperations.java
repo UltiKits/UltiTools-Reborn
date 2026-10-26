@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -28,6 +29,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.ContractPrimitives;
 import com.ultikits.ultitools.utils.PayloadReader;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.PosixAttributePreserver;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
@@ -44,13 +46,17 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * {@code .ultikits/} state directory. This class never builds a {@link File} from a request path
  * on its own; it acts only on the operand the guard returns.</p>
  *
- * <p><b>Every write and delete decision is recorded.</b> Protocol v1 recorded one
- * {@code RemoteActionLog} entry per remote file operation (phase 6 D-22); this handler keeps that
- * property for {@code files.write} and {@code files.delete}: one entry per request that reached a
- * decision, ALLOWED when the requested change was carried out and DENIED when it was refused, with
- * the path as the target, the literal {@code "panel"} as the actor and — for a denial — exactly the
- * text the panel received. Content is never recorded. The log itself is injected, so the handler
- * stays testable and the wiring (plan 22-21) binds it to the live {@code RemoteActionLog}.</p>
+ * <p><b>Every file decision is recorded.</b> Protocol v1 recorded one {@code RemoteActionLog}
+ * entry per remote file operation, reads and listings included (phase 6 D-22); this handler keeps
+ * that property for all four requests: one entry per request that reached a decision, ALLOWED when
+ * the request was carried out (the file read, the directory listed, the change made) and DENIED
+ * when it was answered with an error code, with the path as the target (empty for the root
+ * listing), the literal {@code "panel"} as the actor and — for a denial — exactly the text the
+ * panel received. A malformed payload is answered by the router before it reaches a decision and
+ * records nothing. Content is never recorded. The log itself is injected, so the handler stays
+ * testable and the wiring (plan 22-21) binds it to the live {@code RemoteActionLog}. Reads keep
+ * being answered while the server disables, but from the first step of the disable they are no
+ * longer recorded: the disable closes the action log, and a read changes nothing.</p>
  *
  * <p>It is package-private on purpose: {@code resolveTarget} and {@code ResolvedTarget} are
  * package-private, and keeping the handler in this package is what makes calling them — rather
@@ -120,6 +126,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
     private final FileOperationManager files;
     private final File serverRoot;
     private final Consumer<RemoteActionLog.Entry> actionLog;
+    private final BooleanSupplier readsAudited;
 
     /** Test seam; see {@link #setWriteGate(Runnable)}. */
     private volatile Runnable writeGate;
@@ -130,14 +137,30 @@ final class RemoteFileOperations implements CloudRequestHandler {
      * @param files      the v1 file manager whose guard and editable-root configuration this
      *                   handler reuses rather than duplicating
      * @param serverRoot the server's root directory, used to name the editable roots
-     * @param actionLog  receives one entry per write and delete request, or {@code null} when the
+     * @param actionLog  receives one entry per decided request, or {@code null} when the
      *                   caller has no action log to write to (tests and headless harnesses)
      */
     RemoteFileOperations(FileOperationManager files, File serverRoot,
                          Consumer<RemoteActionLog.Entry> actionLog) {
+        this(files, serverRoot, actionLog, PluginInitiationUtils::isAcceptingPanelMessages);
+    }
+
+    /**
+     * Creates the handler with an explicit answer to "are reads recorded now".
+     *
+     * @param files        as for {@link #RemoteFileOperations(FileOperationManager, File, Consumer)}
+     * @param serverRoot   as for {@link #RemoteFileOperations(FileOperationManager, File, Consumer)}
+     * @param actionLog    as for {@link #RemoteFileOperations(FileOperationManager, File, Consumer)}
+     * @param readsAudited whether a {@code files.read} or {@code files.list} decision is recorded; production asks
+     *                     {@link PluginInitiationUtils#isAcceptingPanelMessages()}, so from the first step of the
+     *                     disable a read is still answered but writes no line to the closing action log
+     */
+    RemoteFileOperations(FileOperationManager files, File serverRoot,
+                         Consumer<RemoteActionLog.Entry> actionLog, BooleanSupplier readsAudited) {
         this.files = files;
         this.serverRoot = serverRoot;
         this.actionLog = actionLog;
+        this.readsAudited = readsAudited;
     }
 
     /**
@@ -189,21 +212,21 @@ final class RemoteFileOperations implements CloudRequestHandler {
 
         FileOperationManager.ResolvedTarget target = files.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
         if (!target.getDecision().isAllowed()) {
-            error(channel, request.id(), FILES_READ_RESULT, "path_not_allowed", target.getDecision().getMessage());
+            refuseRead(channel, request.id(), path, "path_not_allowed", target.getDecision().getMessage());
             return;
         }
 
         File file = target.getOperand();
         if (!file.exists()) {
-            error(channel, request.id(), FILES_READ_RESULT, "not_found", "The requested file does not exist.");
+            refuseRead(channel, request.id(), path, "not_found", "The requested file does not exist.");
             return;
         }
         if (file.isDirectory()) {
-            error(channel, request.id(), FILES_READ_RESULT, "is_directory", "The requested path is a directory.");
+            refuseRead(channel, request.id(), path, "is_directory", "The requested path is a directory.");
             return;
         }
         if (!file.isFile()) {
-            error(channel, request.id(), FILES_READ_RESULT, "file_not_editable",
+            refuseRead(channel, request.id(), path, "file_not_editable",
                     "The requested path is not a regular file.");
             return;
         }
@@ -215,12 +238,12 @@ final class RemoteFileOperations implements CloudRequestHandler {
         } catch (IOException unreadable) {
             LOGGER.log(Level.WARNING, "UltiCloud: a requested file could not be stat'ed ("
                     + unreadable.getClass().getSimpleName() + ").");
-            error(channel, request.id(), FILES_READ_RESULT, "internal_error",
+            refuseRead(channel, request.id(), path, "internal_error",
                     "The requested file could not be read.");
             return;
         }
         if (size > maxBytes) {
-            error(channel, request.id(), FILES_READ_RESULT, "file_not_editable",
+            refuseRead(channel, request.id(), path, "file_not_editable",
                     "The file is larger than this connection's file limit.");
             return;
         }
@@ -231,14 +254,14 @@ final class RemoteFileOperations implements CloudRequestHandler {
         } catch (IOException unreadable) {
             LOGGER.log(Level.WARNING, "UltiCloud: a requested file could not be read ("
                     + unreadable.getClass().getSimpleName() + ").");
-            error(channel, request.id(), FILES_READ_RESULT, "internal_error",
+            refuseRead(channel, request.id(), path, "internal_error",
                     "The requested file could not be read.");
             return;
         }
 
         String refusal = contentRefusal(bytes, maxBytes);
         if (refusal != null) {
-            error(channel, request.id(), FILES_READ_RESULT, "file_not_editable", refusal);
+            refuseRead(channel, request.id(), path, "file_not_editable", refusal);
             return;
         }
 
@@ -247,6 +270,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
         data.addProperty("content", decodeUtf8(bytes));
         data.addProperty("version", sha256Hex(bytes));
         data.addProperty("sizeBytes", bytes.length);
+        auditReadAllowed(FILES_READ, path);
         channel.replyOk(request.id(), FILES_READ_RESULT, data);
     }
 
@@ -279,23 +303,23 @@ final class RemoteFileOperations implements CloudRequestHandler {
             FileOperationManager.ResolvedTarget target =
                     files.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
             if (!target.getDecision().isAllowed()) {
-                error(channel, request.id(), FILES_LIST_RESULT, "path_not_allowed",
+                refuseList(channel, request.id(), path, "path_not_allowed",
                         target.getDecision().getMessage());
                 return;
             }
             File dir = target.getOperand();
             if (!dir.exists()) {
-                error(channel, request.id(), FILES_LIST_RESULT, "not_found", "The requested directory does not exist.");
+                refuseList(channel, request.id(), path, "not_found", "The requested directory does not exist.");
                 return;
             }
             if (!dir.isDirectory()) {
-                error(channel, request.id(), FILES_LIST_RESULT, "not_a_directory",
+                refuseList(channel, request.id(), path, "not_a_directory",
                         "The requested path is not a directory.");
                 return;
             }
             File[] children = dir.listFiles();
             if (children == null) {
-                error(channel, request.id(), FILES_LIST_RESULT, "internal_error",
+                refuseList(channel, request.id(), path, "internal_error",
                         "The requested directory could not be read.");
                 return;
             }
@@ -311,6 +335,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
         data.addProperty("path", path);
         data.add("entries", entries);
         data.addProperty("truncated", truncated);
+        auditReadAllowed(FILES_LIST, path);
         channel.replyOk(request.id(), FILES_LIST_RESULT, data);
     }
 
@@ -657,6 +682,23 @@ final class RemoteFileOperations implements CloudRequestHandler {
         auditDenied(Capability.FILE_WRITE, FILES_WRITE, path, reason);
     }
 
+    /**
+     * Answers a refused {@code files.read} and records it, as {@link #refuseWrite} does. The entry is written
+     * before the reply, so whoever sees the answer also finds the line.
+     */
+    private void refuseRead(CloudChannel channel, String replyTo, String path, String code, String message) {
+        String reason = capped(message);
+        auditReadDenied(FILES_READ, path, reason);
+        error(channel, replyTo, FILES_READ_RESULT, code, reason);
+    }
+
+    /** Answers a refused {@code files.list} and records it, as {@link #refuseRead} does. */
+    private void refuseList(CloudChannel channel, String replyTo, String path, String code, String message) {
+        String reason = capped(message);
+        auditReadDenied(FILES_LIST, path, reason);
+        error(channel, replyTo, FILES_LIST_RESULT, code, reason);
+    }
+
     /** Answers a refused {@code files.delete} and records it, as {@link #refuseWrite} does. */
     private void refuseDelete(CloudChannel channel, String replyTo, String path, String code, String message) {
         String reason = capped(message);
@@ -670,6 +712,23 @@ final class RemoteFileOperations implements CloudRequestHandler {
 
     private void auditDenied(Capability capability, String action, String target, String reason) {
         record(RemoteActionLog.Entry.denied(capability, action, target, PANEL_ACTOR, reason));
+    }
+
+    /**
+     * Records a served read or listing, unless the server is disabling: the disable closes the action log, and a
+     * read changes nothing, so leaving it out loses no change (the shutdown window records no remote action).
+     */
+    private void auditReadAllowed(String action, String target) {
+        if (readsAudited.getAsBoolean()) {
+            auditAllowed(Capability.FILE_READ, action, target);
+        }
+    }
+
+    /** Records a refused read or listing, unless the server is disabling, as {@link #auditReadAllowed} does. */
+    private void auditReadDenied(String action, String target, String reason) {
+        if (readsAudited.getAsBoolean()) {
+            auditDenied(Capability.FILE_READ, action, target, reason);
+        }
     }
 
     /**

@@ -72,6 +72,8 @@ class ServerPropertiesV2Test {
     private AgentMessageRouter router;
     private RecordingChannel channel;
     private List<RemoteActionLog.Entry> audit;
+    /** Whether the server is disabling, as the handler's read-audit check sees it. */
+    private volatile boolean disabling;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -89,7 +91,7 @@ class ServerPropertiesV2Test {
         Files.write(propsFile, SAMPLE.getBytes(StandardCharsets.UTF_8));
         properties = new ServerPropertiesManager(tmp.toFile());
         audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
-        handler = new RemotePropertiesHandler(properties, audit::add);
+        handler = new RemotePropertiesHandler(properties, audit::add, () -> !disabling);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("properties.get", handler);
         router.register("properties.update", handler);
@@ -311,6 +313,57 @@ class ServerPropertiesV2Test {
         assertThat(audit.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
         assertThat(audit.get(0).getTarget()).isEqualTo("motd");
         assertThat(audit.get(0).getReason()).isEqualTo(payload.get("message").getAsString());
+    }
+
+    @Test
+    @DisplayName("a served get is one allowed entry naming server.properties, never a value")
+    void servedGetIsAuditedAsAllowed() {
+        router.dispatch(ContractFixtures.object("fixtures/agent/properties.get/valid/all.json").toString(), channel);
+
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(audit).hasSize(1);
+        RemoteActionLog.Entry entry = audit.get(0);
+        assertThat(entry.getCapability()).isEqualTo(Capability.SERVER_PROPERTIES.name());
+        assertThat(entry.getAction()).isEqualTo("properties.get");
+        assertThat(entry.getTarget()).isEqualTo("server.properties");
+        assertThat(entry.getActor()).isEqualTo("panel");
+        assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(entry.getReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("a refused get is one denied entry with the text the panel received; a malformed one records nothing")
+    void refusedGetIsAuditedAsDenied() throws IOException {
+        Files.delete(propsFile);
+        assertGetError("not_found");
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0).getAction()).isEqualTo("properties.get");
+        assertThat(audit.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(audit.get(0).getReason())
+                .isEqualTo(only(channel).getAsJsonObject("payload").get("message").getAsString());
+
+        Files.write(propsFile, new byte[]{'m', 'o', 't', 'd', '=', (byte) 0xE9, '\n'});
+        assertGetError("file_not_editable");
+        assertThat(audit).hasSize(2);
+        assertThat(audit.get(1).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(audit.get(1).getReason())
+                .isEqualTo(only(channel).getAsJsonObject("payload").get("message").getAsString());
+
+        channel.clear();
+        router.dispatch(ContractFixtures.invalidFrames("properties.get").get(0).frame().toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+        assertThat(audit).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("while the server disables a get is answered but not recorded")
+    void getWhileDisablingIsAnsweredButNotAudited() throws IOException {
+        disabling = true;
+        router.dispatch(ContractFixtures.object("fixtures/agent/properties.get/valid/all.json").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        Files.delete(propsFile);
+        assertGetError("not_found");
+        assertThat(audit).isEmpty();
     }
 
     // --------------------------------------------------------------------------------------

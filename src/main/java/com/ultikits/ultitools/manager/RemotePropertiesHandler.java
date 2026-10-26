@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -16,6 +17,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.ContractPrimitives;
 import com.ultikits.ultitools.utils.PayloadReader;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
@@ -42,6 +44,12 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * trail must say which settings were touched without copying server configuration into a log. The
  * log is injected; plan 22-21 binds it to the live {@code RemoteActionLog}.</p>
  *
+ * <p><b>Every read is recorded too</b>, as 6.3.0 recorded its {@code server_properties} read: one
+ * entry per {@code properties.get}, ALLOWED with the target {@code server.properties} when the
+ * values were sent, DENIED with the text the panel received otherwise. Values are never
+ * recorded. From the first step of the disable a get is still answered but no longer recorded:
+ * the disable closes the action log, and a read changes nothing.</p>
+ *
  * <p>Per-key results follow the contract: {@code ok} when every requested key was written,
  * {@code partial} when at least one was refused or is absent from the file while the others were
  * written, and {@code error} with {@code file_changed}, {@code not_found} or {@code write_denied}
@@ -61,6 +69,9 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
     /** The action-log actor for this surface: protocol v2 carries no per-operator identity. */
     private static final String PANEL_ACTOR = "panel";
 
+    /** The action-log target of a {@code properties.get}: the file it reads, since the request names no key. */
+    private static final String GET_TARGET = "server.properties";
+
     /** The contract's upper bound on {@code motd}, and on every other string-typed property value. */
     private static final int MAX_TEXT_LENGTH = 256;
 
@@ -69,17 +80,33 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
 
     private final ServerPropertiesManager properties;
     private final Consumer<RemoteActionLog.Entry> actionLog;
+    private final BooleanSupplier readsAudited;
 
     /**
      * Creates the handler over the manager that owns the file.
      *
      * @param properties the manager whose read and update operations this handler exposes
-     * @param actionLog  receives one entry per update request, or {@code null} when the caller has
+     * @param actionLog  receives one entry per decided request, or {@code null} when the caller has
      *                   no action log to write to (tests and headless harnesses)
      */
     RemotePropertiesHandler(ServerPropertiesManager properties, Consumer<RemoteActionLog.Entry> actionLog) {
+        this(properties, actionLog, PluginInitiationUtils::isAcceptingPanelMessages);
+    }
+
+    /**
+     * Creates the handler with an explicit answer to "are reads recorded now".
+     *
+     * @param properties   the manager whose read and update operations this handler exposes
+     * @param actionLog    as for {@link #RemotePropertiesHandler(ServerPropertiesManager, Consumer)}
+     * @param readsAudited whether a {@code properties.get} is recorded; production asks
+     *                     {@link PluginInitiationUtils#isAcceptingPanelMessages()}, so from the first step of the
+     *                     disable a get is still answered but writes no line to the closing action log
+     */
+    RemotePropertiesHandler(ServerPropertiesManager properties, Consumer<RemoteActionLog.Entry> actionLog,
+                            BooleanSupplier readsAudited) {
         this.properties = properties;
         this.actionLog = actionLog;
+        this.readsAudited = readsAudited;
     }
 
     @Override
@@ -106,16 +133,16 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
                 properties.readVersioned(channel.limits().fileMaxBytes());
         ServerPropertiesManager.PropertiesSnapshot.Outcome outcome = snapshot.getOutcome();
         if (outcome == ServerPropertiesManager.PropertiesSnapshot.Outcome.NOT_FOUND) {
-            error(channel, request.id(), PROPERTIES_GET_RESULT, "not_found", "There is no server.properties.");
+            refuseGet(channel, request.id(), "not_found", "There is no server.properties.");
             return;
         }
         if (outcome == ServerPropertiesManager.PropertiesSnapshot.Outcome.FILE_NOT_EDITABLE) {
-            error(channel, request.id(), PROPERTIES_GET_RESULT, "file_not_editable",
+            refuseGet(channel, request.id(), "file_not_editable",
                     "server.properties cannot be shown or edited through the panel.");
             return;
         }
         if (outcome != ServerPropertiesManager.PropertiesSnapshot.Outcome.OK) {
-            error(channel, request.id(), PROPERTIES_GET_RESULT, "internal_error",
+            refuseGet(channel, request.id(), "internal_error",
                     "server.properties could not be read.");
             return;
         }
@@ -142,6 +169,9 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
         data.add("values", values);
         data.add("writable", writable);
         data.addProperty("version", snapshot.getVersion());
+        if (readsAudited.getAsBoolean()) {
+            auditAllowed(PROPERTIES_GET, GET_TARGET);
+        }
         channel.replyOk(request.id(), PROPERTIES_GET_RESULT, data);
     }
 
@@ -324,6 +354,19 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
         error(channel, replyTo, PROPERTIES_UPDATE_RESULT, code, reason);
         record(RemoteActionLog.Entry.denied(Capability.SERVER_PROPERTIES, PROPERTIES_UPDATE, target,
                 PANEL_ACTOR, reason));
+    }
+
+    /**
+     * Answers a refused {@code properties.get} and records the same text, as {@link #refuseUpdate} does. The
+     * entry is written before the reply, so whoever sees the answer also finds the line.
+     */
+    private void refuseGet(CloudChannel channel, String replyTo, String code, String message) {
+        String reason = capped(message);
+        if (readsAudited.getAsBoolean()) {
+            record(RemoteActionLog.Entry.denied(Capability.SERVER_PROPERTIES, PROPERTIES_GET, GET_TARGET,
+                    PANEL_ACTOR, reason));
+        }
+        error(channel, replyTo, PROPERTIES_GET_RESULT, code, reason);
     }
 
     private void auditAllowed(String action, String target) {

@@ -12,7 +12,9 @@ import com.ultikits.ultitools.config.document.OperatorFileWriter;
 import com.ultikits.ultitools.config.document.OwnedPaths;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
@@ -33,6 +35,7 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 
@@ -56,6 +59,12 @@ import java.util.logging.Logger;
  * the entity's own validators ({@code @Range}, {@code @NotEmpty}, {@code @Size}, {@code @Pattern} and
  * its declared-type converters) through {@link AbstractConfigEntity#validateProposedProperties} - so a
  * refused key never reaches the file and the accepted ones are written in one verified replace.</p>
+ *
+ * <p><b>Every edit is recorded.</b> As the 6.3.0 configuration edit did, each {@code config.update} that
+ * reached a decision writes one action-log entry (capability {@code FILE_WRITE}, action {@code config.update},
+ * the request's path as target, {@code panel} as actor): ALLOWED when at least one key was written, DENIED with
+ * the text the panel received when nothing was. Values are never recorded. {@code config.tree} and
+ * {@code config.entries} record nothing; a request the switch gate refused is recorded by the gate.</p>
  *
  * <p>All file work runs on the thread the caller injects, which must be the server thread: the
  * configuration layer refuses registry access anywhere else
@@ -96,11 +105,14 @@ final class RemoteConfigHandler {
     private static final String WRITE_DENIED = "The server cannot write this configuration file.";
     private static final String NOT_RELOADED = "Saved to the file, but the module did not reload it (";
     private static final String INTERNAL = "The request could not be processed.";
+    /** The action-log actor for this surface: protocol v2 carries no per-operator identity. */
+    private static final String PANEL_ACTOR = "panel";
 
     private final Supplier<List<UltiToolsPlugin>> modules;
     private final ConfigManager configs;
     private final Executor configThread;
     private final File serverRoot;
+    private final Consumer<RemoteActionLog.Entry> actionLog;
 
     /**
      * Creates the handler that publishes paths relative to the process working directory, the root the
@@ -124,10 +136,27 @@ final class RemoteConfigHandler {
      * @param serverRoot   the directory every published path is relative to
      */
     RemoteConfigHandler(Supplier<List<UltiToolsPlugin>> modules, ConfigManager configs, Executor configThread, File serverRoot) {
+        this(modules, configs, configThread, serverRoot, null);
+    }
+
+    /**
+     * Creates the handler with an explicit server root and the action log that receives one entry per
+     * {@code config.update} request.
+     *
+     * @param modules      the loaded modules whose registered configuration files may be shown
+     * @param configs      the configuration registry
+     * @param configThread the executor that must run the server thread
+     * @param serverRoot   the directory every published path is relative to
+     * @param actionLog    receives one entry per {@code config.update} request that reached a decision, or
+     *                     {@code null} when the caller has no action log to write to (tests)
+     */
+    RemoteConfigHandler(Supplier<List<UltiToolsPlugin>> modules, ConfigManager configs, Executor configThread,
+            File serverRoot, Consumer<RemoteActionLog.Entry> actionLog) {
         this.modules = modules;
         this.configs = configs;
         this.configThread = configThread;
         this.serverRoot = serverRoot;
+        this.actionLog = actionLog;
     }
 
     /**
@@ -178,9 +207,11 @@ final class RemoteConfigHandler {
         List<Change> changes = changes(reader.array("changes", 1, CHANGES_MAX), request.id());
         String replyTo = request.id();
         onConfigThread(channel, replyTo, "config.update.result", () -> {
+            UpdateAudit audit = new UpdateAudit(path);
             try {
-                update(channel, replyTo, path, baseVersion, changes);
+                update(channel, replyTo, path, baseVersion, changes, audit);
             } catch (RuntimeException failure) {
+                audit.denied(INTERNAL);
                 failed(channel, replyTo, "config.update.result", failure);
             }
         });
@@ -278,10 +309,11 @@ final class RemoteConfigHandler {
 
     // -------------------------------------------------------------- config.update
 
-    private void update(CloudChannel channel, String replyTo, String path, String baseVersion, List<Change> changes) {
+    private void update(CloudChannel channel, String replyTo, String path, String baseVersion, List<Change> changes,
+            UpdateAudit audit) {
         Registered registered = lookup(path);
         if (registered == null) {
-            channel.replyError(replyTo, "config.update.result", "path_not_allowed", PATH_NOT_ALLOWED, null);
+            refuseUpdate(channel, replyTo, audit, "path_not_allowed", PATH_NOT_ALLOWED);
             return;
         }
         Path file = registered.file.toPath();
@@ -289,32 +321,32 @@ final class RemoteConfigHandler {
             ConfigLoadResult loaded = ConfigDocument.load(file);
             switch (loaded.state()) {
                 case ABSENT:
-                    channel.replyError(replyTo, "config.update.result", "not_found", NOT_FOUND, null);
+                    refuseUpdate(channel, replyTo, audit, "not_found", NOT_FOUND);
                     return;
                 case UNREADABLE:
-                    channel.replyError(replyTo, "config.update.result", "config_invalid", UNREADABLE, null);
+                    refuseUpdate(channel, replyTo, audit, "config_invalid", UNREADABLE);
                     return;
                 case UNPARSEABLE:
-                    channel.replyError(replyTo, "config.update.result", "config_invalid", CONFIG_INVALID, null);
+                    refuseUpdate(channel, replyTo, audit, "config_invalid", CONFIG_INVALID);
                     return;
                 case LOADED:
                 default:
                     break;
             }
             if (!baseVersion.equals(loaded.fingerprint())) {
-                channel.replyError(replyTo, "config.update.result", "file_changed", FILE_CHANGED, null);
+                refuseUpdate(channel, replyTo, audit, "file_changed", FILE_CHANGED);
                 return;
             }
             if (!Files.isWritable(file)) {
-                channel.replyError(replyTo, "config.update.result", "write_denied", WRITE_DENIED, null);
+                refuseUpdate(channel, replyTo, audit, "write_denied", WRITE_DENIED);
                 return;
             }
-            write(channel, replyTo, registered, loaded, changes);
+            write(channel, replyTo, registered, loaded, changes, audit);
         }
     }
 
     private void write(CloudChannel channel, String replyTo, Registered registered, ConfigLoadResult loaded,
-            List<Change> changes) {
+            List<Change> changes, UpdateAudit audit) {
         List<RemoteConfigEntries.Entry> entries = RemoteConfigEntries.describe(registered.entity, loaded.document());
         List<KeyResult> results = new ArrayList<>();
         List<Accepted> accepted = new ArrayList<>();
@@ -346,22 +378,26 @@ final class RemoteConfigHandler {
             } catch (IOException failure) {
                 LOGGER.warning("UltiCloud: could not write configuration file " + registered.file.getName()
                         + ": " + failure.getClass().getSimpleName());
-                channel.replyError(replyTo, "config.update.result", "write_denied", WRITE_DENIED, null);
+                refuseUpdate(channel, replyTo, audit, "write_denied", WRITE_DENIED);
                 return;
             }
             if (result.outcome() == OperatorFileWriter.Outcome.FILE_CHANGED) {
-                channel.replyError(replyTo, "config.update.result", "file_changed", FILE_CHANGED, null);
+                refuseUpdate(channel, replyTo, audit, "file_changed", FILE_CHANGED);
                 return;
             }
             if (!result.applied()) {
-                channel.replyError(replyTo, "config.update.result", "write_denied", writeDenied(result.reason()),
-                        null);
+                refuseUpdate(channel, replyTo, audit, "write_denied", writeDenied(result.reason()));
                 return;
             }
             version = result.fingerprint();
             notReloaded = reload(registered);
         }
         JsonObject data = keysData(results, version);
+        if (accepted.isEmpty()) {
+            audit.denied(nothingWritten(results));
+        } else {
+            audit.allowed();
+        }
         boolean allOk = accepted.size() == results.size();
         if (allOk) {
             channel.replyOk(replyTo, "config.update.result", data, notReloaded);
@@ -380,6 +416,33 @@ final class RemoteConfigHandler {
      */
     private static String writeDenied(String reason) {
         return reason == null || reason.isEmpty() ? WRITE_DENIED : bounded("Nothing was written: " + reason + ".");
+    }
+
+    /**
+     * Answers a refused {@code config.update} and records the same text as its one DENIED action-log entry, so the
+     * log says what the operator was told.
+     */
+    private static void refuseUpdate(CloudChannel channel, String replyTo, UpdateAudit audit, String code,
+            String message) {
+        audit.denied(message);
+        channel.replyError(replyTo, "config.update.result", code, message, null);
+    }
+
+    /**
+     * The action-log reason of an update whose every key was refused: the key names with the per-key messages the
+     * panel received. Both are value-free: a key is a setting's name, and every per-key message names a rule.
+     *
+     * @param results the per-key results, none of them ok
+     * @return the bounded reason
+     */
+    private static String nothingWritten(List<KeyResult> results) {
+        StringBuilder reason = new StringBuilder("No key was written:");
+        String separator = " ";
+        for (KeyResult result : results) {
+            reason.append(separator).append(result.key).append(" (").append(result.message).append(')');
+            separator = "; ";
+        }
+        return bounded(reason.append('.').toString());
     }
 
     /**
@@ -625,6 +688,45 @@ final class RemoteConfigHandler {
     }
 
     /** One module-registered configuration file the panel may name. */
+    /**
+     * The one action-log entry of one {@code config.update} request (6.3.0 recorded every panel configuration
+     * edit): ALLOWED when at least one key was written to the file, DENIED with the text the panel received when
+     * nothing was written. The target is the request's path; no value is ever recorded. It runs on the server thread
+     * inside the request's own task, so an update the shutdown gate refused, or one the server thread never ran,
+     * records nothing, and none is recorded after the action log closes during the disable. At most one entry is
+     * recorded even if replying fails after the decision.
+     */
+    private final class UpdateAudit {
+        private final String path;
+        private boolean recorded;
+
+        private UpdateAudit(String path) {
+            this.path = path;
+        }
+
+        private void allowed() {
+            record(RemoteActionLog.Entry.allowed(Capability.FILE_WRITE, "config.update", path, PANEL_ACTOR));
+        }
+
+        private void denied(String reason) {
+            record(RemoteActionLog.Entry.denied(Capability.FILE_WRITE, "config.update", path, PANEL_ACTOR, reason));
+        }
+
+        private void record(RemoteActionLog.Entry entry) {
+            Consumer<RemoteActionLog.Entry> sink = actionLog;
+            if (recorded || sink == null) {
+                return;
+            }
+            recorded = true;
+            try {
+                sink.accept(entry);
+            } catch (RuntimeException unwritable) {
+                LOGGER.warning("UltiCloud: an action-log entry could not be recorded ("
+                        + unwritable.getClass().getSimpleName() + ").");
+            }
+        }
+    }
+
     private static final class Registered {
         private final UltiToolsPlugin module;
         private final AbstractConfigEntity entity;

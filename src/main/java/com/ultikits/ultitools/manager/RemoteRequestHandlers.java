@@ -37,7 +37,7 @@ public final class RemoteRequestHandlers {
     /**
      * @param files      the file manager whose guard resolves every remote path
      * @param serverRoot the server root the editable roots are listed relative to
-     * @param actionLog  receives one entry per remote write or delete
+     * @param actionLog  receives one entry per decided remote file request
      * @return the handler of {@link #FILE_TYPES}
      */
     public static CloudRequestHandler files(FileOperationManager files, File serverRoot,

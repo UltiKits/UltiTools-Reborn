@@ -66,6 +66,8 @@ class RemoteFileOperationsTest {
     private AgentMessageRouter router;
     private RecordingChannel channel;
     private List<RemoteActionLog.Entry> audit;
+    /** Whether the server is disabling, as the handler's read-audit check sees it. */
+    private volatile boolean disabling;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -84,7 +86,7 @@ class RemoteFileOperationsTest {
         files = new FileOperationManager();
         pointManagerAt(files, tmp, tmp.resolve("plugins"), tmp.resolve("logs"));
         audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
-        handler = new RemoteFileOperations(files, tmp.toFile(), audit::add);
+        handler = new RemoteFileOperations(files, tmp.toFile(), audit::add, () -> !disabling);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("files.list", handler);
         router.register("files.read", handler);
@@ -484,6 +486,103 @@ class RemoteFileOperationsTest {
         assertThat(audit.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
         assertThat(audit.get(0).getReason())
                 .isEqualTo(only(channel).getAsJsonObject("payload").get("message").getAsString());
+    }
+
+    @Test
+    @DisplayName("a served read and a served listing are each one allowed entry with the path, never the content")
+    void servedReadsAndListingsAreAuditedAsAllowed() throws IOException {
+        write("plugins/UltiTools/config.yml", "secret: hunter2\n");
+
+        router.dispatch(readRequest("plugins/UltiTools/config.yml").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        channel.clear();
+        router.dispatch(listRequest("plugins").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        channel.clear();
+        router.dispatch(listRequest("").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+
+        assertThat(audit).hasSize(3);
+        assertAudit(0, "files.read", "plugins/UltiTools/config.yml", RemoteActionLog.Verdict.ALLOWED);
+        assertAudit(1, "files.list", "plugins", RemoteActionLog.Verdict.ALLOWED);
+        assertAudit(2, "files.list", "", RemoteActionLog.Verdict.ALLOWED);
+        for (RemoteActionLog.Entry entry : audit) {
+            assertThat(entry.getReason()).isNull();
+            assertThat(entry.getTarget()).doesNotContain("hunter2");
+        }
+    }
+
+    @Test
+    @DisplayName("every refused read and listing is one denied entry with the text the panel received")
+    void refusedReadsAndListingsAreAuditedAsDenied() throws IOException {
+        Files.createDirectories(tmp.resolve("plugins/UltiTools"));
+        write("plugins/config.yml", "a: 1\n");
+        Files.write(tmp.resolve("plugins/binary.yml"), new byte[]{'a', 0x01, 'b'});
+        String[][] cases = {
+                {"files.read", ".ultikits/credentials.json", "path_not_allowed"},
+                {"files.read", "plugins/absent.yml", "not_found"},
+                {"files.read", "plugins/UltiTools", "is_directory"},
+                {"files.read", "plugins/binary.yml", "file_not_editable"},
+                {"files.list", ".ultikits", "path_not_allowed"},
+                {"files.list", "plugins/absent", "not_found"},
+                {"files.list", "plugins/config.yml", "not_a_directory"},
+        };
+        for (int i = 0; i < cases.length; i++) {
+            String type = cases[i][0];
+            String path = cases[i][1];
+            JsonObject request = "files.read".equals(type) ? readRequest(path) : listRequest(path);
+            assertError(request, cases[i][2]);
+            assertThat(audit).as(type + " " + path).hasSize(i + 1);
+            assertAudit(i, type, path, RemoteActionLog.Verdict.DENIED);
+            assertThat(audit.get(i).getReason()).as(type + " " + path)
+                    .isEqualTo(only(channel).getAsJsonObject("payload").get("message").getAsString());
+        }
+    }
+
+    @Test
+    @DisplayName("while the server disables, reads and listings are answered but not recorded; a write still is")
+    void readsWhileDisablingAreAnsweredButNotAudited() throws IOException {
+        Path config = write("plugins/UltiTools/config.yml", "a: 1\n");
+        disabling = true;
+
+        router.dispatch(readRequest("plugins/UltiTools/config.yml").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertError(readRequest(".ultikits/credentials.json"), "path_not_allowed");
+        assertError(listRequest(".ultikits"), "path_not_allowed");
+        channel.clear();
+        router.dispatch(listRequest("plugins").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(audit).as("no read is recorded once the disable started").isEmpty();
+
+        // A write the shutdown gate admitted before the disable started is still recorded when it completes.
+        channel.clear();
+        router.dispatch(writeRequest("plugins/UltiTools/config.yml", "a: 2\n",
+                RemoteFilesEndToEndTest.sha256(Files.readAllBytes(config))).toString(), channel);
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0).getAction()).isEqualTo("files.write");
+    }
+
+    @Test
+    @DisplayName("a malformed read or listing is answered invalid_message and records nothing")
+    void malformedReadsAndListingsAreNotAudited() {
+        for (String type : new String[]{"files.read", "files.list"}) {
+            for (ContractFixtures.Fixture fixture : ContractFixtures.invalidFrames(type)) {
+                channel.clear();
+                router.dispatch(fixture.frame().toString(), channel);
+                assertThat(only(channel).getAsJsonObject("payload").get("code").getAsString())
+                        .as(fixture.path()).isEqualTo("invalid_message");
+            }
+        }
+        assertThat(audit).isEmpty();
+    }
+
+    private void assertAudit(int index, String action, String target, RemoteActionLog.Verdict verdict) {
+        RemoteActionLog.Entry entry = audit.get(index);
+        assertThat(entry.getCapability()).as(action + " " + target).isEqualTo(Capability.FILE_READ.name());
+        assertThat(entry.getAction()).as(action + " " + target).isEqualTo(action);
+        assertThat(entry.getTarget()).as(action + " " + target).isEqualTo(target);
+        assertThat(entry.getActor()).isEqualTo("panel");
+        assertThat(entry.getVerdict()).as(action + " " + target).isEqualTo(verdict);
     }
 
     // --------------------------------------------------------------------------------------
