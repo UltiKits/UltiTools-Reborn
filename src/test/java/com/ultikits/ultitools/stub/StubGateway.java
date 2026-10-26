@@ -246,11 +246,14 @@ public final class StubGateway {
         if (connection == null) {
             return;
         }
-        synchronized (connection) {
-            connection.cancelTimers();
-            log.log("WS-CLOSED", connection + " code=" + code + " remote=" + remote
-                    + (reason == null || reason.isEmpty() ? "" : " reason=" + reason));
-        }
+        // Deliberately without the connection's monitor: Java-WebSocket calls onClose while it holds the socket's own
+        // lock, and closeByStub takes the socket's lock while its caller holds the connection's monitor (a newer
+        // connection superseding this one, a timer). Taking the monitor here inverted that order and deadlocked the
+        // stub's selector under CPU load (22-23 fix round). The connection is already out of the map, so no frame is
+        // handled for it any more; a timer that still fires sends on a closed socket, which sendFrame/sendText ignore.
+        connection.cancelTimers();
+        log.log("WS-CLOSED", connection + " code=" + code + " remote=" + remote
+                + (reason == null || reason.isEmpty() ? "" : " reason=" + reason));
     }
 
     private void message(WebSocket socket, String text) {
@@ -795,8 +798,9 @@ public final class StubGateway {
         final List<String> pendingAcks = new ArrayList<>();
         final Deque<Long> invalidAt = new ArrayDeque<>();
         boolean welcomed;
-        ScheduledFuture<?> helloTimer;
-        ScheduledFuture<?> ackFlush;
+        /** Volatile: {@link StubGateway#closed} cancels the timers without the connection's monitor. */
+        volatile ScheduledFuture<?> helloTimer;
+        volatile ScheduledFuture<?> ackFlush;
 
         Connection(int id, WebSocket socket, String credential, String serverId) {
             this.id = id;
@@ -806,11 +810,13 @@ public final class StubGateway {
         }
 
         void cancelTimers() {
-            if (helloTimer != null) {
-                helloTimer.cancel(false);
+            ScheduledFuture<?> hello = helloTimer;
+            if (hello != null) {
+                hello.cancel(false);
             }
-            if (ackFlush != null) {
-                ackFlush.cancel(false);
+            ScheduledFuture<?> flush = ackFlush;
+            if (flush != null) {
+                flush.cancel(false);
                 ackFlush = null;
             }
         }
