@@ -110,6 +110,57 @@ class PlayerLinkRedeliveryTest {
     }
 
     @Test
+    @DisplayName("shutting down: a completion is left for redelivery; let in, it holds a permit until its receipt is sent")
+    void shutdownSignalGatesDeliveryAndHoldsThePermit() {
+        final java.util.concurrent.atomic.AtomicBoolean open = new java.util.concurrent.atomic.AtomicBoolean();
+        final java.util.concurrent.atomic.AtomicInteger entered = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger exited = new java.util.concurrent.atomic.AtomicInteger();
+        ShutdownGate.Signal signal = new ShutdownGate.Signal() {
+            @Override
+            public boolean enter() {
+                if (!open.get()) {
+                    return false;
+                }
+                entered.incrementAndGet();
+                return true;
+            }
+
+            @Override
+            public void exit() {
+                exited.incrementAndGet();
+            }
+        };
+        channel = new PlayerLinkChannel(() -> recording, ledger, () -> false, () -> 0L, timers.service(),
+                Runnable::run, signal);
+        links = new CloudPlayerLinks(channel);
+        router = new AgentMessageRouter(capability -> true, capability -> "not available");
+        channel.register(router);
+        CompletableFuture<GameAccountResult> running = new CompletableFuture<>();
+        List<String> calls = new CopyOnWriteArrayList<>();
+        links.setHandler(plugin, new Handler() {
+            @Override
+            public CompletableFuture<GameAccountResult> onCompleted(LinkCompletion completion) {
+                calls.add(completion.completionId());
+                return running;
+            }
+        });
+
+        dispatch(completedFrame(COMPLETED, PlayerLinkEndToEndTest.CREATE_ID));
+        assertThat(calls).as("refused while shutting down: the handler is not called").isEmpty();
+        assertThat(results()).as("and no receipt ends the delivery").isEmpty();
+
+        open.set(true);
+        dispatch(completedFrame(COMPLETED, PlayerLinkEndToEndTest.CREATE_ID));
+        assertThat(calls).as("the redelivery reaches the handler").hasSize(1);
+        assertThat(entered.get()).isEqualTo(1);
+        assertThat(exited.get()).as("held while the handler's future is pending").isZero();
+
+        running.complete(GameAccountResult.CREATED);
+        assertThat(results()).hasSize(1);
+        assertThat(exited.get()).as("returned once the receipt was sent").isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("a duplicate while the handler is still running is ignored and exactly one result is sent")
     void duplicateWhileRunningIsIgnored() {
         CompletableFuture<GameAccountResult> running = new CompletableFuture<>();

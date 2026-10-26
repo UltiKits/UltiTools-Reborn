@@ -2,7 +2,6 @@ package com.ultikits.ultitools.utils;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 
@@ -78,9 +77,15 @@ public class PluginInitiationUtils {
      * is acknowledged and answered with a failed {@code command.result}, so it is never run again
      * after a restart); read-only requests are still answered until {@code onDisable} closes the
      * connection. Before it returns, this method waits (at most {@value #PANEL_CHANGE_DRAIN_MS} ms)
-     * for every state change that started earlier to finish, so each one, and its action-log entry,
-     * is complete before {@code onDisable} closes the action log. Must not be called by a thread
-     * inside such a change.
+     * for every state change that started earlier to finish -- including the work such a request
+     * handed to another thread: a module responder running for a {@code module.request}, the
+     * player-link handler running for a {@code player.link.completed} -- so each one, and its
+     * action-log entry, is complete before {@code onDisable} closes the action log. A request handed
+     * to the server thread is not waited for: it runs in a later tick, which never comes once the
+     * server stops, and Bukkit cancels the task when UltiTools disables. Such a request accepted
+     * before UltiTools' own disable starts -- while the server is already stopping, for example
+     * while plugins loaded after UltiTools disable -- is not carried out and gets no result.
+     * Must not be called by a thread inside such a change.
      *
      * @since 6.3.0
      */
@@ -92,16 +97,23 @@ public class PluginInitiationUtils {
 
     /**
      * How long {@link #stopAcceptingPanelMessages()} waits for the state changes already running
-     * (a file write, a {@code server.properties} update, a module request being handed to its
-     * responder); each takes milliseconds, so the bound is reached only by a stalled disk.
+     * (a file write, a {@code server.properties} update, a module responder or player-link handler
+     * a request was handed to); each takes milliseconds, so the bound is reached only by a stalled
+     * disk or a module handler that does not end.
      */
     static final long PANEL_CHANGE_DRAIN_MS = 5000L;
 
     /**
-     * Shared by every remote state change while it runs, taken exclusively only by
-     * {@link #stopAcceptingPanelMessages()} to wait for them (22-23 shutdown-window round).
+     * Guards {@link #panelChangesRunning}; {@link #stopAcceptingPanelMessages()} waits on it for the
+     * count to reach zero (22-23 shutdown-window round). A count, not a read-write lock, because a
+     * permit is returned by whichever thread ends the change: a request handed to a module
+     * responder's worker or to the player-link handler thread keeps its permit until that work
+     * ends (22-23 second verification).
      */
-    private static final ReentrantReadWriteLock PANEL_CHANGES = new ReentrantReadWriteLock();
+    private static final Object PANEL_CHANGES = new Object();
+
+    /** How many permits {@link #enterPanelChange()} gave that were not returned yet. Guarded by {@link #PANEL_CHANGES}. */
+    private static int panelChangesRunning;
 
     /** {@link ShutdownGate}'s production signal: {@link #enterPanelChange()} and {@link #exitPanelChange()}. */
     static final ShutdownGate.Signal PANEL_CHANGE_SIGNAL = new ShutdownGate.Signal() {
@@ -117,41 +129,56 @@ public class PluginInitiationUtils {
     };
 
     /**
-     * The shutdown signal of every remote state change ({@link ShutdownGate}): takes a shared
-     * permit and returns {@code true} only while {@link #isAcceptingPanelMessages()} holds; the
-     * caller then calls {@link #exitPanelChange()} once the change, and its action-log entry, is
-     * done. Returns {@code false}, holding nothing, from the first step of {@code onDisable} on.
+     * The shutdown signal of every remote state change ({@link ShutdownGate}): takes a permit and
+     * returns {@code true} only while {@link #isAcceptingPanelMessages()} holds; the caller then
+     * calls {@link #exitPanelChange()} exactly once, from any thread, when the change and its
+     * action-log entry are done, including work it handed to another thread. Returns {@code false},
+     * holding nothing, from the first step of {@code onDisable} on. Never blocks for longer than
+     * another caller's check.
      *
      * @return whether the state change may run
      */
     static boolean enterPanelChange() {
-        if (!PANEL_CHANGES.readLock().tryLock()) {
-            // Only stopAcceptingPanelMessages takes the exclusive side, after it cleared the flag.
-            return false;
-        }
-        if (isAcceptingPanelMessages()) {
+        synchronized (PANEL_CHANGES) {
+            // The flag is cleared before stopAcceptingPanelMessages takes this monitor, so a permit
+            // given here is always one the wait sees.
+            if (!isAcceptingPanelMessages()) {
+                return false;
+            }
+            panelChangesRunning++;
             return true;
         }
-        PANEL_CHANGES.readLock().unlock();
-        return false;
     }
 
-    /** Returns the permit {@link #enterPanelChange()} gave. */
+    /** Returns a permit {@link #enterPanelChange()} gave; may run on a thread other than the one that entered. */
     static void exitPanelChange() {
-        PANEL_CHANGES.readLock().unlock();
+        synchronized (PANEL_CHANGES) {
+            if (panelChangesRunning > 0) {
+                panelChangesRunning--;
+            }
+            if (panelChangesRunning == 0) {
+                PANEL_CHANGES.notifyAll();
+            }
+        }
     }
 
     private static void awaitPanelChanges() {
-        try {
-            if (PANEL_CHANGES.writeLock().tryLock(PANEL_CHANGE_DRAIN_MS, TimeUnit.MILLISECONDS)) {
-                PANEL_CHANGES.writeLock().unlock();
-                return;
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PANEL_CHANGE_DRAIN_MS);
+        synchronized (PANEL_CHANGES) {
+            try {
+                while (panelChangesRunning > 0) {
+                    long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+                    if (remaining <= 0) {
+                        PanelConnectionLog.log(Level.WARNING, "UltiCloud: a remote change was still running "
+                                + PANEL_CHANGE_DRAIN_MS + " ms after UltiTools started disabling; it may finish "
+                                + "after the action log closed.");
+                        return;
+                    }
+                    PANEL_CHANGES.wait(remaining);
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
             }
-            PanelConnectionLog.log(Level.WARNING, "UltiCloud: a remote change was still running "
-                    + PANEL_CHANGE_DRAIN_MS + " ms after UltiTools started disabling; it may finish "
-                    + "after the action log closed.");
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
         }
     }
 

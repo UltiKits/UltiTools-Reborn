@@ -76,6 +76,72 @@ class ModuleRequestHandlerTest {
     }
 
     @Test
+    void shuttingDownAtTheHandOffAnswersInternalErrorAndNeverRunsTheResponder() throws InterruptedException {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        registry.registerResponder(TYPE, data -> {
+            calls.incrementAndGet();
+            return CompletableFuture.completedFuture(new JsonObject());
+        }, OWNER);
+        BudgetChannel channel = new BudgetChannel(Integer.MAX_VALUE);
+        ShutdownGate.Signal refusing = new ShutdownGate.Signal() {
+            @Override
+            public boolean enter() {
+                return false;
+            }
+
+            @Override
+            public void exit() {
+                throw new AssertionError("nothing was taken");
+            }
+        };
+
+        new ModuleRequestHandler(registry, refusing).handle(request(new JsonObject()), channel);
+
+        JsonObject frame = await(() -> channel.frames().isEmpty() ? null : channel.frames().get(0),
+                "the shutting-down refusal");
+        assertThat(frame.get("type").getAsString()).isEqualTo("module.response");
+        assertThat(frame.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("internal_error");
+        assertThat(frame.getAsJsonObject("payload").get("message").getAsString()).isEqualTo(ShutdownGate.MESSAGE);
+        assertThat(calls.get()).isZero();
+    }
+
+    @Test
+    void thePermitIsReturnedOnceWhenTheResponderEnds() throws InterruptedException {
+        CountDownLatch release = new CountDownLatch(1);
+        registry.registerResponder(TYPE, data -> {
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return CompletableFuture.completedFuture(new JsonObject());
+        }, OWNER);
+        java.util.concurrent.atomic.AtomicInteger entered = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger exited = new java.util.concurrent.atomic.AtomicInteger();
+        ShutdownGate.Signal counting = new ShutdownGate.Signal() {
+            @Override
+            public boolean enter() {
+                entered.incrementAndGet();
+                return true;
+            }
+
+            @Override
+            public void exit() {
+                exited.incrementAndGet();
+            }
+        };
+        BudgetChannel channel = new BudgetChannel(Integer.MAX_VALUE);
+
+        new ModuleRequestHandler(registry, counting).handle(request(new JsonObject()), channel);
+
+        assertThat(entered.get()).isEqualTo(1);
+        assertThat(exited.get()).as("held while the responder runs").isZero();
+        release.countDown();
+        await(() -> exited.get() == 1 ? Boolean.TRUE : null, "the permit to be returned");
+        assertThat(exited.get()).isEqualTo(1);
+    }
+
+    @Test
     void shutDownRegistryRepliesModuleError() throws InterruptedException {
         registry.registerResponder(TYPE, data -> CompletableFuture.completedFuture(new JsonObject()), OWNER);
         registry.shutdown();

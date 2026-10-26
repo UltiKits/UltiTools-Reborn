@@ -133,7 +133,7 @@ public final class CloudFeatures {
         this.timers = Executors.newSingleThreadScheduledExecutor(daemon(HANDLER_THREAD_NAME + "-Timer"));
         this.ledger = new SessionDedupeLedger(() -> CloudSession.current().ledgerTarget());
         this.playerLinkChannel = new PlayerLinkChannel(this::liveChannel, ledger, bindings.onlineMode,
-                this::gatewayClockOffsetMillis, timers, handlerThread);
+                this::gatewayClockOffsetMillis, timers, handlerThread, bindings.shutdown);
         this.playerLinks = new CloudPlayerLinks(playerLinkChannel);
         this.capabilities = new AgentCapabilities(bindings.switches, bindings.errorReporting, this::moduleNames,
                 this::available);
@@ -492,7 +492,7 @@ public final class CloudFeatures {
         if (registry == null) {
             return;
         }
-        final ModuleRequestHandler modules = new ModuleRequestHandler(registry);
+        final ModuleRequestHandler modules = new ModuleRequestHandler(registry, bindings.shutdown);
         router.register(MODULE_REQUEST, new CloudRequestHandler() {
             @Override
             public void handle(CloudRequest request, CloudChannel reply) {

@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.regex.Pattern;
 
@@ -98,14 +99,27 @@ final class ModuleRequestHandler implements CloudRequestHandler {
     private static final Gson RESULT_GSON = new Gson();
 
     private final PanelResponderRegistry registry;
+    private final ShutdownGate.Signal shutdown;
 
     /**
-     * Creates the bridge over the registry the framework already owns.
+     * Creates the bridge over the registry the framework already owns, never refused for a shutdown.
      *
      * @param registry the registry holding module responders; never null
      */
     ModuleRequestHandler(PanelResponderRegistry registry) {
+        this(registry, ShutdownGate.Signal.OPEN);
+    }
+
+    /**
+     * @param registry the registry holding module responders; never null
+     * @param shutdown the shutdown signal ({@link ShutdownGate}): a request is handed to its responder only with a
+     *                 permit, which is returned when the responder's work ends (22-23 second verification), so
+     *                 {@code UltiTools#onDisable} waits for a responder that started before it, bounded by
+     *                 {@link PluginInitiationUtils#PANEL_CHANGE_DRAIN_MS}
+     */
+    ModuleRequestHandler(PanelResponderRegistry registry, ShutdownGate.Signal shutdown) {
         this.registry = Objects.requireNonNull(registry, "registry");
+        this.shutdown = Objects.requireNonNull(shutdown, "shutdown");
     }
 
     /**
@@ -134,8 +148,27 @@ final class ModuleRequestHandler implements CloudRequestHandler {
             channel.replyError(request.id(), RESPONSE_TYPE, "module_not_found", NO_RESPONDER_MESSAGE, null);
             return;
         }
-        registry.dispatch(messageType, data, request.id())
-                .whenComplete((result, failure) -> reply(channel, request.id(), result, failure));
+        // The router's permit covers only this call; the responder runs on the registry's worker, so it takes its own.
+        if (!shutdown.enter()) {
+            channel.replyError(request.id(), RESPONSE_TYPE, "internal_error", ShutdownGate.MESSAGE, null);
+            return;
+        }
+        final AtomicBoolean returned = new AtomicBoolean();
+        Runnable exit = () -> {
+            if (returned.compareAndSet(false, true)) {
+                shutdown.exit();
+            }
+        };
+        boolean handedOff = false;
+        try {
+            registry.dispatch(messageType, data, request.id(), exit)
+                    .whenComplete((result, failure) -> reply(channel, request.id(), result, failure));
+            handedOff = true;
+        } finally {
+            if (!handedOff) {
+                exit.run();
+            }
+        }
         publishPanelMessageEvent(request, messageType, data);
     }
 

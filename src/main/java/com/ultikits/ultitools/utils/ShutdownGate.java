@@ -26,8 +26,12 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  * <p>
  * <b>Consumers.</b> {@link AgentMessageRouter#dispatch(String, CloudChannel)} (every covered type, before the switch
  * gate and the handler, for the whole handler call) and {@link SerialRequestWorker} (the covered file and property
- * types again when the worker runs them, since a request queued before the disable may run after it). The command
- * handler reads the same flag through {@code Bindings#disabling} on the server thread.
+ * types again when the worker runs them, since a request queued before the disable may run after it). A request that
+ * hands its change to another thread takes a permit of its own for that work and returns it when the work ends, from
+ * whichever thread ends it (22-23 second verification): {@link ModuleRequestHandler} for the module responder's
+ * worker, {@link PlayerLinkChannel} for the link handler thread. The command handler reads the same flag through
+ * {@code Bindings#disabling} on the server thread; work handed to the server thread is not waited for, since it can
+ * only run in a later tick and Bukkit cancels it when UltiTools disables.
  * <p>
  * <b>Covered types and their refusal</b> (every other request type keeps working until the connection closes):
  * <ul>
@@ -108,7 +112,7 @@ final class ShutdownGate {
          */
         boolean enter();
 
-        /** Returns the permit {@link #enter()} gave. */
+        /** Returns the permit {@link #enter()} gave; may run on a thread other than the one that entered. */
         void exit();
     }
 

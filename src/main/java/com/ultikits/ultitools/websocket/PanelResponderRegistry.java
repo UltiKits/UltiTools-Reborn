@@ -562,11 +562,35 @@ public class PanelResponderRegistry {
      *         a failure describing what went wrong
      */
     public CompletableFuture<JsonElement> dispatch(String messageType, JsonObject data, String requestId) {
+        return dispatch(messageType, data, requestId, null);
+    }
+
+    /**
+     * {@link #dispatch(String, JsonObject, String)}, also telling the caller when the module's work
+     * for the request has ended (22-23 second verification): {@code workEnded} runs exactly once,
+     * after the responder call returned and the future it returned completed, or as soon as the
+     * request settles without the responder having started (no responder, the queue full, the
+     * registry shut down, the deadline or a cancel while it waited). Unlike the returned future it
+     * does not run at the deadline while the responder is still running. It never runs for a
+     * responder whose future never completes. It runs on whichever thread ends the work; a
+     * {@code workEnded} that throws is ignored. Internal, not for module use.
+     *
+     * @param messageType see {@link #dispatch(String, JsonObject, String)}
+     * @param data        see {@link #dispatch(String, JsonObject, String)}
+     * @param requestId   see {@link #dispatch(String, JsonObject, String)}
+     * @param workEnded   runs once when the module's work for this request has ended; {@code null} for none
+     * @return see {@link #dispatch(String, JsonObject, String)}
+     * @since 6.3.1
+     */
+    @ApiStatus.Internal
+    public CompletableFuture<JsonElement> dispatch(String messageType, JsonObject data, String requestId,
+            Runnable workEnded) {
         CompletableFuture<JsonElement> outcome = new CompletableFuture<>();
         ResponderEntry entry = responders.get(messageType);
         if (entry == null) {
             outcome.completeExceptionally(
                     new IllegalStateException("No responder registered for '" + messageType + "'"));
+            runQuietly(workEnded);
             return outcome;
         }
 
@@ -574,7 +598,7 @@ public class PanelResponderRegistry {
         // its data freely, while the caller keeps reading its own object (for example to publish a
         // PanelMessageEvent of the request as received).
         JsonObject requestData = data == null ? null : data.deepCopy();
-        Invocation invocation = new Invocation(messageType, entry, requestData, outcome);
+        Invocation invocation = new Invocation(messageType, entry, requestData, outcome, workEnded);
         admitted.add(invocation);
         // Any settlement, including a caller's cancel, frees the queue slot and the deadline.
         outcome.whenComplete((value, failure) -> invocation.release());
@@ -595,6 +619,19 @@ public class PanelResponderRegistry {
             invocation.settle(null, workers.isShutdown() ? invocation.shutDownFailure() : invocation.refusal());
         }
         return outcome;
+    }
+
+    // PMD.AvoidCatchingGenericException: a caller's completion hook must never break a settlement.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static void runQuietly(Runnable hook) {
+        if (hook == null) {
+            return;
+        }
+        try {
+            hook.run();
+        } catch (RuntimeException ignored) {
+            LOGGER.fine("A panel responder completion hook failed.");
+        }
     }
 
     /**
@@ -696,20 +733,31 @@ public class PanelResponderRegistry {
         /** This registry's registration scope on the admitting thread, possibly {@code null}. */
         private final UltiToolsPlugin admittingScope;
         private volatile ScheduledFuture<?> deadline;
+        /** Runs once when the module's work ends; see {@link #dispatch(String, JsonObject, String, Runnable)}. */
+        private final Runnable workEnded;
+        /** Set by whichever comes first: a worker starting the call, or a settlement before it started. */
+        private final AtomicBoolean claimed = new AtomicBoolean();
+        private final AtomicBoolean ended = new AtomicBoolean();
 
         private Invocation(String messageType, ResponderEntry entry, JsonObject data,
-                CompletableFuture<JsonElement> outcome) {
+                CompletableFuture<JsonElement> outcome, Runnable workEnded) {
             this.messageType = messageType;
             this.entry = entry;
             this.data = data;
             this.outcome = outcome;
+            this.workEnded = workEnded;
             this.admittingLoader = Thread.currentThread().getContextClassLoader();
             this.admittingScope = registrationScopeOwner.get();
         }
 
         @Override
         public void run() {
+            if (!claimed.compareAndSet(false, true)) {
+                // Settled before it started; release() ended the work.
+                return;
+            }
             if (outcome.isDone()) {
+                endWork();
                 return;
             }
             // The start of a call. shutdown() writes its volatile flag before it does anything else,
@@ -719,21 +767,44 @@ public class PanelResponderRegistry {
             // has started; it runs to the end and its result is dropped.
             if (shutDown) {
                 settle(null, shutDownFailure());
+                endWork();
                 return;
             }
-            CompletableFuture<? extends JsonElement> responderFuture = callResponder();
+            CompletableFuture<? extends JsonElement> responderFuture = null;
+            boolean returned = false;
+            try {
+                responderFuture = callResponder();
+                returned = true;
+            } finally {
+                if (!returned) {
+                    // callResponder rethrew an Error after settling the request.
+                    endWork();
+                }
+            }
             if (responderFuture == null) {
+                endWork();
                 return;
             }
             responderFuture.whenComplete((value, throwable) -> {
-                if (throwable != null) {
-                    settle(null, throwable);
-                } else {
-                    // "Answered, no content": Java null and JsonNull both settle as JsonNull, so no
-                    // consumer ever sees a Java null for a successful outcome.
-                    settle(value == null ? JsonNull.INSTANCE : value, null);
+                try {
+                    if (throwable != null) {
+                        settle(null, throwable);
+                    } else {
+                        // "Answered, no content": Java null and JsonNull both settle as JsonNull, so no
+                        // consumer ever sees a Java null for a successful outcome.
+                        settle(value == null ? JsonNull.INSTANCE : value, null);
+                    }
+                } finally {
+                    endWork();
                 }
             });
+        }
+
+        /** Runs {@link #workEnded} once. */
+        private void endWork() {
+            if (ended.compareAndSet(false, true)) {
+                runQuietly(workEnded);
+            }
         }
 
         /**
@@ -787,6 +858,10 @@ public class PanelResponderRegistry {
                 task.cancel(false);
             }
             admitted.remove(this);
+            if (claimed.compareAndSet(false, true)) {
+                // Settled before a worker started it: the responder never runs.
+                endWork();
+            }
         }
 
         private RejectedExecutionException refusal() {
