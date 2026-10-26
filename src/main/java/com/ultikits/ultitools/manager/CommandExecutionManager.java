@@ -37,6 +37,7 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class CommandExecutionManager {
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelWebSocketClient webSocketClient;
     private final ConcurrentHashMap<String, CompletableFuture<CommandResult>> pendingCommands;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
@@ -285,8 +286,14 @@ public class CommandExecutionManager {
     /**
      * Sets the WebSocket client.
      * @param client the WebSocket client
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
+        V1CloudNotice.once(CommandExecutionManager.class, "setWebSocketClient");
         this.webSocketClient = client;
     }
     
@@ -486,7 +493,12 @@ public class CommandExecutionManager {
 
     /**
      * Executes a command received from the panel.
+     * @deprecated Use execute(String, String, Executor, CommandResultSink), which the protocol 2.0.0
+     *     session calls for a panel command; this v1 handler replies only over the client handed to
+     *     setWebSocketClient. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void executeCommand(JsonObject commandData) {
         try {
             String command = commandData.has("command") && !commandData.get("command").isJsonNull() 
@@ -629,7 +641,11 @@ public class CommandExecutionManager {
     
     /**
      * Command result data class.
+     * @deprecated There is no replacement: the protocol 2.0.0 command path reports through
+     *     CommandResultSink. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static class CommandResult {
         private final boolean success;
         private final String output;

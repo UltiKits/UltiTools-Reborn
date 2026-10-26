@@ -9,7 +9,12 @@ import lombok.Data;
  * @param <T> the type of the data payload
  * @author wisdomme
  * @since 6.2.0
+ * @deprecated There is no replacement: this parsed the protocol v1 Worker envelope
+ *     {@code {code, msg, data}}, which UltiCloud no longer serves. The protocol 2.0.0 catalogue
+ *     answers {@code {data: ...}} and the framework parses it itself. Removed in 6.4.0.
+ * @removeIn 6.4.0
  */
+@Deprecated(since = "6.3.1", forRemoval = true)
 @Data
 public class ApiResponse<T> {
     private String code;

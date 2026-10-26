@@ -442,15 +442,13 @@ public class PluginInitiationUtils {
     /**
      * The {@code session}-targeted, {@link CloudSession}-returning form of {@link #disableCloud()}
      * (CR-01/WR-02, 16-REVIEW-cloud.md) -- package-private, since it is new-in-6.3.0 and reached
-     * only by other members of this package ({@code CloudAuthManager#logout()},
-     * {@link #reinitWebSocket(CloudSession)}'s budget-exhaustion branch).
+     * only by other members of this package ({@code CloudAuthManager#logout()}).
      * <p>
-     * {@link #reinitWebSocket(CloudSession)}'s budget-exhaustion branch calls this on the specific
-     * session whose backoff ran out, rather than the no-arg {@link #disableCloud()} (which always
-     * targets whatever {@link CloudSession#current()} happens to be at the moment it runs). A fresh
-     * login racing in between that branch's own currency check and this call would otherwise let a
-     * stale exhaustion event for an old session tear down an unrelated, brand-new one. Likewise,
-     * {@code CloudAuthManager#logout()} calls this with {@code CloudSession.current()} captured at
+     * It acts on the session its caller names, rather than on whatever {@link CloudSession#current()}
+     * happens to be when it runs, as the no-arg {@link #disableCloud()} does: a fresh login racing in
+     * would otherwise let a teardown meant for an old session tear down an unrelated, brand-new one.
+     * (The protocol v1 reconnect loop's budget-exhaustion branch, its other 6.3.0 caller, was removed
+     * in 6.3.1.) {@code CloudAuthManager#logout()} calls this with {@code CloudSession.current()} captured at
      * its own call site -- immediately before teardown begins -- and acts on the returned reference
      * afterward rather than re-reading {@link CloudSession#current()} a second, independent time.
      *
@@ -523,17 +521,13 @@ public class PluginInitiationUtils {
                 return session;
             }
 
-            // Stop server monitoring. It carries its own ScheduledExecutorService (batch_update
-            // every 5 seconds) plus two main-thread Bukkit scheduled tasks (1Hz TPS/CPU, a
-            // world/player/plugin snapshot every 5 seconds). Before this line existed at all,
-            // stopMonitoring() had no caller anywhere in src/main — written, tested, just never
-            // wired up. Without stopping it, the main thread would keep iterating every world and
-            // chunk every 5 seconds after "cloud features are disabled."
-            teardownStep("stopping server monitor", () -> {
-                if (UltiTools.getInstance().getServerMonitorManager() != null) {
-                    UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
-                }
-            });
+            // Stop the protocol v1 server monitor. It carries its own ScheduledExecutorService
+            // (batch_update every 5 seconds) plus two main-thread Bukkit scheduled tasks (1Hz
+            // TPS/CPU, a world/player/plugin snapshot every 5 seconds). As of 6.3.1 the framework
+            // never starts it, but a caller of the deprecated v1 API still can, and "cloud features
+            // are disabled" must stop it too; otherwise the main thread keeps iterating every world
+            // and chunk every 5 seconds.
+            teardownStep("stopping server monitor", PluginInitiationUtils::stopV1Monitor);
 
             // Strip the player event listener. Still receiving player events after cloud is
             // disabled is pure waste — the isConnected() check inside the event handler only
@@ -546,6 +540,14 @@ public class PluginInitiationUtils {
         }
 
         return session;
+    }
+
+    /** Stops the protocol v1 server monitor, if one exists; it runs only when a caller started it. */
+    @SuppressWarnings("removal") // stops the deprecated v1 monitor until it leaves in 6.4.0 (S-67)
+    private static void stopV1Monitor() {
+        if (UltiTools.getInstance().getServerMonitorManager() != null) {
+            UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
+        }
     }
 
     /**
@@ -583,26 +585,13 @@ public class PluginInitiationUtils {
      * itself is not replaced; doing so for no reason would gratuitously drop its credential and its
      * connection. Only a session that {@link CloudSession#invalidate()} already ran on
      * (typically {@code disableCloud()}, without a following {@code /ulticloud login}) gets
-     * replaced.
-     * <p>
-     * <b>16-10 gap-closure addendum (round-12 review, PR #464):</b> {@link CloudSession#getBackoff()}
-     * is reset unconditionally below, regardless of whether the session itself needed replacing --
-     * unlike the credential and the connection, reconnect-attempt history is NOT worth preserving
-     * across a call to this method. Both of this method's own documented call sites -- cloud login
-     * at server startup, and after a successful {@code /ulticloud login} -- are, by definition, a
-     * fresh start of the connection-attempt cycle, matching the pre-6.3.0 global backoff's own
-     * behaviour (every {@code enableCloud()} call reset it). Without this, {@code UltiTools#onDisable()}
-     * stops the current session's schedulers and WebSocket client but never invalidates the session
-     * itself (a deliberate choice -- a full teardown at JVM shutdown is pointless work), so a plugin
-     * disabled and re-enabled in the same classloader (e.g. {@code /reload}) resumes with whatever
-     * backoff attempt count it had accumulated before the disable, exhausting its retry budget
-     * prematurely instead of getting the fresh budget a restart implies.
+     * replaced. (The protocol v1 reconnect budget this method also reset in 6.3.0 was removed in
+     * 6.3.1: the protocol v2 agent connection keeps its own backoff.)
      */
     public static void enableCloud() {
         if (!CloudSession.current().isCurrent()) {
             CloudSession.startNew();
         }
-        CloudSession.current().getBackoff().reset();
     }
 
     /** Lets a test assert whether the state machine is currently enabled -- i.e. whether the current session is still current. */

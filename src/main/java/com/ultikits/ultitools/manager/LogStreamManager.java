@@ -11,7 +11,6 @@ import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
-import lombok.Getter;
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -49,10 +48,10 @@ public class LogStreamManager implements Listener {
             new HashSet<>(Arrays.asList("info", "warning", "error", "debug"));
 
     private static LogStreamManager instance;
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelWebSocketClient webSocketClient;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
-    
-    @Getter
+
     private UltiPanelLogTransmitter logTransmitter;
     private SystemLogHandler systemLogHandler;
     
@@ -74,8 +73,14 @@ public class LogStreamManager implements Listener {
     
     /**
      * Initializes the log stream manager.
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // builds the deprecated v1 transmitter over the v1 client; kept until 6.4.0 (S-67)
     public void initialize(UltiPanelWebSocketClient client) {
+        V1CloudNotice.once(LogStreamManager.class, "initialize");
         // Idempotent: a repeat call must first tear down whatever the previous round left behind.
         //
         // This method is called by onConnectHandler, and onConnectHandler runs on **every**
@@ -110,15 +115,15 @@ public class LogStreamManager implements Listener {
         this.logTransmitter.adoptPending(unsent);
 
         // Gate-2 finding (round 4): externalDrainMode must be re-applied to EVERY freshly-created
-        // transmitter, not only once from ServerMonitorManager#startMonitoring(). wireManagers()
-        // calls startMonitoring() BEFORE this method on first boot, so the very first transmitter
-        // did not exist yet when startMonitoring() tried to enable drain mode on it -- the
-        // (defensive, still-present) call there saw a null transmitter and never retried. Every
-        // reconnect after the first calls THIS method again to build a fresh transmitter, while
-        // startMonitoring() itself early-returns on isMonitoring() already being true, so it would
-        // never reach a later transmitter either. Querying monitoring state here, at the one place
+        // transmitter, not only once from ServerMonitorManager#startMonitoring(). The 6.3.0 v1
+        // wiring (removed in 6.3.1) called startMonitoring() BEFORE this method on first boot, so
+        // the very first transmitter did not exist yet when startMonitoring() tried to enable
+        // drain mode on it -- the (defensive, still-present) call there saw a null transmitter and
+        // never retried. Every reconnect after the first calls THIS method again to build a fresh
+        // transmitter, while startMonitoring() itself early-returns on isMonitoring() already being
+        // true, so it would never reach a later transmitter either. Querying monitoring state here, at the one place
         // a transmitter is actually constructed, covers both the first-boot ordering and every
-        // reconnect -- without needing to reorder wireManagers() or special-case reconnects.
+        // reconnect -- without needing to reorder the callers or special-case reconnects.
         ServerMonitorManager serverMonitorManager = UltiTools.getInstance().getServerMonitorManager();
         if (serverMonitorManager != null && serverMonitorManager.isMonitoring()) {
             this.logTransmitter.setExternalDrainMode(true);
@@ -260,7 +265,11 @@ public class LogStreamManager implements Listener {
 
     /**
      * Handles a log stream message.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void handleLogStreamMessage(JsonObject data) {
         if (data == null) {
             UltiTools.getInstance().getLogger().warning(FrameworkText.text("LogStreamManager: 收到空的日志流消息"));
@@ -738,7 +747,11 @@ public class LogStreamManager implements Listener {
      * in the {@link SystemLogHandler}'s level state (a null or blank level counts as
      * {@code "info"}, matched case-insensitively; the level text sent is left as given). The
      * panel's {@code excluded-loggers} do not apply, because a direct entry has no logger name.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void sendCustomLog(String level, String message, String source) {
         if (logTransmitter != null && isDirectLevelEnabled(level)) {
             logTransmitter.sendLog(level, message, source, null);
@@ -771,7 +784,11 @@ public class LogStreamManager implements Listener {
      * <p>
      * The panel's {@code levels} apply, as for {@link #sendCustomLog}; the panel's
      * {@code excluded-loggers} do not, because a direct entry has no logger name.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void sendPlayerEventLog(String eventType, String playerName, String message) {
         sendCustomLog("info", 
             FrameworkText.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
@@ -783,7 +800,11 @@ public class LogStreamManager implements Listener {
      * <p>
      * The panel's {@code levels} apply, as for {@link #sendCustomLog}; the panel's
      * {@code excluded-loggers} do not, because a direct entry has no logger name.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void sendPluginActionLog(String action, String details) {
         sendCustomLog("info",
             FrameworkText.format("[插件操作] %s: %s", action, details),
@@ -792,19 +813,43 @@ public class LogStreamManager implements Listener {
 
     // ========== Bukkit event handlers ==========
     
+    /**
+     * Sends a protocol v1 join line; does nothing without a v1 transmitter.
+     *
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
     @EventHandler
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerJoin(PlayerJoinEvent event) {
         String playerName = event.getPlayer().getName();
         sendPlayerEventLog("JOIN", playerName, FrameworkText.text("玩家加入服务器"));
     }
     
+    /**
+     * Sends a protocol v1 quit line; does nothing without a v1 transmitter.
+     *
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
     @EventHandler
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerQuit(PlayerQuitEvent event) {
         String playerName = event.getPlayer().getName();
         sendPlayerEventLog("QUIT", playerName, FrameworkText.text("玩家离开服务器"));
     }
     
+    /**
+     * Sends a protocol v1 "server loaded" line; does nothing without a v1 transmitter.
+     *
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
     @EventHandler
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onServerLoad(ServerLoadEvent event) {
         sendCustomLog("info", FrameworkText.text("服务器加载完成"), "server");
     }
@@ -818,6 +863,20 @@ public class LogStreamManager implements Listener {
         } catch (Exception e) {
             return "unknown";
         }
+    }
+
+    /**
+     * The protocol v1 transmitter {@link #initialize(UltiPanelWebSocketClient)} built, or
+     * {@code null} before that (always, as of 6.3.1, unless a caller hands in a v1 client).
+     *
+     * @return the v1 transmitter, possibly {@code null}
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     streams the console itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    public UltiPanelLogTransmitter getLogTransmitter() {
+        return logTransmitter;
     }
 
     /**

@@ -22,16 +22,21 @@ import com.ultikits.ultitools.websocket.CloudPlayerLinks;
  * credential.</p>
  *
  * <p><b>Compatibility.</b> Every public type and member of 6.3.0 is still present with the same
- * signatures; only behaviour and this documentation changed. Deprecation and removal follow in a
- * later release. UltiLogin 2.0.0 maps {@link Outcome#PATH_NOT_ALLOWED} to a link error and never
- * retries, so its {@code /panel} fails in the way it already handles.</p>
+ * signatures; only behaviour and this documentation changed. As of 6.3.1 the class, its two calls
+ * and its two nested types are deprecated for removal in 6.4.0. UltiLogin 2.0.0 maps
+ * {@link Outcome#PATH_NOT_ALLOWED} to a link error and never retries, so its {@code /panel} fails in
+ * the way it already handles.</p>
  *
  * <p><b>Threading.</b> The methods no longer perform network I/O, but they keep the 6.3.0 contract
  * and still refuse the server's primary thread with {@link IllegalStateException}; callers that
  * already hop to an asynchronous task keep working unchanged.</p>
  *
  * @since 6.3.0
+ * @deprecated Use {@link CloudPlayerLinks} to link a player; protocol 2.0.0 has no v1 REST cloud, so
+ *     every call of this class is refused. Removed in 6.4.0.
+ * @removeIn 6.4.0
  */
+@Deprecated(since = "6.3.1", forRemoval = true)
 public final class UltiCloudRequests {
 
     private static final Logger LOGGER = Logger.getLogger(UltiCloudRequests.class.getName());
@@ -53,7 +58,11 @@ public final class UltiCloudRequests {
      * @param jsonBody the JSON request body, ignored because nothing is sent
      * @return {@link Outcome#PATH_NOT_ALLOWED} with no status code and no body
      * @throws IllegalStateException if called on the server's primary thread
+     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.0.0 has no v1
+     *     REST cloud, so this call is always refused. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static Result post(String path, String jsonBody) {
         requireOffPrimaryThread();
         announceOnce(CREATE_PATH.equals(path) || POLL_PATH.equals(path));
@@ -67,7 +76,11 @@ public final class UltiCloudRequests {
      * @param query query parameters, ignored because nothing is sent
      * @return {@link Outcome#PATH_NOT_ALLOWED} with no status code and no body
      * @throws IllegalStateException if called on the server's primary thread
+     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.0.0 has no v1
+     *     REST cloud, so this call is always refused. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static Result get(String path, Map<String, String> query) {
         requireOffPrimaryThread();
         announceOnce(POLL_PATH.equals(path) || CREATE_PATH.equals(path));
@@ -100,7 +113,11 @@ public final class UltiCloudRequests {
      * What happened to a request.
      *
      * @since 6.3.0
+     * @deprecated There is no replacement: {@link CloudPlayerLinks} reports its own outcomes.
+     *     Removed in 6.4.0 with {@link UltiCloudRequests}.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public enum Outcome {
         /**
          * An HTTP exchange completed; read {@link Result#getStatusCode()}. Since 6.3.1 no call makes
@@ -126,7 +143,11 @@ public final class UltiCloudRequests {
      * Carries no request header and no credential.
      *
      * @since 6.3.0
+     * @deprecated There is no replacement: {@link CloudPlayerLinks} reports its own outcomes.
+     *     Removed in 6.4.0 with {@link UltiCloudRequests}.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static final class Result {
 
         private final Outcome outcome;

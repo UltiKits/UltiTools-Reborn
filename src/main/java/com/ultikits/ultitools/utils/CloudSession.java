@@ -20,13 +20,12 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.exceptions.DataAccessException;
-import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
 
 /**
  * The single owner of one UltiCloud login's entire lifetime.
  * <p>
- * A session owns the protocol v2 server credential, the device-login poll it started, the reconnect
- * backoff state and its agent connection (D-16). {@code login} constructs a new
+ * A session owns the protocol v2 server credential, the device-login poll it started and its agent
+ * connection, which keeps its own reconnect backoff (D-16). {@code login} constructs a new
  * session via {@link #startNew()}; {@code logout} replaces the current one the same way. Everything
  * the replaced session started -- an in-flight poll, a reconnect attempt --
  * lapses on its own once {@link #invalidate()} has run, because {@link #commitCredential(ServerCredential)}
@@ -116,14 +115,6 @@ final class CloudSession {
 
     // All field declarations precede all methods (PMD FieldDeclarationsShouldBeAtStartOfClass) --
     // moved here in plan 16-10 (Gate 1); no field's own meaning changed, only its position.
-
-    /**
-     * The global cap on outer reinit attempts. Once exceeded, the state machine enters a terminal
-     * state and only {@code /ulticloud login} or a restart recovers it. Package-private (not
-     * private) so {@link PluginInitiationUtils#reinitWebSocket(CloudSession)} can name it in its own
-     * "gave up after %d attempts" log line -- the two classes are in the same package.
-     */
-    static final int MAX_REINIT_ATTEMPTS = 10;
 
     /**
      * How often the session persists its reliable-delivery state (D-15): the outbox and the
@@ -245,19 +236,6 @@ final class CloudSession {
 
     private ScheduledExecutorService pollExecutor;
     private ScheduledFuture<?> pollTask;
-
-    /**
-     * The global budget and backoff for this session's outer reconnection (reinit loop).
-     * <p>
-     * The client's own limit of 5 attempts is a <b>per-instance</b> cap, and
-     * {@code PluginInitiationUtils.reinitWebSocket} builds a brand-new client instance every time --
-     * so the per-instance cap places no constraint at all on the whole, which is exactly how the
-     * loop became unbounded (issue #181). This strategy spans client instances instead; only one
-     * successful {@code onOpen} resets it. Being a fresh field on every new session is also what
-     * makes D-16's "the old session's backoff counter does not carry over" true for free -- a new
-     * session's budget starts at zero attempts by construction, with no reset call needed.
-     */
-    private final ExponentialBackoffStrategy backoff = ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
 
     // No explicit constructor: this class needs none, and the implicit no-arg constructor the
     // compiler generates is already package-private (matching this top-level class's own default
@@ -412,13 +390,6 @@ final class CloudSession {
         } finally {
             credential = null;
         }
-    }
-
-    /**
-     * @return this session's own reconnect backoff strategy -- never shared with any other session
-     */
-    ExponentialBackoffStrategy getBackoff() {
-        return backoff;
     }
 
     /** Stops this session's device-login steps (the request and the polling) and their executor. */

@@ -61,6 +61,7 @@ public class UltiPanelLogTransmitter {
      */
     static final long DISCARD_REPORT_INTERVAL_MS = 60_000L;
 
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private final UltiPanelWebSocketClient webSocketClient;
     private final String serverId;
 
@@ -219,9 +220,25 @@ public class UltiPanelLogTransmitter {
      *
      * @param webSocketClient the WebSocket client
      * @param serverId the server ID
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) streams the console through a transmitter it builds itself. Removed in
+     *     6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
     public UltiPanelLogTransmitter(UltiPanelWebSocketClient webSocketClient, String serverId) {
-        this(webSocketClient, serverId != null ? serverId : getDefaultServerId(), null);
+        this(webSocketClient, v1ServerId(serverId), null);
+    }
+
+    /**
+     * The v1 constructor's server ID, defaulted as in 6.3.0; also writes that constructor's one INFO
+     * line per run, here because nothing may precede its {@code this(...)} call.
+     */
+    private static String v1ServerId(String serverId) {
+        V1CloudNotice.once(UltiPanelLogTransmitter.class,
+                "UltiPanelLogTransmitter(UltiPanelWebSocketClient, String)");
+        return serverId != null ? serverId : getDefaultServerId();
     }
 
     /**
@@ -234,6 +251,7 @@ public class UltiPanelLogTransmitter {
         this(null, "", java.util.Objects.requireNonNull(sink, "sink"));
     }
 
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelLogTransmitter(UltiPanelWebSocketClient webSocketClient, String serverId, AgentLineSink sink) {
         this.webSocketClient = webSocketClient;
         this.serverId = serverId;

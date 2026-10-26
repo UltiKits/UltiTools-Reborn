@@ -15,12 +15,26 @@ import java.util.Map;
 /**
  * Simple HTTP client implementation using HttpURLConnection.
  * Replaces Hutool-http to reduce dependency size.
+ * <p>
+ * As of 6.3.1 nothing in the framework uses it: it carried the protocol v1 REST calls, and the
+ * protocol 2.0.0 client has its own transport. It still sends the requests it is given, as before.
  *
  * @author wisdomme
  * @since 6.2.0
+ * @deprecated Use {@link HttpURLConnection} or an HTTP client library of your own; the framework no
+ *     longer needs a general HTTP helper. Removed in 6.4.0.
+ * @removeIn 6.4.0
  */
+@Deprecated(since = "6.3.1", forRemoval = true)
 public class SimpleHttpClient {
 
+    /**
+     * Status and body of one exchange.
+     *
+     * @deprecated There is no replacement, as for {@link SimpleHttpClient}. Removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static class Response implements AutoCloseable {
         private final int status;
         private final String body;

@@ -65,6 +65,7 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class FileOperationManager {
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelWebSocketClient webSocketClient;
     private final File serverRoot;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
@@ -187,8 +188,14 @@ public class FileOperationManager {
     /**
      * Sets the WebSocket client.
      * @param client the WebSocket client
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
+        V1CloudNotice.once(FileOperationManager.class, "setWebSocketClient");
         this.webSocketClient = client;
     }
 
@@ -540,7 +547,12 @@ public class FileOperationManager {
      * {@code operationData} afterward, following the immutable-string capture discipline
      * {@link TriggerContext} establishes — the mutable {@link JsonObject} itself is not safe to
      * re-read once handed to another thread.
+     * @deprecated There is no replacement for modules: the framework's own UltiCloud session (protocol
+     *     2.0.0) answers the panel's file requests; this v1 handler replies only over the client
+     *     handed to setWebSocketClient. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void handleFileOperation(JsonObject operationData) {
         try {
             String operation = operationData.has("operation") && !operationData.get("operation").isJsonNull()

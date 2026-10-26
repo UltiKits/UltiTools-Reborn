@@ -33,6 +33,7 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class ServerMonitorManager {
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelWebSocketClient webSocketClient;
     /**
      * Send thread pool. <b>Must not be final</b>: {@link #stopMonitoring()} shuts it down, and
@@ -259,14 +260,27 @@ public class ServerMonitorManager {
     /**
      * Set the WebSocket client.
      * @param client the WebSocket client
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
+        V1CloudNotice.once(ServerMonitorManager.class, "setWebSocketClient");
         this.webSocketClient = client;
     }
 
     /**
-     * Start monitoring server status.
+     * Start monitoring server status: the protocol v1 {@code batch_update} sender, its log drain and
+     * the two sampling tasks it owns. As of 6.3.1 the framework never calls it; the protocol 2.0.0
+     * session samples through its own telemetry instead.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     *     the server's status and telemetry itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // reads the deprecated v1 log transmitter; kept until 6.4.0 (S-67)
     public void startMonitoring() {
         if (isMonitoring) {
             return;
@@ -293,12 +307,12 @@ public class ServerMonitorManager {
 
         // Enable the log transmitter's external drain mode (logs will be sent uniformly via
         // batch_update). Defensive only -- the PRIMARY point this is applied from is
-        // LogStreamManager#initialize() itself (Gate-2 finding, round 4): wireManagers() calls
-        // startMonitoring() BEFORE the very first transmitter exists, so this check would see
-        // null and never retry on first boot, and every reconnect rebuilds a fresh transmitter
-        // through initialize() while this method early-returns above (isMonitoring already
-        // true) without ever reaching that new instance. This call stays here only for the case
-        // where a transmitter genuinely already exists when startMonitoring() runs.
+        // LogStreamManager#initialize() itself (Gate-2 finding, round 4): the 6.3.0 v1 wiring
+        // (removed in 6.3.1) called startMonitoring() BEFORE the very first transmitter existed,
+        // so this check would see null and never retry, and every reconnect rebuilds a fresh
+        // transmitter through initialize() while this method early-returns above (isMonitoring
+        // already true) without ever reaching that new instance. This call stays here only for
+        // the case where a transmitter genuinely already exists when startMonitoring() runs.
         LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
         if (lsm != null && lsm.getLogTransmitter() != null) {
             lsm.getLogTransmitter().setExternalDrainMode(true);
@@ -360,7 +374,11 @@ public class ServerMonitorManager {
      * on the send thread, so shutting down sending removed it too. After the move, not
      * cancelling turns "stop monitoring" into "stop sending, but still iterate every world and
      * chunk every 5 seconds" -- and now on the main thread. See the PR #265 review.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     *     the server's status and telemetry itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void stopMonitoring() {
         if (!isMonitoring) {
             return;
@@ -390,7 +408,11 @@ public class ServerMonitorManager {
 
     /**
      * Send server status information.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     *     the server's status and telemetry itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void sendServerStatus() {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -486,7 +508,11 @@ public class ServerMonitorManager {
 
     /**
      * Send server status information with a request ID (in response to a backend request).
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     *     the server's status and telemetry itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void sendServerStatusWithRequestId(String requestId) {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -821,6 +847,7 @@ public class ServerMonitorManager {
      * Sends the batch_update message, merging status, metrics, plugins and logs into a single
      * WebSocket frame. Called every 5 seconds; plugins is included once every 12th tick (60 seconds).
      */
+    @SuppressWarnings("removal") // reads the deprecated v1 log transmitter; kept until 6.4.0 (S-67)
     private void sendBatchUpdate() {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -933,6 +960,7 @@ public class ServerMonitorManager {
      * {@code if (batch.X)}, so a partial batch_update is an already-supported shape, not a
      * protocol change.
      */
+    @SuppressWarnings("removal") // reads the deprecated v1 log transmitter; kept until 6.4.0 (S-67)
     private void maybeSendLogsOnly() {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -979,6 +1007,7 @@ public class ServerMonitorManager {
      * {@link #lastLogFlushMs} is still advanced afterwards so the interval-based tasks do not
      * immediately re-fire for the records this call already sent.
      */
+    @SuppressWarnings("removal") // reads the deprecated v1 log transmitter; kept until 6.4.0 (S-67)
     void drainLogsNow() {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -1164,7 +1193,11 @@ public class ServerMonitorManager {
 
     /**
      * Sends performance metrics data (standalone message, for on-demand requests).
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     *     the server's status and telemetry itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void sendMetricsData() {
         try {
             JsonObject message = new JsonObject();
@@ -1184,7 +1217,11 @@ public class ServerMonitorManager {
 
     /**
      * Sends performance metrics data with a request ID (in response to a backend request).
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     *     the server's status and telemetry itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void sendMetricsDataWithRequestId(String requestId) {
         try {
             JsonObject message = new JsonObject();
@@ -1298,7 +1335,11 @@ public class ServerMonitorManager {
 
     /**
      * Sends a player event.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void sendPlayerEvent(String eventType, Player player, JsonObject additionalData) {
         try {
             JsonObject message = new JsonObject();
@@ -1343,6 +1384,14 @@ public class ServerMonitorManager {
         }
     }
     
+    /**
+     * Whether the protocol v1 monitor that startMonitoring() starts is running.
+     *
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     *     the server's status and telemetry itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public boolean isMonitoring() {
         return isMonitoring;
     }
