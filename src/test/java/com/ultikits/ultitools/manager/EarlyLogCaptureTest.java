@@ -36,6 +36,7 @@ import com.google.gson.JsonParser;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+import com.ultikits.ultitools.websocket.V1ClientConnectSeam;
 
 /**
  * #487: records logged after {@code UltiTools#onLoad()} and before {@code LogStreamManager#initialize}
@@ -134,10 +135,13 @@ class EarlyLogCaptureTest {
             server = new CapturingServer();
             server.start();
             assertThat(server.started.await(10, TimeUnit.SECONDS)).isTrue();
+            // 6.3.1 refuses every v1 connect; these kept v1 log-stream tests reach their own local server.
+            V1ClientConnectSeam.permitConnect(true);
         }
 
         @AfterEach
         void stopServer() throws InterruptedException {
+            V1ClientConnectSeam.permitConnect(false);
             LogStreamManager.getInstance().shutdown();
             if (client != null) {
                 client.disconnect();

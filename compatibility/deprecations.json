@@ -147,6 +147,16 @@
     "status": "ANNOUNCED"
   },
   {
+    "key": "com.ultikits.ultitools.entities.vo.ServerEntityVO",
+    "className": "com.ultikits.ultitools.entities.vo.ServerEntityVO",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: {@code /ulticloud login} links a protocol 2.0.0 server. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.interfaces.DataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin,java.lang.Class)",
     "className": "com.ultikits.ultitools.interfaces.DataStore",
     "memberName": "getOperator",
@@ -520,6 +530,38 @@
     "status": "ANNOUNCED"
   },
   {
+    "key": "com.ultikits.ultitools.manager.CommandExecutionManager#executeCommand(com.google.gson.JsonObject)",
+    "className": "com.ultikits.ultitools.manager.CommandExecutionManager",
+    "memberName": "executeCommand",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use execute(String, String, Executor, CommandResultSink), which the protocol 2.0.0 session calls for a panel command; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.CommandExecutionManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)",
+    "className": "com.ultikits.ultitools.manager.CommandExecutionManager",
+    "memberName": "setWebSocketClient",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.CommandExecutionManager$CommandResult",
+    "className": "com.ultikits.ultitools.manager.CommandExecutionManager$CommandResult",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the protocol 2.0.0 command path reports through CommandResultSink. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.manager.CommandManager#register(org.bukkit.command.CommandExecutor)",
     "className": "com.ultikits.ultitools.manager.CommandManager",
     "memberName": "register",
@@ -588,6 +630,28 @@
     "removedIn": "6.3.0"
   },
   {
+    "key": "com.ultikits.ultitools.manager.FileOperationManager#handleFileOperation(com.google.gson.JsonObject)",
+    "className": "com.ultikits.ultitools.manager.FileOperationManager",
+    "memberName": "handleFileOperation",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement for modules: the framework's own UltiCloud session (protocol 2.0.0) answers the panel's file requests; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.FileOperationManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)",
+    "className": "com.ultikits.ultitools.manager.FileOperationManager",
+    "memberName": "setWebSocketClient",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.manager.ListenerManager#register(com.ultikits.ultitools.abstracts.UltiToolsPlugin,org.bukkit.event.Listener)",
     "className": "com.ultikits.ultitools.manager.ListenerManager",
     "memberName": "register",
@@ -610,6 +674,193 @@
     "replacement": "This overload reflectively scans and instantiates every {@code @EventListener} class in {@code packageName} without ever consulting EventListener#manualRegister() -- a listener its author deliberately withheld from auto-registration is registered anyway. After plan 04-08, PluginManager#registerBukkit no longer has an in-framework caller for this overload either; both registration entry points resolve listeners as beans from the module's own container instead. Use registerAll(UltiToolsPlugin), which does honour {@code manualRegister()}. See issue #337.",
     "status": "REMOVED",
     "removedIn": "6.3.0"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#getLogTransmitter()",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "getLogTransmitter",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#handleLogStreamMessage(com.google.gson.JsonObject)",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "handleLogStreamMessage",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#initialize(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "initialize",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#onPlayerJoin(org.bukkit.event.player.PlayerJoinEvent)",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "onPlayerJoin",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent)",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "onPlayerQuit",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#onServerLoad(org.bukkit.event.server.ServerLoadEvent)",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "onServerLoad",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#sendCustomLog(java.lang.String,java.lang.String,java.lang.String)",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "sendCustomLog",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#sendPlayerEventLog(java.lang.String,java.lang.String,java.lang.String)",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "sendPlayerEventLog",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.LogStreamManager#sendPluginActionLog(java.lang.String,java.lang.String)",
+    "className": "com.ultikits.ultitools.manager.LogStreamManager",
+    "memberName": "sendPluginActionLog",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.PlayerEventManager#initialize(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)",
+    "className": "com.ultikits.ultitools.manager.PlayerEventManager",
+    "memberName": "initialize",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.PlayerEventManager#onPlayerChangedWorld(org.bukkit.event.player.PlayerChangedWorldEvent)",
+    "className": "com.ultikits.ultitools.manager.PlayerEventManager",
+    "memberName": "onPlayerChangedWorld",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.PlayerEventManager#onPlayerChat(org.bukkit.event.player.PlayerChatEvent)",
+    "className": "com.ultikits.ultitools.manager.PlayerEventManager",
+    "memberName": "onPlayerChat",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.PlayerEventManager#onPlayerCommandPreprocess(org.bukkit.event.player.PlayerCommandPreprocessEvent)",
+    "className": "com.ultikits.ultitools.manager.PlayerEventManager",
+    "memberName": "onPlayerCommandPreprocess",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.PlayerEventManager#onPlayerDeath(org.bukkit.event.entity.PlayerDeathEvent)",
+    "className": "com.ultikits.ultitools.manager.PlayerEventManager",
+    "memberName": "onPlayerDeath",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.PlayerEventManager#onPlayerJoin(org.bukkit.event.player.PlayerJoinEvent)",
+    "className": "com.ultikits.ultitools.manager.PlayerEventManager",
+    "memberName": "onPlayerJoin",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.PlayerEventManager#onPlayerKick(org.bukkit.event.player.PlayerKickEvent)",
+    "className": "com.ultikits.ultitools.manager.PlayerEventManager",
+    "memberName": "onPlayerKick",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.PlayerEventManager#onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent)",
+    "className": "com.ultikits.ultitools.manager.PlayerEventManager",
+    "memberName": "onPlayerQuit",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
   },
   {
     "key": "com.ultikits.ultitools.manager.PluginDependencyResolver$PluginNode#getAllDependencies(java.util.Set)",
@@ -645,6 +896,138 @@
     "replacement": "This overload's reflective, with-args construction has failed on every release since 6.2.0 (Phase 1 D-15, measured): SecurityPolicy#isSafeParameterType rejects the runtime types {@code authors} and {@code loadAfter} actually are ({@code Arrays.asList(...)}'s {@code java.util.Arrays$ArrayList}, or any {@code Collections.*} wrapper) before the module's constructor ever runs. This overload existed to bypass {@code plugin.yml}-based metadata for connector callers; use register(UltiToolsPlugin) instead, which takes an already-constructed plugin instance and has no reflective construction path of its own. See issue #332.",
     "status": "REMOVED",
     "removedIn": "6.3.0"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#isMonitoring()",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "isMonitoring",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#sendMetricsData()",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "sendMetricsData",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#sendMetricsDataWithRequestId(java.lang.String)",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "sendMetricsDataWithRequestId",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#sendPlayerEvent(java.lang.String,org.bukkit.entity.Player,com.google.gson.JsonObject)",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "sendPlayerEvent",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#sendServerStatus()",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "sendServerStatus",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#sendServerStatusWithRequestId(java.lang.String)",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "sendServerStatusWithRequestId",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "setWebSocketClient",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#startMonitoring()",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "startMonitoring",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerMonitorManager#stopMonitoring()",
+    "className": "com.ultikits.ultitools.manager.ServerMonitorManager",
+    "memberName": "stopMonitoring",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerPropertiesManager#handleServerProperties(com.google.gson.JsonObject)",
+    "className": "com.ultikits.ultitools.manager.ServerPropertiesManager",
+    "memberName": "handleServerProperties",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use readVersioned(int) and updateWithBaseVersion(String, Map), which the protocol 2.0.0 session calls; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.ServerPropertiesManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)",
+    "className": "com.ultikits.ultitools.manager.ServerPropertiesManager",
+    "memberName": "setWebSocketClient",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.UltiPanelLogTransmitter#UltiPanelLogTransmitter(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient,java.lang.String)",
+    "className": "com.ultikits.ultitools.manager.UltiPanelLogTransmitter",
+    "memberName": "UltiPanelLogTransmitter",
+    "kind": "CONSTRUCTOR",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) streams the console through a transmitter it builds itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
   },
   {
     "key": "com.ultikits.ultitools.utils.AnnotationUtils#findAnnotation(java.lang.Class,java.lang.Class)",
@@ -739,6 +1122,39 @@
     "status": "ANNOUNCED"
   },
   {
+    "key": "com.ultikits.ultitools.utils.HttpRequestUtils#getServerByUUID(java.lang.String,com.ultikits.ultitools.entities.TokenEntity)",
+    "className": "com.ultikits.ultitools.utils.HttpRequestUtils",
+    "memberName": "getServerByUUID",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: a protocol 2.0.0 server is linked with {@code /ulticloud login} and identified by its server credential. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.HttpRequestUtils#registerServer(java.lang.String,java.lang.String,int,java.lang.String,boolean,com.ultikits.ultitools.entities.TokenEntity)",
+    "className": "com.ultikits.ultitools.utils.HttpRequestUtils",
+    "memberName": "registerServer",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: {@code /ulticloud login} links a protocol 2.0.0 server through the device authorization. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.HttpRequestUtils#updateServer(java.lang.String,int,java.lang.String,boolean,com.ultikits.ultitools.entities.TokenEntity)",
+    "className": "com.ultikits.ultitools.utils.HttpRequestUtils",
+    "memberName": "updateServer",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: a protocol 2.0.0 server reports its own state over its connection. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.utils.PluginInitiationUtils#activateCloudIfCurrent(long)",
     "className": "com.ultikits.ultitools.utils.PluginInitiationUtils",
     "memberName": "activateCloudIfCurrent",
@@ -802,6 +1218,47 @@
     "status": "DEPRECATED"
   },
   {
+    "key": "com.ultikits.ultitools.utils.SimpleHttpClient",
+    "className": "com.ultikits.ultitools.utils.SimpleHttpClient",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use HttpURLConnection or an HTTP client library of your own; the framework no longer needs a general HTTP helper. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.SimpleHttpClient$Response",
+    "className": "com.ultikits.ultitools.utils.SimpleHttpClient$Response",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement, as for SimpleHttpClient. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.UltiCloudRequests",
+    "className": "com.ultikits.ultitools.utils.UltiCloudRequests",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use CloudPlayerLinks to link a player; protocol 2.0.0 has no v1 REST cloud, so every call of this class is refused. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.UltiCloudRequests#get(java.lang.String,java.util.Map)",
+    "className": "com.ultikits.ultitools.utils.UltiCloudRequests",
+    "memberName": "get",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.utils.UltiCloudRequests#post(java.lang.String,java.lang.String)",
     "className": "com.ultikits.ultitools.utils.UltiCloudRequests",
     "memberName": "post",
@@ -810,6 +1267,66 @@
     "forRemoval": true,
     "removeIn": "6.4.0",
     "replacement": "Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.UltiCloudRequests$Outcome",
+    "className": "com.ultikits.ultitools.utils.UltiCloudRequests$Outcome",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: CloudPlayerLinks reports its own outcomes. Removed in 6.4.0 with UltiCloudRequests.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.UltiCloudRequests$Result",
+    "className": "com.ultikits.ultitools.utils.UltiCloudRequests$Result",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: CloudPlayerLinks reports its own outcomes. Removed in 6.4.0 with UltiCloudRequests.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.websocket.ExponentialBackoffStrategy",
+    "className": "com.ultikits.ultitools.websocket.ExponentialBackoffStrategy",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) paces its reconnects itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.websocket.ExponentialBackoffStrategy$Builder",
+    "className": "com.ultikits.ultitools.websocket.ExponentialBackoffStrategy$Builder",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement, as for ExponentialBackoffStrategy. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.websocket.ReconnectStrategy",
+    "className": "com.ultikits.ultitools.websocket.ReconnectStrategy",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) paces its reconnects itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.websocket.UltiPanelWebSocketClient",
+    "className": "com.ultikits.ultitools.websocket.UltiPanelWebSocketClient",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) carries every panel request, and modules answer panel requests through PanelResponderRegistry. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   }
 ]

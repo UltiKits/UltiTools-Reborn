@@ -60,6 +60,7 @@ public class ServerPropertiesManager {
     private static final String FILE_NAME = "server.properties";
 
     private final File serverRoot;
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelWebSocketClient webSocketClient;
 
     private static final Set<String> SAFE_KEYS = new HashSet<>(Arrays.asList(
@@ -96,7 +97,17 @@ public class ServerPropertiesManager {
         this.serverRoot = serverRoot;
     }
 
+    /**
+     * Sets the protocol v1 client the v1 senders of this manager reply over.
+     *
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
+        V1CloudNotice.once(ServerPropertiesManager.class, "setWebSocketClient");
         this.webSocketClient = client;
     }
 
@@ -1183,7 +1194,12 @@ public class ServerPropertiesManager {
      * Handle WebSocket message for server properties operations.
      *
      * @param data the message data
+     * @deprecated Use readVersioned(int) and updateWithBaseVersion(String, Map), which the protocol
+     *     2.0.0 session calls; this v1 handler replies only over the client handed to
+     *     setWebSocketClient. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void handleServerProperties(JsonObject data) {
         if (data == null) return;
 

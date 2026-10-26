@@ -8,8 +8,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -24,11 +26,23 @@ import com.ultikits.ultitools.utils.FrameworkText;
 import lombok.Getter;
 
 /**
- * UltiPanel WebSocket Client
+ * The UltiPanel protocol v1 WebSocket client, kept only so 6.3.0 code still links (plan 22-25).
  * <p>
- * New WebSocket client based on Java-WebSocket library
+ * <b>As of 6.3.1 it never opens a socket.</b> Protocol 2.0.0 has no v1 gateway, so
+ * {@link #connect()}, both {@code connectBlocking} forms, {@link #reconnect()} and
+ * {@link #reconnectBlocking()} return without connecting (the blocking forms return
+ * {@code false}), and the first such call in a run writes one INFO line that says so. The
+ * framework itself never constructs this class; its own UltiCloud session speaks protocol 2.0.0.
+ * The kept v1 senders in the managers still send over an instance a caller hands to their
+ * deprecated entry points, and {@link #sendMessage(JsonObject)} then reports the closed socket.
+ *
+ * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+ *     carries every panel request, and modules answer panel requests through
+ *     {@link PanelResponderRegistry}. Removed in 6.4.0.
+ * @removeIn 6.4.0
  */
 @Getter
+@Deprecated(since = "6.3.1", forRemoval = true)
 public class UltiPanelWebSocketClient extends WebSocketClient {
     private final String serverId;
     private final String token;
@@ -80,6 +94,13 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
      */
     private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
 
+    /** Where the one-per-run "no v1 gateway" line goes; a class logger, so it needs no plugin instance. */
+    private static final Logger NOTICE_LOGGER = Logger.getLogger(UltiPanelWebSocketClient.class.getName());
+    /** Whether this run has already said that a v1 client does not connect. */
+    private static final AtomicBoolean CONNECT_NOTICE_LOGGED = new AtomicBoolean();
+    /** Test-only switch that lets the kept v1 log-stream tests reach a local socket server. */
+    private static volatile boolean connectPermittedForTesting;
+
     /**
      * Constructor.
      *
@@ -118,15 +139,100 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * Connects to the WebSocket server.
+     * Opens no socket as of 6.3.1: protocol 2.0.0 has no v1 gateway. The first call of any connect
+     * form in a run writes one INFO line naming the removal.
      */
     @Override
     public void connect() {
+        if (refuseConnect()) {
+            return;
+        }
         if (isConnected) {
             PanelConnectionLog.log(Level.WARNING, FrameworkText.text("WebSocket已经连接，请勿重复连接"));
             return;
         }
         super.connect();
+    }
+
+    /**
+     * Opens no socket as of 6.3.1 (see {@link #connect()}).
+     *
+     * @return {@code false}: no connection was made
+     * @throws InterruptedException never as of 6.3.1; kept from the overridden signature
+     */
+    @Override
+    public boolean connectBlocking() throws InterruptedException {
+        if (refuseConnect()) {
+            return false;
+        }
+        return super.connectBlocking();
+    }
+
+    /**
+     * Opens no socket as of 6.3.1 (see {@link #connect()}).
+     *
+     * @param timeout ignored, nothing is awaited
+     * @param timeUnit ignored, nothing is awaited
+     * @return {@code false}: no connection was made
+     * @throws InterruptedException never as of 6.3.1; kept from the overridden signature
+     */
+    @Override
+    public boolean connectBlocking(long timeout, TimeUnit timeUnit) throws InterruptedException {
+        if (refuseConnect()) {
+            return false;
+        }
+        return super.connectBlocking(timeout, timeUnit);
+    }
+
+    /**
+     * Opens no socket as of 6.3.1 (see {@link #connect()}).
+     */
+    @Override
+    public void reconnect() {
+        if (refuseConnect()) {
+            return;
+        }
+        super.reconnect();
+    }
+
+    /**
+     * Opens no socket as of 6.3.1 (see {@link #connect()}).
+     *
+     * @return {@code false}: no connection was made
+     * @throws InterruptedException never as of 6.3.1; kept from the overridden signature
+     */
+    @Override
+    public boolean reconnectBlocking() throws InterruptedException {
+        if (refuseConnect()) {
+            return false;
+        }
+        return super.reconnectBlocking();
+    }
+
+    /**
+     * Whether a connect call must open nothing: always, outside the kept v1 log-stream tests.
+     * Writes the one-per-run INFO line on the first refusal.
+     */
+    private static boolean refuseConnect() {
+        if (connectPermittedForTesting) {
+            return false;
+        }
+        if (CONNECT_NOTICE_LOGGED.compareAndSet(false, true)) {
+            NOTICE_LOGGER.info("UltiCloud: UltiPanelWebSocketClient speaks protocol v1, which UltiCloud no "
+                    + "longer serves, so it opens no connection; it is deprecated and removed in 6.4.0. The "
+                    + "framework's own UltiCloud session (protocol 2.0.0) carries the panel.");
+        }
+        return true;
+    }
+
+    /** Test-only: lets a kept v1 log-stream test connect to its own local socket server. */
+    static void permitConnectForTesting(boolean permit) {
+        connectPermittedForTesting = permit;
+    }
+
+    /** Test-only: forgets that this run already logged the "opens no connection" line. */
+    static void resetConnectNoticeForTesting() {
+        CONNECT_NOTICE_LOGGED.set(false);
     }
 
     /**
