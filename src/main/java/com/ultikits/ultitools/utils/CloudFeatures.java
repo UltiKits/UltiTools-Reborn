@@ -222,6 +222,7 @@ public final class CloudFeatures {
         if (previous != null) {
             previous.close();
         }
+        router.onSwitchRefusal(this::recordSwitchRefusal);
         registerCommands(router);
         registerPower(router);
         registerPlayerActions(router);
@@ -533,6 +534,33 @@ public final class CloudFeatures {
                         + "before the power action; buffered player join/leave events may be lost.");
             }
         }
+    }
+
+    /**
+     * Records a request the capability gate refused as exactly one DENIED entry (FEATURES.md
+     * {@code ultitools.remote.file-refusal-audit}, as 6.3.0 did): the switch that decides the capability, the request
+     * type as action, its {@code command} or {@code path} as target when it carries one (the type otherwise), the
+     * panel as actor and the refusal sentence naming the configuration key as reason. A capability no
+     * {@link Capability} switch decides records nothing. Writes only the action log, never an operator file.
+     */
+    private void recordSwitchRefusal(CloudRequest request, String capability, String message) {
+        Capability decidedBy = AgentCapabilities.switchFor(capability);
+        if (decidedBy == null) {
+            return;
+        }
+        recordAction(RemoteActionLog.Entry.denied(decidedBy, request.type(), refusalTarget(request), PANEL_ACTOR,
+                message));
+    }
+
+    private static String refusalTarget(CloudRequest request) {
+        JsonObject payload = request.payload();
+        for (String field : new String[] {"command", "path"}) {
+            JsonElement value = payload.get(field);
+            if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+                return value.getAsString();
+            }
+        }
+        return request.type();
     }
 
     /** One action-log entry; a failing log never reaches the handler, so the request still gets its reply. */

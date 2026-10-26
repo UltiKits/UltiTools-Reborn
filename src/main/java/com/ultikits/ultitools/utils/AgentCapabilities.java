@@ -124,6 +124,15 @@ final class AgentCapabilities {
     }
 
     /**
+     * @param contractCapability a contract capability name
+     * @return the operator switch that decides it, or {@code null} when no {@link Capability} switch does (the
+     *         error-report key, {@code power}, {@code link}, module names, an unknown name)
+     */
+    static Capability switchFor(String contractCapability) {
+        return contractCapability == null ? null : SWITCHES.get(contractCapability);
+    }
+
+    /**
      * @param contractCapability a contract capability name, or the module sentinel
      * @return whether the operator allows it now: its switch for a mapped name; always for {@code power} (its handler
      *         applies the switch), {@code link}, module names and the module sentinel; never for {@code backups} or an

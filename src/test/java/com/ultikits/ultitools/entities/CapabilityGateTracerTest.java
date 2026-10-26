@@ -149,6 +149,12 @@ class CapabilityGateTracerTest {
             session.pass(300L);
             assertThat(session.executions()).as("the refused command never ran").isZero();
             assertThat(session.stub().gateway().received("command.ack")).isEmpty();
+            assertThat(session.actions()).as("the switch refusal writes exactly one DENIED entry").hasSize(1);
+            RemoteActionLog.Entry denied = session.actions().get(0);
+            assertThat(denied.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(denied.getCapability()).isEqualTo(Capability.COMMANDS.name());
+            assertThat(denied.getAction()).isEqualTo("command.execute");
+            assertThat(denied.getReason()).isEqualTo(Capability.COMMANDS.refusalMessage());
 
             session.config().set(Capability.COMMANDS.getConfigPath(), true);
             id = session.send("command.execute", "say", null).get("id").getAsString();
@@ -178,13 +184,27 @@ class CapabilityGateTracerTest {
             }
             assertThat(refused).hasSize(12);
             assertThat(session.executions()).isZero();
-            assertThat(session.actions()).as("a refused request writes no action-log entry").isEmpty();
+            // FEATURES.md ultitools.remote.file-refusal-audit and UAT-CHECKLIST.md
+            // ultitools.capability.commands.neg-disabled: every switch refusal is exactly one DENIED entry naming the
+            // switch, with the refusal sentence that names its configuration key as the reason.
+            assertThat(session.actions()).as("one DENIED entry per refused request").hasSize(12);
+            int index = 0;
+            for (Map.Entry<Capability, String[]> entry : switchedTypes().entrySet()) {
+                for (String type : entry.getValue()) {
+                    RemoteActionLog.Entry denied = session.actions().get(index++);
+                    assertThat(denied.getVerdict()).as(type).isEqualTo(RemoteActionLog.Verdict.DENIED);
+                    assertThat(denied.getCapability()).as(type).isEqualTo(entry.getKey().name());
+                    assertThat(denied.getAction()).as(type).isEqualTo(type);
+                    assertThat(denied.getActor()).as(type).isEqualTo("panel");
+                    assertThat(denied.getReason()).as(type).isEqualTo(entry.getKey().refusalMessage());
+                }
+            }
         }
 
         /**
          * CR-01 (06-REVIEW.md) on v2: with commands on, a blocklisted command is refused by the command manager's own
-         * check, which writes exactly one DENIED entry; the router writes none, so no second, false ALLOWED entry can
-         * appear (the v1 gate used to add one).
+         * check, which writes exactly one DENIED entry; the router's gate passes the request and records nothing, so
+         * no second, false ALLOWED entry can appear (the v1 gate used to add one).
          */
         @Test
         @DisplayName("CR-01: a blocklisted command with commands on records exactly one DENIED entry")
