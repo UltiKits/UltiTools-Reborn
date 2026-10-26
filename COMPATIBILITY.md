@@ -308,6 +308,22 @@ public members of `PluginInitiationUtils`, `CloudAuthManager#logout` and `#statu
 and their members the 6.3.1 session uses, the rest of `UltiPanelLogTransmitter`, and
 `UltiTools#getPlayerEventManager`, `#getLogStreamManager` and `#getServerMonitorManager`.
 
+### Remote action log under protocol 2.0.0
+
+`plugins/UltiTools/security/action.log.0` keeps one JSON line per panel request that reached a decision, with the
+same fields as in 6.3.0. Two things a reader of the log sees differently. The `action` of a file, configuration or
+`server.properties` request is the protocol 2.0.0 request type (`files.read`, `files.list`, `files.write`,
+`files.delete`, `config.update`, `properties.get`, `properties.update`) where 6.3.0 wrote the v1 type
+(`file_operation:read`, `update_config`, `server_properties`); power and player actions are `server.power.<action>`
+and `player.action.<action>`, and a run or blocked command keeps `execute_command` (a switch refusal is written with
+the request type, `command.execute`). And a permitted file request that
+then fails for an ordinary reason (a missing file, a directory where a file was expected, a version that no longer
+matches) is now `DENIED` with the reply's message as `reason`; 6.3.0 recorded it `ALLOWED`. `ALLOWED` now means the
+request was carried out: the file read, the directory listed, the change made, at least one configuration key
+written. A request refused because its `ultipanel.capabilities.*` switch is off is one `DENIED` line from the switch
+gate, as in 6.3.0. A malformed request, `config.tree`, `config.entries`, telemetry and module requests write no
+line. No line ever holds file content or a configuration value.
+
 ### Shutdown window
 
 From the first step of UltiTools' disable, every request that would change server state is refused with an
