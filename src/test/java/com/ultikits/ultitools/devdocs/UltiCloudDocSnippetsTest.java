@@ -3,6 +3,7 @@ package com.ultikits.ultitools.devdocs;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -25,10 +26,13 @@ import org.junit.jupiter.api.Test;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks;
+import com.ultikits.ultitools.websocket.PanelResponderRegistry;
+import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 
 /**
  * The Java code blocks of the UltiCloud developer documentation (plan 22-27), compiled and run here.
@@ -59,6 +63,8 @@ class UltiCloudDocSnippetsTest {
     private static final Path LEDGER = Paths.get("compatibility/deprecations.json");
     private static final String COMPATIBILITY_HEADING = "## UltiCloud protocol 2.0.0 (as of 6.3.1)";
 
+    private static final String PANEL_EN = "docs/src/guide/advanced/panel-integration.md";
+    private static final String PANEL_ZH = "docs/src/zh/guide/advanced/panel-integration.md";
     private static final String PLAYER_LINK_EN = "docs/src/guide/advanced/player-link.md";
     private static final String PLAYER_LINK_ZH = "docs/src/zh/guide/advanced/player-link.md";
 
@@ -202,6 +208,99 @@ class UltiCloudDocSnippetsTest {
     @DisplayName("player-link handler: the Chinese page shows the compiled snippet unchanged")
     void playerLinkHandlerChinesePage() throws IOException {
         assertPageShows(PLAYER_LINK_ZH, "player-link-handler");
+    }
+
+    // docs-snippet:sensitive-commands:begin
+    public class SensitiveCommands {
+
+        /** Call from registerSelf() with UltiTools.getInstance().getSensitiveCommandRegistry(). */
+        public void register(SensitiveCommandRegistry registry) {
+            registry.register("login", "l", "register", "reg", "changepassword");
+        }
+    }
+    // docs-snippet:sensitive-commands:end
+
+    @Test
+    @DisplayName("sensitive commands: the registered names are redacted on their way to UltiCloud")
+    void sensitiveCommandsRun() {
+        SensitiveCommandRegistry registry = new SensitiveCommandRegistry();
+        new SensitiveCommands().register(registry);
+
+        assertThat(registry.registeredNames()).containsExactly("changepassword", "l", "login", "reg", "register");
+        assertThat(registry.redactCommandLine("/login hunter2")).isEqualTo("/login ***");
+        assertThat(registry.isSensitive("/UltiLogin:L hunter2")).isTrue();
+        assertThat(registry.redactText("Steve issued server command: /register pw pw"))
+                .isEqualTo("Steve issued server command: /register ***");
+        assertThat(registry.redactCommandLine("/msg Alex hi")).isEqualTo("/msg Alex hi");
+        assertThat(SensitiveCommandRegistry.commandName("/Essentials:SPAWN now")).isEqualTo("spawn");
+    }
+
+    @Test
+    @DisplayName("sensitive commands: both panel-integration pages show the compiled snippet unchanged")
+    void sensitiveCommandsPages() throws IOException {
+        assertPageShows(PANEL_EN, "sensitive-commands");
+        assertPageShows(PANEL_ZH, "sensitive-commands");
+    }
+
+    // docs-snippet:module-responders:begin
+    public class MailResponders {
+
+        /** Call from registerSelf(); the framework releases the responders when the module unloads. */
+        public void register(PanelResponderRegistry registry, UltiToolsPlugin module) {
+            // Answers module.request { module: "ultimail", action: "inbox.count", params, actor }.
+            registry.registerResponder("ultimail.inbox.count", data -> {
+                JsonObject actor = data.getAsJsonObject("actor");
+                JsonObject reply = new JsonObject();
+                reply.addProperty("userId", actor.get("userId").getAsLong());
+                reply.addProperty("unread", 3);
+                return CompletableFuture.completedFuture(reply);
+            }, module.getPluginName(), module);
+
+            // Completing with null answers ok with data: null.
+            registry.registerResponder("ultimail.inbox.clear",
+                    data -> CompletableFuture.completedFuture(null), module.getPluginName(), module);
+        }
+    }
+    // docs-snippet:module-responders:end
+
+    @Test
+    @DisplayName("module responders: reached by identifier and action, answer an object or no content")
+    void moduleRespondersRun() throws Exception {
+        PanelResponderRegistry registry = new PanelResponderRegistry();
+        try {
+            UltiToolsPlugin module = mock(UltiToolsPlugin.class);
+            when(module.getPluginName()).thenReturn("UltiMail");
+            when(module.getIdentifyString()).thenReturn("ultimail");
+            new MailResponders().register(registry, module);
+
+            assertThat(registry.moduleRequestType("ultimail", "inbox.count")).isEqualTo("ultimail.inbox.count");
+            assertThat(registry.moduleRequestType("ultichat", "inbox.count")).isNull();
+
+            JsonObject data = new JsonObject();
+            data.addProperty("folder", "main");
+            JsonObject actor = new JsonObject();
+            actor.addProperty("userId", 42L);
+            actor.add("minecraftUuid", JsonNull.INSTANCE);
+            data.add("actor", actor);
+
+            JsonElement count = registry.dispatch("ultimail.inbox.count", data, "01JBQ0000000000000000000R1")
+                    .get(5, TimeUnit.SECONDS);
+            assertThat(count.getAsJsonObject().get("userId").getAsLong()).isEqualTo(42L);
+            assertThat(count.getAsJsonObject().get("unread").getAsInt()).isEqualTo(3);
+
+            JsonElement cleared = registry.dispatch("ultimail.inbox.clear", data, "01JBQ0000000000000000000R2")
+                    .get(5, TimeUnit.SECONDS);
+            assertThat(cleared).isSameAs(JsonNull.INSTANCE);
+        } finally {
+            registry.shutdown();
+        }
+    }
+
+    @Test
+    @DisplayName("module responders: both panel-integration pages show the compiled snippet unchanged")
+    void moduleRespondersPages() throws IOException {
+        assertPageShows(PANEL_EN, "module-responders");
+        assertPageShows(PANEL_ZH, "module-responders");
     }
 
     // ---------------------------------------------------------------------------------------------
