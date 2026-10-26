@@ -130,24 +130,14 @@ class UltiCloudUatRowsTest {
             Pattern.compile("^([A-Z][A-Za-z0-9]*)#([A-Za-z_][A-Za-z0-9_]*)(\\([^)]*\\))?$");
     private static final Pattern CELL_SPLIT = Pattern.compile("(?<!\\\\)\\|");
 
-    /**
-     * @param id a listed checklist ID
-     * @return whether its row is already checked; every ID is checked once all rows have landed
-     */
-    static boolean enabled(String id) {
-        return id.startsWith("ultitools.ulticloud.") || id.startsWith("ultitools.cloud.");
-    }
-
     @Test
     void everyListedRowHasItsChecklistAndFeatureRow() throws IOException {
         Map<String, List<Row>> checklist = rows(CHECKLIST);
         Map<String, List<Row>> features = rows(FEATURES);
         List<String> problems = new ArrayList<>();
         for (String id : CHECKLIST_IDS) {
-            if (enabled(id)) {
-                checkChecklistRow(id, checklist.get(id), problems);
-                checkFeatureRow(id, base(id), features.get(base(id)), problems);
-            }
+            checkChecklistRow(id, checklist.get(id), problems);
+            checkFeatureRow(id, base(id), features.get(base(id)), problems);
         }
         assertThat(problems).as("checklist and feature rows of the UltiCloud protocol v2 client").isEmpty();
     }
@@ -158,7 +148,7 @@ class UltiCloudUatRowsTest {
         List<String> problems = new ArrayList<>();
         for (String id : CHECKLIST_IDS) {
             List<Row> found = checklist.get(id);
-            if (!enabled(id) || found == null || found.size() != 1 || found.get(0).cells.size() < 2) {
+            if (found == null || found.size() != 1 || found.get(0).cells.size() < 2) {
                 continue;
             }
             Row row = found.get(0);

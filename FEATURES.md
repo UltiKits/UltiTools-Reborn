@@ -11,8 +11,11 @@ for UAT execution and issue reconciliation — the public description of these f
   drawn from `[a-z0-9-]`. `<repo-slug>` is the repository name lowercased with no separators —
   `ultitools` here, `ultichat`, `ultiessentials`, and `ultitools-example` for
   `UltiTools-External-Example`. `<area>` is the feature section's slug. `<action>` is the verb.
-  A `config` row is the one shape that exceeds three segments and is exempt from the
-  lowercase-ASCII rule for its key-path suffix:
+  Two shapes exceed three segments. As of 6.3.1 an aspect row adds one more `[a-z0-9-]`
+  segment, `<repo-slug>.<area>.<feature>.<aspect>`, for one behaviour of a feature that has its
+  own UAT row (`ultitools.cloud.outbox.persist-restart`, `ultitools.upm.install.sha256`); the
+  `.neg-<slug>` suffix stays checklist-only. A `config` row is the other shape, and the only one
+  exempt from the lowercase-ASCII rule for its key-path suffix:
   `<repo-slug>.config.<file-stem>.<yml key path>`, the key path keeping its own dots and its own
   casing verbatim from the yml file (`config.yml` itself uses camelCase for several keys, e.g.
   `maximumPoolSize`) — a config ID is a citation of the key, not a re-derived slug, so lowercasing
@@ -38,7 +41,7 @@ for UAT execution and issue reconciliation — the public description of these f
   all). `none` alone means no permission-node restriction at all, for anyone —
   `PermissionValidator` treats an empty `permission()` as no check to run, not as an implicit OP
   requirement. OP-only access, where it exists (e.g. every `/ul`/`/upm`/`/ulticloud` command in
-  this repository, hence every one of their 19 rows carrying the suffix), comes from the separate
+  this repository, hence every one of their 20 rows carrying the suffix), comes from the separate
   `@CmdExecutor` class-level `requireOp` flag, a different mechanism entirely — the suffix exists
   so a reader does not have to cross-reference the class declaration to learn it. `n/a` is for
   every Kind that is not `command` — a config key or a scheduled task has no permission node to
@@ -74,26 +77,33 @@ rather than an error:
    `.worktrees/economy-v2/src/main/java`, so a `find` without the `-not -path` exclusions above
    reports 48 `@CmdMapping` sites where the real number is 24.
 3. **Javadoc and string literals** — requiring the annotation to start its own line (the
-   `^[[:space:]]*@` anchor) takes this framework's own `@CmdMapping` count from 46 to 15, and
+   `^[[:space:]]*@` anchor) takes this framework's own `@CmdMapping` count from 47 to 16 (as of
+   6.3.1, measured from the repository root with `.` as the search root), and
    drops the two `@CmdExecutor` "hits" at `CommandManager.java` lines 91 and 130, which are
    warning message text, not annotations.
 
-**Positive control:** the line-start form returns `/ul` = 4, `/upm` = 8, `/ulticloud` = 3 for
-this repository, matching the number of `@CmdMapping` sites in each class exactly — confirmed by
-reading `UltiToolsCommands.java`, `PluginInstallCommands.java` and `CloudLoginCommand.java`
-directly, not by trusting the count alone. This document's own row counts diverge from these
-annotation-site counts for `/upm` (10 rows) and `/ulticloud` (4 command rows plus the `request-helper` gate row and the `credential-migration` persistence row) — each divergence is
-explained, with its reason, in that command group's own section below.
+**Positive control:** the line-start form returns `/ul` = 4, `/upm` = 8, `/ulticloud` = 4 for
+this repository as of 6.3.1, 16 in all, matching the number of `@CmdMapping` sites in each class
+exactly — confirmed by reading `UltiToolsCommands.java` (lines 62, 75, 128, 133),
+`PluginInstallCommands.java` (lines 50, 168, 174, 179, 199, 239, 519, 575) and
+`CloudLoginCommand.java` (lines 66, 71, 96, 110) directly, not by trusting the count alone. One
+more trap of the same kind: run from inside a git worktree (a checkout under `.worktrees/`), an
+absolute search root itself matches `-not -path '*/.worktrees/*'` and the count is 0, so use `.`
+as the root there. This document's own row counts diverge from these annotation-site counts for
+`/upm` (12 rows: 10 command rows and 2 `gate` aspect rows) and `/ulticloud` (5 command rows, 2
+`persistence` rows and 8 `gate` rows), and the section `UltiCloud connection — panel requests
+and delivery` has no annotation site at all — each divergence is explained, with its reason, in
+that section below.
 
 ## /ul — framework administration
 
 `UltiToolsCommands` — class-level `@CmdExecutor(alias = {"ul", "ultitools", "ulti"}, requireOp =
 true)`, `@CmdTarget(BOTH)`. `grep -c '@CmdMapping' UltiToolsCommands.java` returns 4 — confirmed
-by reading the file directly at lines 62, 75, 129 and 134 (`reload`, `reload <name>`, `help`,
+by reading the file directly at lines 62, 75, 128 and 133 (`reload`, `reload <name>`, `help`,
 `list`). As of 6.3.0 the `reload` site is `UltiToolsCommands#reloadAll`, which replies the reload
-summary to the sender; `#reloadPlugins` is kept without a mapping (#509). The `help` site (line 129,
+summary to the sender; `#reloadPlugins` is kept without a mapping (#509). The `help` site (line 128,
 `UltiToolsCommands#help`) is counted in that 4 and in the
-repository-wide `@CmdMapping` total of 15, but it never actually dispatches:
+repository-wide `@CmdMapping` total of 16, but it never actually dispatches:
 `BaseCommandExecutor#onCommand` short-circuits a literal `help` argument to `handleGatedHelp` →
 `#handleHelp` before `matchMethod` runs at all, exactly the same short-circuit that reaches
 `/upm help` and `/ulticloud help` with no `@CmdMapping` site of their own (see those sections
@@ -115,8 +125,8 @@ below). The row below therefore cites `#handleHelp`, the method that actually ex
 `@CmdTarget(BOTH)`. `grep -c '@CmdMapping' PluginInstallCommands.java` returns 8 — confirmed by
 reading the file directly (`list <page>`, `list`, `install <plugin> <version>`,
 `install <plugin>`, `versions <plugin>`, `uninstall <plugin>`, `check`, `update <plugin>`),
-matching D-08's independently stated count exactly. This section carries 10 rows, not 8, for two
-reasons, neither an omission. First: `/upm help` (also the bare `/upm` with no arguments) is
+matching D-08's independently stated count exactly. This section carries 12 rows, not 8: 10
+command rows, for two reasons, neither an omission, and two aspect rows, for a third. First: `/upm help` (also the bare `/upm` with no arguments) is
 reachable and operator-visible, but has no `@CmdMapping` site — `BaseCommandExecutor#onCommand`
 short-circuits a `help` argument before format-matching and dispatches straight to
 `PluginInstallCommands#handleHelp`, an override with no annotation. `/ul help` is dispatched by
@@ -124,16 +134,18 @@ the exact same short-circuit — the presence or absence of a `@CmdMapping(forma
 on the class (`UltiToolsCommands` has one, `PluginInstallCommands` does not) makes no difference
 to which method actually runs, only to whether the annotation-counting instrument sees an extra
 site; see the `/ul` section's own note above. The `@CmdMapping` reconciliation line for this
-repository stays at 15 regardless — neither of this section's two extra rows is counted against
-it, and `UltiToolsCommands#help`'s own site (counted in that 15) is dead code, not a second
+repository stays at 16 regardless — neither of this section's extra rows is counted against
+it, and `UltiToolsCommands#help`'s own site (counted in that 16) is dead code, not a second
 dispatch path. Second: `update <plugin>` is one `@CmdMapping` site whose method,
 `PluginInstallCommands#updatePlugin`, internally branches on whether the argument is the literal
 string `all` — two materially different, independently-observable behaviors
 (`ultitools.upm.update` for one named module; `ultitools.upm.update-all` for
 `PluginInstallCommands#updateAllPlugins`'s own iteration and partial-failure accounting) sharing
 one annotation site, split into two rows here so the checklist can cite a real feature ID for
-each rather than inventing a non-negative ID-suffix convention this document does not otherwise
-use.
+each. Third, as of 6.3.1: `ultitools.upm.install.sha256` and `ultitools.upm.update-check.v2` are
+`gate` aspect rows (Conventions, ID grammar), not commands — the catalogue integrity check every
+module download passes, and the protocol v2 catalogue every `/upm` request and the start-up
+update check use.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
@@ -141,11 +153,13 @@ use.
 | ultitools.upm.help | Show the `/upm` subcommand help text | command | `/upm help` (also the bare `/upm` with no arguments) | none (requireOp=true) | both | admin | none | PluginInstallCommands#handleHelp |
 | ultitools.upm.install | Install the latest version of a plugin from UltiCloud that this UltiTools-API installs. As of 6.3.0 every UltiCloud request `/upm` makes carries `apiLevel` (this UltiTools-API's API level, 630 for 6.3.0) and `minApiLevel=630`. The JAR is downloaded into the modules folder as `<id>-<version>.jar.part`, a name the module loader never reads, its `plugin.yml` is read again, and only a module whose `api-version` is an integer from 630 up to this UltiTools-API's level is renamed to `<id>-<version>.jar`; any other — absent, not an integer, below 630 or above that level — is refused: the download is deleted, the modules folder is left as it was, and the red reply names the module, the version, the declared `api-version`, this UltiTools-API's level and the accepted range (`ultitools.upm.install.neg-incompatible-jar`). When UltiCloud answers that no version is compatible (HTTP 409), nothing is downloaded and the reply says so and names the range (`ultitools.upm.install.neg-incompatible`) | command | `/upm install <plugin>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#installPlugin(plugin) |
 | ultitools.upm.install-version | Install a specific version of a plugin from UltiCloud. As of 6.3.0 the same API-level rules as `ultitools.upm.install` apply: the request carries the level, the download is checked before it is renamed into place, and when UltiCloud answers that this version is not compatible (HTTP 409) nothing is downloaded and the red reply names the version and the accepted range (`ultitools.upm.install-version.neg-incompatible`) | command | `/upm install <plugin> <version>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#installPlugin(plugin,version) |
+| ultitools.upm.install.sha256 | As of 6.3.1, a module download from the UltiCloud catalogue is verified before it is admitted: the downloaded bytes must match the catalogue version's `sizeBytes` and lower-case `sha256` and the download's `X-Content-SHA256` header. A JAR that matches is renamed into `plugins/UltiTools/plugins/` as `<id>-<version>.jar`; on any mismatch the partial download is deleted, nothing lands in the modules folder, the red reply and a console line say that the file did not pass its integrity check against the catalogue, and which check failed is logged at FINE. A version the catalogue offers only with a licence (`download.kind` `license_required`) is refused before anything is downloaded | gate | `/upm install <plugin>` (also `/upm install <plugin> <version>`) | n/a | n/a | admin | brief | PluginInstallUtils#installReporting, PluginInstallUtils#downloadAndAdmit, VerifiedDownload#fetch |
 | ultitools.upm.list | List page 1 of the plugins available on UltiCloud. For a player the page is one chat message in which each entry has a clickable button: `\| Uninstall \|` for a loaded module runs `/upm uninstall <runtime name>`, `\| Install \|` for any other entry runs `/upm install <identify-string>`. Fixed in 6.3.0: on Paper 1.21.11 the page arrived one line per message and the buttons carried no click event, so clicking them did nothing (`ultitools.upm.list.click-buttons`). The list is not filtered by API level (maintainer ruling 2026-10-11): an entry with no version this UltiTools-API installs is still listed, and its Install button replies with the reason (`ultitools.upm.install`) | command | `/upm list` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#listPlugins(sender) |
 | ultitools.upm.list-page | List a chosen page of the plugins available on UltiCloud | command | `/upm list <page>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#listPlugins(sender,page) |
 | ultitools.upm.uninstall | Uninstall a module: resolve which module the operator named — by its runtime name or by a name one of its JARs declares — unload every loaded instance of it through the framework's full unload path, so its scheduled tasks, cached beans, completers and EventBus handlers stop at once rather than at the next restart, then delete the JARs identified as its own and report what actually happened on disk. The unload also removes the module from the loaded modules (#507). A loaded module is asked which JAR it came from, so its own JAR is deleted whatever that JAR's `plugin.yml` says now. No JAR another loaded module was loaded from is ever deleted. An entry the command could not identify — it would not open, its `plugin.yml` is not valid YAML, or it declares no module — is reported as such rather than passed over or called a copy; an entry that opened and declares another module is left alone in silence; and a modules folder that cannot be listed is reported as that rather than as an absent JAR. Success names every file it deleted and never claims that no copy of the module remains. A JAR whose `plugin.yml` `main:` names the loaded module's main class — the one entry the module loader loads a module by, recorded per module by the start-up scan — is this module's whatever `name:` it declares, so a second copy under another name is deleted and named too; a main class another loaded module also has is never matched, a file that now declares something else is judged by what it declares now, and no class is read out of any archive (#516). The modules folder is read in file-name order, so the files are named in that order (#476). An uninstall that goes ahead — whatever then happens to its JARs: deleted, recorded for deletion, not deletable, or a modules folder that cannot be listed — also cancels every update of the module still waiting for the next start, and says so; it matches them on the identity it resolved before touching the folder (the unloaded instances' identify-strings and runtime names, the name it was given and the names their JARs declare, and their JARs), so an uninstall by any of the module's names cancels them; a refused uninstall cancels nothing. An update of that module still downloading when the uninstall runs is cancelled the same way: its record is never written and `/upm update` replies that it was cancelled. Whatever the name, the next start never installs an update whose old JAR is gone or still recorded for deletion (#505). A JAR that cannot be deleted now — held open by the running server, as Windows does with every loaded module JAR through the shared module class loader, or in a folder that is not writable — is recorded, and the reply says it is held open or not writable, that the next start deletes it before modules load, and that a start which still cannot delete it says so in its log — instead of asking the operator to delete a file the running server prevents them from deleting (`ultitools.boot.deferred-removal`, #518). When the deletion cannot be recorded either, for example because the server root's `.ultikits` folder is not writable, the reply asks the operator to delete by hand only the module JARs it names, and says on its own line that the deletion could not be recorded for the next start, so the next start will not delete them. A module whose unload hook throws, even an exception it does not declare, still has its commands and listeners unregistered (UltiKits/UltiTools-Reborn#676) | command | `/upm uninstall <plugin>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#uninstallPlugin |
 | ultitools.upm.update | Stage an update of one named module: download its latest version into `.ultikits/upm-transactions/` under the server root (beside the credential store, outside `plugins/`) — never into the modules folder, which does not change while the server runs — record it, and reply that it takes effect at the next start and is kept only if the new version actually loads, otherwise the current version is restored (`ultitools.boot.module-update-apply`, `ultitools.boot.module-update-observe`). Never replies "updated". A second update while one is staged, a module not loaded from the modules folder, a module whose JAR another loaded module also came from (two module classes in one archive; the reply names the other module), an identify-string another loaded module in another JAR also declares (the command names a module only by its identify-string, so which one was meant cannot be told apart; the reply names every such module), a current JAR that cannot be read, a file access the server's security policy denies, a record that cannot be written, a failed download, a download that does not declare the module's identify-string and a version, or one that declares a version other than the latest the catalogue offered, changes nothing and says why; a failed apply recorded by an earlier start is reported first. Before anything is downloaded, the update is refused when another copy of the module would load instead of the new JAR at the next start: another JAR in the modules folder that the start-up would put on the module class path (it passes the JAR size and entry check), whose `plugin.yml` `main:` is the module's main class (as the start-up scan recorded it), and whose file name sorts before the new JAR's `<id>-<latest>.jar` in the order the module loader reads the folder (plain code-point order, `ultitools.boot.duplicate-module-jars`). The reply names the new JAR and every such copy and asks the operator to remove them first; nothing is downloaded, recorded or touched. Each copy is judged by what its `plugin.yml` declares at that moment, so once it is removed the next `/upm update` goes ahead without a restart. A copy that sorts after the new JAR does not stop the update (the new JAR loads; the start-up duplicate warning names the copy), and a copy added after staging is still caught at the next start, which keeps the current version. Only `plugin.yml` is read (maintainer follow-up 19). Changed in 6.3.0 (UltiKits/UltiTools-Reborn#505, #513): the update used to download into the modules folder, ignore whether the old JAR was deleted, and report success either way. Also as of 6.3.0 the UltiCloud requests carry `apiLevel` and `minApiLevel=630`; a downloaded JAR whose `api-version` is absent, not an integer, below 630 or above this UltiTools-API's level is refused like the other download checks — staging discarded, nothing recorded, the reply naming the file, the declared level and the accepted range (`ultitools.upm.update.neg-incompatible-jar`) — and when UltiCloud has no compatible version (HTTP 409) nothing is staged | command | `/upm update <plugin>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#updatePlugin |
 | ultitools.upm.update-all | Stage an update of every module with an available update in one command, each independently and under the same checks as `ultitools.upm.update` (the API-level check included), one reply line per module, then the staged and not-staged counts | command | `/upm update all` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#updateAllPlugins |
+| ultitools.upm.update-check.v2 | As of 6.3.1, the start-up update check and every `/upm` catalogue request use only the protocol v2 catalogue: `/v1/catalogue/framework` for the framework's newest version, and `/v1/catalogue/modules` routes for `/upm list`, `versions`, `install`, `check` and `update`; no request goes to the 6.3.0 `/plugin/*` endpoints, and catalogue requests carry no credential | gate | automatic at start-up; `/upm list`, `/upm versions <plugin>`, `/upm install <plugin>`, `/upm check` | n/a | n/a | admin | brief | CatalogueClient#frameworkNewest, CatalogueClient#list, CatalogueClient#versions, UpdateManager#checkFrameworkUpdate |
 | ultitools.upm.versions | List the versions of a plugin on UltiCloud that this UltiTools-API installs: as of 6.3.0 the request carries `apiLevel` and `minApiLevel=630` and UltiCloud returns only versions declaring an `api-version` from 630 up to this UltiTools-API's level. With none, one red line says that no version can be installed on this server and names the range, instead of an empty list (`ultitools.upm.versions.neg-none-compatible`) | command | `/upm versions <plugin>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#listVersions |
 
 ## /ulticloud — cloud authentication
