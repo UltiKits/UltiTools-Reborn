@@ -12,7 +12,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import java.util.logging.Level;
 
@@ -73,6 +76,14 @@ public class CommandExecutionManager {
      * {@code command.result.data.executionMs} maximum in the frozen contract.
      */
     private static final long MAX_EXECUTION_MS = 86400000L;
+
+    /**
+     * How long after a v2 command's result was taken its late output is still written to the
+     * server console — see {@link CapturedFeedback}. Long enough for asynchronous command bodies
+     * that wait on a database or the network; it bounds how long the framework answers for a
+     * capturing sender that a command or another plugin kept.
+     */
+    static final long LATE_OUTPUT_WINDOW_NANOS = TimeUnit.MINUTES.toNanos(10);
 
     /**
      * The {@code command_result} text for a command the server console accepted. A panel command
@@ -311,7 +322,11 @@ public class CommandExecutionManager {
         /** Reports a blocklist refusal with the normalized matched entry and existing policy message. */
         void blocked(String matched, String message);
 
-        /** Reports synchronous feedback captured before dispatch returned, and main-thread execution time. */
+        /**
+         * Reports synchronous feedback captured before dispatch returned, and main-thread execution
+         * time. Feedback the command prints later is not part of the result: it is written to the
+         * server console, and so reaches the log stream.
+         */
         void completed(List<String> lines, boolean truncated, long executionMs);
 
         /**
@@ -329,6 +344,10 @@ public class CommandExecutionManager {
      * injected executor, which must enqueue work onto the server main thread in arrival order.
      * Output is cut to the {@code command.result} schema bounds — {@value #MAX_OUTPUT_LINES} lines
      * of {@value #MAX_OUTPUT_LINE_CHARS} code points — and the flag reports that cut.
+     * Only feedback printed before the dispatch returns is in the result. A line the command prints
+     * later, for example from an asynchronous body, is written to the server console instead, as
+     * 6.3.0 printed every panel command's output there; the log stream carries it from there,
+     * redacted like every other console line (see {@link CapturedFeedback}).
      * This method only reads operator configuration and never rewrites it.
      *
      * @param commandLine command text, optionally prefixed with a slash
@@ -403,16 +422,14 @@ public class CommandExecutionManager {
     }
 
     private void executeCaptured(String commandLine, CommandResultSink sink) {
-        List<String> lines = new ArrayList<>();
         // Paper's feedback sender shares the console's PermissibleBase, so the command runs with
         // console-equivalent permissions; both sendMessage(String) and sendMessage(Component)
-        // arrive here. A component is split into one entry per printed line.
-        CommandSender sender = Bukkit.getServer().createCommandSender(component -> {
-            String text = PlainTextComponentSerializer.plainText().serialize(component);
-            if (!text.isEmpty()) {
-                Collections.addAll(lines, text.split("\\r\\n|\\r|\\n"));
-            }
-        });
+        // arrive at the feedback object, which splits a component into one entry per printed line.
+        // That sender never echoes to the console, so the feedback object writes whatever arrives
+        // after the result was taken to the console itself.
+        CapturedFeedback feedback = new CapturedFeedback(baseCommandName(commandLine),
+                LATE_OUTPUT_WINDOW_NANOS, System::nanoTime, CommandExecutionManager::writeToConsole);
+        CommandSender sender = Bukkit.getServer().createCommandSender(feedback);
         String command = commandLine.trim();
         if (command.startsWith("/")) {
             command = command.substring(1);
@@ -422,6 +439,7 @@ public class CommandExecutionManager {
         try {
             accepted = Bukkit.dispatchCommand(sender, command);
         } catch (Exception ex) {
+            feedback.take();
             // The panel receives the message only, so the stack trace lives here or nowhere. The
             // command name is logged without its arguments: an argument can carry a secret.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
@@ -429,6 +447,7 @@ public class CommandExecutionManager {
             sink.failed(resultMessage(ex.getMessage()));
             return;
         }
+        List<String> lines = feedback.take();
         long elapsed = Math.min(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), MAX_EXECUTION_MS);
         if (!accepted) {
             sink.failed(rejectionMessage(lines));
@@ -436,6 +455,103 @@ public class CommandExecutionManager {
         }
         BoundedLines bounded = boundLines(lines);
         sink.completed(bounded.lines, bounded.truncated, elapsed);
+    }
+
+    /**
+     * Writes one late output line of a panel command to the server console: the server's own
+     * logger, at {@code INFO}, with the text unchanged. The local console and log files keep the
+     * text as printed, like every console line; the log stream picks the record up from the
+     * {@code java.util.logging} root logger and redacts registered sensitive commands
+     * ({@link com.ultikits.ultitools.websocket.SensitiveCommandRegistry}) on its way to UltiCloud,
+     * exactly as for any other console line.
+     */
+    static void writeToConsole(String line) {
+        Bukkit.getLogger().log(Level.INFO, line);
+    }
+
+    /**
+     * The feedback of one v2 panel command, handed to Paper's capturing sender.
+     * <p>
+     * Until {@link #take()} every printed line is kept for the {@code command.result}. From then on
+     * a line is written to the console through {@code console} instead, so output a command prints
+     * after its dispatch returned (an asynchronous body, a scheduled reply) is not lost: it lands in
+     * the result or on the console, exactly once, whichever thread prints it. The lock makes the
+     * hand-over atomic; the console is written outside it.
+     * <p>
+     * <b>Bounded lifetime.</b> Taking the result releases the captured lines, so a sender that a
+     * command or another plugin keeps holds only this small object. Late lines are forwarded for
+     * {@code windowNanos} after the result was taken; after that they are dropped, and one WARNING
+     * names the command (never its arguments, which can carry a secret) so the operator knows why.
+     */
+    static final class CapturedFeedback implements Consumer<Component> {
+        private final String commandName;
+        private final long windowNanos;
+        private final LongSupplier clock;
+        private final Consumer<String> console;
+        private final Object lock = new Object();
+        /** The lines kept for the result, or {@code null} once taken. Guarded by {@link #lock}. */
+        private List<String> captured = new ArrayList<>();
+        /** The {@link #clock} reading when the result was taken. Guarded by {@link #lock}. */
+        private long takenAt;
+        /** Whether the dropped-output warning was logged. Guarded by {@link #lock}. */
+        private boolean expiryReported;
+
+        CapturedFeedback(String commandName, long windowNanos, LongSupplier clock, Consumer<String> console) {
+            this.commandName = commandName;
+            this.windowNanos = windowNanos;
+            this.clock = clock;
+            this.console = console;
+        }
+
+        @Override
+        public void accept(Component component) {
+            String text = PlainTextComponentSerializer.plainText().serialize(component);
+            if (text.isEmpty()) {
+                return;
+            }
+            String[] lines = text.split("\\r\\n|\\r|\\n");
+            boolean reportExpiry = false;
+            synchronized (lock) {
+                if (captured != null) {
+                    Collections.addAll(captured, lines);
+                    return;
+                }
+                if (clock.getAsLong() - takenAt > windowNanos) {
+                    if (expiryReported) {
+                        return;
+                    }
+                    expiryReported = true;
+                    reportExpiry = true;
+                }
+            }
+            if (reportExpiry) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        "[Remote command] Output of the panel command '" + commandName + "' arrived more than "
+                                + TimeUnit.NANOSECONDS.toMinutes(windowNanos) + " minutes after it returned and "
+                                + "was not written to the console.");
+                return;
+            }
+            for (String line : lines) {
+                console.accept(line);
+            }
+        }
+
+        /**
+         * Takes the lines printed so far for the result and switches later lines to the console.
+         *
+         * @return the captured lines; empty when they were already taken
+         */
+        List<String> take() {
+            synchronized (lock) {
+                List<String> taken = captured;
+                if (taken == null) {
+                    return new ArrayList<>();
+                }
+                captured = null;
+                takenAt = clock.getAsLong();
+                return taken;
+            }
+        }
     }
 
     /**

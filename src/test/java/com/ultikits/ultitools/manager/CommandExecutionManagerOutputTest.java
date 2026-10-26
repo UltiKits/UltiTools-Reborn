@@ -19,11 +19,19 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockito.ArgumentCaptor;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.logging.Handler;
 import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +54,7 @@ class CommandExecutionManagerOutputTest {
     private YamlConfiguration config;
     private RemoteActionLog actionLog;
     private Logger logger;
+    private ConsoleCapture console;
 
     @BeforeEach
     void setUp() {
@@ -69,10 +78,13 @@ class CommandExecutionManagerOutputTest {
             }).when(sender).sendMessage(any(Component.class));
             return sender;
         }).when(server).createCommandSender(any());
+        console = new ConsoleCapture();
+        server.getLogger().addHandler(console);
     }
 
     @AfterEach
     void tearDown() {
+        server.getLogger().removeHandler(console);
         MockBukkitHelper.safeUnmock();
     }
 
@@ -267,6 +279,120 @@ class CommandExecutionManagerOutputTest {
         assertThat(sink.failedMessage).contains(Capability.COMMANDS.getConfigPath());
     }
 
+    @Test
+    void aLinePrintedAfterDispatchReturnsReachesTheServerConsoleOnceAndStaysOutOfTheResult() throws Exception {
+        CountDownLatch resultTaken = new CountDownLatch(1);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        register("later", (sender, args) -> {
+            sender.sendMessage(Component.text("now"));
+            Thread thread = new Thread(() -> {
+                awaitQuietly(resultTaken);
+                sender.sendMessage(Component.text("later"));
+            });
+            worker.set(thread);
+            thread.start();
+            return true;
+        });
+
+        RecordingSink sink = new RecordingSink();
+        sink.onCompleted = resultTaken::countDown;
+        new CommandExecutionManager().execute("later", null, Runnable::run, sink);
+
+        assertThat(sink.completedCalls).isEqualTo(1);
+        assertThat(sink.lines).containsExactly("now");
+        assertThat(console.awaitMessages(1, 10_000L)).containsExactly("later");
+        worker.get().join(10_000L);
+        assertThat(worker.get().isAlive()).isFalse();
+        assertThat(console.records()).hasSize(1);
+        assertThat(console.records().get(0).getLevel()).isEqualTo(Level.INFO);
+        assertThat(console.records().get(0).getLoggerName()).isEqualTo(server.getLogger().getName());
+    }
+
+    @Test
+    void aLateLineAfterARefusedDispatchIsForwardedToTheConsoleToo() throws Exception {
+        CountDownLatch resultTaken = new CountDownLatch(1);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        register("refusedlater", (sender, args) -> {
+            Thread thread = new Thread(() -> {
+                awaitQuietly(resultTaken);
+                sender.sendMessage(Component.text("finished elsewhere"));
+            });
+            worker.set(thread);
+            thread.start();
+            return false;
+        });
+
+        RecordingSink sink = new RecordingSink();
+        sink.onFailed = resultTaken::countDown;
+        new CommandExecutionManager().execute("refusedlater", null, Runnable::run, sink);
+
+        assertThat(sink.failedMessage).isEqualTo(CommandExecutionManager.NOT_ACCEPTED_WITHOUT_REPLY);
+        assertThat(console.awaitMessages(1, 10_000L)).containsExactly("finished elsewhere");
+        worker.get().join(10_000L);
+    }
+
+    @Test
+    void linesRacingTheEndOfTheDispatchLandExactlyOnceInTheResultOrOnTheConsole() throws Exception {
+        int count = 2000;
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        register("racing", (sender, args) -> {
+            Thread thread = new Thread(() -> {
+                for (int i = 0; i < count; i++) {
+                    sender.sendMessage(Component.text("late-" + i));
+                }
+            });
+            worker.set(thread);
+            thread.start();
+            sender.sendMessage(Component.text("sync"));
+            return true;
+        });
+
+        RecordingSink sink = execute("racing");
+        worker.get().join(10_000L);
+        assertThat(worker.get().isAlive()).isFalse();
+
+        List<String> inResult = new ArrayList<>(sink.lines);
+        assertThat(inResult).contains("sync");
+        inResult.remove("sync");
+        int forwardedExpected = count - inResult.size();
+        List<String> onConsole = console.awaitMessages(forwardedExpected, 10_000L);
+        Set<String> seen = new HashSet<>(inResult);
+        for (String line : onConsole) {
+            assertThat(seen.add(line)).as("printed once: %s", line).isTrue();
+        }
+        assertThat(seen).hasSize(count);
+        assertThat(onConsole).doesNotContain("sync");
+    }
+
+    @Test
+    void afterTheForwardingWindowLateLinesAreDroppedWithOneWarningNamingOnlyTheCommand() {
+        AtomicLong now = new AtomicLong(0L);
+        List<String> forwarded = new ArrayList<>();
+        CommandExecutionManager.CapturedFeedback feedback = new CommandExecutionManager.CapturedFeedback(
+                "login", TimeUnit.SECONDS.toNanos(60), now::get, forwarded::add);
+        feedback.accept(Component.text("before"));
+
+        assertThat(feedback.take()).containsExactly("before");
+        now.set(TimeUnit.SECONDS.toNanos(60));
+        feedback.accept(Component.text("inside\nthe window"));
+        now.set(TimeUnit.SECONDS.toNanos(61));
+        feedback.accept(Component.text("too late hunter2"));
+        feedback.accept(Component.text("too late again"));
+
+        assertThat(forwarded).containsExactly("inside", "the window");
+        verify(logger).log(eq(Level.WARNING),
+                argThat((String line) -> line.contains("'login'") && !line.contains("hunter2")));
+        assertThat(feedback.take()).isEmpty();
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private RecordingSink execute(String command) {
         RecordingSink sink = new RecordingSink();
         Executor mainThread = Runnable::run;
@@ -307,6 +433,8 @@ class CommandExecutionManagerOutputTest {
         private long executionMs = -1L;
         private int failedCalls;
         private String failedMessage;
+        private Runnable onCompleted = () -> { };
+        private Runnable onFailed = () -> { };
 
         @Override
         public void blocked(String matched, String message) {
@@ -321,12 +449,56 @@ class CommandExecutionManagerOutputTest {
             lines = new ArrayList<>(captured);
             truncated = wasTruncated;
             executionMs = elapsed;
+            onCompleted.run();
         }
 
         @Override
         public void failed(String message) {
             failedCalls++;
             failedMessage = message;
+            onFailed.run();
+        }
+    }
+
+    /** Stands for the server console: a handler on the server's logger, recording what it is given. */
+    private static final class ConsoleCapture extends Handler {
+        private final List<LogRecord> received = new ArrayList<>();
+
+        @Override
+        public synchronized void publish(LogRecord record) {
+            received.add(record);
+            notifyAll();
+        }
+
+        synchronized List<LogRecord> records() {
+            return new ArrayList<>(received);
+        }
+
+        /** Waits, at most {@code timeoutMs}, until {@code expected} records arrived; returns their messages. */
+        synchronized List<String> awaitMessages(int expected, long timeoutMs) throws InterruptedException {
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            while (received.size() < expected) {
+                long left = deadline - System.currentTimeMillis();
+                if (left <= 0) {
+                    break;
+                }
+                wait(left);
+            }
+            List<String> messages = new ArrayList<>();
+            for (LogRecord record : received) {
+                messages.add(record.getMessage());
+            }
+            return messages;
+        }
+
+        @Override
+        public void flush() {
+            // nothing buffered
+        }
+
+        @Override
+        public void close() {
+            // nothing to release
         }
     }
 }
