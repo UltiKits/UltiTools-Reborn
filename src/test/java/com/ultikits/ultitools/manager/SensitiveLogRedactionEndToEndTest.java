@@ -203,6 +203,27 @@ class SensitiveLogRedactionEndToEndTest {
         assertThat(logs.get(0).getAsJsonObject().get("message").getAsString()).isEqualTo(REDACTED_LOG_MESSAGE);
     }
 
+    @Test
+    @DisplayName("a panel command's late output written to the console is redacted on the wire the same way")
+    void latePanelCommandOutputIsRedactedOnTheWireOnly() {
+        registerLoginLikeAModule();
+        startStream();
+        CommandExecutionManager.CapturedFeedback feedback = new CommandExecutionManager.CapturedFeedback(
+                "relay", CommandExecutionManager.LATE_OUTPUT_WINDOW_NANOS, System::nanoTime,
+                CommandExecutionManager::writeToConsole);
+        assertThat(feedback.take()).isEmpty();
+
+        feedback.accept(net.kyori.adventure.text.Component.text(COMMAND_LOG_MESSAGE));
+
+        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+        verify(mockWebSocketClient).sendMessage(captor.capture());
+        assertThat(captor.getValue().getAsJsonObject("data").get("message").getAsString())
+                .isEqualTo(REDACTED_LOG_MESSAGE);
+        assertThat(localCapture.messages())
+                .as("the local console keeps the line as the command printed it")
+                .contains(COMMAND_LOG_MESSAGE);
+    }
+
     /** Stands for the local console: a plain handler on the root logger recording what it is given. */
     private static final class LocalRecordCapture extends Handler {
         private final List<String> received = new ArrayList<>();

@@ -2,7 +2,8 @@
 
 This document explains what the version numbers of `com.ultikits:UltiTools-API` mean, how
 deprecation and removal work, and which removals each release makes (for 6.3.0, see
-[Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors.
+[Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
+changes for UltiCloud is in [UltiCloud protocol 2.0.0 (as of 6.3.1)](#ulticloud-protocol-200-as-of-631).
 
 ## Upgrade checklist: moving a module from 6.2.5 to 6.3.0
 
@@ -61,6 +62,321 @@ Third-party modules using XSeries must check these removed public APIs and recom
 See the [XSeries 14.0.0 release notes](https://github.com/CryptoMorin/XSeries/releases/tag/v14.0.0)
 and the published [13.7.1](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/13.7.1/XSeries-13.7.1-sources.jar)
 and [14.0.0 sources](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/14.0.0/XSeries-14.0.0-sources.jar).
+
+## UltiCloud protocol 2.0.0 (as of 6.3.1)
+
+6.3.1 replaces the framework's whole UltiCloud client with one that speaks UltiCloud protocol 2.0.0
+(the frozen contract `UltiKits/ulticloud` `aabd6d2`, vendored under `src/test/resources/ulticloud-contract/`).
+It is a PATCH release, so no public API is removed: every 6.3.0 public or protected member that only served
+the old cloud is deprecated for removal in 6.4.0 and either refuses explicitly or keeps doing what it says.
+The runtime behaviour of the cloud features changes without a migration period, because the old cloud
+service stops at the cut-over and nothing could keep its behaviour. This section is the complete list of
+what changes for a module author and for an operator; the developer guides on dev.ultikits.com (Cloud
+Login, Panel Integration, Player Link) explain each part in prose.
+
+### Cut-over: the protocol v1 cloud stops
+
+- The v1 cloud is not used by any 6.3.1 code path: the `wss://<api>/ws` socket, the user OAuth token, the
+  `/auth/*`, `/oauth/*`, `/server/*` and `/editor/*` REST calls, the magic-link requests and the `/plugin/*`
+  catalogue. The framework connects to `wss://api.ultikits.com/v1/agent` with a per-server credential, and
+  `/upm` reads the public catalogue under `/v1/catalogue/*`. A 6.3.0 server is refused by the new gateway
+  (HTTP 426), so 6.3.0's panel connection, `/ulticloud login`, `/panel` link and catalogue and update checks
+  stop working at the cut-over; 6.3.1 must be installed before then.
+- A server is linked again with `/ulticloud login`, which now uses a device code: the console prints a
+  verification URI, an `XXXX-XXXX` user code and a complete link, valid for 10 minutes; the owner confirms in
+  the panel and names the server there. Over RCON the command answers at once that the code is printed in
+  the server console, and every line also goes to the console. The credential is stored as the
+  `cloud_credential` entry of `<server root>/.ultikits/credentials.json` (owner-only on POSIX). It does not
+  expire. `/ulticloud logout` revokes it on UltiCloud and then deletes it; when UltiCloud cannot be reached it
+  still deletes it locally and tells the operator to revoke it in the panel. `/ulticloud status` names the
+  server, its server ID and the connection state. The new `/ulticloud reconnect` retries at once, at most once
+  every 10 seconds.
+- At the first start of 6.3.1, a `cloud_token` left by 6.3.0 (including one migrated from the pre-6.3.0
+  `data.json`) is deleted with one WARNING ending "Run /ulticloud login to re-attach this server."; the
+  32-hex `uuid` entry is kept byte for byte and is sent as `legacyServerUuid` with the device login, so
+  the panel can offer to re-attach the existing server. A file with no `cloud_token` is not
+  rewritten. The old token is never sent anywhere again.
+- `UltiCloudRequests.post` and `.get`, the 6.3.0 helper that made UltiLogin's `/panel` magic-link calls,
+  answer every call with `PATH_NOT_ALLOWED` and send nothing (one INFO line per run). UltiLogin 2.0.0's
+  `/panel` therefore stops working on 6.3.1; its `/login` keeps working. UltiLogin 2.1.0, released with
+  6.3.1, uses `CloudPlayerLinks` instead and is required for `/panel`. There is no bridge for 2.0.0.
+
+### New public API
+
+| API | Since | Purpose |
+|---|---|---|
+| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged. The table starts empty, matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
+| `websocket.CloudPlayerLinks`, `UltiTools#getCloudPlayerLinks()` | 6.3.1 | The player-link API that replaces the magic-link calls: `create(...)` returns a one-time link valid for 600 seconds; one module-owned `LinkEventHandler` receives completions and expiries on a framework worker thread; the framework persists each result before it answers the gateway, so a completion redelivered after a restart is answered without calling the module again. `getCloudPlayerLinks()` returns `null` only before the framework has enabled. |
+| `PanelResponderRegistry#ownerModuleOf(String)`, `#ownerModules()` | 6.3.1 | Read-only views of responder ownership. |
+| `websocket.CloudChannel`, `CloudRequest`, `CloudRequestHandler`, `CloudLimits` | 6.3.1, `@ApiStatus.Internal` | The framework's internal request and reply seam. Public only because handlers live in two packages; not for module use, and they may change without notice. |
+
+The other public types added in 6.3.1 (`utils.CloudOutboxListener`, `utils.CloudFeatures`, `utils.ModuleIds`,
+`utils.AgentMessageRouter`, `utils.ContractPrimitives`, `utils.PayloadReader`, `manager.AgentOutboundFeeds`,
+`manager.RemoteRequestHandlers`, and the internal `PanelResponderRegistry#moduleIdentifierOf`,
+`#moduleRequestType` and four-argument `#dispatch`) are `@ApiStatus.Internal`. So are the new members of the
+already-internal managers and of `CloudAuthManager`. `SensitiveCommandRegistry` and `CloudPlayerLinks` are
+stable extension points although their package carries `@ApiStatus.Internal`.
+
+### Module responders: result shapes and two source-level changes
+
+A `PanelResponderRegistry` responder may now answer any JSON value: an object, an array, a primitive, or no
+content. A future that completes with `null` or `JsonNull` is a success with no content, sent as `ok` with
+`data: null`; in 6.3.0 it was a failure. A responder that returns no future, throws, or completes its future
+exceptionally still fails the request (`module_error`). To allow these shapes the generic signatures changed,
+with identical erasure, so compiled modules keep linking (japicmp: binary compatible):
+
+- `registerResponder(String, Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>>, String)`
+  and the four-argument overload. A lambda or a `Function<JsonObject, CompletableFuture<JsonObject>>` written
+  for 6.3.0 still compiles. A subclass that overrides either method with the 6.3.0 parameter type no longer
+  compiles (the override clashes with the new signature) and must take the new parameter type.
+- `dispatch(String, JsonObject, String)` returns `CompletableFuture<JsonElement>` instead of
+  `CompletableFuture<JsonObject>`. A caller that assigns the result to a `CompletableFuture<JsonObject>` no
+  longer compiles. The future never completes successfully with a Java `null`: no content is
+  `JsonNull.INSTANCE`.
+
+No UltiKits module and no example calls `dispatch` or overrides `registerResponder`.
+
+### Module identifiers and the `module.request` key convention
+
+UltiCloud addresses a module by its catalogue identifier: the module's `identify-string`, trimmed and
+lower-cased, not its `plugin.yml` name. This matters where the two differ, for example UltiChat (name
+`UltiTools-Chat`, identifier `ultichat`), UltiEconomy (`ultieconomy`), UltiKits (`ultikits.kits`) and UltiMenu
+(`ultimenu`). The identifier is what the `hello` declares as `modules:<identifier>@<X.Y.Z>` (version: the first
+three numeric parts of the module's `plugin.yml` version), what a panel `module.request` names in `module`, and
+what an `error.report` names in `moduleName`. `moduleName` is `null` unless the report names a loaded module.
+A module whose `identify-string` is missing or is not a valid identifier (a lower-case letter first, segments of
+lower-case letters and digits joined by one `.` or `-`, at most 64 characters) is addressed by its `plugin.yml`
+name trimmed and lower-cased instead, as in 6.3.0, when that is a valid identifier; if neither is, its
+responders are not declared and one WARNING says so. Its error reports then carry `moduleName` `null`.
+
+A `module.request { module, action, params, actor }` is dispatched only to a responder of the module whose
+identifier equals `module`, registered under `<identifier>.<action>`. New registrations should use that form.
+The 6.3.0 form `<plugin.yml name lower-cased>.<action>` keeps working; the request still arrives with the
+identifier. Anything else is answered `module_not_found` and reaches no responder. The responder receives a
+copy of `params` with an added `actor` object `{ userId, minecraftUuid }` that the gateway fills and the
+framework passes on as received (a `params.actor` the panel sent is replaced). A module that owns no responder
+declares no capability, and the gateway sends it no requests. The capability list is built for each
+connection's `hello`; `/ul reload` reconnects when the list changed.
+
+### New configuration keys
+
+Two switches join `ultipanel.capabilities` in `plugins/UltiTools/config.yml`, both `false` by default:
+
+| Key | Gates |
+|---|---|
+| `ultipanel.capabilities.power-actions` | The panel's structured stop and restart (`server.power`), which do not pass through the command blocklist. A restart needs the `restart-script` of `spigot.yml` to exist; otherwise it is refused as `power_unsupported` and nothing stops. |
+| `ultipanel.capabilities.player-actions` | Kick, change game mode, teleport (`player.action`). |
+
+An existing `config.yml` gains the two keys once at start-up, with their comments and the value `false`. Only
+missing keys are inserted, through the configuration write gate, and every operator-written byte stays as it
+was; a layout the gate cannot keep gets one start-up WARNING naming the keys and the reason, the file is not
+written, and both switches stay off. The eight 6.3.0 switches keep their keys and defaults. Every request is
+checked against the switch's current value: with the switch off it is refused with `capability_not_accepted`
+naming the key, and a power request with `power_disabled`. A `/ul reload` that turns a switch on or off reconnects, so the next `hello` declares the new
+set; a changed `power-actions` value alone does not reconnect and is reported to the panel as
+`settings.changed`, because `power` is always declared and the switch is checked in its handler.
+
+### Message classes the framework supports
+
+| Class | Messages | Switch |
+|---|---|---|
+| Commands | `command.execute` answered by `command.ack` before it runs and `command.result` with the output lines the command printed before its dispatch returned (capped, with `truncated`). Lines it prints later, for example from an asynchronous body, are written to the server console and reach the panel through the log stream, not the result. The blocklist applies | `commands` |
+| Power | `server.power` (stop, restart) answered by `command.ack` and `server.power.result`, sent before the stop begins; `power_disabled` when the switch is off | `power-actions` |
+| Structured player actions | `player.action` (kick, game mode, teleport to a player or to coordinates) and its result; `player_not_online`, `world_not_found` | `player-actions` |
+| Telemetry and snapshot requests | `status`, `players.snapshot`, `plugins.snapshot`, `worlds.snapshot`; `snapshot.request` pushes the requested snapshots, then answers | `monitoring` |
+| Log stream and events | `log.lines` (sensitive commands redacted), `error.report`, reliable `player.join` and `player.leave`, `player.command` (name only), `outbox.overflow` | `logs`, `player-events`, `ultipanel.logging.error-reporting.enabled` |
+| Structured configuration | `config.tree`, `config.entries`, `config.update` over the configuration files of loaded modules; an update writes only the named keys through the write gate and answers `file_changed` when the file's SHA-256 is not the `baseVersion` | `file-read` (read), `file-write` (write) |
+| Files with versions | `files.list`, `files.read` (content, `version` = SHA-256 of the raw bytes), `files.write` (requires `baseVersion`, `file_changed` on mismatch), `files.delete` (files only), inside the editable roots | `file-read`, `file-write`, `file-delete` |
+| `server.properties` | `properties.get` (the 14 common keys, typed, with `version`) and `properties.update` (12 writable keys); `online-mode` and `white-list` are read-only | `server-properties` |
+| Module requests | `module.request` and `module.response`, as above | `modules:<id>@<X.Y.Z>` |
+| Player links | `player.link.create`, `.created`, `.completed`, `.completed.result`, `.expired` | always declared |
+| Credential rotation | `credential.rotate`: the new credential is written to disk atomically, then `credential.rotate.ack` is sent; the open connection keeps the old one and the next connection uses the new one | always |
+| Operator settings | `settings.changed { powerActionsEnabled }` after `/ul reload` changes `power-actions` | always |
+
+6.3.1 never declares `backups`, so the panel's backup requests are answered by the gateway as unavailable and
+never reach the server. The panel can no longer start, stop, pause or reconfigure the log stream: protocol
+2.0.0 has no log-control message.
+
+### Connection outcomes an operator sees
+
+The framework retries a lost connection with full-jitter backoff from 1 second up to 60 seconds, building a new
+socket and reading the credential afresh on every attempt, and logs one line per attempt and per scheduled
+retry. The gateway's refusals and closes end in these states:
+
+| Signal | Outcome |
+|---|---|
+| HTTP 401 at the upgrade, or close 4401 (credential revoked or the server deleted) | Reconnecting stops, the local credential and the reliable-delivery state are deleted, and the console says: "UltiCloud rejected this server's credential (it was revoked or is no longer valid). The saved credential was deleted. Run /ulticloud login to link this server again." |
+| HTTP 426, or close 4426 | Reconnecting stops, the credential is kept, and the console says this UltiTools version is no longer accepted, with the minimum version when the gateway names one. Upgrade UltiTools and restart. |
+| HTTP 402, or close 4402 (plan limit) | The credential is kept; the framework retries quietly every 15 minutes and prints the reason, the end of the grace period and the plan's manage link once. `/ulticloud status` shows the pause; `/ulticloud reconnect` retries at once. The connection resumes on the next retry after the plan is renewed. |
+| HTTP 429, close 4400 or 4429, any other 4xx | Long backoff, from 60 seconds up to 15 minutes; a 429 waits at least its `Retry-After`, at most one hour. |
+| Close 4000 (another connection uses the same credential) | Long backoff; after three in a row with no connection lasting 10 minutes in between, reconnecting stops and the console says another connection uses the credential. |
+| A `welcome` naming another server ID than the linked one | Reconnecting stops, the credential is kept, and the console tells the operator to contact support or run `/ulticloud logout` and `/ulticloud login`. |
+| Close 1000, 1001, 1009, 1011, 4408, a network error, a 5xx, a missing `welcome` within 15 seconds, or 90 seconds without a `pong` | Normal backoff. |
+
+### Module downloads
+
+`/upm install`, `/upm update` and the start-up update check use only the public catalogue. A module JAR is
+downloaded only from the same origin (scheme, host and port) as the configured API base URL; another origin is
+refused, and no 3xx redirect is followed. The body must match the version's `sizeBytes` and `sha256` (64
+lower-case hex characters in the version metadata), or the temporary file is deleted, an error is reported and
+nothing lands under `plugins/UltiTools/plugins/`. Version metadata without a usable hash or size makes the
+version uninstallable, never unchecked. The `X-Content-SHA256` response header, when present, must name the
+same hash; a missing or upper-case header is accepted, because the body is always checked against the
+metadata. A version whose metadata is broken ends in the generic "Install Failed!" line without a reason. The
+catalogue's `framework.downloadUrl` (Maven Central) is never downloaded by the framework; only its version is
+read for the newest-version check. `/upm update` stages a module against the version it read through the
+catalogue route, whatever shape the download URL has.
+
+### Deprecations: the protocol v1 surface, removed in 6.4.0
+
+Every entry below is `@Deprecated(since = "6.3.1", forRemoval = true)` with a `@deprecated` paragraph and
+`@removeIn 6.4.0`, and appears in `compatibility/DEPRECATIONS.md`. Behaviour codes: **R** refuses explicitly
+(a failure result, or one INFO line per run); **F** forwards to the 6.3.1 equivalent; **E** an entry point that
+only stores a v1 client nothing connects, with one INFO line per run; **S** a kept v1 sender, handler or
+listener of an `@ApiStatus.Internal` manager, unchanged since 6.3.0, which the framework never reaches;
+**U** a self-contained type that still does what it says and has no cloud effect.
+
+| Member | Code | 6.3.1 behaviour | Replacement | Removed in |
+|---|---|---|---|---|
+| `com.ultikits.ultitools.entities.ApiResponse` | U | plain data type, behaviour unchanged; it parsed the v1 Worker envelope `{code, msg, data}` | There is no replacement: this parsed the protocol v1 Worker envelope `{code, msg, data}`, which UltiCloud no longer serves. The protocol 2.0.0 catalogue answers `{data: ...}` and the framework parses it itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.entities.TokenEntity` | U | plain JWT value type; 6.3.1 never issues one | Use CloudAuthManager.login(DeviceLoginListener) for server linking; removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.entities.vo.ServerEntityVO` | U | plain value type; its only user was the v1 `registerServer` | There is no replacement: `/ulticloud login` links a protocol 2.0.0 server. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.CommandExecutionManager#executeCommand(com.google.gson.JsonObject)` | S | still runs the command it is given, blocklist included; its reply goes only to a v1 client, which never connects | Use execute(String, String, Executor, CommandResultSink), which the protocol 2.0.0 session calls for a panel command; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.CommandExecutionManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)` | E | stores the client and writes one INFO line per run; the framework never calls it, and the client it stores never connects | There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.CommandExecutionManager$CommandResult` | U | unused value class | There is no replacement: the protocol 2.0.0 command path reports through CommandResultSink. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.FileOperationManager#handleFileOperation(com.google.gson.JsonObject)` | S | still carries out the request it is given; its reply goes only to a v1 client, which never connects | There is no replacement for modules: the framework's own UltiCloud session (protocol 2.0.0) answers the panel's file requests; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.FileOperationManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)` | E | stores the client and writes one INFO line per run; the framework never calls it, and the client it stores never connects | There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#getLogTransmitter()` | S | returns the transmitter `initialize(client)` created, otherwise `null` | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#handleLogStreamMessage(com.google.gson.JsonObject)` | S | logs an INFO line; its replies are dropped without a log line | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#initialize(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)` | E | stores the client and writes one INFO line per run; the framework never calls it, and the client it stores never connects | There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#onPlayerJoin(org.bukkit.event.player.PlayerJoinEvent)` | S | listener method; does nothing without a v1 transmitter | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent)` | S | listener method; does nothing without a v1 transmitter | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#onServerLoad(org.bukkit.event.server.ServerLoadEvent)` | S | listener method; does nothing without a v1 transmitter | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#sendCustomLog(java.lang.String,java.lang.String,java.lang.String)` | S | does nothing and logs nothing without a v1 transmitter, the only 6.3.1 state | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#sendPlayerEventLog(java.lang.String,java.lang.String,java.lang.String)` | S | does nothing and logs nothing without a v1 transmitter, the only 6.3.1 state | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.LogStreamManager#sendPluginActionLog(java.lang.String,java.lang.String)` | S | does nothing and logs nothing without a v1 transmitter, the only 6.3.1 state | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.PlayerEventManager#initialize(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)` | E | stores the client and writes one INFO line per run; the framework never calls it, and the client it stores never connects | There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.PlayerEventManager#onPlayerChangedWorld(org.bukkit.event.player.PlayerChangedWorldEvent)` | S | listener method, registered only by `initialize(client)` | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.PlayerEventManager#onPlayerChat(org.bukkit.event.player.PlayerChatEvent)` | S | listener method, registered only by `initialize(client)` | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.PlayerEventManager#onPlayerCommandPreprocess(org.bukkit.event.player.PlayerCommandPreprocessEvent)` | S | listener method, registered only by `initialize(client)` | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.PlayerEventManager#onPlayerDeath(org.bukkit.event.entity.PlayerDeathEvent)` | S | listener method, registered only by `initialize(client)` | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.PlayerEventManager#onPlayerJoin(org.bukkit.event.player.PlayerJoinEvent)` | S | listener method, registered only by `initialize(client)` | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.PlayerEventManager#onPlayerKick(org.bukkit.event.player.PlayerKickEvent)` | S | listener method, registered only by `initialize(client)` | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.PlayerEventManager#onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent)` | S | listener method, registered only by `initialize(client)` | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#isMonitoring()` | S | reports whether such a monitor runs | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#sendMetricsData()` | S | sends only over a v1 client; without one it logs a WARNING and sends nothing | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#sendMetricsDataWithRequestId(java.lang.String)` | S | sends only over a v1 client; without one it logs a WARNING and sends nothing | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#sendPlayerEvent(java.lang.String,org.bukkit.entity.Player,com.google.gson.JsonObject)` | S | sends only over a v1 client; without one it logs a WARNING and sends nothing | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#sendServerStatus()` | S | sends only over a v1 client; without one it logs a WARNING and sends nothing | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#sendServerStatusWithRequestId(java.lang.String)` | S | sends only over a v1 client; without one it logs a WARNING and sends nothing | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)` | E | stores the client and writes one INFO line per run; the framework never calls it, and the client it stores never connects | There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#startMonitoring()` | S | without a client it still starts its executor and two main-thread sampling tasks and logs an INFO line, but delivers nothing | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerMonitorManager#stopMonitoring()` | S | stops a monitor a caller started; the framework calls it in its teardown | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerPropertiesManager#handleServerProperties(com.google.gson.JsonObject)` | S | still carries out the request it is given; its reply goes only to a v1 client, which never connects | Use readVersioned(int) and updateWithBaseVersion(String, Map), which the protocol 2.0.0 session calls; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.ServerPropertiesManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)` | E | stores the client and writes one INFO line per run; the framework never calls it, and the client it stores never connects | There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.manager.UltiPanelLogTransmitter#UltiPanelLogTransmitter(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient,java.lang.String)` | E | stores the client and writes one INFO line per run; the framework never calls it, and the client it stores never connects | There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) streams the console through a transmitter it builds itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.CloudAuthManager#login(java.lang.Runnable,java.util.function.Consumer,java.lang.Runnable,java.util.function.Consumer,java.util.function.Consumer)` | F | forwards to `login(DeviceLoginListener)` | Use login(DeviceLoginListener) instead; removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus#getExpirationDate()` | R | returns `null`; a 6.3.1 credential carries no user name or expiry | Use getServerName() or getServerId() for identity instead; removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus#getUserName()` | R | returns `null`; a 6.3.1 credential carries no user name or expiry | Use getServerName() or getServerId() instead; removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.HttpRequestUtils#getServerByUUID(java.lang.String,com.ultikits.ultitools.entities.TokenEntity)` | R | returns `Response(-1, "UltiCloud protocol v1 was removed; no request was sent.")` without a request; one INFO line per member per run | There is no replacement: a protocol 2.0.0 server is linked with `/ulticloud login` and identified by its server credential. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.HttpRequestUtils#registerServer(java.lang.String,java.lang.String,int,java.lang.String,boolean,com.ultikits.ultitools.entities.TokenEntity)` | R | returns `Response(-1, "UltiCloud protocol v1 was removed; no request was sent.")` without a request; one INFO line per member per run | There is no replacement: `/ulticloud login` links a protocol 2.0.0 server through the device authorization. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.HttpRequestUtils#updateServer(java.lang.String,int,java.lang.String,boolean,com.ultikits.ultitools.entities.TokenEntity)` | R | returns `Response(-1, "UltiCloud protocol v1 was removed; no request was sent.")` without a request; one INFO line per member per run | There is no replacement: a protocol 2.0.0 server reports its own state over its connection. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.PluginInitiationUtils#startTokenRefreshScheduler()` | R | does nothing; the 6.3.1 server credential does not expire | No replacement is needed for non-expiring server credentials; removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.SimpleHttpClient` | U | still sends the request it is given; the framework no longer calls it | Use HttpURLConnection or an HTTP client library of your own; the framework no longer needs a general HTTP helper. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.SimpleHttpClient$Response` | U | plain response holder of `SimpleHttpClient`, behaviour unchanged; the framework no longer uses it | There is no replacement, as for SimpleHttpClient. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.UltiCloudRequests` | R | every call returns `PATH_NOT_ALLOWED` without opening a connection; the first call in a run writes one INFO line | Use CloudPlayerLinks to link a player; protocol 2.0.0 has no v1 REST cloud, so every call of this class is refused. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.UltiCloudRequests#get(java.lang.String,java.util.Map)` | R | every call returns `PATH_NOT_ALLOWED` without opening a connection; the first call in a run writes one INFO line | Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.UltiCloudRequests#post(java.lang.String,java.lang.String)` | R | every call returns `PATH_NOT_ALLOWED` without opening a connection; the first call in a run writes one INFO line | Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.UltiCloudRequests$Outcome` | U | plain enum of `UltiCloudRequests` outcomes; every `UltiCloudRequests` call now answers `PATH_NOT_ALLOWED` | There is no replacement: CloudPlayerLinks reports its own outcomes. Removed in 6.4.0 with UltiCloudRequests. | 6.4.0 |
+| `com.ultikits.ultitools.utils.UltiCloudRequests$Result` | U | plain value type of `UltiCloudRequests` answers; every call now gives one with `PATH_NOT_ALLOWED`, no status code and no body | There is no replacement: CloudPlayerLinks reports its own outcomes. Removed in 6.4.0 with UltiCloudRequests. | 6.4.0 |
+| `com.ultikits.ultitools.websocket.ExponentialBackoffStrategy` | U | delay arithmetic unchanged from 6.3.0; the framework no longer uses it | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) paces its reconnects itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.websocket.ExponentialBackoffStrategy$Builder` | U | delay arithmetic unchanged from 6.3.0; the framework no longer uses it | There is no replacement, as for ExponentialBackoffStrategy. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.websocket.ReconnectStrategy` | U | delay arithmetic unchanged from 6.3.0; the framework no longer uses it | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) paces its reconnects itself. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.websocket.UltiPanelWebSocketClient` | R | `connect()`, both `connectBlocking` forms, `reconnect()`, `reconnectBlocking()` and `run()` open no socket (the blocking forms return `false`) and write one INFO line per run; `sendMessage` reports the closed socket | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) carries every panel request, and modules answer panel requests through PanelResponderRegistry. Removed in 6.4.0. | 6.4.0 |
+
+The managers' members marked **S** act only through a v1 client handed to an **E** entry point, and such a
+client never connects (every connect form, `run()` included, is refused), so nothing they do reaches a panel.
+They are not all silent: `LogStreamManager#sendCustomLog`, `#sendPlayerEventLog` and `#sendPluginActionLog`
+do nothing and log nothing; `#handleLogStreamMessage` logs an INFO line and drops its replies;
+`ServerMonitorManager#startMonitoring` still schedules sampling that can never deliver; only
+`ServerMonitorManager#sendServerStatus*`, `#sendMetricsData*`, `#sendPlayerEvent` and the client's
+`sendMessage` log a WARNING and send nothing. These classes are `@ApiStatus.Internal`, so a module calling them
+was already outside the API contract.
+
+Not deprecated, because they keep a 6.3.1 meaning: `HttpRequestUtils` itself and its constructor, the other
+public members of `PluginInitiationUtils`, `CloudAuthManager#logout` and `#status`, the managers' constructors
+and their members the 6.3.1 session uses, the rest of `UltiPanelLogTransmitter`, and
+`UltiTools#getPlayerEventManager`, `#getLogStreamManager` and `#getServerMonitorManager`.
+
+### Shutdown window
+
+From the first step of UltiTools' disable, every request that would change server state is refused with an
+explicit failure saying the server is shutting down: `command.execute` and `server.power` are acknowledged and
+then fail, so a redelivery after the restart is acknowledged and never run; `files.write`, `files.delete`,
+`properties.update`, `config.update`, `player.action` and `module.request` fail with `internal_error`;
+`credential.rotate` gets a generic error, and the gateway sends it again after the next `welcome`. A
+`player.link.completed` is left unanswered and delivered again after the restart. Read-only requests keep
+working until the connection closes. The disable waits, at most 5 seconds, for changes already under way,
+including work handed to a module responder or the player-link handler, so no change happens after the remote
+action log closes.
+
+### Known limitations (6.3.1)
+
+These are documented, not defended; each needs a crash, an unusual layout, or a step the operator should not
+take.
+
+- **Commands are at most once.** A `command.execute` or `server.power` id is persisted before the
+  acknowledgement and before the command runs. A crash between persisting the id and running the command loses
+  that command; it is never run twice.
+- **Reliable events can lose the last 30 seconds.** Unacknowledged `player.join` and `player.leave` events live
+  in memory and in `<server root>/.ultikits/cloud-outbox.json` (owner-only), written every 30 seconds when
+  changed and at shutdown, at most 1000 events by default (UltiCloud's `welcome` can set another limit for the
+  connection), with the oldest dropped first (reported once as `outbox.overflow`). A crash loses what changed
+  since the last write.
+- **A quit after UltiTools is disabled is not captured.** During a server stop, a player quit that fires after
+  UltiTools has already been disabled is not recorded: Bukkit no longer calls a disabled plugin's listeners.
+  Whether Paper's stop sequence disables plugins before it removes players is not yet verified on a real
+  server; the UAT row `ultitools.cloud.outbox.persist-restart` observes it.
+- **A crash can ask a player-link handler twice.** If the server crashes after the module's handler decided a
+  completion but before the framework recorded the result, the redelivered completion calls the handler again.
+  A result larger than 4 KiB is not stored either, so its redelivery also asks again. When the framework cannot
+  resolve its state directory, ids and results are not kept at all.
+- **Module JARs are hash-checked, not signed.** The catalogue's `sha256` and `sizeBytes` protect against a
+  corrupted or substituted download, not against a compromised catalogue.
+- **The state directory guard assumes the default layout.** The remote file guard finds `.ultikits/` through the
+  server's working directory, while the credential store finds it from the plugin data folder
+  (`<plugins dir>/../.ultikits`). With a relocated plugins folder and editable roots widened to reach it,
+  `cloud-outbox.json` is not covered by the `.ultikits` refusal; `credentials.json` still is, by name. Do not
+  widen the editable roots beyond the server root.
+- **Case-insensitive file systems.** On a case-insensitive file system such as the default macOS one, whether a
+  request spelled `.ULTIKITS/...` is refused depends on how the JVM resolves the real path.
+- **Hand edits of `credentials.json` while the server runs are not picked up.** The running session holds the
+  current credential, and a rotation is written to disk before it is acknowledged; an out-of-band edit or
+  deletion takes effect at the next start. Do not edit framework-owned files while the server runs.
+- **A rotation during shutdown can outlive its grace period.** A `credential.rotate` that reaches the server in
+  the shutdown window is refused; the gateway sends it again after the next `welcome`. If the server stays down
+  longer than the rotation's grace period (24 hours by default), the old credential expires, the next
+  connection is refused with HTTP 401, and the operator runs `/ulticloud login` again, which reconnects the same
+  server.
+- **A command accepted in the last moment before a stop may not run.** A request that needs the server thread,
+  such as a command, a player action or a configuration read or edit, admitted after the server began stopping
+  but before UltiTools' own disable started (Paper disables plugins loaded after UltiTools first), may never get
+  its server-thread task run. The panel then reports a timeout, and nothing changed.
+- **Console-only plugin commands are refused from the panel.** A panel command runs with Paper's capturing
+  command sender, which has console permissions but is not the console sender, so that the panel receives the
+  command's real output. A plugin command that accepts only the console sender refuses it. Run such commands in
+  the server console. There is no automatic console retry.
+- **A panel command's late output is not in its result.** `command.result` is sent when the command's dispatch
+  returns, so it holds only the lines printed until then. Lines printed later (an asynchronous command body, a
+  scheduled reply) are written to the server console unchanged, so they appear in the console, the log files
+  and the panel's log stream (sensitive commands redacted, as for every console line). That forwarding lasts
+  10 minutes after the result; a line printed later still is dropped, with one WARNING naming the command.
+- **File and property requests share one worker per connection.** They run in arrival order on one thread, so a
+  slow `files.list` (about 10 seconds for 100,000 entries) delays the next file or property request, never
+  heartbeats, acknowledgements or other request types. More than 64 waiting requests are answered
+  `rate_limited`, and a switch turned off while a request already waits does not stop that request.
+- **Error-report attribution.** `error.report.moduleName` names a module only when the report names a loaded
+  module; errors of command executors and AOP beans are reported as the framework's own (`null`).
 
 ## Config layer (6.3.0)
 
@@ -1263,6 +1579,9 @@ New public API in a MINOR release. An addition breaks no existing module: nothin
 signature or a behaviour a module already relies on.
 
 ### `UltiCloudRequests`: authenticated UltiCloud requests on a module's behalf
+
+As of 6.3.1 this helper is deprecated and every call answers `PATH_NOT_ALLOWED` without a request; see
+[UltiCloud protocol 2.0.0 (as of 6.3.1)](#ulticloud-protocol-200-as-of-631). The text below describes 6.3.0.
 
 `com.ultikits.ultitools.utils.UltiCloudRequests` (public, `@since 6.3.0`) sends an UltiCloud request
 with this server's UltiCloud credential **without giving the module the credential**. The framework
