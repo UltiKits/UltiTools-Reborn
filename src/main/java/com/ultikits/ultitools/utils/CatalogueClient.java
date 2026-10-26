@@ -58,8 +58,6 @@ final class CatalogueClient {
             "^https://[^\\x00-\\x20\\x7F-\\x9F/?#]+([/?#][^\\x00-\\x20\\x7F-\\x9F]*)?$");
     /** The longest URL the contract allows. */
     private static final int MAX_URL_LENGTH = 2048;
-    /** The longest module identifier the contract allows. */
-    private static final int MAX_IDENTIFIER_LENGTH = 64;
     /** The largest {@code sizeBytes} the contract allows (2^53 - 1). */
     private static final long MAX_SIZE_BYTES = 9007199254740991L;
     /** The contract's {@code apiLevel} range. */
@@ -137,19 +135,14 @@ final class CatalogueClient {
 
     /**
      * The contract's {@code :moduleRef} for a module: its identifier (lower-case letter first,
-     * segments separated by a single {@code .} or {@code -}, 1 to 64 characters). The framework never
-     * addresses a module by its ULID.
+     * segments separated by a single {@code .} or {@code -}, 1 to 64 characters), as {@link
+     * ModuleIds#of(String)} derives it. The framework never addresses a module by its ULID.
      *
      * @param identifyString a module's identify-string
      * @return the segment the catalogue addresses it by, or {@code null} when it cannot be one
      */
     static String moduleRef(String identifyString) {
-        String normalized = PluginInstallUtils.normalizeIdentifyString(identifyString);
-        if (normalized == null || normalized.length() > MAX_IDENTIFIER_LENGTH
-                || !ContractPrimitives.MODULE_IDENTIFIER.matcher(normalized).matches()) {
-            return null;
-        }
-        return normalized;
+        return ModuleIds.of(identifyString);
     }
 
     /**

@@ -6,7 +6,6 @@ import org.jetbrains.annotations.ApiStatus;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
@@ -21,10 +20,11 @@ import java.util.regex.Pattern;
  *
  * <p>One name is produced per module owning at least one responder, and none for a module that owns
  * none — the gateway sends a module's request only to a plugin that declared that module's
- * capability (D-24, contract answer 11). The id is the owner module name lower-cased, taken only
- * when it forms a valid contract module identifier (lowercase letters, digits, dot and hyphen
- * inside, at most 64 characters); a name that cannot is skipped with one WARNING rather than
- * mangled into something the gateway would route wrongly.</p>
+ * capability (D-24, contract answer 11). The id is the module's UltiCloud identifier -- its
+ * catalogue identifier, which is its {@code identify-string} lower-cased ({@link ModuleIds}), not its
+ * {@code plugin.yml} name ({@link PanelResponderRegistry#moduleIdentifierOf(String)}; 22-26 fix round,
+ * backend contract answer of 2026-10-27). A module whose identifier cannot be derived is skipped with
+ * one WARNING rather than mangled into something the gateway would route wrongly.</p>
  *
  * <p>The version is supplied by the caller from the module's own {@code plugin.yml} version and cut
  * to its first three numeric parts, so {@code 1.2.0-beta} becomes {@code 1.2.0}, {@code 2} becomes
@@ -50,8 +50,6 @@ final class ModuleCapabilities {
     static final int MAX_NAMES = 64;
     /** The contract's {@code hello} limit on one capability name. */
     static final int MAX_CAPABILITY_LENGTH = 96;
-    /** The contract's bound on a module identifier. */
-    private static final int MODULE_IDENTIFIER_MAX_LENGTH = 64;
     private static final String NAME_PREFIX = "modules:";
     private static final Pattern DIGITS = Pattern.compile("[0-9]+");
 
@@ -75,7 +73,7 @@ final class ModuleCapabilities {
         Objects.requireNonNull(moduleVersionByName, "moduleVersionByName");
         Map<String, String> namesById = new TreeMap<>();
         for (String owner : registry.ownerModules()) {
-            String id = identifier(owner);
+            String id = registry.moduleIdentifierOf(owner);
             if (id == null) {
                 LOGGER.warning("UltiCloud: module '" + owner + "' cannot form a protocol module identifier;"
                         + " its responders are not declared to the panel.");
@@ -107,19 +105,6 @@ final class ModuleCapabilities {
             names.add(name);
         }
         return Collections.unmodifiableList(names);
-    }
-
-    /** The owner module name as a contract module identifier, or {@code null} when it cannot be one. */
-    private static String identifier(String owner) {
-        if (owner == null) {
-            return null;
-        }
-        String id = owner.toLowerCase(Locale.ROOT);
-        if (id.length() > MODULE_IDENTIFIER_MAX_LENGTH
-                || !ContractPrimitives.MODULE_IDENTIFIER.matcher(id).matches()) {
-            return null;
-        }
-        return id;
     }
 
     /**

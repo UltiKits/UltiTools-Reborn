@@ -29,6 +29,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.utils.ModuleIds;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
 /**
@@ -262,12 +263,17 @@ public class PanelResponderRegistry {
      *
      * <h4>UltiCloud protocol v2 module types</h4>
      * <p>A module that answers UltiCloud protocol v2 {@code module.request} messages registers its
-     * responder under {@code <module id>.<action>}, the module id being the module's own name
-     * lower-cased. The v2 bridge derives that exact type from the request payload's {@code module}
-     * and {@code action} fields and dispatches only when the responder's owner module name,
-     * lower-cased, equals {@code module}; a request that would reach another module's responder is
-     * answered {@code module_not_found} and never dispatched (D-25, contract answer 11). An action
-     * therefore needs no namespace of its own: the module id is the namespace.</p>
+     * responder under {@code <prefix>.<action>}, where the prefix is either the module's own name
+     * lower-cased (as in 6.3.0) or its UltiCloud module identifier. UltiCloud addresses the module by
+     * its identifier: its {@code identify-string}, lower-case ({@link ModuleIds}), which for some
+     * modules differs from the name. The v2 bridge takes {@code module} and {@code action} from the
+     * request payload and dispatches only to a responder of the module whose identifier equals {@code
+     * module} and registered under {@code <module>.<action>} or {@code <its name lower-cased>.<action>};
+     * any other request is answered {@code module_not_found} and never dispatched (D-25, contract
+     * answer 11). An action therefore needs no namespace of its own: the module is the namespace. The
+     * identifier is taken from the recorded module instance (see {@code ownerModule}); a responder with
+     * no instance recorded or listed, or whose module declares no usable identify-string, keeps the
+     * 6.3.0 behaviour: its owner name lower-cased stands for the identifier.</p>
      *
      * @param messageType the exact message type string this responder will serve, matched by
      *                    {@code String.equals} — no case folding, no Unicode normalization
@@ -496,6 +502,78 @@ public class PanelResponderRegistry {
     public String ownerModuleOf(String messageType) {
         ResponderEntry entry = messageType == null ? null : responders.get(messageType);
         return entry == null ? null : entry.ownerModule;
+    }
+
+    /**
+     * The UltiCloud module identifier of the module that owns responders under {@code ownerModule}
+     * (22-26 fix round): the identify-string of the recorded module instance, or of the copy listed
+     * as loaded under that name, lower-cased ({@link ModuleIds#of(UltiToolsPlugin)}); when neither
+     * gives one, the owner name itself through the same derivation, as in 6.3.0. Internal, not for
+     * module use.
+     *
+     * @param ownerModule an owner module name as {@link #ownerModules()} lists it
+     * @return the identifier, or {@code null} when the module owns no responder or none can be derived
+     * @since 6.3.1
+     */
+    @ApiStatus.Internal
+    public String moduleIdentifierOf(String ownerModule) {
+        if (ownerModule == null) {
+            return null;
+        }
+        String fallback = null;
+        for (ResponderEntry entry : responders.values()) {
+            if (ownerModule.equals(entry.ownerModule)) {
+                String id = identifierOf(entry);
+                if (entry.ownerInstance != null && id != null) {
+                    return id;
+                }
+                if (fallback == null) {
+                    fallback = id;
+                }
+            }
+        }
+        return fallback;
+    }
+
+    /**
+     * The registered message type a UltiCloud {@code module.request} for {@code moduleIdentifier}
+     * and {@code action} is dispatched to (22-26 fix round), or {@code null} when there is none: the
+     * type {@code <moduleIdentifier>.<action>}, or {@code <owner name lower-cased>.<action>} as 6.3.0
+     * registered it, and only when the module owning that responder has {@code moduleIdentifier} as
+     * its identifier ({@link #moduleIdentifierOf(String)}). The identifier form wins when both exist.
+     * Compared lower-case. Internal, not for module use.
+     *
+     * @param moduleIdentifier the request's {@code module}
+     * @param action           the request's {@code action}
+     * @return the type to dispatch, or {@code null} when no responder of that module serves the action
+     * @since 6.3.1
+     */
+    @ApiStatus.Internal
+    public String moduleRequestType(String moduleIdentifier, String action) {
+        if (moduleIdentifier == null || action == null) {
+            return null;
+        }
+        String id = moduleIdentifier.toLowerCase(java.util.Locale.ROOT);
+        String direct = id + "." + action;
+        ResponderEntry exact = responders.get(direct);
+        if (exact != null && id.equals(identifierOf(exact))) {
+            return direct;
+        }
+        for (Map.Entry<String, ResponderEntry> registered : responders.entrySet()) {
+            ResponderEntry entry = registered.getValue();
+            String legacy = entry.ownerModule.toLowerCase(java.util.Locale.ROOT) + "." + action;
+            if (registered.getKey().equals(legacy) && id.equals(identifierOf(entry))) {
+                return legacy;
+            }
+        }
+        return null;
+    }
+
+    /** The identifier of an entry's module; see {@link #moduleIdentifierOf(String)}. */
+    private static String identifierOf(ResponderEntry entry) {
+        UltiToolsPlugin owner = entry.ownerInstance != null ? entry.ownerInstance : listedCopyNamed(entry.ownerModule);
+        String id = ModuleIds.of(owner);
+        return id != null ? id : ModuleIds.of(entry.ownerModule);
     }
 
     /**
