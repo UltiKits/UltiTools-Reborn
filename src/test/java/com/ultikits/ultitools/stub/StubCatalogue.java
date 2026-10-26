@@ -145,6 +145,7 @@ public final class StubCatalogue implements AutoCloseable {
     private volatile int versionCount;
     private volatile int changelogChars;
     private volatile String sha256HeaderOverride;
+    private volatile String downloadPathOverride;
     private final Map<String, Vendored> vendored = new ConcurrentHashMap<>();
 
     private StubCatalogue(HttpServer server) {
@@ -226,6 +227,22 @@ public final class StubCatalogue implements AutoCloseable {
      */
     public StubCatalogue jar(byte[] jar) {
         this.jar = jar.clone();
+        return this;
+    }
+
+    /**
+     * Makes {@link #VERSION}'s public {@code download.url} name another path (and optionally a query)
+     * on this stub, and serves the download there; the usual download route keeps working.
+     *
+     * <p>The catalogue contract says download URLs are opaque and their shape is descriptive only, so
+     * a backend may hand out, say, {@code /v1/catalogue/downloads/<token>} or add a {@code ?sig=}
+     * query inside 1.0.0. {@code null} restores the usual shape.
+     *
+     * @param pathAndQuery the raw path, starting with {@code /}, optionally followed by {@code ?query}
+     * @return this stub
+     */
+    public StubCatalogue downloadPath(String pathAndQuery) {
+        this.downloadPathOverride = pathAndQuery;
         return this;
     }
 
@@ -344,8 +361,11 @@ public final class StubCatalogue implements AutoCloseable {
                 exchange.getRequestHeaders().getFirst("Authorization")));
         try {
             Vendored answer = vendored.get(path);
+            String override = downloadPathOverride;
             if (answer != null) {
                 send(exchange, answer.status, answer.body);
+            } else if (override != null && path.equals(override.split("\\?", 2)[0])) {
+                download(exchange);
             } else {
                 route(exchange, path, query);
             }
@@ -513,7 +533,9 @@ public final class StubCatalogue implements AutoCloseable {
 
     /** {@link #VERSION} as the version route and the versions page carry it, with the mode applied. */
     private JsonObject publicVersion() {
-        JsonObject data = versionObject(PUBLIC_VERSION_FIXTURE, VERSION, true, 630, downloadUrl(baseUrl(), MODULE, VERSION));
+        String override = downloadPathOverride;
+        JsonObject data = versionObject(PUBLIC_VERSION_FIXTURE, VERSION, true, 630,
+                override == null ? downloadUrl(baseUrl(), MODULE, VERSION) : baseUrl() + override);
         if (mode == Mode.LICENSE_REQUIRED) {
             JsonObject download = new JsonObject();
             download.addProperty("kind", "license_required");

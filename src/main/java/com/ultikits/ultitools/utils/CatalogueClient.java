@@ -290,37 +290,6 @@ final class CatalogueClient {
     }
 
     /**
-     * Reads the version a download URL belongs to, from its own metadata route.
-     *
-     * @param metadataPath the path of the version's metadata, as {@link #metadataPathOf} returns it
-     * @return the version, or {@code null} when it cannot be read
-     */
-    static Version versionAt(String metadataPath) {
-        JsonObject object = dataObject(CatalogueHttp.getJson(metadataPath));
-        return object == null ? null : toVersion(object);
-    }
-
-    /**
-     * Derives a version's metadata path from its download URL.
-     *
-     * @param downloadUrl the absolute download URL
-     * @return the path of the version's metadata route, or {@code null} when the URL is not a
-     *         catalogue version download
-     */
-    static String metadataPathOf(String downloadUrl) {
-        String base = CatalogueHttp.baseUrl();
-        if (downloadUrl == null || base == null || !downloadUrl.startsWith(base + MODULES)) {
-            return null;
-        }
-        String path = downloadUrl.substring(base.length());
-        String suffix = "/download";
-        if (path.indexOf('?') >= 0 || !path.endsWith(suffix)) {
-            return null;
-        }
-        return path.substring(0, path.length() - suffix.length());
-    }
-
-    /**
      * Looks up the newest UltiTools version.
      *
      * @return {@code FOUND} with the version, or {@code FAILED} when the lookup established nothing
