@@ -14,7 +14,9 @@ import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.contract.RecordingChannel;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.RemoteActionLog;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -54,6 +56,7 @@ class RemoteConfigUpdateTest {
     private ConfigManager configs;
     private AgentMessageRouter router;
     private RecordingChannel channel;
+    private List<RemoteActionLog.Entry> audit;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -71,8 +74,9 @@ class RemoteConfigUpdateTest {
         configs = new ConfigManager();
         configs.register(module, entity);
 
+        audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
         RemoteConfigHandler handler = new RemoteConfigHandler(
-                () -> Collections.singletonList(module), configs, Runnable::run, root.toFile());
+                () -> Collections.singletonList(module), configs, Runnable::run, root.toFile(), audit::add);
         router = new AgentMessageRouter(capability -> true, capability -> "denied");
         handler.register(router);
         channel = new RecordingChannel();
@@ -361,6 +365,122 @@ class RemoteConfigUpdateTest {
         assertThat(entity.prefix).isEqualTo("[C]");
         assertThat(ownChannel.frames().get(0).getAsJsonObject("payload").get("status").getAsString())
                 .isEqualTo("ok");
+    }
+
+    // ---------------------------------------------------------------- the action log
+
+    @Test
+    void anAppliedUpdateIsOneAllowedEntryNamingTheFileAndNoValue() throws Exception {
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWW", version(),
+                "[{\"key\":\"prefix\",\"value\":\"[Secret]\"}]");
+
+        assertThat(payload("config.update.result").get("status").getAsString()).isEqualTo("ok");
+        assertThat(audit).hasSize(1);
+        RemoteActionLog.Entry entry = audit.get(0);
+        assertThat(entry.getCapability()).isEqualTo(Capability.FILE_WRITE.name());
+        assertThat(entry.getAction()).isEqualTo("config.update");
+        assertThat(entry.getTarget()).isEqualTo(PATH);
+        assertThat(entry.getActor()).isEqualTo("panel");
+        assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(entry.getReason()).isNull();
+    }
+
+    @Test
+    void aPartialUpdateThatWroteAKeyIsAllowed() throws Exception {
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWX", version(),
+                "[{\"key\":\"prefix\",\"value\":\"[C]\"},{\"key\":\"cooldown\",\"value\":99}]");
+
+        assertThat(payload("config.update.result").get("status").getAsString()).isEqualTo("partial");
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+    }
+
+    @Test
+    void anUpdateThatWroteNothingIsOneDeniedEntryNamingTheKeysNeverTheValues() throws Exception {
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWY", version(),
+                "[{\"key\":\"cooldown\",\"value\":99},{\"key\":\"code\",\"value\":\"SECRETVALUE\"}]");
+
+        assertThat(payload("config.update.result").get("status").getAsString()).isEqualTo("partial");
+        assertThat(audit).hasSize(1);
+        RemoteActionLog.Entry entry = audit.get(0);
+        assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(entry.getTarget()).isEqualTo(PATH);
+        assertThat(entry.getReason()).startsWith("No key was written:").contains("cooldown").contains("code")
+                .doesNotContain("99").doesNotContain("SECRETVALUE");
+    }
+
+    @Test
+    void everyWholeRequestRefusalIsOneDeniedEntryWithTheTextThePanelReceived() throws Exception {
+        String readVersion = version();
+        Files.write(file, CONFIG.replace("cooldown: 3", "cooldown: 7").getBytes(StandardCharsets.UTF_8));
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TWZ", readVersion, "[{\"key\":\"prefix\",\"value\":\"[C]\"}]");
+        assertDenied(0, PATH, "file_changed");
+
+        channel.clear();
+        dispatchUpdateOn("server.properties", version(), "[{\"key\":\"prefix\",\"value\":\"x\"}]");
+        assertDenied(1, "server.properties", "path_not_allowed");
+
+        channel.clear();
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("r--r--r--"));
+        try {
+            dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TX0", version(), "[{\"key\":\"prefix\",\"value\":\"[C]\"}]");
+        } finally {
+            Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-r--r--"));
+        }
+        assertDenied(2, PATH, "write_denied");
+
+        channel.clear();
+        Files.write(file, "prefix: [unclosed\n  - x\n".getBytes(StandardCharsets.UTF_8));
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TX1", version(), "[{\"key\":\"prefix\",\"value\":\"[C]\"}]");
+        assertDenied(3, PATH, "config_invalid");
+
+        channel.clear();
+        String goneVersion = version();
+        Files.delete(file);
+        dispatchUpdate("01JB2Z8Y3K4M5N6P7Q8R9S0TX2", goneVersion, "[{\"key\":\"prefix\",\"value\":\"[C]\"}]");
+        assertDenied(4, PATH, "not_found");
+        assertThat(audit).hasSize(5);
+    }
+
+    @Test
+    void aMalformedUpdateAndTheReadRequestsRecordNothing() throws Exception {
+        for (ContractFixtures.Fixture fixture : ContractFixtures.invalidFrames("config.update")) {
+            router.dispatch(fixture.frame().toString(), channel);
+        }
+        dispatch("config.tree", "01JB2Z8Y3K4M5N6P7Q8R9S0TX3", "{}");
+        dispatch("config.entries", "01JB2Z8Y3K4M5N6P7Q8R9S0TX4", "{\"path\":\"" + PATH + "\"}");
+        dispatch("config.entries", "01JB2Z8Y3K4M5N6P7Q8R9S0TX5", "{\"path\":\"server.properties\"}");
+
+        assertThat(audit).isEmpty();
+    }
+
+    @Test
+    void aQueuedUpdateIsRecordedOnlyWhenTheServerThreadDecidesIt() throws Exception {
+        List<Runnable> queued = new ArrayList<>();
+        RemoteConfigHandler handler = new RemoteConfigHandler(
+                () -> Collections.singletonList(module), configs, queued::add, root.toFile(), audit::add);
+        AgentMessageRouter ownRouter = new AgentMessageRouter(capability -> true, capability -> "denied");
+        handler.register(ownRouter);
+
+        ownRouter.dispatch(updateFrame("01JB2Z8Y3K4M5N6P7Q8R9S0TX6", version(),
+                "[{\"key\":\"prefix\",\"value\":\"[C]\"}]"), new RecordingChannel());
+        assertThat(audit).as("nothing is decided before the server thread runs the task").isEmpty();
+
+        queued.get(0).run();
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+    }
+
+    private void assertDenied(int index, String target, String code) {
+        JsonObject payload = payload("config.update.result");
+        assertThat(payload.get("code").getAsString()).isEqualTo(code);
+        assertThat(audit).as(code).hasSize(index + 1);
+        RemoteActionLog.Entry entry = audit.get(index);
+        assertThat(entry.getCapability()).isEqualTo(Capability.FILE_WRITE.name());
+        assertThat(entry.getAction()).isEqualTo("config.update");
+        assertThat(entry.getTarget()).isEqualTo(target);
+        assertThat(entry.getVerdict()).as(code).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(entry.getReason()).as(code).isEqualTo(payload.get("message").getAsString());
     }
 
     private JsonObject payload(String type) {

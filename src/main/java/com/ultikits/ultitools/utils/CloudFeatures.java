@@ -480,7 +480,8 @@ public final class CloudFeatures {
         }
         ConfigManager configs = bindings.configs.get();
         if (configs != null) {
-            new RemoteConfigHandler(bindings.modules, configs, bindings.mainThread).register(router);
+            new RemoteConfigHandler(bindings.modules, configs, bindings.mainThread,
+                    new File(System.getProperty("user.dir")), this::recordAction).register(router);
         }
     }
 
@@ -641,7 +642,7 @@ public final class CloudFeatures {
         ShutdownGate.Signal shutdown = ShutdownGate.Signal.OPEN;
         /** The stop and restart of {@code server.power}. */
         Supplier<PowerActionHandler.PowerExecutor> power;
-        /** Receives one entry per remote player or power action. */
+        /** Receives every action-log entry the remote surface records (commands excepted: their manager records them). */
         Consumer<RemoteActionLog.Entry> actionLog;
         /** How many file and property requests may wait behind the running one (then {@code rate_limited}). */
         int fileQueueCapacity = SerialRequestWorker.DEFAULT_CAPACITY;

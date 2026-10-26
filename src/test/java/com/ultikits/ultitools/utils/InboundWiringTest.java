@@ -278,6 +278,23 @@ class InboundWiringTest {
     }
 
     @Test
+    @DisplayName("config.update reaches the action log through the live wiring")
+    void configUpdateIsRecordedThroughTheLiveWiring() throws Exception {
+        connect();
+        String id = send("config.update", "two-changes", null).get("id").getAsString();
+        JsonObject result = reply("config.update.result", 1);
+        assertThat(result.get("replyTo").getAsString()).isEqualTo(id);
+        assertThat(result.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("path_not_allowed");
+        await(() -> !actions.isEmpty(), "the config.update action-log entry");
+        assertThat(actions).hasSize(1);
+        assertThat(actions.get(0).getCapability()).isEqualTo(Capability.FILE_WRITE.name());
+        assertThat(actions.get(0).getAction()).isEqualTo("config.update");
+        assertThat(actions.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(actions.get(0).getReason())
+                .isEqualTo(result.getAsJsonObject("payload").get("message").getAsString());
+    }
+
+    @Test
     @DisplayName("a module the gateway did not accept is refused with capability_not_accepted")
     void undeclaredModuleIsRefused() throws Exception {
         connect();
