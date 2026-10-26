@@ -139,11 +139,15 @@ No UltiKits module and no example calls `dispatch` or overrides `registerRespond
 ### Module identifiers and the `module.request` key convention
 
 UltiCloud addresses a module by its catalogue identifier: the module's `identify-string`, trimmed and
-lower-cased, never its `plugin.yml` name. This matters where the two differ, for example UltiChat (name
+lower-cased, not its `plugin.yml` name. This matters where the two differ, for example UltiChat (name
 `UltiTools-Chat`, identifier `ultichat`), UltiEconomy (`ultieconomy`), UltiKits (`ultikits.kits`) and UltiMenu
 (`ultimenu`). The identifier is what the `hello` declares as `modules:<identifier>@<X.Y.Z>` (version: the first
 three numeric parts of the module's `plugin.yml` version), what a panel `module.request` names in `module`, and
 what an `error.report` names in `moduleName`. `moduleName` is `null` unless the report names a loaded module.
+A module whose `identify-string` is missing or is not a valid identifier (a lower-case letter first, segments of
+lower-case letters and digits joined by one `.` or `-`, at most 64 characters) is addressed by its `plugin.yml`
+name trimmed and lower-cased instead, as in 6.3.0, when that is a valid identifier; if neither is, its
+responders are not declared and one WARNING says so. Its error reports then carry `moduleName` `null`.
 
 A `module.request { module, action, params, actor }` is dispatched only to a responder of the module whose
 identifier equals `module`, registered under `<identifier>.<action>`. New registrations should use that form.
@@ -176,7 +180,7 @@ set; a changed `power-actions` value alone does not reconnect and is reported to
 
 | Class | Messages | Switch |
 |---|---|---|
-| Commands | `command.execute` answered by `command.ack` before it runs and `command.result` with the real output lines the command printed (capped, with `truncated`); the blocklist applies | `commands` |
+| Commands | `command.execute` answered by `command.ack` before it runs and `command.result` with the output lines the command printed before its dispatch returned (capped, with `truncated`). Lines it prints later, for example from an asynchronous body, are written to the server console and reach the panel through the log stream, not the result. The blocklist applies | `commands` |
 | Power | `server.power` (stop, restart) answered by `command.ack` and `server.power.result`, sent before the stop begins; `power_disabled` when the switch is off | `power-actions` |
 | Structured player actions | `player.action` (kick, game mode, teleport to a player or to coordinates) and its result; `player_not_online`, `world_not_found` | `player-actions` |
 | Telemetry and snapshot requests | `status`, `players.snapshot`, `plugins.snapshot`, `worlds.snapshot`; `snapshot.request` pushes the requested snapshots, then answers | `monitoring` |
@@ -279,12 +283,12 @@ listener of an `@ApiStatus.Internal` manager, unchanged since 6.3.0, which the f
 | `com.ultikits.ultitools.utils.HttpRequestUtils#updateServer(java.lang.String,int,java.lang.String,boolean,com.ultikits.ultitools.entities.TokenEntity)` | R | returns `Response(-1, "UltiCloud protocol v1 was removed; no request was sent.")` without a request; one INFO line per member per run | There is no replacement: a protocol 2.0.0 server reports its own state over its connection. Removed in 6.4.0. | 6.4.0 |
 | `com.ultikits.ultitools.utils.PluginInitiationUtils#startTokenRefreshScheduler()` | R | does nothing; the 6.3.1 server credential does not expire | No replacement is needed for non-expiring server credentials; removed in 6.4.0. | 6.4.0 |
 | `com.ultikits.ultitools.utils.SimpleHttpClient` | U | still sends the request it is given; the framework no longer calls it | Use HttpURLConnection or an HTTP client library of your own; the framework no longer needs a general HTTP helper. Removed in 6.4.0. | 6.4.0 |
-| `com.ultikits.ultitools.utils.SimpleHttpClient$Response` | U | still sends the request it is given; the framework no longer calls it | There is no replacement, as for SimpleHttpClient. Removed in 6.4.0. | 6.4.0 |
+| `com.ultikits.ultitools.utils.SimpleHttpClient$Response` | U | plain response holder of `SimpleHttpClient`, behaviour unchanged; the framework no longer uses it | There is no replacement, as for SimpleHttpClient. Removed in 6.4.0. | 6.4.0 |
 | `com.ultikits.ultitools.utils.UltiCloudRequests` | R | every call returns `PATH_NOT_ALLOWED` without opening a connection; the first call in a run writes one INFO line | Use CloudPlayerLinks to link a player; protocol 2.0.0 has no v1 REST cloud, so every call of this class is refused. Removed in 6.4.0. | 6.4.0 |
 | `com.ultikits.ultitools.utils.UltiCloudRequests#get(java.lang.String,java.util.Map)` | R | every call returns `PATH_NOT_ALLOWED` without opening a connection; the first call in a run writes one INFO line | Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0. | 6.4.0 |
 | `com.ultikits.ultitools.utils.UltiCloudRequests#post(java.lang.String,java.lang.String)` | R | every call returns `PATH_NOT_ALLOWED` without opening a connection; the first call in a run writes one INFO line | Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0. | 6.4.0 |
-| `com.ultikits.ultitools.utils.UltiCloudRequests$Outcome` | R | every call returns `PATH_NOT_ALLOWED` without opening a connection; the first call in a run writes one INFO line | There is no replacement: CloudPlayerLinks reports its own outcomes. Removed in 6.4.0 with UltiCloudRequests. | 6.4.0 |
-| `com.ultikits.ultitools.utils.UltiCloudRequests$Result` | R | every call returns `PATH_NOT_ALLOWED` without opening a connection; the first call in a run writes one INFO line | There is no replacement: CloudPlayerLinks reports its own outcomes. Removed in 6.4.0 with UltiCloudRequests. | 6.4.0 |
+| `com.ultikits.ultitools.utils.UltiCloudRequests$Outcome` | U | plain enum of `UltiCloudRequests` outcomes; every `UltiCloudRequests` call now answers `PATH_NOT_ALLOWED` | There is no replacement: CloudPlayerLinks reports its own outcomes. Removed in 6.4.0 with UltiCloudRequests. | 6.4.0 |
+| `com.ultikits.ultitools.utils.UltiCloudRequests$Result` | U | plain value type of `UltiCloudRequests` answers; every call now gives one with `PATH_NOT_ALLOWED`, no status code and no body | There is no replacement: CloudPlayerLinks reports its own outcomes. Removed in 6.4.0 with UltiCloudRequests. | 6.4.0 |
 | `com.ultikits.ultitools.websocket.ExponentialBackoffStrategy` | U | delay arithmetic unchanged from 6.3.0; the framework no longer uses it | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) paces its reconnects itself. Removed in 6.4.0. | 6.4.0 |
 | `com.ultikits.ultitools.websocket.ExponentialBackoffStrategy$Builder` | U | delay arithmetic unchanged from 6.3.0; the framework no longer uses it | There is no replacement, as for ExponentialBackoffStrategy. Removed in 6.4.0. | 6.4.0 |
 | `com.ultikits.ultitools.websocket.ReconnectStrategy` | U | delay arithmetic unchanged from 6.3.0; the framework no longer uses it | There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) paces its reconnects itself. Removed in 6.4.0. | 6.4.0 |
@@ -326,8 +330,9 @@ take.
   that command; it is never run twice.
 - **Reliable events can lose the last 30 seconds.** Unacknowledged `player.join` and `player.leave` events live
   in memory and in `<server root>/.ultikits/cloud-outbox.json` (owner-only), written every 30 seconds when
-  changed and at shutdown, at most 1000 events with the oldest dropped first (reported once as
-  `outbox.overflow`). A crash loses what changed since the last write.
+  changed and at shutdown, at most 1000 events by default (UltiCloud's `welcome` can set another limit for the
+  connection), with the oldest dropped first (reported once as `outbox.overflow`). A crash loses what changed
+  since the last write.
 - **A quit after UltiTools is disabled is not captured.** During a server stop, a player quit that fires after
   UltiTools has already been disabled is not recorded: Bukkit no longer calls a disabled plugin's listeners.
   Whether Paper's stop sequence disables plugins before it removes players is not yet verified on a real
@@ -361,6 +366,11 @@ take.
   command sender, which has console permissions but is not the console sender, so that the panel receives the
   command's real output. A plugin command that accepts only the console sender refuses it. Run such commands in
   the server console. There is no automatic console retry.
+- **A panel command's late output is not in its result.** `command.result` is sent when the command's dispatch
+  returns, so it holds only the lines printed until then. Lines printed later (an asynchronous command body, a
+  scheduled reply) are written to the server console unchanged, so they appear in the console, the log files
+  and the panel's log stream (sensitive commands redacted, as for every console line). That forwarding lasts
+  10 minutes after the result; a line printed later still is dropped, with one WARNING naming the command.
 - **File and property requests share one worker per connection.** They run in arrival order on one thread, so a
   slow `files.list` (about 10 seconds for 100,000 entries) delays the next file or property request, never
   heartbeats, acknowledgements or other request types. More than 64 waiting requests are answered
