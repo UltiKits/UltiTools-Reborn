@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -42,6 +43,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import net.bytebuddy.jar.asm.ClassReader;
 import net.bytebuddy.jar.asm.ClassVisitor;
+import net.bytebuddy.jar.asm.Handle;
 import net.bytebuddy.jar.asm.MethodVisitor;
 import net.bytebuddy.jar.asm.Opcodes;
 import net.bytebuddy.jar.asm.Type;
@@ -56,14 +58,18 @@ import net.bytebuddy.jar.asm.Type;
  * senders behind them, in <b>6.4.0</b>. This class proves that they are unreachable from the framework until then:
  * <ul>
  *   <li><b>Static part.</b> A bytecode scan of every class of the framework jar ({@code target/classes}) with
- *   ByteBuddy's bundled ASM finds no {@code NEW} of the v1 client, and no call that hands a v1 client to another
- *   class (a {@code setWebSocketClient} call, or any call whose parameters include the v1 client type) except from a
- *   method that was itself handed one. Calls inside one class are a manager's own sender steps, not a hand-off. A v1 client therefore only ever enters the framework through one of the kept
- *   public entry points, whose inventory is pinned, and never originates in framework code. The same scan finds no
- *   call of the v1 REST client ({@code SimpleHttpClient}, the v1 server registration of {@code HttpRequestUtils})
- *   outside those two classes, and (CLOUD-02, S-47) no class but {@code ServerCredentialStore}, whose 6.3.0-token
- *   cleanup removes it, names the user-token entry {@code cloud_token}. A probe class compiled with this test is
- *   the negative control: the same scan reports each of its violations.</li>
+ *   ByteBuddy's bundled ASM finds no {@code NEW} of the v1 client (nor a constructor reference to it), and no call
+ *   that hands a v1 client to another class (a {@code setWebSocketClient} call, or any call whose parameters include
+ *   the v1 client type; method and constructor references are scanned as calls through the method handles of their
+ *   invokedynamic instructions) except from a method that was itself handed one. Calls inside one class are a
+ *   manager's own sender steps, not a hand-off. A v1 client therefore only ever enters the framework through one of
+ *   the kept public entry points, whose inventory is pinned, and never originates in framework code. The same scan
+ *   finds no call of the v1 REST client ({@code SimpleHttpClient}, the v1 server registration of
+ *   {@code HttpRequestUtils}) outside those two classes, and (CLOUD-02, S-47) no class but
+ *   {@code ServerCredentialStore}, whose 6.3.0-token cleanup removes it, names the user-token entry
+ *   {@code cloud_token}. A probe class compiled with this test is the negative control: the same scan reports each
+ *   of its violations. Reflection by class name cannot be fenced statically and is covered by review, not by this
+ *   test.</li>
  *   <li><b>Runtime part.</b> After a whole protocol v2 session on the in-process stub (welcome, telemetry, a
  *   command, a file listing, the properties, a reconnect and the teardown), every manager the framework reaches
  *   through {@link UltiTools}'s getters holds no v1 client.</li>
@@ -148,8 +154,12 @@ class NoV1RuntimePathTest {
                     .contains("V1InjectionProbe#inject").contains("ServerMonitorManager.setWebSocketClient"));
             assertThat(scan.findings).anySatisfy(finding -> assertThat(finding)
                     .contains("V1InjectionProbe#fromField").contains("ServerMonitorManager.setWebSocketClient"));
+            assertThat(scan.findings).anySatisfy(finding -> assertThat(finding)
+                    .contains("V1InjectionProbe#methodReference").contains("ServerMonitorManager.setWebSocketClient"));
+            assertThat(scan.findings).anySatisfy(finding -> assertThat(finding)
+                    .contains("V1InjectionProbe#constructorReference").contains("constructs " + CLIENT));
             assertThat(scan.findings).noneSatisfy(finding -> assertThat(finding).contains("#passAlong"));
-            assertThat(scan.findings).hasSize(3);
+            assertThat(scan.findings).hasSize(5);
             assertThat(scan.restFindings).containsExactly(
                     V1InjectionProbe.class.getName().replace('.', '/') + "#rest calls SimpleHttpClient.get");
             assertThat(scan.tokenFindings).containsExactly(
@@ -314,6 +324,27 @@ class NoV1RuntimePathTest {
                         @Override
                         public void visitMethodInsn(int opcode, String owner, String callee, String calleeDesc,
                                 boolean isInterface) {
+                            checkCall(owner, callee, calleeDesc);
+                        }
+
+                        @Override
+                        public void visitInvokeDynamicInsn(String indyName, String indyDesc, Handle bootstrap,
+                                Object... bootstrapArguments) {
+                            // A method or constructor reference is an invokedynamic whose bootstrap argument is a
+                            // method handle: it emits neither NEW nor INVOKE*, so each handle is checked as a call.
+                            for (Object argument : bootstrapArguments) {
+                                if (!(argument instanceof Handle)) {
+                                    continue;
+                                }
+                                Handle handle = (Handle) argument;
+                                if (handle.getTag() == Opcodes.H_NEWINVOKESPECIAL && CLIENT.equals(handle.getOwner())) {
+                                    findings.add(where + " constructs " + CLIENT);
+                                }
+                                checkCall(handle.getOwner(), handle.getName(), handle.getDesc());
+                            }
+                        }
+
+                        private void checkCall(String owner, String callee, String calleeDesc) {
                             if (isV1Rest(owner, callee) && !isV1RestClass(className)) {
                                 restFindings.add(where + " calls "
                                         + owner.substring(owner.lastIndexOf('/') + 1) + "." + callee);
@@ -325,8 +356,8 @@ class NoV1RuntimePathTest {
                             }
                             if ("setWebSocketClient".equals(callee) || takesClient(calleeDesc)) {
                                 if (isClientConstructor(owner, callee) || sameTopLevelClass(owner, className)) {
-                                    // The NEW above is reported already; a call inside one class (a manager's own
-                                    // sender steps) does not hand the client to anyone else.
+                                    // The NEW (or constructor handle) above is reported already; a call inside one
+                                    // class (a manager's own sender steps) does not hand the client to anyone else.
                                     return;
                                 }
                                 findings.add(where + " hands a v1 client to "
@@ -447,10 +478,16 @@ class NoV1RuntimePathTest {
      * The negative control of the static scan: never run, only compiled and scanned. {@link #inject} constructs a
      * client and hands it to a setter, {@link #fromField} hands a stored client to a setter (the shape the framework
      * wiring had), {@link #passAlong} only forwards the client it was handed (the shape of a kept entry point),
-     * {@link #rest} calls the v1 REST client and {@link #token} reads the user-token entry.
+     * {@link #methodReference} and {@link #constructorReference} reach the same two calls through method handles
+     * (invokedynamic), {@link #rest} calls the v1 REST client and {@link #token} reads the user-token entry.
      */
     @SuppressWarnings("unused")
     static final class V1InjectionProbe {
+        /** Target type of the constructor reference in {@link #constructorReference}. */
+        interface ClientFactory {
+            UltiPanelWebSocketClient make(String url, String uuid, String token) throws URISyntaxException;
+        }
+
         private UltiPanelWebSocketClient stored;
 
         void inject(ServerMonitorManager monitor) throws URISyntaxException {
@@ -463,6 +500,14 @@ class NoV1RuntimePathTest {
 
         void passAlong(ServerMonitorManager monitor, UltiPanelWebSocketClient client) {
             monitor.setWebSocketClient(client);
+        }
+
+        Consumer<UltiPanelWebSocketClient> methodReference(ServerMonitorManager monitor) {
+            return monitor::setWebSocketClient;
+        }
+
+        ClientFactory constructorReference() {
+            return UltiPanelWebSocketClient::new;
         }
 
         Object rest() {
