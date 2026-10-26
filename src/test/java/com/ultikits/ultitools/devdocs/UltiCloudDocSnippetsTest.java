@@ -23,6 +23,10 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 
@@ -50,6 +54,10 @@ class UltiCloudDocSnippetsTest {
 
     private static final Path SOURCE =
             Paths.get("src/test/java/com/ultikits/ultitools/devdocs/UltiCloudDocSnippetsTest.java");
+
+    private static final Path COMPATIBILITY = Paths.get("COMPATIBILITY.md");
+    private static final Path LEDGER = Paths.get("compatibility/deprecations.json");
+    private static final String COMPATIBILITY_HEADING = "## UltiCloud protocol 2.0.0 (as of 6.3.1)";
 
     private static final String PLAYER_LINK_EN = "docs/src/guide/advanced/player-link.md";
     private static final String PLAYER_LINK_ZH = "docs/src/zh/guide/advanced/player-link.md";
@@ -194,6 +202,74 @@ class UltiCloudDocSnippetsTest {
     @DisplayName("player-link handler: the Chinese page shows the compiled snippet unchanged")
     void playerLinkHandlerChinesePage() throws IOException {
         assertPageShows(PLAYER_LINK_ZH, "player-link-handler");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // COMPATIBILITY.md 6.3.1 section (D-29, checker B-W8)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("COMPATIBILITY.md: the 6.3.1 UltiCloud section names every 6.3.1 ledger key with its 6.4.0 removal")
+    void compatibilityNamesEveryLedgerKey() throws IOException {
+        List<String> keys = sinceSixThreeOneKeys();
+        assertThat(keys).as("since-6.3.1 keys in compatibility/deprecations.json").isNotEmpty();
+        List<String> section = lines(compatibilitySection());
+        List<String> missing = new ArrayList<>();
+        List<String> withoutRemoval = new ArrayList<>();
+        for (String key : keys) {
+            String row = null;
+            for (String line : section) {
+                if (line.contains("`" + key + "`")) {
+                    row = line;
+                    break;
+                }
+            }
+            if (row == null) {
+                missing.add(key);
+            } else if (!row.contains("6.4.0")) {
+                withoutRemoval.add(key);
+            }
+        }
+        assertThat(missing).as("ledger keys the section does not name").isEmpty();
+        assertThat(withoutRemoval).as("ledger keys whose row does not say 6.4.0").isEmpty();
+    }
+
+    @Test
+    @DisplayName("COMPATIBILITY.md keeps LF line endings")
+    void compatibilityKeepsLf() throws IOException {
+        assertThat(read(COMPATIBILITY)).as("COMPATIBILITY.md holds a carriage return").doesNotContain("\r");
+    }
+
+    /** The {@code ## UltiCloud protocol 2.0.0 (as of 6.3.1)} section of COMPATIBILITY.md, up to the next heading of its level. */
+    static String compatibilitySection() throws IOException {
+        List<String> lines = lines(read(COMPATIBILITY));
+        int begin = indexOf(lines, COMPATIBILITY_HEADING, 0);
+        assertThat(begin).as("heading '%s' in COMPATIBILITY.md", COMPATIBILITY_HEADING).isGreaterThanOrEqualTo(0);
+        int end = lines.size();
+        boolean inFence = false;
+        for (int i = begin + 1; i < lines.size(); i++) {
+            if (lines.get(i).startsWith("```")) {
+                inFence = !inFence;
+            }
+            if (!inFence && lines.get(i).startsWith("## ")) {
+                end = i;
+                break;
+            }
+        }
+        return String.join("\n", lines.subList(begin, end));
+    }
+
+    /** Every ledger key whose {@code since} is 6.3.1, as {@code mvn verify} generated it. */
+    static List<String> sinceSixThreeOneKeys() throws IOException {
+        JsonArray ledger = JsonParser.parseString(read(LEDGER)).getAsJsonArray();
+        List<String> keys = new ArrayList<>();
+        for (JsonElement element : ledger) {
+            JsonObject entry = element.getAsJsonObject();
+            if (entry.has("since") && entry.get("since").getAsString().startsWith("6.3.1")) {
+                keys.add(entry.get("key").getAsString());
+            }
+        }
+        return keys;
     }
 
     // ---------------------------------------------------------------------------------------------
