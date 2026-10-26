@@ -53,7 +53,11 @@ public final class UltiCloudRequests {
      * @param jsonBody the JSON request body, ignored because nothing is sent
      * @return {@link Outcome#PATH_NOT_ALLOWED} with no status code and no body
      * @throws IllegalStateException if called on the server's primary thread
+     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.0.0 has no v1
+     *     REST cloud, so this call is always refused. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static Result post(String path, String jsonBody) {
         requireOffPrimaryThread();
         announceOnce(CREATE_PATH.equals(path) || POLL_PATH.equals(path));

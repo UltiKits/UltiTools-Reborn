@@ -800,5 +800,16 @@
     "forRemoval": false,
     "replacement": "Since 6.3.0 (GEN-07), for the same reason as isSafeClassName(String) -- its only in-tree caller (the seven-argument {@code PluginManager.register}/with-args reflective-construction path) was deleted by GEN-04, which is what dissolved this method's former \"shared-field, can't safely delete the whitelist\" objection.",
     "status": "DEPRECATED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.UltiCloudRequests#post(java.lang.String,java.lang.String)",
+    "className": "com.ultikits.ultitools.utils.UltiCloudRequests",
+    "memberName": "post",
+    "kind": "METHOD",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
   }
 ]
