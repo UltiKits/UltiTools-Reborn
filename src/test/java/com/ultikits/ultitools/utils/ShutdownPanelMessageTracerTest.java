@@ -70,6 +70,13 @@ class ShutdownPanelMessageTracerTest {
             return CompletableFuture.completedFuture(new JsonObject());
         }, "UltiMail");
         session.start(null);
+        // Settle the handshake before a case starts: "connected" is reported when the welcome is accepted, before the
+        // connection's established listeners run on the agent thread, and those listeners still hand the welcome's
+        // status to the server thread and start the once-a-second main timer. A case that took its scheduler baseline
+        // or turned disabling on in that gap saw those calls land afterwards (22-23 fix round, under CPU load). The
+        // main timer is the listeners' last scheduler call.
+        session.reply("status", 1);
+        session.await(() -> server.getScheduler().enabledCalls.contains("runTaskTimer"), "the welcome's main timer");
     }
 
     @AfterEach
