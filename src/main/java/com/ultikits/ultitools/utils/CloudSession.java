@@ -26,15 +26,13 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.exceptions.DataAccessException;
-import com.ultikits.ultitools.manager.EarlyLogCapture;
 import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * The single owner of one UltiCloud login's entire lifetime.
  * <p>
- * A session owns the token, the poll and refresh schedulers it created, the panel WebSocket client,
- * the reconnect backoff state, and the panel-manager wiring (D-16). {@code login} constructs a new
+ * A session owns the token, the poll and refresh schedulers it created, the reconnect backoff state and
+ * (protocol v2) its agent connection (D-16). {@code login} constructs a new
  * session via {@link #startNew()}; {@code logout} replaces the current one the same way. Everything
  * the replaced session started -- an in-flight poll, an in-flight refresh, a reconnect attempt --
  * lapses on its own once {@link #invalidate()} has run, because {@link #commit(TokenEntity)} and
@@ -80,20 +78,14 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * and by every caller in {@code PluginInitiationUtils} that needs to
  * read-then-act on a session's currency ({@code reinitWebSocket}'s second confirmation,
  * {@code activateCloudIfCurrent}, {@code doDisableCloud}'s two global-manager steps).</li>
- * <li>{@link #LOG_WIRING_LOCK} (16-10 gap-closure addendum, issue #465) -- the innermost lock,
- * held only inside {@link #shutdownLogStreamManager()} and inside {@link #wireManagers()}'s own
- * {@code LOGS} branch, both of which are themselves only ever reached from within a
- * {@code synchronized (this)} region ({@link #invalidate()} and {@link #initializeManagers()}
- * respectively) -- so this lock is never acquired without the session monitor already held, and
- * never used to acquire anything further.</li>
  * <li>{@link CloudStateStore}'s JVM-wide write lock (plan 22-07) -- taken by every load, flush
  * and detach of {@code cloud-outbox.json}, always below the session monitor: {@link
  * #invalidate()}'s and the shutdown flush's write cannot interleave with the 30 s task's, which
  * holds only this lock and never the session monitor. Its inner locks are the {@link CloudOutbox}
  * and {@link CommandDedupeSet} monitors, which are leaves.</li>
  * <li>The {@link AgentConnection} monitor and {@code CredentialStore.LOCK}, taken by
- * {@link ServerCredentialStore}, are siblings of {@code LOG_WIRING_LOCK}: never nested in one
- * another, always below the session monitor. AgentConnection never calls out while holding its
+ * {@link ServerCredentialStore}, are siblings: never nested in one another, always below the
+ * session monitor. AgentConnection never calls out while holding its
  * monitor. Its scheduler callbacks take the session monitor first and reject invalidated or
  * replaced sessions and replaced connections before acting.</li>
  * <li>(plan 22-20) The private lock of the connection's {@link AgentProtocol} -- below the session
@@ -301,15 +293,6 @@ final class CloudSession {
     private ScheduledFuture<?> refreshTask;
 
     /**
-     * This session's own WebSocket client, or {@code null} if none is connected. Task 2 of plan
-     * 16-08 moved this off {@code PluginInitiationUtils}'s static {@code panelWS} field -- the
-     * client dies with the session that built it ({@link #invalidate()} disconnects and clears it),
-     * so a reconnect-exhaustion callback or a late handshake checked against THIS session can never
-     * disagree with what client is actually installed here.
-     */
-    private volatile UltiPanelWebSocketClient webSocketClient;
-
-    /**
      * The global budget and backoff for this session's outer reconnection (reinit loop).
      * <p>
      * The client's own limit of 5 attempts is a <b>per-instance</b> cap, and
@@ -321,39 +304,6 @@ final class CloudSession {
      * session's budget starts at zero attempts by construction, with no reset call needed.
      */
     private final ExponentialBackoffStrategy backoff = ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
-
-    /**
-     * The innermost lock in this class's documented lock order (see the class javadoc) -- guards
-     * {@link #logStreamOwner} only. A dedicated lock object, not {@code this}/a session monitor and
-     * not {@code CloudSession.class}: the ownership check it protects must be readable from
-     * {@link #shutdownLogStreamManager()} (called from {@link #invalidate()}, under the tearing-down
-     * session's own monitor) while comparing against whichever session's monitor
-     * {@link #wireManagers()} (called from {@link #initializeManagers()}, under the wiring
-     * session's own, possibly DIFFERENT, monitor) last held when it wrote it -- two different
-     * sessions' monitors can never be compared against each other directly, so the ownership record
-     * itself needs its own lock, held only ever as the innermost one (16-10 gap-closure addendum,
-     * issue #465).
-     */
-    private static final Object LOG_WIRING_LOCK = new Object();
-
-    /**
-     * Which session's log-stream wiring is currently installed on the JVM-wide
-     * {@link com.ultikits.ultitools.manager.LogStreamManager} singleton, or {@code null} if no
-     * session has ever wired it (or the last session to do so has already cleanly detached it).
-     * Guarded exclusively by {@link #LOG_WIRING_LOCK}.
-     * <p>
-     * <b>Deliberately tolerant of {@code null}, not "unowned means owned by nobody, so skip."</b> A
-     * great many call paths in this package's own tests (and at least one production path this
-     * class does not control -- a direct {@code LogStreamManager.getInstance().initialize(...)} call
-     * bypassing {@link #wireManagers()} entirely) install log-stream wiring WITHOUT ever routing
-     * through this class, so this field can legitimately be {@code null} even while a handler is, in
-     * fact, attached. {@link #shutdownLogStreamManager()} therefore only ever refuses to shut down
-     * when this field names ANOTHER, specific, still-current session -- never merely because it is
-     * unset -- so every pre-existing "logout detaches the handler" guarantee this class already made
-     * before issue #465 continues to hold exactly as before for every caller that never populates
-     * this field.
-     */
-    private static CloudSession logStreamOwner;
 
     // No explicit constructor: this class needs none, and the implicit no-arg constructor the
     // compiler generates is already package-private (matching this top-level class's own default
@@ -413,14 +363,6 @@ final class CloudSession {
         setAgentEndpointOverrideForTesting(null);
         setAgentTimingOverrideForTesting(null, null);
         setAgentRuntimeForTesting(null, null, null);
-        // 16-10 gap-closure addendum: logStreamOwner is a second JVM-wide static this class owns
-        // (issue #465) -- left unset, a leftover reference from a previous test class would make
-        // shutdownLogStreamManager() wrongly believe a DIFFERENT session still owns the wiring and
-        // skip a shutdown this fresh test genuinely expects, exactly the "no forkCount" leak issue
-        // #250 already documents for #current itself.
-        synchronized (LOG_WIRING_LOCK) {
-            logStreamOwner = null;
-        }
     }
 
     // ---- Commit / invalidate: the contract D-18 requires ----
@@ -448,26 +390,10 @@ final class CloudSession {
 
     /**
      * Marks this session invalid and tears down everything it owns: the log stream manager (as of
-     * plan 16-10, WR-01), the poll and refresh schedulers, and (as of plan 16-08 Task 2) the
-     * WebSocket client. Safe to call on a session that never started any of those (a freshly
-     * constructed session with nothing scheduled and no client yet) and safe to call more than once
-     * -- both are exercised directly by this class's own tests, independently of the static
-     * {@link #current()} holder.
-     * <p>
-     * <b>WR-01 (16-REVIEW-cloud.md):</b> the log-stream-manager shutdown used to run in
-     * {@code PluginInitiationUtils.doDisableCloud()}, <i>before</i> this method and with no lock at
-     * all. A late {@code onWebSocketOpened} landing in that unlocked gap would observe this session
-     * as still current -- because it genuinely still was, at that exact instant -- and re-attach the
-     * log handler that step had just detached; {@link #invalidate()} would then run and close the
-     * WebSocket client, but never re-run the log-stream shutdown a second time. Moving the shutdown
-     * inside this method closes that gap: {@link #initializeManagers()} (which re-wires the log
-     * stream manager) and this method both synchronize on {@code this}, so one of them always runs
-     * to completion before the other can even enter -- there is no window in which "wiring" can see
-     * a stale "still current" read while "teardown" is genuinely underway. The original ordering
-     * concern this step's comment used to document -- log flush before the WebSocket client closes,
-     * so {@code sendBatch()} does not find the socket already down with a non-empty queue -- is
-     * preserved: this step still runs before {@link #closeWebSocketClient()} below, just now under
-     * the same lock as everything else.
+     * plan 16-10, WR-01), the poll and refresh schedulers, the pending reliable-delivery state (D-15)
+     * and the agent connection. Safe to call on a session that never started any of those and safe
+     * to call more than once -- both are exercised directly by this class's own tests, independently
+     * of the static {@link #current()} holder.
      * <p>
      * <b>Real-machine UAT fix, plan 16-08:</b> {@link #pendingAuthenticationCancelled} is captured
      * here -- reading {@link #pollTask} BEFORE {@link #stopPolling()} below clears it -- so
@@ -483,7 +409,6 @@ final class CloudSession {
         }
         stopPolling();
         stopTokenRefreshScheduler();
-        closeWebSocketClient();
         // D-15: a pending outbox or command-dedupe change must reach the disk before the
         // connection that owns it goes away -- this is also the flush the plugin's shutdown
         // performs, through PluginInitiationUtils#stopWebsocket(). It is a no-op on a session
@@ -495,24 +420,10 @@ final class CloudSession {
     /**
      * Shuts down the framework's log stream manager, if one is configured. Extracted so
      * {@link #invalidate()} reads as a flat list of teardown steps, and tolerant of a {@code null}
-     * manager (unmocked in the majority of this package's tests) exactly like
-     * {@link #closeWebSocketClient()} already tolerates a {@code null} client -- neither condition
-     * is an error, both are simply nothing to tear down.
-     * <p>
-     * <b>16-10 gap-closure addendum, issue #465:</b> before this fix, this step ran unconditionally
-     * whenever ANY session invalidated -- including a stale, already-superseded session's own
-     * redundant second invalidation (e.g. a delayed reconnect-exhaustion callback for an old session
-     * arriving after a replacement session had already completed its own handshake and wired its own
-     * log handler). Because {@link com.ultikits.ultitools.manager.LogStreamManager} is a JVM-wide
-     * singleton, that unconditional shutdown would detach the REPLACEMENT session's own,
-     * currently-valid wiring -- with no later handshake ever coming to re-attach it, since the
-     * replacement session's own {@code onOpen} had already run. Gating on {@link #logStreamOwner}
-     * (held under {@link #LOG_WIRING_LOCK}, the innermost lock in this class's documented order)
-     * closes that: this session's own teardown only ever shuts the manager down if it is the one
-     * that most recently wired it (or nothing has ever recorded ownership at all -- see
-     * {@link #logStreamOwner}'s own javadoc for why an unset owner must still shut down, not skip).
-     * A session that finds a DIFFERENT, specific owner recorded leaves the manager alone and does
-     * NOT clear the record -- the owning session's own eventual teardown is what does that.
+     * manager (unmocked in the majority of this package's tests): no manager is simply nothing to
+     * tear down. As of 6.3.1 no framework path wires the log stream manager (its protocol v1 wiring
+     * was removed, plan 22-24); the shutdown still runs so a module that wired it through the kept
+     * public API is detached on logout as in 6.3.0.
      */
     private void shutdownLogStreamManager() {
         UltiTools plugin = UltiTools.getInstance();
@@ -520,18 +431,9 @@ final class CloudSession {
             return;
         }
         try {
-            synchronized (LOG_WIRING_LOCK) {
-                if (logStreamOwner != null && logStreamOwner != this) {
-                    // A different, still-current session's own wiring is installed -- this
-                    // (older, already-superseded) session's teardown must not detach it (#465).
-                    return;
-                }
-                com.ultikits.ultitools.manager.LogStreamManager logStreamManager =
-                    plugin.getLogStreamManager();
-                if (logStreamManager != null) {
-                    logStreamManager.shutdown();
-                }
-                logStreamOwner = null;
+            com.ultikits.ultitools.manager.LogStreamManager logStreamManager = plugin.getLogStreamManager();
+            if (logStreamManager != null) {
+                logStreamManager.shutdown();
             }
         } catch (Exception e) {
             plugin.getLogger().log(Level.FINE,
@@ -540,34 +442,13 @@ final class CloudSession {
     }
 
     /**
-     * Disconnects and clears this session's WebSocket client, if any. Extracted out of
-     * {@link #invalidate()} so the client-close step is a named, independently callable action --
-     * exactly the shape issue #298's fourth acceptance criterion (teardown order is not a
-     * correctness precondition) needs to test each of the four named steps in isolation, in
-     * whatever order a test chooses. Production code only ever reaches this through
-     * {@link #invalidate()}.
-     */
-    synchronized void closeWebSocketClient() {
-        if (webSocketClient != null) {
-            try {
-                webSocketClient.disconnect();
-            } catch (Exception e) {
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                    "Error disconnecting WebSocket during session invalidation: " + e.getMessage());
-            }
-            webSocketClient = null;
-        }
-    }
-
-    /**
-     * Test-only: marks this session invalidated without touching the poller, the refresher, or
-     * the WebSocket client -- the flag-setting half of {@link #invalidate()}, isolated so a test
-     * can establish "logout has been decided" as a precondition and then permute the four
-     * mechanical teardown actions ({@link #stopPolling()}, {@link #stopTokenRefreshScheduler()},
-     * {@link #closeWebSocketClient()}, {@link #clearPersisted()}) in any order afterward, proving
-     * their relative order does not change the outcome (D-16/D-18, issue #298's fourth acceptance
-     * criterion). Production code never calls this in isolation; {@link #invalidate()} always sets
-     * the same flag together with the poller/refresher/client cleanup, in one atomic call.
+     * Test-only: marks this session invalidated without touching the poller, the refresher or the
+     * connection -- the flag-setting half of {@link #invalidate()}, isolated so a test can establish
+     * "logout has been decided" as a precondition and then permute the mechanical teardown actions
+     * ({@link #stopPolling()}, {@link #stopTokenRefreshScheduler()}, {@link #clearPersisted()}) in
+     * any order afterward, proving their relative order does not change the outcome (D-16/D-18,
+     * issue #298's fourth acceptance criterion). Production code never calls this in isolation;
+     * {@link #invalidate()} always sets the same flag together with the cleanup, in one atomic call.
      */
     synchronized void markInvalidatedForTesting() {
         invalidated = true;
@@ -617,22 +498,6 @@ final class CloudSession {
             token = null;
             predecessorToken = null;
         }
-    }
-
-    /** @return this session's WebSocket client, or {@code null} if none is connected */
-    UltiPanelWebSocketClient getWebSocketClient() {
-        return webSocketClient;
-    }
-
-    /**
-     * Installs {@code client} as this session's WebSocket client, replacing (without closing) any
-     * previous one. Callers that need the previous client closed first should read
-     * {@link #getWebSocketClient()}, close it themselves, and only then call this.
-     *
-     * @param client the client to install, or {@code null} to clear the reference without closing it
-     */
-    void setWebSocketClient(UltiPanelWebSocketClient client) {
-        this.webSocketClient = client;
     }
 
     /**
@@ -1839,116 +1704,6 @@ final class CloudSession {
         if (refreshExecutor != null) {
             refreshExecutor.shutdown();
             refreshExecutor = null;
-        }
-    }
-
-    // ---- Panel-manager wiring (moved here from PluginInitiationUtils by plan 16-08 Task 2) ----
-
-    /**
-     * Wires all WebSocket managers up to this session's connection, but only if this session is
-     * still current.
-     * <p>
-     * This method hangs off {@code onConnectHandler} (via
-     * {@code PluginInitiationUtils.onWebSocketOpened} → {@code PluginInitiationUtils.initializeManagers()}
-     * → here), and an in-flight handshake can still land after {@code /ulticloud logout}. Without a
-     * guard, the listeners {@code disableCloud()} just tore down would be reinstalled verbatim by
-     * this late-arriving onOpen — the exact same "no one owns the decision" defect from #181/#223,
-     * resurfacing in a different place.
-     * <p>
-     * <b>Checking {@link #isCurrent()} alone is not enough.</b> That would be only a read taken
-     * outside a lock: after it reads true but before this method actually wires anything up,
-     * {@link #invalidate()} could cut in on another thread, tear everything down cleanly, and then
-     * this method would continue on and wire the listeners right back up. So both this method and
-     * {@link #invalidate()} synchronize on {@code this} (this session's own monitor, replacing the
-     * former global lifecycle lock — see the two review rounds on PR #264 for the
-     * original race), which is why the currency check below is safe to trust once taken: teardown
-     * either has not started yet or has already run to completion by the time this returns from the
-     * check, never caught in the middle.
-     */
-    synchronized void initializeManagers() {
-        if (!isCurrent()) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                FrameworkText.text("云连接已关闭，跳过管理器初始化（这是一次登出之后迟到的握手）"));
-            return;
-        }
-        wireManagers();
-    }
-
-    /**
-     * The actual wiring performed by {@link #initializeManagers()}. Callers must hold this
-     * session's own monitor (i.e. call only from a {@code synchronized(this)} context).
-     * <p>
-     * D-11/D-12: the four outbound capabilities ({@code monitoring}/{@code logs}/
-     * {@code player-events}/{@code server-properties}) decide here, via
-     * {@link Capability#isEnabled()}, whether to <b>start collecting</b> data at all — not whether
-     * to discard it at the send-side after collection. The latter would still leave data already
-     * gathered into memory, just never transmitted, and D-12 explicitly rejects that
-     * "exposed but not transmitted" shape. Every client-reference wiring call is deliberately kept
-     * unconditional: assigning a client reference by itself starts no collection, and running it
-     * unconditionally is what guarantees every manager getter is always non-null and every manager
-     * always exists (D-11) — the dispatch table has two manager-getter dereferences with no null
-     * check.
-     */
-    private void wireManagers() {
-        try {
-            // Wire up the server monitor manager — reference assignment is kept separate from
-            // "whether to start monitoring"; see this method's javadoc
-            UltiTools.getInstance().getServerMonitorManager().setWebSocketClient(webSocketClient);
-            if (Capability.MONITORING.isEnabled()) {
-                // Start monitoring (sends status immediately and then periodically)
-                UltiTools.getInstance().getServerMonitorManager().startMonitoring();
-            } else {
-                PluginInitiationUtils.logSkippedCapability(Capability.MONITORING);
-            }
-
-            // Wire up the command execution manager
-            UltiTools.getInstance().getCommandExecutionManager().setWebSocketClient(webSocketClient);
-
-            // Wire up the file operation manager
-            UltiTools.getInstance().getFileOperationManager().setWebSocketClient(webSocketClient);
-
-            // Wire up the server properties manager
-            if (UltiTools.getInstance().getServerPropertiesManager() != null) {
-                UltiTools.getInstance().getServerPropertiesManager().setWebSocketClient(webSocketClient);
-            }
-
-            // Wire up the log stream manager — while logs is disabled, SystemLogHandler is never
-            // attached to the root logger. Records this session as the log-stream owner (16-10
-            // gap-closure addendum, issue #465) under the same LOG_WIRING_LOCK
-            // shutdownLogStreamManager() checks, so a later, stale teardown from a DIFFERENT
-            // (already-superseded) session can recognise this wiring is not its own to detach.
-            if (UltiTools.getInstance().getLogStreamManager() != null) {
-                if (Capability.LOGS.isEnabled()) {
-                    synchronized (LOG_WIRING_LOCK) {
-                        // Ownership is recorded BEFORE calling initialize(), not after: this
-                        // method's own outer try/catch means a later step inside initialize()
-                        // throwing (its handler attachment happens early, well before its own
-                        // final steps) must not silently skip the ownership record -- the handler
-                        // it already attached is still this session's to own and eventually
-                        // detach, whether or not initialize() itself ran to completion.
-                        logStreamOwner = this;
-                        UltiTools.getInstance().getLogStreamManager().initialize(webSocketClient);
-                    }
-                } else {
-                    // #487: the stream will not start, so the early capture must not keep waiting.
-                    EarlyLogCapture.release();
-                    PluginInitiationUtils.logSkippedCapability(Capability.LOGS);
-                }
-            }
-
-            // Wire up the player event manager — while player-events is disabled, the Bukkit
-            // listener is never registered
-            if (UltiTools.getInstance().getPlayerEventManager() != null) {
-                if (Capability.PLAYER_EVENTS.isEnabled()) {
-                    UltiTools.getInstance().getPlayerEventManager().initialize(webSocketClient);
-                } else {
-                    PluginInitiationUtils.logSkippedCapability(Capability.PLAYER_EVENTS);
-                }
-            }
-
-            UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("所有WebSocket管理器已初始化并启动监控"));
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("初始化管理器时出错: %s", e.getMessage()), e);
         }
     }
 }

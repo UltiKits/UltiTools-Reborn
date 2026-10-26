@@ -91,19 +91,6 @@ class PluginInitiationUtilsWebSocketTest {
     class PrivateMethodSignatureTests {
 
         @Test
-        @DisplayName("initializeManagers 方法应该存在")
-        void initializeManagersMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod("initializeManagers");
-
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            // 包级可见（PR #264 起）：cloudEnabled 闸门需要被单元测试直接驱动。
-            // 仍然不是 public —— 它不是对外 API。
-            assertThat(Modifier.isPrivate(method.getModifiers())).isFalse();
-            assertThat(Modifier.isPublic(method.getModifiers())).isFalse();
-            assertThat(Modifier.isProtected(method.getModifiers())).isFalse();
-        }
-
-        @Test
         @DisplayName("v2 建连入口为包私有，公开静态方法保持兼容")
         void sessionStartConnectionIsPackagePrivate() throws NoSuchMethodException {
             Method method = CloudSession.class.getDeclaredMethod("startConnection");
@@ -146,6 +133,29 @@ class PluginInitiationUtilsWebSocketTest {
                 .map(Field::getName)
                 .collect(Collectors.toList());
             assertThat(fields).doesNotContain("INBOUND_HANDLERS", "SERVER_PROPERTIES_FILE");
+        }
+
+        /**
+         * Plan 22-24 (S-67): the protocol v1 manager wiring and the v1 client the session used to hold are gone. It
+         * replaces the former "initializeManagers exists" pin; {@code NoV1RuntimePathTest} is the bytecode fence.
+         */
+        @Test
+        @DisplayName("no v1 manager wiring or v1 client member remains (22-24)")
+        void noV1ClientWiringRemains() {
+            List<String> methods = Arrays.stream(PluginInitiationUtils.class.getDeclaredMethods())
+                .map(Method::getName)
+                .collect(Collectors.toList());
+            assertThat(methods).doesNotContain("initializeManagers", "setWebSocketClientForTesting",
+                "getPanelWebsocketClient", "logSkippedCapability");
+            List<String> sessionMethods = Arrays.stream(CloudSession.class.getDeclaredMethods())
+                .map(Method::getName)
+                .collect(Collectors.toList());
+            assertThat(sessionMethods).doesNotContain("initializeManagers", "wireManagers", "setWebSocketClient",
+                "getWebSocketClient", "closeWebSocketClient");
+            assertThat(sessionMethods).as("control: the reflection sees the session's members")
+                .contains("startConnection", "invalidate");
+            assertThat(Arrays.stream(CloudSession.class.getDeclaredFields()).map(f -> f.getType().getName()))
+                .doesNotContain("com.ultikits.ultitools.websocket.UltiPanelWebSocketClient");
         }
     }
 
