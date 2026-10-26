@@ -30,11 +30,11 @@ import org.junit.jupiter.api.Test;
  * Steps, Expected and Layer cells are non-empty (Covers stays blank, as the file's conventions require when no
  * GUI-excluded class applies); its Layer is a real-server layer of the conventions list; its Preconditions begin with
  * the environment marker {@code Env: `staging`}, {@code Env: `stub`} or {@code Env: `server`}; every checklist ID its
- * Preconditions cite appears earlier in the file (sweep class 8, Phase 10 D-27a). The feature row of its base ID (the
- * ID without a trailing {@code .neg-<slug>} segment) exists once with nine cells, a Kind, Target, Tier and Manual from
- * the conventions' value sets, the Permission the conventions prescribe for its Kind, and a Source whose every
- * {@code ClassName#member} names a class under {@code src/main/java} whose source mentions that member. The retired
- * magic-link rows are absent from both documents, and both documents stay LF.
+ * Preconditions cite exists and appears earlier in the file (sweep class 8, Phase 10 D-27a). The feature row of its
+ * base ID (the ID without a trailing {@code .neg-<slug>} segment) exists once with nine cells, a Kind, Target, Tier and
+ * Manual from the conventions' value sets, the Permission the conventions prescribe for its Kind, and a Source whose
+ * every {@code ClassName#member} names a class under {@code src/main/java} whose source mentions that member. The
+ * retired magic-link rows are absent from both documents, and both documents stay LF.
  * <p>
  * The documents are plain Markdown tables; this is a reader of those tables, nothing more.
  */
@@ -148,6 +148,8 @@ class UltiCloudUatRowsTest {
     @Test
     void preconditionsCiteOnlyEarlierRows() throws IOException {
         Map<String, List<Row>> checklist = rows(CHECKLIST);
+        Set<String> sections = checklist.keySet().stream().map(UltiCloudUatRowsTest::section)
+                .collect(Collectors.toSet());
         List<String> problems = new ArrayList<>();
         for (String id : CHECKLIST_IDS) {
             List<Row> found = checklist.get(id);
@@ -159,7 +161,13 @@ class UltiCloudUatRowsTest {
             while (cited.find()) {
                 String other = cited.group();
                 List<Row> target = checklist.get(other);
-                if (other.equals(id) || target == null) {
+                if (other.equals(id)) {
+                    continue;
+                }
+                if (target == null) {
+                    if (sections.contains(section(other))) {
+                        problems.add(id + " (line " + row.line + ") cites " + other + ", which is no row of this file");
+                    }
                     continue;
                 }
                 if (target.get(0).line >= row.line) {
@@ -168,7 +176,18 @@ class UltiCloudUatRowsTest {
                 }
             }
         }
-        assertThat(problems).as("Preconditions that cite a later row (sweep class 8)").isEmpty();
+        assertThat(problems).as("Preconditions that cite a later or a missing row (sweep class 8)").isEmpty();
+    }
+
+    /**
+     * @return the first two segments of a dotted name, such as {@code ultitools.cloud}; a cited name that shares
+     *         them with a checklist row is a row citation, while a property name such as {@code ultitools.api.url}
+     *         (no row starts {@code ultitools.api.}) is not
+     */
+    static String section(String dotted) {
+        int first = dotted.indexOf('.');
+        int second = first < 0 ? -1 : dotted.indexOf('.', first + 1);
+        return second < 0 ? dotted : dotted.substring(0, second);
     }
 
     @Test
