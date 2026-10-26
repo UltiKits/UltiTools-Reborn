@@ -1,0 +1,7 @@
+{
+  "expect": "invalid",
+  "why": "q is at most 100 characters",
+  "body": {
+    "q": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

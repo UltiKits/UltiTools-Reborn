@@ -1,0 +1,26 @@
+{
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "name": "Administration",
+        "slug": "admin",
+        "sortOrder": 10,
+        "moduleCount": 4
+      },
+      {
+        "id": 3,
+        "name": "Gameplay",
+        "slug": "gameplay",
+        "sortOrder": 20,
+        "moduleCount": 7
+      },
+      {
+        "id": 5,
+        "name": "Chat",
+        "slug": "chat",
+        "sortOrder": 30
+      }
+    ]
+  }
+}

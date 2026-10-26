@@ -319,12 +319,13 @@ class CatalogueInstallEndToEndTest {
     class DownloadOrigin {
 
         @Test
-        @DisplayName("a relative path is joined; an absolute URL is accepted only on the same origin")
+        @DisplayName("an absolute URL is accepted only on the same origin; a relative path is refused (contract 1.0.0)")
         void onlyTheSameOriginIsAccepted() {
             String base = catalogue.baseUrl();
             String path = "/v1/catalogue/modules/demo/versions/1.1/download";
 
-            assertThat(CatalogueClient.absoluteDownloadUrl(path)).isEqualTo(base + path);
+            // The frozen contract makes every download URL absolute; plan 22-18 joined relative ones.
+            assertThat(CatalogueClient.absoluteDownloadUrl(path)).isNull();
             assertThat(CatalogueClient.absoluteDownloadUrl(base + path)).isEqualTo(base + path);
 
             String host = base.substring("http://".length());

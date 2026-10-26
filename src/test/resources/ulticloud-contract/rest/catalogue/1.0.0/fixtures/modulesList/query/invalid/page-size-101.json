@@ -1,0 +1,7 @@
+{
+  "expect": "invalid",
+  "why": "pageSize is at most 100",
+  "body": {
+    "pageSize": 101
+  }
+}

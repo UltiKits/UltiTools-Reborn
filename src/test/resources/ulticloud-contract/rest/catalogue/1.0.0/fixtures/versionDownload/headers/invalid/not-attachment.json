@@ -1,0 +1,8 @@
+{
+  "expect": "invalid",
+  "why": "content-disposition starts with attachment;",
+  "body": {
+    "x-content-sha256": "4f6c1e9a0b7d3c2e8f5a6b1c9d0e7f3a2b4c5d6e7f8091a2b3c4d5e6f7089a1b",
+    "content-disposition": "inline; filename=\"UltiKits-1.2.0.jar\""
+  }
+}

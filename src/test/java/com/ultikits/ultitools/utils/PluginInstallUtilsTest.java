@@ -35,10 +35,10 @@ import com.ultikits.ultitools.stub.StubCatalogue;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallUtilsTest {
 
-    /** The pending version shape, naming the given version of UltiTrade. */
-    private static String version(String version) {
+    /** The version shape, naming the given version of UltiTrade with an absolute download URL on {@code base}. */
+    private static String version(String base, String version) {
         return StubCatalogue.versionSample(version,
-                "/v1/catalogue/modules/ultitrade/versions/" + version + "/download");
+                base + "/v1/catalogue/modules/ultitrade/versions/" + version + "/download");
     }
 
     @Test
@@ -47,6 +47,7 @@ class PluginInstallUtilsTest {
         AtomicReference<String> request = new AtomicReference<>();
         AtomicReference<String> versionPath = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String base = "http://localhost:" + server.getAddress().getPort();
         server.createContext("/v1/catalogue/modules/ultitrade", exchange -> {
             request.set(exchange.getRequestURI().getRawQuery());
             byte[] body = StubCatalogue.moduleCardSample("ultitrade", "UltiTrade")
@@ -56,21 +57,21 @@ class PluginInstallUtilsTest {
             exchange.close();
         });
         server.createContext("/v1/catalogue/modules/ultitrade/versions", exchange -> {
-            byte[] body = StubCatalogue.versionsPageOf(version("1.0.0")).getBytes(StandardCharsets.UTF_8);
+            byte[] body = StubCatalogue.versionsPageOf(version(base, "1.0.0")).getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
         });
         server.createContext("/v1/catalogue/modules/ultitrade/versions/", exchange -> {
             versionPath.set(exchange.getRequestURI().getRawPath());
-            byte[] body = ("{\"data\":" + version("release candidate") + "}").getBytes(StandardCharsets.UTF_8);
+            byte[] body = ("{\"data\":" + version(base, "release candidate") + "}").getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
         });
         server.start();
         try {
-            PluginInstallUtils.setBaseUrlForTesting("http://localhost:" + server.getAddress().getPort());
+            PluginInstallUtils.setBaseUrlForTesting(base);
             assertThat(PluginInstallUtils.getPluginLatestVersion("  UltiTrade  ")).isEqualTo("1.0.0");
             // The module route takes no level parameter (the contract rejects undeclared ones).
             assertThat(request.get()).isNull();

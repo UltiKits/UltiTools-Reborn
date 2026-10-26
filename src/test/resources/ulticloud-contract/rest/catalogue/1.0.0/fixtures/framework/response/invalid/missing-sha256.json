@@ -1,0 +1,12 @@
+{
+  "expect": "invalid",
+  "why": "sha256 is required",
+  "body": {
+    "data": {
+      "version": "6.3.0",
+      "fileName": "UltiTools-API-6.3.0.jar",
+      "downloadUrl": "https://repo1.maven.org/maven2/com/ultikits/UltiTools-API/6.3.0/UltiTools-API-6.3.0.jar",
+      "sizeBytes": 1542997
+    }
+  }
+}

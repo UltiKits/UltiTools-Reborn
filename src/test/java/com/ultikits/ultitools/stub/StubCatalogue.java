@@ -12,10 +12,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -81,6 +85,15 @@ public final class StubCatalogue implements AutoCloseable {
     /** The version the samples mark {@code license_required}. */
     public static final String LICENSED_VERSION = "2.0.0";
 
+    /**
+     * The API origin the vendored catalogue fixtures name in their URLs. The stub answers on a
+     * loopback address instead, so {@link #rebased(String)} moves exactly the download URLs at this
+     * origin onto {@link #baseUrl()}.
+     */
+    public static final String API_ORIGIN = "https://api.ultikits.com";
+    /** A download URL at {@link #API_ORIGIN} inside a JSON string; icons and other hosts never match. */
+    private static final Pattern VENDORED_DOWNLOAD = Pattern.compile(
+            Pattern.quote(API_ORIGIN) + "(/v1/catalogue/modules/[^\"?#]*/download)\"");
     private static final String FIXTURES = "ulticloud-contract/pending/catalogue/";
     private static final String VERSION_PATH = "/v1/catalogue/modules/" + MODULE + "/versions/" + VERSION;
     private static final String HASH_OF_ONE_MIB = repeat('d', 64);
@@ -113,6 +126,8 @@ public final class StubCatalogue implements AutoCloseable {
     private volatile int longDescriptionChars;
     private volatile int versionCount;
     private volatile int changelogChars;
+    private volatile String sha256HeaderOverride;
+    private final Map<String, Vendored> vendored = new ConcurrentHashMap<>();
 
     private StubCatalogue(HttpServer server) {
         this.server = server;
@@ -196,6 +211,50 @@ public final class StubCatalogue implements AutoCloseable {
         return this;
     }
 
+    /**
+     * Answers {@code path} (any query) with a vendored catalogue body instead of the stub's own,
+     * byte for byte except that each download URL at {@link #API_ORIGIN} is rebased onto this stub
+     * (see {@link #rebased(String)}), so a client pointed at the stub reaches the stub's download.
+     *
+     * @param path   the raw request path to answer
+     * @param status the HTTP status
+     * @param body   the vendored body, as the contract export holds it
+     * @return this stub
+     */
+    public StubCatalogue serveVendored(String path, int status, String body) {
+        vendored.put(path, new Vendored(status, rebased(body)));
+        return this;
+    }
+
+    /**
+     * Moves every download URL at {@link #API_ORIGIN} onto {@link #baseUrl()}, and changes nothing
+     * else: icon URLs, the Maven Central framework URL and URLs on any other host stay as written.
+     *
+     * @param vendoredBody a body as the contract export holds it
+     * @return the body this stub serves for it
+     */
+    public String rebased(String vendoredBody) {
+        Matcher matcher = VENDORED_DOWNLOAD.matcher(vendoredBody);
+        StringBuffer out = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(out, Matcher.quoteReplacement(baseUrl() + matcher.group(1) + "\""));
+        }
+        matcher.appendTail(out);
+        return out.toString();
+    }
+
+    /**
+     * Makes the download send this {@code X-Content-SHA256} value instead of the hash the mode
+     * implies; {@code null} restores the mode's header.
+     *
+     * @param value the header value to send, verbatim
+     * @return this stub
+     */
+    public StubCatalogue sha256Header(String value) {
+        this.sha256HeaderOverride = value;
+        return this;
+    }
+
     /** @return the bytes served for {@link #VERSION} */
     public byte[] jar() {
         return jar.clone();
@@ -266,7 +325,12 @@ public final class StubCatalogue implements AutoCloseable {
         requests.add(new Request(exchange.getRequestMethod(), path, query,
                 exchange.getRequestHeaders().getFirst("Authorization")));
         try {
-            route(exchange, path, query);
+            Vendored answer = vendored.get(path);
+            if (answer != null) {
+                send(exchange, answer.status, answer.body);
+            } else {
+                route(exchange, path, query);
+            }
         } finally {
             exchange.close();
         }
@@ -342,6 +406,10 @@ public final class StubCatalogue implements AutoCloseable {
     }
 
     private String headerFor(byte[] body) {
+        String override = sha256HeaderOverride;
+        if (override != null) {
+            return override;
+        }
         if (mode == Mode.WRONG_HEADER) {
             return repeat('e', 64);
         }
@@ -425,6 +493,8 @@ public final class StubCatalogue implements AutoCloseable {
         }
         if (mode == Mode.FOREIGN_URL) {
             data.getAsJsonObject("download").addProperty("url", FOREIGN_DOWNLOAD);
+        } else {
+            absolutise(data);
         }
         if (mode == Mode.HUGE_BODY) {
             data.addProperty("sizeBytes", HUGE_DECLARED_BYTES);
@@ -476,6 +546,7 @@ public final class StubCatalogue implements AutoCloseable {
                     version.add("download", download);
                 }
             }
+            absolutise(version);
             if (within(version, apiLevel, minApiLevel)) {
                 items.add(version);
             }
@@ -499,14 +570,27 @@ public final class StubCatalogue implements AutoCloseable {
             item.addProperty("sha256", sha256(jar));
             JsonObject download = new JsonObject();
             download.addProperty("kind", "public");
-            download.addProperty("url", "/v1/catalogue/modules/" + MODULE + "/versions/" + version + "/download");
+            download.addProperty("url", baseUrl() + "/v1/catalogue/modules/" + MODULE + "/versions/" + version
+                    + "/download");
             item.add("download", download);
             items.add(item);
         }
         return items;
     }
 
-    private static boolean within(JsonObject version, Integer apiLevel, Integer minApiLevel) {        if (apiLevel == null && minApiLevel == null) {
+    /** Makes a relative sample {@code download.url} absolute on this stub: the contract allows only absolute URLs. */
+    private void absolutise(JsonObject version) {
+        JsonElement download = version.get("download");
+        if (download != null && download.isJsonObject() && download.getAsJsonObject().has("url")) {
+            String url = download.getAsJsonObject().get("url").getAsString();
+            if (url.startsWith("/")) {
+                download.getAsJsonObject().addProperty("url", baseUrl() + url);
+            }
+        }
+    }
+
+    private static boolean within(JsonObject version, Integer apiLevel, Integer minApiLevel) {
+        if (apiLevel == null && minApiLevel == null) {
             return true;
         }
         JsonElement level = version.get("apiLevel");
@@ -688,6 +772,17 @@ public final class StubCatalogue implements AutoCloseable {
             text.append(value);
         }
         return text.toString();
+    }
+
+    /** A vendored answer {@link #serveVendored} installed for one path. */
+    private static final class Vendored {
+        private final int status;
+        private final String body;
+
+        private Vendored(int status, String body) {
+            this.status = status;
+            this.body = body;
+        }
     }
 
     /** One request the stub received. */

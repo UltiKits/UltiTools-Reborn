@@ -1,0 +1,7 @@
+{
+  "expect": "invalid",
+  "why": "apiLevel is an integer 1..99999",
+  "body": {
+    "apiLevel": 0
+  }
+}

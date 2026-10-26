@@ -1,10 +1,12 @@
 package com.ultikits.ultitools.utils;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -14,20 +16,29 @@ import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.manager.ModuleApiLevels;
 
 /**
- * The module catalogue of protocol v2, read over {@code /v1/catalogue/*} (plan 22-18, D-27).
+ * The module catalogue of protocol v2, read over {@code /v1/catalogue/*} (plans 22-18 and 22-26,
+ * D-27, D-28).
  *
- * <p>The routes, the response envelope {@code {data: ...}} and the version object follow the
- * backend's catalogue contract as it stood on 2026-10-24 (P3 plan 03-04 and P15's planning record,
- * contract answer 12): a module is addressed by its identifier, a version names its {@code
- * sizeBytes}, its lower-case {@code sha256}, its integer {@code apiLevel} and a {@code download}
- * that is either {@code {kind: "public", url}} or {@code {kind: "license_required"}}. That
- * contract is not frozen yet, so the samples that pin these shapes are marked as pending fixtures
- * ({@code @PendingFixture}) and plan 22-26 swaps in the exported fixtures.
+ * <p>The routes, the response envelope {@code {data: ...}} and the version object follow the frozen
+ * catalogue REST contract {@value #CONTRACT_VERSION} of UltiCloud (UltiKits/ulticloud {@code main}
+ * commit {@code 682735c9}, {@code packages/contracts/generated/rest-v1/catalogue/1.0.0/}), whose
+ * schemas and fixtures the tests read byte for byte. A module is addressed by its identifier; a
+ * version names its {@code sizeBytes}, its lower-case {@code sha256}, its {@code apiLevel} (an
+ * integer, or {@code null} when unknown) and a {@code download} whose {@code kind} is {@code
+ * public} (with an absolute {@code https:} URL), {@code license_required} or {@code withdrawn}.
+ * Every kind but {@code public} is not downloadable.
+ *
+ * <p>A version object that breaks the contract in a field the install relies on -- a {@code sha256}
+ * that is not 64 lower-case hex characters, a {@code sizeBytes} below 1, a missing or out-of-range
+ * {@code apiLevel}, a missing {@code isLatest} or {@code version}, a public download without a URL --
+ * is unusable: the lookup answers nothing, as for an unreadable body, and no download is requested.
+ * Keys the client does not read, including keys a later contract may add, are ignored.
  *
  * <p>Only the versions route takes the API-level filter ({@code apiLevel}, {@code minApiLevel});
- * the other routes reject undeclared parameters, so no request carries them. A relative {@code
- * download.url} is resolved against the configured base URL and an absolute one is accepted only
- * when it stays on that same origin, so a catalogue answer can never send a download elsewhere.
+ * the other routes reject undeclared parameters, so no request carries them. A {@code
+ * download.url} is accepted only when it is absolute and stays on the configured base URL's origin
+ * (in production {@code https://api.ultikits.com}); a relative path, which the contract never
+ * produces, is refused, so a catalogue answer can never send a download elsewhere.
  *
  * @since 6.3.1
  */
@@ -37,6 +48,23 @@ final class CatalogueClient {
     static final String MODULES = "/v1/catalogue/modules";
     /** The route naming the newest UltiTools version. */
     static final String FRAMEWORK = "/v1/catalogue/framework";
+    /** The catalogue REST contract version this client implements; the vendored lock must name the same. */
+    static final String CONTRACT_VERSION = "1.0.0";
+
+    /** The contract's {@code sha256}: 64 lower-case hex characters. */
+    private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
+    /** The contract's URL rule for icons: an absolute {@code https:} URL without spaces or control characters. */
+    private static final Pattern HTTPS_URL = Pattern.compile(
+            "^https://[^\\x00-\\x20\\x7F-\\x9F/?#]+([/?#][^\\x00-\\x20\\x7F-\\x9F]*)?$");
+    /** The longest URL the contract allows. */
+    private static final int MAX_URL_LENGTH = 2048;
+    /** The longest module identifier the contract allows. */
+    private static final int MAX_IDENTIFIER_LENGTH = 64;
+    /** The largest {@code sizeBytes} the contract allows (2^53 - 1). */
+    private static final long MAX_SIZE_BYTES = 9007199254740991L;
+    /** The contract's {@code apiLevel} range. */
+    private static final int MIN_API_LEVEL = 1;
+    private static final int MAX_API_LEVEL = 99999;
 
     private CatalogueClient() {
     }
@@ -76,12 +104,12 @@ final class CatalogueClient {
             return latest;
         }
 
-        /** @return the {@code sha256} as written, or {@code null} when the catalogue named none */
+        /** @return the {@code sha256}: 64 lower-case hex characters, as the contract requires */
         String sha256() {
             return sha256;
         }
 
-        /** @return the {@code sizeBytes}, or {@code 0} when the catalogue named none */
+        /** @return the {@code sizeBytes}: at least 1, as the contract requires */
         long sizeBytes() {
             return sizeBytes;
         }
@@ -91,7 +119,7 @@ final class CatalogueClient {
             return apiLevel;
         }
 
-        /** @return the {@code download.kind}, or {@code null} when the catalogue named none */
+        /** @return the {@code download.kind}: {@code public}, {@code license_required}, {@code withdrawn} or a later one */
         String downloadKind() {
             return downloadKind;
         }
@@ -108,12 +136,17 @@ final class CatalogueClient {
     }
 
     /**
+     * The contract's {@code :moduleRef} for a module: its identifier (lower-case letter first,
+     * segments separated by a single {@code .} or {@code -}, 1 to 64 characters). The framework never
+     * addresses a module by its ULID.
+     *
      * @param identifyString a module's identify-string
      * @return the segment the catalogue addresses it by, or {@code null} when it cannot be one
      */
     static String moduleRef(String identifyString) {
         String normalized = PluginInstallUtils.normalizeIdentifyString(identifyString);
-        if (normalized == null || !ContractPrimitives.MODULE_IDENTIFIER.matcher(normalized).matches()) {
+        if (normalized == null || normalized.length() > MAX_IDENTIFIER_LENGTH
+                || !ContractPrimitives.MODULE_IDENTIFIER.matcher(normalized).matches()) {
             return null;
         }
         return normalized;
@@ -316,10 +349,13 @@ final class CatalogueClient {
     }
 
     /**
-     * Resolves a {@code download.url} against the configured base URL.
+     * Checks a {@code download.url} against the configured base URL. The contract makes every URL
+     * absolute ({@code https:} in production) and tells callers to use it as an opaque address, so
+     * the URL is used as written, and only when it lies under the base URL: another host, another
+     * scheme, a {@code user@host} form or a relative path is refused.
      *
-     * @param url the value the catalogue answered, relative or absolute
-     * @return the absolute URL, or {@code null} when it would leave the catalogue's origin
+     * @param url the value the catalogue answered
+     * @return the URL, or {@code null} when it is relative or would leave the catalogue's origin
      */
     static String absoluteDownloadUrl(String url) {
         if (url == null || url.trim().isEmpty()) {
@@ -330,10 +366,7 @@ final class CatalogueClient {
             return null;
         }
         String value = url.trim();
-        if (value.startsWith("/") && !value.startsWith("//")) {
-            return base + value;
-        }
-        return value.startsWith(base + "/") ? value : null;
+        return value.length() <= MAX_URL_LENGTH && value.startsWith(base + "/") ? value : null;
     }
 
     /** @return the filter every versions request carries: this framework's level and the floor */
@@ -374,7 +407,11 @@ final class CatalogueClient {
         return parseVersions(answer);
     }
 
-    /** @return the versions an answer carries, or {@code null} when it carries no usable list */
+    /**
+     * @return the versions an answer carries, or {@code null} when it carries no usable list: one
+     *         version that breaks the contract makes the whole answer unusable, so the newest version
+     *         is never chosen from a list the catalogue got wrong
+     */
     private static List<Version> parseVersions(CatalogueHttp.Json answer) {
         JsonArray items = itemsOf(answer);
         if (items == null) {
@@ -382,9 +419,11 @@ final class CatalogueClient {
         }
         List<Version> versions = new ArrayList<>();
         for (JsonElement item : items) {
-            if (item.isJsonObject()) {
-                versions.add(toVersion(item.getAsJsonObject()));
+            Version version = item.isJsonObject() ? toVersion(item.getAsJsonObject()) : null;
+            if (version == null) {
+                return null;
             }
+            versions.add(version);
         }
         return versions;
     }
@@ -418,19 +457,57 @@ final class CatalogueClient {
         }
     }
 
+    /**
+     * Reads one version object, or refuses it: {@code null} when a field the install relies on breaks
+     * the contract (see the class comment). A value of the wrong JSON type is a refusal, never an
+     * exception.
+     */
     private static Version toVersion(JsonObject object) {
-        JsonElement sizeBytes = object.get("sizeBytes");
-        JsonElement apiLevel = object.get("apiLevel");
-        JsonObject download = object.has("download") && object.get("download").isJsonObject()
-                ? object.getAsJsonObject("download") : null;
-        return new Version(
-                string(object, "version"),
-                booleanValue(object, "isLatest"),
-                string(object, "sha256"),
-                sizeBytes == null || sizeBytes.isJsonNull() ? 0 : sizeBytes.getAsLong(),
-                apiLevel == null || apiLevel.isJsonNull() ? null : apiLevel.getAsInt(),
-                download == null ? null : string(download, "kind"),
-                download == null ? null : string(download, "url"));
+        String version = string(object, "version");
+        JsonElement latest = object.get("isLatest");
+        String sha256 = string(object, "sha256");
+        BigDecimal sizeBytes = integer(object.get("sizeBytes"));
+        if (version == null || version.trim().isEmpty() || latest == null || !latest.isJsonPrimitive()
+                || !latest.getAsJsonPrimitive().isBoolean() || sha256 == null || !SHA256.matcher(sha256).matches()
+                || sizeBytes == null || sizeBytes.signum() <= 0
+                || sizeBytes.compareTo(BigDecimal.valueOf(MAX_SIZE_BYTES)) > 0 || !object.has("apiLevel")) {
+            return null;
+        }
+        JsonElement apiLevelValue = object.get("apiLevel");
+        Integer apiLevel = null;
+        if (!apiLevelValue.isJsonNull()) {
+            BigDecimal level = integer(apiLevelValue);
+            if (level == null || level.compareTo(BigDecimal.valueOf(MIN_API_LEVEL)) < 0
+                    || level.compareTo(BigDecimal.valueOf(MAX_API_LEVEL)) > 0) {
+                return null;
+            }
+            apiLevel = level.intValue();
+        }
+        JsonElement downloadValue = object.get("download");
+        if (downloadValue == null || !downloadValue.isJsonObject()) {
+            return null;
+        }
+        JsonObject download = downloadValue.getAsJsonObject();
+        String kind = string(download, "kind");
+        String url = string(download, "url");
+        if (kind == null || ("public".equals(kind) && url == null)) {
+            return null;
+        }
+        return new Version(version, latest.getAsBoolean(), sha256, sizeBytes.longValue(), apiLevel, kind,
+                "public".equals(kind) ? url : null);
+    }
+
+    /** @return the JSON number as an integer, or {@code null} when it is absent, not a number or not whole */
+    private static BigDecimal integer(JsonElement value) {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+            return null;
+        }
+        try {
+            BigDecimal number = value.getAsBigDecimal();
+            return number.signum() == 0 || number.stripTrailingZeros().scale() <= 0 ? number : null;
+        } catch (NumberFormatException notANumber) {
+            return null;
+        }
     }
 
     /**
@@ -444,20 +521,20 @@ final class CatalogueClient {
         entity.setName(string(card, "name"));
         entity.setDescription(string(card, "description"));
         entity.setShortDescription(string(card, "shortDescription"));
-        entity.setIcon(string(card, "iconUrl"));
+        entity.setIcon(httpsUrl(string(card, "iconUrl")));
         entity.setDate(instant(string(card, "publishedAt")));
         entity.setModifiedTime(instant(string(card, "updatedAt")));
         return entity;
     }
 
+    /** @return the URL when it is an absolute {@code https:} URL the contract allows, otherwise {@code null} */
+    private static String httpsUrl(String url) {
+        return url != null && url.length() <= MAX_URL_LENGTH && HTTPS_URL.matcher(url).matches() ? url : null;
+    }
+
     private static String string(JsonObject object, String name) {
         JsonElement value = object.get(name);
         return value == null || value.isJsonNull() || !value.isJsonPrimitive() ? null : value.getAsString();
-    }
-
-    private static boolean booleanValue(JsonObject object, String name) {
-        JsonElement value = object.get(name);
-        return value != null && !value.isJsonNull() && value.isJsonPrimitive() && value.getAsBoolean();
     }
 
     private static Date instant(String text) {
