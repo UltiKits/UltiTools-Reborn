@@ -370,6 +370,8 @@ public final class UltiCloudStub {
             frontDoor = new StubFrontDoor(options.httpPort(), contract, log, credentials,
                     gateway.port(), http.getAddress().getPort(), portOf(catalogue.baseUrl()));
             frontDoor.start();
+            // The framework under test is built against the front door, so download URLs must name it.
+            catalogue.advertiseDownloadsAt(baseUrl());
             admin = new StubAdminApi(options.adminPort, this, log);
             admin.start();
             log.log("STUB", "started http=" + baseUrl() + " admin=" + adminUrl() + " gateway=127.0.0.1:" + gateway.port()

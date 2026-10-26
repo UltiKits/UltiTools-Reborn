@@ -146,6 +146,7 @@ public final class StubCatalogue implements AutoCloseable {
     private volatile int changelogChars;
     private volatile String sha256HeaderOverride;
     private volatile String downloadPathOverride;
+    private volatile String downloadOrigin;
     private final Map<String, Vendored> vendored = new ConcurrentHashMap<>();
 
     private StubCatalogue(HttpServer server) {
@@ -170,6 +171,27 @@ public final class StubCatalogue implements AutoCloseable {
     /** @return the base URL a test points {@code PluginInstallUtils} at */
     public String baseUrl() {
         return "http://127.0.0.1:" + server.getAddress().getPort();
+    }
+
+    /**
+     * Names the origin the download URLs this stub hands out point at, for a catalogue reached
+     * through a relay on another port (the UAT stub's front door, plan 22-28). A framework accepts a
+     * download only on the origin it is configured with, so without this every download URL would
+     * name this server's own port and be refused as foreign. Until it is called, download URLs name
+     * {@link #baseUrl()}.
+     *
+     * @param origin the public origin, such as {@code http://127.0.0.1:18080}, without a trailing slash
+     * @return this stub
+     */
+    public StubCatalogue advertiseDownloadsAt(String origin) {
+        this.downloadOrigin = origin;
+        return this;
+    }
+
+    /** @return the origin download URLs name: the advertised one, or {@link #baseUrl()} */
+    private String downloadOrigin() {
+        String origin = downloadOrigin;
+        return origin == null ? baseUrl() : origin;
     }
 
     /**
@@ -262,7 +284,8 @@ public final class StubCatalogue implements AutoCloseable {
     }
 
     /**
-     * Moves every download URL at {@link #API_ORIGIN} onto {@link #baseUrl()}, and changes nothing
+     * Moves every download URL at {@link #API_ORIGIN} onto the download origin ({@link #baseUrl()}
+     * unless {@link #advertiseDownloadsAt(String)} named another), and changes nothing
      * else: icon URLs, the Maven Central framework URL and URLs on any other host stay as written.
      *
      * @param vendoredBody a body as the contract export holds it
@@ -272,7 +295,7 @@ public final class StubCatalogue implements AutoCloseable {
         Matcher matcher = VENDORED_DOWNLOAD.matcher(vendoredBody);
         StringBuffer out = new StringBuffer();
         while (matcher.find()) {
-            matcher.appendReplacement(out, Matcher.quoteReplacement(baseUrl() + matcher.group(1) + "\""));
+            matcher.appendReplacement(out, Matcher.quoteReplacement(downloadOrigin() + matcher.group(1) + "\""));
         }
         matcher.appendTail(out);
         return out.toString();
@@ -535,7 +558,7 @@ public final class StubCatalogue implements AutoCloseable {
     private JsonObject publicVersion() {
         String override = downloadPathOverride;
         JsonObject data = versionObject(PUBLIC_VERSION_FIXTURE, VERSION, true, 630,
-                override == null ? downloadUrl(baseUrl(), MODULE, VERSION) : baseUrl() + override);
+                override == null ? downloadUrl(downloadOrigin(), MODULE, VERSION) : downloadOrigin() + override);
         if (mode == Mode.LICENSE_REQUIRED) {
             JsonObject download = new JsonObject();
             download.addProperty("kind", "license_required");
@@ -612,7 +635,7 @@ public final class StubCatalogue implements AutoCloseable {
         for (int i = 0; i < versionCount; i++) {
             String version = i == 0 ? VERSION : "1.0." + i;
             JsonObject item = versionObject(PUBLIC_VERSION_FIXTURE, version, i == 0, 630,
-                    downloadUrl(baseUrl(), MODULE, version));
+                    downloadUrl(downloadOrigin(), MODULE, version));
             item.addProperty("changelog", repeat(WIDE_CHARACTER, changelogChars));
             item.addProperty("sizeBytes", (long) jar.length);
             item.addProperty("sha256", sha256(jar));

@@ -448,6 +448,48 @@ class UltiCloudStubSelfTest {
                 .isEqualTo(stub.catalogue().servedSha256());
     }
 
+    /**
+     * A framework built with {@code ultitools.api.url} set to the stub's public port accepts a
+     * download only when its URL stays on that origin (plan 22-28): the version the front door relays
+     * must name its download on the public port, not on the catalogue's internal one, and the bytes
+     * fetched there must be the ones the metadata describes.
+     */
+    @Test
+    void catalogueDownloadUrlsNameThePublicPortAndServeTheDescribedBytes() throws Exception {
+        String expectedUrl = stub.baseUrl() + "/v1/catalogue/modules/" + StubCatalogue.MODULE + "/versions/"
+                + StubCatalogue.VERSION + "/download";
+        JsonObject version = RawHttp.get(stub.httpPort(),
+                "/v1/catalogue/modules/" + StubCatalogue.MODULE + "/versions/" + StubCatalogue.VERSION, null)
+                .json().getAsJsonObject("data");
+        assertThat(version.getAsJsonObject("download").get("url").getAsString()).isEqualTo(expectedUrl);
+        JsonObject listed = RawHttp.get(stub.httpPort(), "/v1/catalogue/modules/" + StubCatalogue.MODULE
+                + "/versions?apiLevel=631&minApiLevel=630", null).json().getAsJsonObject("data")
+                .getAsJsonArray("items").get(0).getAsJsonObject();
+        assertThat(listed.getAsJsonObject("download").get("url").getAsString()).isEqualTo(expectedUrl);
+
+        java.net.HttpURLConnection download = (java.net.HttpURLConnection) new java.net.URL(expectedUrl)
+                .openConnection();
+        assertThat(download.getResponseCode()).isEqualTo(200);
+        byte[] bytes;
+        try (InputStream in = download.getInputStream()) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            bytes = out.toByteArray();
+        }
+        StringBuilder hex = new StringBuilder();
+        for (byte b : java.security.MessageDigest.getInstance("SHA-256").digest(bytes)) {
+            hex.append(String.format(Locale.ROOT, "%02x", b));
+        }
+        assertThat(hex.toString()).isEqualTo(stub.catalogue().servedSha256())
+                .isEqualTo(version.get("sha256").getAsString())
+                .isEqualTo(download.getHeaderField("X-Content-SHA256"));
+        assertThat((long) bytes.length).isEqualTo(version.get("sizeBytes").getAsLong());
+    }
+
     @Test
     void v1PathsAnswer410AndAreLogged() throws Exception {
         assertThat(RawHttp.get(stub.httpPort(), "/plugin/list", null).status).isEqualTo(410);
