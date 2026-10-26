@@ -186,7 +186,10 @@ class CapabilityGateTracerTest {
             assertThat(session.executions()).isZero();
             // FEATURES.md ultitools.remote.file-refusal-audit and UAT-CHECKLIST.md
             // ultitools.capability.commands.neg-disabled: every switch refusal is exactly one DENIED entry naming the
-            // switch, with the refusal sentence that names its configuration key as the reason.
+            // switch, with the refusal sentence that names its configuration key as the reason. The router records the
+            // entry after it sent the refusal, so wait for the twelfth entry, then let a stray thirteenth show.
+            session.await(() -> session.actions().size() >= 12, "the twelfth DENIED entry");
+            session.pass(300L);
             assertThat(session.actions()).as("one DENIED entry per refused request").hasSize(12);
             int index = 0;
             for (Map.Entry<Capability, String[]> entry : switchedTypes().entrySet()) {
