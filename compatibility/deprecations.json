@@ -137,6 +137,16 @@
     "removedIn": "6.3.0"
   },
   {
+    "key": "com.ultikits.ultitools.entities.ApiResponse",
+    "className": "com.ultikits.ultitools.entities.ApiResponse",
+    "kind": "CLASS",
+    "since": "6.3.1",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "There is no replacement: this parsed the protocol v1 Worker envelope {@code {code, msg, data}}, which UltiCloud no longer serves. The protocol 2.0.0 catalogue answers {@code {data: ...}} and the framework parses it itself. Removed in 6.4.0.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.entities.TokenEntity",
     "className": "com.ultikits.ultitools.entities.TokenEntity",
     "kind": "CLASS",

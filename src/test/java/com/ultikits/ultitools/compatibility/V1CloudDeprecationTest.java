@@ -88,6 +88,7 @@ class V1CloudDeprecationTest {
         UCR + "#post(java.lang.String,java.lang.String)",
         UCR + "#get(java.lang.String,java.util.Map)",
         "com.ultikits.ultitools.entities.vo.ServerEntityVO",
+        "com.ultikits.ultitools.entities.ApiResponse",
         // The protected v1 REST calls (the class stays: its base-URL helper serves protocol v2).
         HRU + "#getServerByUUID(java.lang.String," + TOKEN + ")",
         HRU + "#registerServer(java.lang.String,java.lang.String,int,java.lang.String,boolean," + TOKEN + ")",
