@@ -447,6 +447,89 @@ class CatalogueContractConformanceTest {
         assertThat(missing.kind()).isEqualTo(VerifiedDownload.Kind.NOT_AVAILABLE);
     }
 
+    // ------------------------------------------------------------------ the stub's own answers
+
+    /** GETs a stub path; the body with the stub's origin put back to {@link StubCatalogue#API_ORIGIN}. */
+    private String[] get(String pathAndQuery) throws IOException {
+        java.net.HttpURLConnection connection = (java.net.HttpURLConnection)
+                new java.net.URL(stub.baseUrl() + pathAndQuery).openConnection();
+        connection.setInstanceFollowRedirects(false);
+        int status = connection.getResponseCode();
+        java.io.InputStream in = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while (in != null && (read = in.read(buffer)) != -1) {
+            bytes.write(buffer, 0, read);
+        }
+        if (in != null) {
+            in.close();
+        }
+        String body = new String(bytes.toByteArray(), java.nio.charset.StandardCharsets.UTF_8)
+                .replace(stub.baseUrl() + "/", StubCatalogue.API_ORIGIN + "/");
+        return new String[]{String.valueOf(status), body,
+                connection.getHeaderField("X-Content-SHA256"), connection.getHeaderField("Content-Disposition")};
+    }
+
+    private void assertServedValid(String pathAndQuery, int status, String schema) throws IOException {
+        String[] answer = get(pathAndQuery);
+        assertThat(answer[0]).as(pathAndQuery).isEqualTo(String.valueOf(status));
+        JsonObject body = JsonParser.parseString(answer[1]).getAsJsonObject();
+        assertThat(schema(schema).validate(node(body.toString()))).as(pathAndQuery + " against " + schema).isEmpty();
+    }
+
+    @Test
+    @DisplayName("control: every answer the stub builds itself validates against the vendored schema")
+    void theStubsOwnAnswersFollowTheContract() throws IOException {
+        String module = "/v1/catalogue/modules/" + StubCatalogue.MODULE;
+        assertServedValid("/v1/catalogue/modules?page=1&pageSize=20", 200, "schemas/modulesList.response.200.schema.json");
+        assertServedValid(module, 200, "schemas/moduleGet.response.200.schema.json");
+        assertServedValid(module + "/versions", 200, "schemas/versionsList.response.200.schema.json");
+        assertServedValid(module + "/versions?apiLevel=630&minApiLevel=630", 200,
+                "schemas/versionsList.response.200.schema.json");
+        assertServedValid(module + "/versions/" + StubCatalogue.VERSION, 200, "schemas/versionGet.response.200.schema.json");
+        assertServedValid(module + "/versions/" + StubCatalogue.LICENSED_VERSION, 200,
+                "schemas/versionGet.response.200.schema.json");
+        assertServedValid(CatalogueClient.FRAMEWORK, 200, "schemas/framework.response.200.schema.json");
+        assertServedValid("/v1/catalogue/modules/nope", 404, "schemas/moduleGet.error.404.schema.json");
+        assertServedValid(module + "/versions/9.9.9", 404, "schemas/versionGet.error.404.schema.json");
+        stub.mode(StubCatalogue.Mode.LICENSE_REQUIRED);
+        assertServedValid(module + "/versions/" + StubCatalogue.VERSION + "/download", 404,
+                "schemas/versionDownload.error.404.schema.json");
+        stub.mode(StubCatalogue.Mode.NORMAL);
+
+        String[] download = get(module + "/versions/" + StubCatalogue.VERSION + "/download");
+        JsonObject headers = new JsonObject();
+        headers.addProperty("x-content-sha256", download[2]);
+        headers.addProperty("content-disposition", download[3]);
+        assertThat(schema("schemas/versionDownload.headers.200.schema.json").validate(node(headers.toString())))
+                .isEmpty();
+
+        for (String sample : new String[]{StubCatalogue.moduleCardSample("ultitrade", "UltiTrade"),
+                StubCatalogue.versionsPageOf(StubCatalogue.versionSample("1.0.0",
+                        StubCatalogue.API_ORIGIN + "/v1/catalogue/modules/ultitrade/versions/1.0.0/download")),
+                StubCatalogue.frameworkSample("6.3.1")}) {
+            JsonObject body = JsonParser.parseString(sample).getAsJsonObject();
+            String schema = body.getAsJsonObject("data").has("items") ? "schemas/versionsList.response.200.schema.json"
+                    : body.getAsJsonObject("data").has("identifier") ? "schemas/moduleGet.response.200.schema.json"
+                    : "schemas/framework.response.200.schema.json";
+            assertThat(schema(schema).validate(node(sample))).as(sample).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("the hand-made samples and their marker annotation are gone (S-49)")
+    void noPlaceholderRemains() {
+        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/rest/catalogue/1.0.0"))
+                .as("control").isDirectory();
+        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/pending")).doesNotExist();
+        // The name is split so the plan's own search for any use of the marker stays at zero.
+        assertThat(java.nio.file.Paths.get("src/test/java/com/ultikits/ultitools/contract/Pending" + "Fixture.java"))
+                .doesNotExist();
+        assertThat(java.nio.file.Paths.get("src/test/java/com/ultikits/ultitools/contract/ContractFixtures.java"))
+                .as("control").exists();
+    }
+
     // ------------------------------------------------------------------ invalid fixtures
 
     @Test

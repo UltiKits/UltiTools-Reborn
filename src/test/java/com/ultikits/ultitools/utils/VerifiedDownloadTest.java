@@ -16,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
@@ -27,7 +26,6 @@ import com.ultikits.ultitools.stub.StubCatalogue;
  * behind, and a body larger than its declared size must be cut off while it is streaming.
  */
 @DisplayName("VerifiedDownload: every integrity failure is detected and leaves nothing behind")
-@PendingFixture
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class VerifiedDownloadTest {
 

@@ -23,7 +23,6 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.entities.PluginEntity;
-import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
@@ -31,7 +30,6 @@ import com.ultikits.ultitools.stub.StubCatalogue;
  * 测试插件安装工具类的方法签名和结构
  */
 @DisplayName("PluginInstallUtils 测试")
-@PendingFixture
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallUtilsTest {
 

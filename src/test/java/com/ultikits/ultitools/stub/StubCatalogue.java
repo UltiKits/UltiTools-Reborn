@@ -32,11 +32,16 @@ import com.sun.net.httpserver.HttpServer;
  * A local catalogue server the catalogue tests drive (plan 22-18), reusable by the UAT stub of
  * plan 22-19.
  *
- * <p>It answers the {@code /v1/catalogue/*} routes from the pending samples in
- * {@code src/test/resources/ulticloud-contract/pending/catalogue/} and serves a module JAR it
- * generates, so the metadata it reports ({@code sizeBytes}, {@code sha256}, {@code
- * X-Content-SHA256}) is always the truth about the bytes it actually serves. {@link Mode}
- * perturbs exactly one of those three, so a test can prove which check caught the difference.
+ * <p>It answers the {@code /v1/catalogue/*} routes with bodies built from the frozen catalogue REST
+ * contract 1.0.0 vendored in {@code src/test/resources/ulticloud-contract/rest/catalogue/1.0.0/}
+ * (plan 22-26): every body is a vendored valid fixture with only the scenario's values put in --
+ * the module {@link #MODULE}, its versions {@link #VERSION} and {@link #LICENSED_VERSION}, their
+ * API levels, the real {@code sizeBytes} and {@code sha256} of the JAR it serves, and download
+ * URLs on this stub instead of {@link #API_ORIGIN}. It serves a module JAR it generates, so the
+ * metadata it reports ({@code sizeBytes}, {@code sha256}, {@code X-Content-SHA256}) is always the
+ * truth about the bytes it actually serves. {@link Mode} perturbs exactly one of those three, so a
+ * test can prove which check caught the difference. {@link #serveVendored} answers a path with a
+ * vendored fixture exactly as exported.
  *
  * <p>Every request is recorded in {@link #requests()} with its path, query and {@code
  * Authorization} header; the v1 {@code /plugin/*} routes answer 410 and are recorded the same way,
@@ -80,9 +85,11 @@ public final class StubCatalogue implements AutoCloseable {
 
     /** The module identifier every generated route uses. */
     public static final String MODULE = "demo";
-    /** The newest compatible version the samples name. */
-    public static final String VERSION = "1.1";
-    /** The version the samples mark {@code license_required}. */
+    /** The module's name on its card. */
+    public static final String MODULE_NAME = "Demo";
+    /** The newest compatible version, {@code apiLevel} 630, publicly downloadable. */
+    public static final String VERSION = "1.1.0";
+    /** The version marked {@code license_required}, {@code apiLevel} 640. */
     public static final String LICENSED_VERSION = "2.0.0";
 
     /**
@@ -94,7 +101,18 @@ public final class StubCatalogue implements AutoCloseable {
     /** A download URL at {@link #API_ORIGIN} inside a JSON string; icons and other hosts never match. */
     private static final Pattern VENDORED_DOWNLOAD = Pattern.compile(
             Pattern.quote(API_ORIGIN) + "(/v1/catalogue/modules/[^\"?#]*/download)\"");
-    private static final String FIXTURES = "ulticloud-contract/pending/catalogue/";
+    private static final String CONTRACT = "ulticloud-contract/rest/catalogue/1.0.0/";
+    private static final String PUBLIC_VERSION_FIXTURE = "fixtures/versionGet/response/valid/public-download.json";
+    private static final String LICENSED_VERSION_FIXTURE = "fixtures/versionGet/response/valid/license-required.json";
+    private static final String MODULE_FIXTURE = "fixtures/moduleGet/response/valid/anonymous.json";
+    private static final String MODULES_PAGE_FIXTURE = "fixtures/modulesList/response/valid/page.json";
+    private static final String VERSIONS_PAGE_FIXTURE = "fixtures/versionsList/response/valid/page.json";
+    private static final String FRAMEWORK_FIXTURE = "fixtures/framework/response/valid/6.3.0.json";
+    private static final String MODULE_NOT_FOUND = "fixtures/moduleGet/error/valid/404-not-found.json";
+    private static final String VERSION_NOT_FOUND = "fixtures/versionGet/error/valid/404-not-found.json";
+    private static final String DOWNLOAD_NOT_FOUND = "fixtures/versionDownload/error/valid/404-not-found.json";
+    /** The framework version the vendored framework answer names. */
+    private static final String VENDORED_FRAMEWORK_VERSION = "6.3.0";
     private static final String VERSION_PATH = "/v1/catalogue/modules/" + MODULE + "/versions/" + VERSION;
     private static final String HASH_OF_ONE_MIB = repeat('d', 64);
     /** A download URL on a host that is not the catalogue's, as a compromised answer would name it. */
@@ -119,7 +137,7 @@ public final class StubCatalogue implements AutoCloseable {
     private final HttpServer server;
     private final List<Request> requests = Collections.synchronizedList(new ArrayList<>());
     private volatile Mode mode = Mode.NORMAL;
-    private volatile byte[] jar = moduleJar("Demo", VERSION, MODULE, "630");
+    private volatile byte[] jar = moduleJar(MODULE_NAME, VERSION, MODULE, "630");
     private volatile int servedBytes;
     private volatile boolean clientAborted;
     private final CountDownLatch clientAbortSeen = new CountDownLatch(1);
@@ -134,7 +152,7 @@ public final class StubCatalogue implements AutoCloseable {
     }
 
     /**
-     * Starts a stub on a free loopback port, serving the pending samples and a module JAR declaring
+     * Starts a stub on a free loopback port, serving the vendored catalogue shapes and a module JAR declaring
      * {@code api-version 630}.
      *
      * @return the running stub
@@ -171,7 +189,7 @@ public final class StubCatalogue implements AutoCloseable {
      * Makes the module card carry a description of the given length, in four-byte characters.
      *
      * <p>The catalogue contract lets a module's {@code description} be 50,000 characters long, so a
-     * card can be far larger than a 64 KiB answer. {@code 0} restores the pending sample.
+     * card can be far larger than a 64 KiB answer. {@code 0} restores the vendored card's description.
      *
      * @param characters the number of characters, each four bytes in UTF-8
      * @return this stub
@@ -186,8 +204,8 @@ public final class StubCatalogue implements AutoCloseable {
      * given length in four-byte characters.
      *
      * <p>The contract caps a page at 100 versions and a changelog at 5,000 characters. The first
-     * version is the pending sample's {@link #VERSION} and the one marked {@code isLatest}; the
-     * others are {@code 1.0.<i>}. {@code 0} restores the pending sample.
+     * version is {@link #VERSION} and the one marked {@code isLatest}; the others are {@code
+     * 1.0.<i>}. {@code 0} restores the stub's own page.
      *
      * @param versions       how many versions the page carries
      * @param changelogChars the changelog length of each, in characters (four bytes each)
@@ -341,7 +359,7 @@ public final class StubCatalogue implements AutoCloseable {
         if (path.startsWith("/plugin/")) {
             send(exchange, 410, "{\"error\":{\"code\":\"gone\",\"message\":\"v1 catalogue is gone\"}}");
         } else if (modules.equals(path)) {
-            send(exchange, 200, fixture("modules-list.json"));
+            send(exchange, 200, modulesPage());
         } else if ((modules + "/" + MODULE).equals(path)) {
             send(exchange, 200, moduleBody());
         } else if ((modules + "/" + MODULE + "/versions").equals(path)) {
@@ -349,9 +367,9 @@ public final class StubCatalogue implements AutoCloseable {
         } else if (path.startsWith(modules + "/" + MODULE + "/versions/")) {
             versionRoute(exchange, path.substring((modules + "/" + MODULE + "/versions/").length()));
         } else if ("/v1/catalogue/framework".equals(path)) {
-            send(exchange, 200, fixture("framework.json"));
+            send(exchange, 200, fixture(FRAMEWORK_FIXTURE));
         } else {
-            send(exchange, 404, fixture("error-not-found.json"));
+            send(exchange, 404, fixture(MODULE_NOT_FOUND));
         }
     }
 
@@ -359,14 +377,14 @@ public final class StubCatalogue implements AutoCloseable {
         if (VERSION.equals(tail)) {
             send(exchange, 200, versionBody());
         } else if (LICENSED_VERSION.equals(tail)) {
-            send(exchange, 200, fixture("version-license-required.json"));
+            send(exchange, 200, envelope(licensedVersion()));
         } else if ((VERSION + "/download").equals(tail)) {
             download(exchange);
         } else if (("redirect-" + VERSION + "/download").equals(tail)) {
             // Only reachable when a client follows the redirect the REDIRECT mode answers.
             stream(exchange, jar, headerFor(jar));
         } else {
-            send(exchange, 404, fixture("error-not-found.json"));
+            send(exchange, 404, fixture(VERSION_NOT_FOUND));
         }
     }
 
@@ -384,7 +402,7 @@ public final class StubCatalogue implements AutoCloseable {
                 send(exchange, 500, "{\"error\":{\"code\":\"internal_error\",\"message\":\"down\"}}");
                 return;
             case LICENSE_REQUIRED:
-                send(exchange, 404, fixture("error-not-found.json"));
+                send(exchange, 404, fixture(DOWNLOAD_NOT_FOUND));
                 return;
             case HUGE_BODY:
                 hugeBody(exchange);
@@ -419,6 +437,7 @@ public final class StubCatalogue implements AutoCloseable {
 
     private void stream(HttpExchange exchange, byte[] body, String sha256Header) throws IOException {
         exchange.getResponseHeaders().add("Content-Type", "application/java-archive");
+        exchange.getResponseHeaders().add("Content-Disposition", contentDisposition());
         if (sha256Header != null) {
             exchange.getResponseHeaders().add("X-Content-SHA256", sha256Header);
         }
@@ -483,9 +502,18 @@ public final class StubCatalogue implements AutoCloseable {
 
     // ------------------------------------------------------------------ bodies
 
+    /** @return the {@code Content-Disposition} the contract's download headers require */
+    private static String contentDisposition() {
+        return "attachment; filename=\"" + MODULE_NAME + "-" + VERSION + ".jar\"";
+    }
+
     private String versionBody() {
-        JsonObject root = JsonParser.parseString(fixture("version-public.json")).getAsJsonObject();
-        JsonObject data = root.getAsJsonObject("data");
+        return envelope(publicVersion());
+    }
+
+    /** {@link #VERSION} as the version route and the versions page carry it, with the mode applied. */
+    private JsonObject publicVersion() {
+        JsonObject data = versionObject(PUBLIC_VERSION_FIXTURE, VERSION, true, 630, downloadUrl(baseUrl(), MODULE, VERSION));
         if (mode == Mode.LICENSE_REQUIRED) {
             JsonObject download = new JsonObject();
             download.addProperty("kind", "license_required");
@@ -493,8 +521,6 @@ public final class StubCatalogue implements AutoCloseable {
         }
         if (mode == Mode.FOREIGN_URL) {
             data.getAsJsonObject("download").addProperty("url", FOREIGN_DOWNLOAD);
-        } else {
-            absolutise(data);
         }
         if (mode == Mode.HUGE_BODY) {
             data.addProperty("sizeBytes", HUGE_DECLARED_BYTES);
@@ -503,21 +529,37 @@ public final class StubCatalogue implements AutoCloseable {
             data.addProperty("sizeBytes", (long) jar.length + (mode == Mode.TAMPER_SIZE ? 1 : 0));
             data.addProperty("sha256", sha256(jar));
         }
-        return root.toString();
+        return data;
+    }
+
+    /** {@link #LICENSED_VERSION}: the vendored licence-required version, re-addressed. */
+    private static JsonObject licensedVersion() {
+        return versionObject(LICENSED_VERSION_FIXTURE, LICENSED_VERSION, false, 640, null);
     }
 
     private String moduleBody() {
-        String sample = fixture("module.json");
-        if (longDescriptionChars <= 0) {
-            return sample;
+        JsonObject root = JsonParser.parseString(moduleCard(MODULE, MODULE_NAME)).getAsJsonObject();
+        JsonObject data = root.getAsJsonObject("data");
+        data.add("latest", publicVersion());
+        if (longDescriptionChars > 0) {
+            data.addProperty("description", repeat(WIDE_CHARACTER, longDescriptionChars));
         }
-        JsonObject root = JsonParser.parseString(sample).getAsJsonObject();
-        root.getAsJsonObject("data").addProperty("description", repeat(WIDE_CHARACTER, longDescriptionChars));
+        return root.toString();
+    }
+
+    /** The vendored list page whose first module is {@link #MODULE}. */
+    private static String modulesPage() {
+        JsonObject root = JsonParser.parseString(fixture(MODULES_PAGE_FIXTURE)).getAsJsonObject();
+        JsonObject first = root.getAsJsonObject("data").getAsJsonArray("items").get(0).getAsJsonObject();
+        first.addProperty("identifier", MODULE);
+        first.addProperty("name", MODULE_NAME);
+        first.addProperty("latestVersion", VERSION);
+        first.addProperty("iconUrl", API_ORIGIN + "/v1/catalogue/modules/" + MODULE + "/icon");
         return root.toString();
     }
 
     private String versionsPage(String query) {
-        JsonObject root = JsonParser.parseString(fixture("versions-list.json")).getAsJsonObject();
+        JsonObject root = JsonParser.parseString(fixture(VERSIONS_PAGE_FIXTURE)).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
         JsonArray items = new JsonArray();
         if (mode == Mode.NO_COMPATIBLE_VERSION) {
@@ -531,22 +573,9 @@ public final class StubCatalogue implements AutoCloseable {
             data.addProperty("total", longPage.size());
             return root.toString();
         }
-        JsonArray all = data.getAsJsonArray("items");
         Integer apiLevel = integerParameter(query, "apiLevel");
         Integer minApiLevel = integerParameter(query, "minApiLevel");
-        for (JsonElement element : all) {
-            JsonObject version = element.getAsJsonObject().deepCopy();
-            if (VERSION.equals(version.get("version").getAsString())) {
-                version.addProperty("sizeBytes", mode == Mode.HUGE_BODY
-                        ? HUGE_DECLARED_BYTES : (long) jar.length);
-                version.addProperty("sha256", mode == Mode.HUGE_BODY ? HASH_OF_ONE_MIB : sha256(jar));
-                if (mode == Mode.LICENSE_REQUIRED) {
-                    JsonObject download = new JsonObject();
-                    download.addProperty("kind", "license_required");
-                    version.add("download", download);
-                }
-            }
-            absolutise(version);
+        for (JsonObject version : new JsonObject[]{publicVersion(), licensedVersion()}) {
             if (within(version, apiLevel, minApiLevel)) {
                 items.add(version);
             }
@@ -557,36 +586,48 @@ public final class StubCatalogue implements AutoCloseable {
     }
 
     private JsonArray longVersionsPageItems() {
-        JsonObject template = JsonParser.parseString(fixture("version-public.json")).getAsJsonObject()
-                .getAsJsonObject("data");
         JsonArray items = new JsonArray();
         for (int i = 0; i < versionCount; i++) {
-            JsonObject item = template.deepCopy();
             String version = i == 0 ? VERSION : "1.0." + i;
-            item.addProperty("version", version);
-            item.addProperty("isLatest", i == 0);
+            JsonObject item = versionObject(PUBLIC_VERSION_FIXTURE, version, i == 0, 630,
+                    downloadUrl(baseUrl(), MODULE, version));
             item.addProperty("changelog", repeat(WIDE_CHARACTER, changelogChars));
             item.addProperty("sizeBytes", (long) jar.length);
             item.addProperty("sha256", sha256(jar));
-            JsonObject download = new JsonObject();
-            download.addProperty("kind", "public");
-            download.addProperty("url", baseUrl() + "/v1/catalogue/modules/" + MODULE + "/versions/" + version
-                    + "/download");
-            item.add("download", download);
             items.add(item);
         }
         return items;
     }
 
-    /** Makes a relative sample {@code download.url} absolute on this stub: the contract allows only absolute URLs. */
-    private void absolutise(JsonObject version) {
-        JsonElement download = version.get("download");
-        if (download != null && download.isJsonObject() && download.getAsJsonObject().has("url")) {
-            String url = download.getAsJsonObject().get("url").getAsString();
-            if (url.startsWith("/")) {
-                download.getAsJsonObject().addProperty("url", baseUrl() + url);
-            }
+    /**
+     * A vendored version object with the scenario's values put in.
+     *
+     * @param fixture     the vendored fixture whose {@code data} is the template
+     * @param version     the {@code version}
+     * @param latest      the {@code isLatest}
+     * @param apiLevel    the {@code apiLevel}
+     * @param downloadUrl the public {@code download.url}, or {@code null} to keep the template's download
+     */
+    private static JsonObject versionObject(String fixture, String version, boolean latest, int apiLevel,
+                                            String downloadUrl) {
+        JsonObject data = JsonParser.parseString(fixture(fixture)).getAsJsonObject().getAsJsonObject("data");
+        data.addProperty("version", version);
+        data.addProperty("isLatest", latest);
+        data.addProperty("apiLevel", apiLevel);
+        if (downloadUrl != null) {
+            data.getAsJsonObject("download").addProperty("url", downloadUrl);
         }
+        return data;
+    }
+
+    private static String downloadUrl(String origin, String module, String version) {
+        return origin + "/v1/catalogue/modules/" + module + "/versions/" + version + "/download";
+    }
+
+    private static String envelope(JsonObject data) {
+        JsonObject root = new JsonObject();
+        root.add("data", data);
+        return root.toString();
     }
 
     private static boolean within(JsonObject version, Integer apiLevel, Integer minApiLevel) {
@@ -620,42 +661,41 @@ public final class StubCatalogue implements AutoCloseable {
     }
 
     /**
-     * One of the pending samples, exactly as it is served.
+     * A vendored module card addressed to another module: its {@code identifier}, {@code name}, and the
+     * identifier in its {@code iconUrl} and latest version's download URL.
      *
-     * <p>Tests that stand in for the catalogue build their answers from these rather than from
-     * hand-written JSON, so the shapes have one source: the samples plan 22-26 swaps.
-     *
-     * @param name the sample's file name under {@code pending/catalogue/}
-     * @return the whole answer body
-     */
-    public static String sample(String name) {
-        return fixture(name);
-    }
-
-    /**
-     * The pending module card's shape, addressed to another module.
+     * <p>Tests that stand in for the catalogue build their answers from the vendored fixtures rather
+     * than from hand-written JSON, so the shapes have one source: the frozen contract.
      *
      * @param identifier the {@code identifier}
      * @param name       the {@code name}
      * @return the whole answer body
      */
     public static String moduleCardSample(String identifier, String name) {
-        JsonObject root = JsonParser.parseString(fixture("module.json")).getAsJsonObject();
+        return moduleCard(identifier, name);
+    }
+
+    private static String moduleCard(String identifier, String name) {
+        JsonObject root = JsonParser.parseString(fixture(MODULE_FIXTURE)).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
         data.addProperty("identifier", identifier);
         data.addProperty("name", name);
+        data.addProperty("iconUrl", API_ORIGIN + "/v1/catalogue/modules/" + identifier + "/icon");
+        JsonObject latest = data.getAsJsonObject("latest");
+        latest.getAsJsonObject("download").addProperty("url",
+                downloadUrl(API_ORIGIN, identifier, latest.get("version").getAsString()));
         return root.toString();
     }
 
     /**
-     * The pending version sample's shape, with another version name and download URL.
+     * The vendored public-download version, with another version name and download URL.
      *
      * @param version     the {@code version}
-     * @param downloadUrl the {@code download.url}, relative or absolute
+     * @param downloadUrl the {@code download.url}; the contract allows only absolute URLs
      * @return the {@code data} object as JSON, without the envelope
      */
     public static String versionSample(String version, String downloadUrl) {
-        JsonObject data = JsonParser.parseString(fixture("version-public.json")).getAsJsonObject()
+        JsonObject data = JsonParser.parseString(fixture(PUBLIC_VERSION_FIXTURE)).getAsJsonObject()
                 .getAsJsonObject("data");
         data.addProperty("version", version);
         data.getAsJsonObject("download").addProperty("url", downloadUrl);
@@ -663,13 +703,13 @@ public final class StubCatalogue implements AutoCloseable {
     }
 
     /**
-     * The pending versions page's shape carrying the given version objects.
+     * The vendored versions page carrying the given version objects.
      *
      * @param versions the versions, as {@link #versionSample} returns them; none for an empty page
      * @return the whole answer body
      */
     public static String versionsPageOf(String... versions) {
-        JsonObject root = JsonParser.parseString(fixture("versions-list.json")).getAsJsonObject();
+        JsonObject root = JsonParser.parseString(fixture(VERSIONS_PAGE_FIXTURE)).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
         JsonArray items = new JsonArray();
         for (String version : versions) {
@@ -681,20 +721,26 @@ public final class StubCatalogue implements AutoCloseable {
     }
 
     /**
-     * The pending framework sample's shape naming another version.
+     * The vendored framework answer naming another version, with its file name and Maven Central
+     * URL following it.
      *
      * @param version the {@code data.version}
      * @return the whole answer body
      */
     public static String frameworkSample(String version) {
-        JsonObject root = JsonParser.parseString(fixture("framework.json")).getAsJsonObject();
-        root.getAsJsonObject("data").addProperty("version", version);
-        return root.toString();
+        return fixture(FRAMEWORK_FIXTURE).replace(VENDORED_FRAMEWORK_VERSION, version);
     }
 
-    static String fixture(String name) {        try (InputStream input = StubCatalogue.class.getClassLoader().getResourceAsStream(FIXTURES + name)) {
+    /**
+     * A vendored file, exactly as exported.
+     *
+     * @param path the path inside the contract, as its MANIFEST names it
+     * @return the file's text
+     */
+    static String fixture(String path) {
+        try (InputStream input = StubCatalogue.class.getClassLoader().getResourceAsStream(CONTRACT + path)) {
             if (input == null) {
-                throw new IllegalStateException("Missing pending catalogue sample: " + FIXTURES + name);
+                throw new IllegalStateException("Missing vendored catalogue file: " + CONTRACT + path);
             }
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             byte[] buffer = new byte[4096];
@@ -704,7 +750,7 @@ public final class StubCatalogue implements AutoCloseable {
             }
             return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
         } catch (IOException ex) {
-            throw new IllegalStateException("Cannot read pending catalogue sample: " + FIXTURES + name, ex);
+            throw new IllegalStateException("Cannot read vendored catalogue file: " + CONTRACT + path, ex);
         }
     }
 

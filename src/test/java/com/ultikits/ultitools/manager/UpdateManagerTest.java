@@ -12,7 +12,6 @@ import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionLookup;
@@ -340,7 +339,6 @@ class UpdateManagerTest {
      */
     @Nested
     @DisplayName("module update check asks with the API level and offers only what this framework installs (18-40)")
-    @PendingFixture
     class ApiLevelUpdateCheck {
 
         private com.sun.net.httpserver.HttpServer server;
@@ -356,12 +354,12 @@ class UpdateManagerTest {
                 int status = 200;
                 String body;
                 if ("/v1/catalogue/modules/demo".equals(path)) {
-                    body = StubCatalogue.sample("module.json");
+                    body = StubCatalogue.moduleCardSample("demo", "Demo");
                 } else if ("/v1/catalogue/modules/demo/versions".equals(path)) {
                     versionQueries.add(query);
                     body = noCompatibleVersion ? StubCatalogue.versionsPageOf()
                             : StubCatalogue.versionsPageOf(StubCatalogue.versionSample("1.1",
-                                    "/v1/catalogue/modules/demo/versions/1.1/download"));
+                                    StubCatalogue.API_ORIGIN + "/v1/catalogue/modules/demo/versions/1.1/download"));
                 } else {
                     status = 404;
                     body = "{\"error\":{\"code\":\"not_found\"}}";
