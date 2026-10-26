@@ -198,6 +198,39 @@ class ShutdownPanelMessageTracerTest {
             assertQuiet("sweep");
         }
 
+        /**
+         * The v2 form of the 6.3.0 case "a handshake completing while disabling wires nothing and schedules nothing"
+         * (dropped in 22-23, restored in its fix round): onDisable's first step and Bukkit's own flag are set, the
+         * connection is replaced, and a second welcome arrives. The established listeners' server-thread work (the
+         * welcome's status and snapshots, the once-a-second timer) goes through {@code scheduleUnlessDisabling}, so
+         * nothing is scheduled for the disabled plugin, nothing of it reaches the gateway, and no WARNING is printed.
+         */
+        @Test
+        @DisplayName("a handshake completing while disabling: nothing scheduled for the disabled plugin, no welcome "
+                + "telemetry sent, no WARNING")
+        void handshakeCompletingWhileDisablingSchedulesNothing() throws Exception {
+            session.reply("status", 1);
+            int welcomes = session.stub().gateway().sent("welcome").size();
+            int statuses = session.stub().gateway().received("status").size();
+            int scheduledBefore = server.getScheduler().enabledCalls.size();
+            PluginInitiationUtils.stopAcceptingPanelMessages();
+            disabling();
+
+            PluginInitiationUtils.reinitWebSocket();
+            session.await(() -> session.stub().gateway().sent("welcome").size() > welcomes, "a second welcome");
+            session.pass(2500L);
+
+            assertThat(server.getScheduler().disabledCalls).as("nothing scheduled for the disabled plugin").isEmpty();
+            assertThat(server.getScheduler().enabledCalls.subList(scheduledBefore,
+                    server.getScheduler().enabledCalls.size())).as("nothing scheduled at all").isEmpty();
+            assertThat(session.stub().gateway().received("status")).as("no welcome status while disabling")
+                    .hasSize(statuses);
+            // ConsoleMirror's once-per-JVM "log forwarder not found" WARNING is a MockBukkit artefact.
+            assertThat(at(Level.WARNING)).extracting(LogRecord::getMessage)
+                    .filteredOn(message -> message == null || !message.contains("log forwarder")).isEmpty();
+            assertThat(at(Level.SEVERE)).isEmpty();
+        }
+
         @Test
         @DisplayName("control: while enabled a properties update, a module request and a player kick run")
         void enabledRequestsRun() throws Exception {
