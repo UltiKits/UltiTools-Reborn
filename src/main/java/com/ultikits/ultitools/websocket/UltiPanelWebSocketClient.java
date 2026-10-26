@@ -29,9 +29,9 @@ import lombok.Getter;
  * The UltiPanel protocol v1 WebSocket client, kept only so 6.3.0 code still links (plan 22-25).
  * <p>
  * <b>As of 6.3.1 it never opens a socket.</b> Protocol 2.0.0 has no v1 gateway, so
- * {@link #connect()}, both {@code connectBlocking} forms, {@link #reconnect()} and
- * {@link #reconnectBlocking()} return without connecting (the blocking forms return
- * {@code false}), and the first such call in a run writes one INFO line that says so. The
+ * {@link #connect()}, both {@code connectBlocking} forms, {@link #reconnect()},
+ * {@link #reconnectBlocking()} and the inherited {@link Runnable#run()} return without connecting
+ * (the blocking forms return {@code false}), and the first such call in a run writes one INFO line that says so. The
  * framework itself never constructs this class; its own UltiCloud session speaks protocol 2.0.0.
  * The kept v1 senders in the managers still send over an instance a caller hands to their
  * deprecated entry points, and {@link #sendMessage(JsonObject)} then reports the closed socket.
@@ -207,6 +207,20 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             return false;
         }
         return super.reconnectBlocking();
+    }
+
+    /**
+     * Opens no socket as of 6.3.1 (see {@link #connect()}). The inherited {@code run()} creates and
+     * connects the socket itself, so a caller that starts this client as a {@link Runnable} (for
+     * example {@code new Thread(client).start()}) would otherwise bypass the connect forms. It
+     * returns at once on any thread.
+     */
+    @Override
+    public void run() {
+        if (refuseConnect()) {
+            return;
+        }
+        super.run();
     }
 
     /**

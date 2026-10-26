@@ -709,5 +709,31 @@ class UltiPanelWebSocketClientTest {
                 client.disconnect();
             }
         }
+
+        @Test
+        @DisplayName("the inherited Runnable#run() opens nothing either, on a thread or in the caller")
+        void runAsRunnableOpensNothing() throws Exception {
+            UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
+                "ws://127.0.0.1:" + gateway.getLocalPort(), TEST_SERVER_ID, TEST_TOKEN);
+            try {
+                Thread runner = new Thread(client);
+                runner.setDaemon(true);
+                runner.start();
+                runner.join(5000);
+                assertThat(runner.isAlive()).as("run() returns instead of blocking").isFalse();
+
+                // A direct call on the caller's thread must neither block nor throw.
+                client.run();
+
+                assertThatThrownBy(gateway::accept).as("no connection reached the stand-in gateway")
+                    .isInstanceOf(SocketTimeoutException.class);
+                assertThat(client.isOpen()).isFalse();
+                assertThat(client.isConnected()).isFalse();
+                assertThat(records).as("one INFO line per run").hasSize(1);
+                assertThat(records.get(0).getLevel()).isEqualTo(Level.INFO);
+            } finally {
+                client.disconnect();
+            }
+        }
     }
 }
