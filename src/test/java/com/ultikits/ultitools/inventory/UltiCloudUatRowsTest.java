@@ -135,7 +135,7 @@ class UltiCloudUatRowsTest {
      * @return whether its row is already checked; every ID is checked once all rows have landed
      */
     static boolean enabled(String id) {
-        return "ultitools.ulticloud.login".equals(id);
+        return id.startsWith("ultitools.ulticloud.") || id.startsWith("ultitools.cloud.");
     }
 
     @Test
@@ -176,6 +176,16 @@ class UltiCloudUatRowsTest {
             }
         }
         assertThat(problems).as("Preconditions that cite a later row (sweep class 8)").isEmpty();
+    }
+
+    @Test
+    void retiredRowsAreGoneFromBothDocuments() throws IOException {
+        Map<String, List<Row>> checklist = rows(CHECKLIST);
+        Map<String, List<Row>> features = rows(FEATURES);
+        for (String id : RETIRED_IDS) {
+            assertThat(checklist).as("retired checklist row " + id).doesNotContainKey(id);
+            assertThat(features).as("retired feature row " + id).doesNotContainKey(id);
+        }
     }
 
     @Test
