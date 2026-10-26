@@ -374,7 +374,8 @@ class CloudConnectionLifecycleTest {
         Thread.sleep(150);
         assertThat(raw.requests).isEmpty();
         assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid").containsEntry("uuid", UUID);
-        assertThat(CloudSession.current().getToken()).isNull();
+        // Plan 22-24: the session has no user-token state any more; the old token adopted nothing.
+        assertThat(CloudSession.current().hasCredential()).isFalse();
     }
 
     @Test

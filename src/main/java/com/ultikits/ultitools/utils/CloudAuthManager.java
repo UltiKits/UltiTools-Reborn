@@ -29,7 +29,9 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * <p>
  * {@code CredentialStaticSurfaceInvariantTest} enforces this structurally: no public static method
  * anywhere in this package may accept or return a {@link TokenEntity} or a generation (D-18), so a
- * static bypass of {@link CloudSession#commit(TokenEntity)} cannot be reintroduced unnoticed.
+ * static bypass of the session's credential commit cannot be reintroduced unnoticed. As of 6.3.1 the
+ * 6.3.0 user token is neither stored nor sent (plan 22-24 removed its store); the server credential is
+ * committed only through {@link CloudSession#commitCredential(ServerCredential)}.
  * <p>
  * Marked {@link ApiStatus.Internal} -- this class exists to serve {@code CloudLoginCommand}'s three
  * {@code @CmdMapping} methods and is not part of the framework's public API surface for module
@@ -268,8 +270,7 @@ public class CloudAuthManager {
     /**
      * Tears down cloud features unconditionally, then asynchronously revokes and deletes the
      * protocol v2 credential. The revoke and delete finish after this method returns; use
-     * {@link #logoutReporting(Consumer)} to observe their outcome. The token-era cleanup remains
-     * synchronous while that internal code is retained. In both forms teardown must run
+     * {@link #logoutReporting(Consumer)} to observe their outcome. In both forms teardown must run
      * even when there is nothing to clear (an expired-but-still-connected session is the case that
      * most needs logout to take effect), and the credential is read only <b>after</b> teardown so an
      * in-flight login that commits mid-teardown is still caught and cleared -- see
@@ -278,13 +279,13 @@ public class CloudAuthManager {
      * <b>CR-01 (16-REVIEW-cloud.md):</b> this method captures {@link CloudSession#current()} exactly
      * once -- in the statement below, immediately before teardown begins -- and passes that captured
      * reference to {@link PluginInitiationUtils#disableCloud(CloudSession)}, which acts on and
-     * returns that exact instance. The disk-clear decision then acts on the returned reference,
+     * returns that exact instance. The revoke-and-delete decision then acts on the returned reference,
      * never on a second, independent call to {@link CloudSession#current()} taken after teardown
      * returns. Reading {@code current()} a second time, afterward, used to be exactly the bug: a
      * concurrent {@code login()} (unsynchronized, and reachable from a different thread via
      * {@code @RunAsync}) can install a brand-new session with {@link CloudSession#startNew()}
      * in the gap while teardown is running, and that second read would then see the NEW session's
-     * (always {@code null}) token instead of the one actually being logged out of -- concluding
+     * (always {@code null}) credential instead of the one actually being logged out of -- concluding
      * "nothing to clear" and leaving the real credential on disk. Acting on the one reference this
      * method already holds makes that race structurally impossible: there is no second read left to
      * disagree with the first. This method deliberately does <b>not</b> call
@@ -292,35 +293,21 @@ public class CloudAuthManager {
      * place is sufficient, and the next real login installs a fresh session via its own
      * {@code CloudSession.startNew()} call, exactly as it always has.
      * <p>
-     * <b>Round-1 external review finding, corrected in the same plan:</b> the paragraph above
-     * establishes WHICH session's disk-clear decision this method acts on, but not what that
-     * clear is safe to remove. {@link CloudSession#clearPersisted()} does NOT wipe disk
-     * unconditionally -- it delegates to {@link TokenStore#clearIfMatches(TokenEntity)}, a
-     * compare-and-delete keyed on the torn-down session's own last-known token. This matters
-     * because a concurrent {@code login()} can still WRITE a fresh credential to the same shared
-     * document while this session's teardown is in flight, even though its own session-invalidation
-     * race is already closed by the paragraph above -- see {@link CloudSession#clearPersisted()}'s
-     * own javadoc for the full account of why an unconditional clear would remove that fresh write.
-     * <p>
-     * <b>Documented semantics for logout racing a concurrent login (CR-01's second half):</b> this
-     * method's teardown always acts on whichever session was current at the single instant this
-     * method's own {@link CloudSession#current()} call below reads it -- a single, fixed point in
-     * time this method controls directly, rather than one buried inside a callee. A {@code login()}
-     * that installs its new session <b>before</b> that read wins outright: this {@code logout()}
-     * call never sees or touches it. A {@code login()} that installs its new session <b>after</b>
-     * that read has already lost the SESSION-invalidation race regardless of what this method does
-     * -- {@link CloudSession#startNew()} itself unconditionally invalidates whatever session it
-     * replaces, so the fresh login's session object is torn down by that call alone, independent of
-     * this command. What {@link CloudSession#clearPersisted()}'s compare-and-delete adds on top is
-     * the disk-level half of that same guarantee: even if the fresh login's own commit reaches the
-     * shared document before this method's clear does, the clear cannot remove a value the
-     * torn-down session never itself wrote.
+     * <b>Round-1 external review finding:</b> the paragraph above establishes WHICH session this
+     * method acts on, but not what its delete is safe to remove. A concurrent {@code login()} can
+     * write a fresh credential to the same shared document while this session's teardown is in
+     * flight, so the delete is a compare-and-delete keyed on the retiring credential's id
+     * ({@link ServerCredentialStore#deleteIfMatches(String)}): it never removes a credential the
+     * torn-down session did not hold. A {@code login()} that installs its new session <b>after</b>
+     * this method's single read of {@link CloudSession#current()} has lost the session race
+     * regardless -- {@link CloudSession#startNew()} invalidates whatever session it replaces.
      *
      * @return {@code true} if a credential existed and cleanup was started, or a pending authentication
      *         attempt was cancelled (real-machine UAT fix, plan 16-08 -- see
      *         {@link CloudSession#hasAnythingToClear()}); {@code false} if there was nothing to
      *         clear and nothing pending (teardown still ran regardless)
-     * @throws IOException if clearing the persisted credential fails
+     * @throws IOException never as of 6.3.1 (a failed local delete is reported by the asynchronous
+     *         task); kept in the 6.3.0 signature
      */
     public static synchronized boolean logout() throws IOException {
         return beginLogout(outcome -> { });
@@ -336,14 +323,10 @@ public class CloudAuthManager {
      */
     public static synchronized void logoutReporting(Consumer<LogoutOutcome> onDone) {
         Objects.requireNonNull(onDone, "onDone");
-        try {
-            beginLogout(onDone);
-        } catch (IOException failure) {
-            throw new com.ultikits.ultitools.exceptions.DataAccessException("Could not clear the saved cloud credential");
-        }
+        beginLogout(onDone);
     }
 
-    private static boolean beginLogout(Consumer<LogoutOutcome> onDone) throws IOException {
+    private static boolean beginLogout(Consumer<LogoutOutcome> onDone) {
         CloudSession tornDown;
         ServerCredential retiring;
         boolean hadAnything;
@@ -357,9 +340,6 @@ public class CloudAuthManager {
             retiring = linkedCredential(tornDown);
             hadAnything = tornDown.hasAnythingToClear() || retiring != null;
             cancelled = tornDown.consumePendingCancellation();
-            if (retiring == null && tornDown.hasAnythingToClear()) {
-                tornDown.clearPersisted();
-            }
         }
         if (retiring == null) {
             onDone.accept(cancelled ? LogoutOutcome.CANCELLED_PENDING : LogoutOutcome.NOT_LINKED);

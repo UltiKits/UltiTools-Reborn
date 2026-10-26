@@ -23,9 +23,21 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * D-18's structural enforcement: no {@code public static} method in the {@code utils} package may
  * accept or return a {@link TokenEntity} or a generation. Plan 16-09 removed every such method from
  * {@code CloudAuthManager} and {@code PluginInitiationUtils} outright (D-17) -- this rule is what
- * keeps a static bypass of {@code CloudSession#commit(TokenEntity)} from being reintroduced without
+ * keeps a static bypass of the session's credential commit from being reintroduced without
  * anyone noticing, the same way {@link com.ultikits.ultitools.buildtools.deprecation.OverBroadExclusionInvariant}
  * keeps a stale japicmp exclude from silencing a class nobody removed.
+ *
+ * <p><b>The credential writers of 6.3.1 (plan 22-24).</b> The 6.3.0 user token is no longer stored: its
+ * store ({@code TokenStore}) and {@code CloudSession#commit(TokenEntity)} were deleted, and no framework
+ * class names its {@code cloud_token} entry except the one-time cleanup ({@code NoV1RuntimePathTest}).
+ * {@code credentials.json} is written only by its owner {@code CredentialStore}, on behalf of these
+ * package-private writers: {@code ServerCredentialStore#save} (device login, which also drops a
+ * leftover {@code cloud_token}), {@code #replace} ({@code credential.rotate}), {@code #deleteIfMatches}
+ * (logout and a rejected credential), {@code #delete} and {@code #removeLegacyToken} (the 6.3.0-token
+ * cleanup at the first start); {@code CommonUtils#getUltiToolsUUID} writes the install id. The
+ * session reaches them only through {@code CloudSession#commitCredential}, {@code #rotateCredential},
+ * {@code #completeCredentialLogout} and its connection listener's rejection path. None of them is a
+ * {@code public static} method, and none accepts or returns a {@link TokenEntity}.
  *
  * <p>Pure logic over an already-derived input -- the {@link Method} objects to check -- so this is
  * unit-testable with hand-built synthetic fixtures, without touching the classpath or the real
@@ -76,7 +88,7 @@ import com.ultikits.ultitools.entities.TokenEntity;
  *   {@code TokenEntity} on some future public, instantiable class in this package would pass either
  *   check. This is a real, accepted gap, not an oversight: today it is unreachable in practice --
  *   {@code CloudAuthManager}'s constructor is {@code private} and {@code CloudSession}/
- *   {@code TokenStore} are package-private, so no public, instantiable class in {@code utils} exposes
+ *   {@code ServerCredentialStore} are package-private, so no public, instantiable class in {@code utils} exposes
  *   any instance method to a caller outside the package at all. If that ever changes, this rule
  *   provides no protection and would need to be extended to instance methods on public classes too.
  *   </li>

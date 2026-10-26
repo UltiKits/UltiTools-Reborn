@@ -554,7 +554,7 @@ class CloudReconnectStateMachineTest {
     /**
      * CR-02 (16-REVIEW-cloud.md): {@code reinitWebSocket}'s second confirmation, through to the
      * connection actually being established, must be covered by {@code session}'s own monitor --
-     * the same pattern {@code activateCloudIfCurrent} already used. Without it, an {@code invalidate()}
+     * the same pattern the 6.3.0 {@code activateCloudIfCurrent} used. Without it, an {@code invalidate()}
      * landing in that window leaves an already-invalidated session holding a live, authenticated
      * WebSocket connection nothing ever closes.
      */
