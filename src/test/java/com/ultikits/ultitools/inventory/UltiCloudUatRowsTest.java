@@ -34,7 +34,7 @@ import org.junit.jupiter.api.Test;
  * base ID (the ID without a trailing {@code .neg-<slug>} segment) exists once with nine cells, a Kind, Target, Tier and
  * Manual from the conventions' value sets, the Permission the conventions prescribe for its Kind, and a Source whose
  * every {@code ClassName#member} names a class under {@code src/main/java} whose source mentions that member. The
- * retired magic-link rows are absent from both documents, and both documents stay LF.
+ * retired rows are absent from both documents, and both documents stay LF.
  * <p>
  * The documents are plain Markdown tables; this is a reader of those tables, nothing more.
  */
@@ -110,14 +110,78 @@ class UltiCloudUatRowsTest {
             "ultitools.upm.install.neg-sha256-mismatch",
             "ultitools.upm.install.neg-size-mismatch",
             "ultitools.upm.install.neg-license-required",
-            "ultitools.upm.update-check.v2"));
+            "ultitools.upm.update-check.v2",
+            // 6.3.0 rows rewritten for protocol v2 (the 22-28 fix round)
+            "ultitools.upm.install.neg-incompatible",
+            "ultitools.upm.install-version.neg-incompatible",
+            "ultitools.upm.versions",
+            "ultitools.upm.versions.neg-none-compatible",
+            "ultitools.config.panel-roundtrip-server",
+            "ultitools.config.panel-map-entry-server",
+            "ultitools.language.framework-text",
+            "ultitools.capability.commands",
+            "ultitools.capability.commands.neg-disabled",
+            "ultitools.capability.file-delete",
+            "ultitools.capability.file-delete.neg-disabled",
+            "ultitools.capability.file-delete.neg-directory",
+            "ultitools.capability.file-read",
+            "ultitools.capability.file-read.neg-disabled",
+            "ultitools.capability.file-write",
+            "ultitools.capability.file-write.neg-disabled",
+            "ultitools.capability.file-write.neg-update-config-disabled",
+            "ultitools.capability.logs",
+            "ultitools.capability.logs.neg-disabled",
+            "ultitools.capability.monitoring",
+            "ultitools.capability.monitoring.neg-disabled",
+            "ultitools.capability.player-events",
+            "ultitools.capability.player-events.neg-disabled",
+            "ultitools.capability.server-properties",
+            "ultitools.capability.server-properties.neg-disabled",
+            "ultitools.remote.error-auto-report",
+            "ultitools.remote.log-stream-early-boot",
+            "ultitools.remote.log-stream-console-mirror",
+            "ultitools.remote.enabled-plugins",
+            "ultitools.remote.command-blocklist",
+            "ultitools.remote.command-blocklist.neg-namespaced",
+            "ultitools.remote.command-blocklist.neg-invalid-value",
+            "ultitools.remote.file-delete-link",
+            "ultitools.remote.file-delete-link.neg-protected-name",
+            "ultitools.remote.file-editable-roots",
+            "ultitools.remote.file-editable-roots.neg-outside-root",
+            "ultitools.remote.file-editable-roots.neg-protected",
+            "ultitools.remote.file-editable-roots.neg-link-outside-root",
+            "ultitools.remote.file-editable-roots.neg-link-to-protected",
+            "ultitools.remote.file-refusal-audit",
+            "ultitools.remote.server-properties-safe-keys-read",
+            "ultitools.remote.server-properties-safe-keys",
+            "ultitools.remote.server-properties-safe-keys.neg-absent-on-server",
+            "ultitools.remote.server-properties-one-line",
+            "ultitools.config.protected-file-server",
+            "ultitools.config.operator-bytes.anchored-file"));
 
-    /** Magic-link rows of 6.3.0 that protocol 2.0.0 retired, in either document. */
+    /** Rows of 6.3.0 that protocol 2.0.0 retired (magic-link login and protocol v1 messages), in either document. */
     static final List<String> RETIRED_IDS = Collections.unmodifiableList(Arrays.asList(
             "ultitools.ulticloud.request-helper",
             "ultitools.ulticloud.request-helper.neg-not-connected",
             "ultitools.ulticloud.login.neg-already-logged-in",
-            "ultitools.ulticloud.status.neg-not-connected"));
+            "ultitools.ulticloud.status.neg-not-connected",
+            "ultitools.runtime.panel-reply",
+            "ultitools.config.panel-map-entry",
+            "ultitools.capability.file-delete.recursive",
+            "ultitools.capability.file-delete.neg-recursive-unset",
+            "ultitools.capability.server-properties.update-config",
+            "ultitools.capability.server-properties.neg-update-config-disabled",
+            "ultitools.remote.log-stream-pause",
+            "ultitools.remote.log-stream-levels",
+            "ultitools.remote.log-stream-levels-direct",
+            "ultitools.remote.log-stream-batch-interval",
+            "ultitools.remote.log-stream-batch-interval.neg-below-floor",
+            "ultitools.remote.log-stream-start-stop",
+            "ultitools.remote.log-stream-status",
+            "ultitools.remote.upload-config",
+            "ultitools.remote.upload-config.neg-permissions",
+            "ultitools.remote.disk-usage",
+            "ultitools.remote.server-properties-safe-keys.neg-unsafe-key"));
 
     private static final Set<String> LAYERS = new HashSet<>(Arrays.asList(
             "protocol", "java-client", "os-input", "pixel", "server"));
