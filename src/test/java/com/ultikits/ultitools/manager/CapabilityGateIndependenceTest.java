@@ -34,12 +34,17 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * non-null regardless of capability configuration, because construction stays capability-free
  * (D-11).
  * <p>
- * Reaches {@code PluginInitiationUtils.initializeManagers()} / {@code onWebSocketOpened} via
- * reflection: this class lives in {@code manager}, a different package from {@code utils}, the
- * same approach {@code CapabilityGateTracerTest} in {@code entities} uses to reach
- * {@code handleInboundMessage}.
+ * Reaches {@code PluginInitiationUtils.initializeManagers()} via reflection: this class lives in
+ * {@code manager}, a different package from {@code utils}. The wiring it drives is the legacy (protocol v1)
+ * manager wiring that 6.3.1 keeps unreachable until 6.4.0 (S-67).
+ * <p>
+ * Plan 22-23 removed the v1 handshake callback ({@code onWebSocketOpened}) and with it the two
+ * server-properties cases (no upload on connect while the switch is off, upload while on). On protocol v2 nothing
+ * is uploaded at connect: the hello declares {@code properties:read}/{@code properties:write} only while the switch
+ * is on ({@code InboundWiringTest#helloDeclaresTheSwitches}) and a request is refused while it is off
+ * ({@code CapabilityGateTracerTest}).
  */
-@DisplayName("能力开关的出站独立性 —— wireManagers / onWebSocketOpened")
+@DisplayName("能力开关的出站独立性 —— wireManagers")
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reflection to reach package-private test seams
 class CapabilityGateIndependenceTest {
 
@@ -136,7 +141,7 @@ class CapabilityGateIndependenceTest {
         // PluginInitiationUtils. CloudSession itself is package-private (utils), so this different
         // package (manager) cannot even compile a reference to it -- setWebSocketClientForTesting()
         // is the seam PluginInitiationUtils exposes instead, reached the same reflective way this
-        // class already reaches initializeManagers()/onWebSocketOpened().
+        // class already reaches initializeManagers().
         Method method = PluginInitiationUtils.class.getDeclaredMethod(
                 "setWebSocketClientForTesting", UltiPanelWebSocketClient.class);
         method.setAccessible(true);
@@ -147,13 +152,6 @@ class CapabilityGateIndependenceTest {
         Method method = PluginInitiationUtils.class.getDeclaredMethod("initializeManagers");
         method.setAccessible(true);
         method.invoke(null);
-    }
-
-    private static void invokeOnWebSocketOpened(UltiPanelWebSocketClient client) throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "onWebSocketOpened", UltiPanelWebSocketClient.class);
-        method.setAccessible(true);
-        method.invoke(null, client);
     }
 
     @Nested
@@ -229,33 +227,6 @@ class CapabilityGateIndependenceTest {
             invokeInitializeManagers();
 
             verify(mockPlayerEventManager, times(1)).initialize(mockPanelWs);
-        }
-    }
-
-    @Nested
-    @DisplayName("server-properties 能力")
-    class ServerPropertiesCapability {
-
-        @Test
-        @DisplayName("默认关闭（D-08）：连接建立时不上传服务器属性，并记一条 INFO")
-        void disabledByDefaultSkipsUpload() throws Exception {
-            invokeOnWebSocketOpened(mockPanelWs);
-
-            verify(mockServerPropertiesManager, never()).getSafeProperties();
-            verify(mockLogger).log(eq(Level.INFO), contains(Capability.SERVER_PROPERTIES.getConfigPath()));
-        }
-
-        @Test
-        @DisplayName("启用时：连接建立时上传服务器属性")
-        void enabledUploadsOnConnect() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig())
-                    .thenReturn(configWith(Capability.SERVER_PROPERTIES.getConfigPath(), true));
-            lenient().when(mockServerPropertiesManager.getSafeProperties())
-                    .thenReturn(java.util.Collections.singletonMap("difficulty", "normal"));
-
-            invokeOnWebSocketOpened(mockPanelWs);
-
-            verify(mockServerPropertiesManager, times(1)).getSafeProperties();
         }
     }
 

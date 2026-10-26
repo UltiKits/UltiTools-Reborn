@@ -73,6 +73,7 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
     private final LongSupplier gatewayClockOffsetMillis;
     private final ScheduledExecutorService timers;
     private final Executor handlerThread;
+    private final ShutdownGate.Signal shutdown;
 
     private final Map<String, Pending> pendingCreates = new ConcurrentHashMap<>();
     private final Set<String> busyCompletions = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
@@ -89,6 +90,24 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
      */
     PlayerLinkChannel(Supplier<CloudChannel> channel, DedupeLedger ledger, BooleanSupplier onlineMode,
                       LongSupplier gatewayClockOffsetMillis, ScheduledExecutorService timers, Executor handlerThread) {
+        this(channel, ledger, onlineMode, gatewayClockOffsetMillis, timers, handlerThread, ShutdownGate.Signal.OPEN);
+    }
+
+    /**
+     * @param channel supplies the current connection, or null while none exists
+     * @param ledger the shared session ledger and synchronization monitor
+     * @param onlineMode reports this server's online-mode setting
+     * @param gatewayClockOffsetMillis the gateway clock minus the framework clock, in milliseconds
+     * @param timers schedules the create and handler deadlines
+     * @param handlerThread runs the owning module's handler
+     * @param shutdown the shutdown signal ({@link ShutdownGate}): a completion is delivered only with a permit, which
+     *                 is returned when the handler's work and the receipt end (22-23 second verification); refused, the
+     *                 completion is left unanswered for redelivery after the next welcome
+     */
+    PlayerLinkChannel(Supplier<CloudChannel> channel, DedupeLedger ledger, BooleanSupplier onlineMode,
+                      LongSupplier gatewayClockOffsetMillis, ScheduledExecutorService timers, Executor handlerThread,
+                      ShutdownGate.Signal shutdown) {
+        this.shutdown = Objects.requireNonNull(shutdown, "shutdown");
         this.channel = Objects.requireNonNull(channel, "channel");
         this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.onlineMode = Objects.requireNonNull(onlineMode, "onlineMode");
@@ -278,25 +297,72 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
         deliver(completion, connection);
     }
 
+    /**
+     * Delivers one completion to the module's handler, or answers it when no handler is set. Runs with its own
+     * shutdown permit (22-23 second verification), whichever thread delivers it -- the connection thread, the timer
+     * of a create's deadline, or the connection thread of a later {@code player.link.created} for a held completion --
+     * and returns it only when the handler's work and the receipt have ended; refused, the completion is left for the
+     * gateway to deliver again after the next welcome, exactly as {@link ShutdownGate} leaves it.
+     */
     private void deliver(final CloudPlayerLinks.LinkCompletion completion, final CloudChannel connection) {
         final String id = completion.completionId();
-        Owner owner = handler.get();
-        if (owner == null) {
-            answer(connection, id, noHandlerResult(completion));
+        if (!shutdown.enter()) {
             busyCompletions.remove(id);
+            LOGGER.fine("UltiCloud: player.link.completed left for redelivery: the server is shutting down.");
             return;
         }
-        final CloudPlayerLinks.LinkEventHandler target = owner.handler;
-        handlerThread.execute(new Runnable() {
+        final Runnable exit = exitOnce();
+        boolean handedOff = false;
+        try {
+            Owner owner = handler.get();
+            if (owner == null) {
+                answer(connection, id, noHandlerResult(completion));
+                busyCompletions.remove(id);
+                return;
+            }
+            final CloudPlayerLinks.LinkEventHandler target = owner.handler;
+            handlerThread.execute(new Runnable() {
+                @Override
+                public void run() {
+                    invokeHandler(target, completion, connection, id, exit);
+                }
+            });
+            handedOff = true;
+        } finally {
+            if (!handedOff) {
+                exit.run();
+            }
+        }
+    }
+
+    /** @return a hook that returns this delivery's shutdown permit the first time it runs */
+    private Runnable exitOnce() {
+        final AtomicBoolean returned = new AtomicBoolean();
+        return new Runnable() {
             @Override
             public void run() {
-                invokeHandler(target, completion, connection, id);
+                if (returned.compareAndSet(false, true)) {
+                    shutdown.exit();
+                }
             }
-        });
+        };
     }
 
     private void invokeHandler(CloudPlayerLinks.LinkEventHandler target, CloudPlayerLinks.LinkCompletion completion,
-                               CloudChannel connection, final String id) {
+                               CloudChannel connection, final String id, final Runnable exit) {
+        boolean handedOff = false;
+        try {
+            handedOff = callHandler(target, completion, connection, id, exit);
+        } finally {
+            if (!handedOff) {
+                exit.run();
+            }
+        }
+    }
+
+    /** @return whether the permit now belongs to the handler's future (returned by {@code exit} when it settles) */
+    private boolean callHandler(CloudPlayerLinks.LinkEventHandler target, CloudPlayerLinks.LinkCompletion completion,
+                                final CloudChannel connection, final String id, final Runnable exit) {
         CompletableFuture<CloudPlayerLinks.GameAccountResult> answer;
         try {
             answer = target.onCompleted(completion);
@@ -304,13 +370,13 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
             LOGGER.warning("UltiCloud: the player-link handler failed for completion " + id
                     + "; no result is sent and the gateway will redeliver.");
             busyCompletions.remove(id);
-            return;
+            return false;
         }
         if (answer == null) {
             LOGGER.warning("UltiCloud: the player-link handler returned no future for completion " + id
                     + "; no result is sent and the gateway will redeliver.");
             busyCompletions.remove(id);
-            return;
+            return false;
         }
         final AtomicBoolean settled = new AtomicBoolean();
         final ScheduledFuture<?> deadline = timers.schedule(new Runnable() {
@@ -320,6 +386,7 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
                     busyCompletions.remove(id);
                     LOGGER.warning("UltiCloud: the player-link handler did not answer completion " + id
                             + " in time; no result is sent and the gateway will redeliver.");
+                    exit.run();
                 }
             }
         }, HANDLER_DEADLINE_MS, TimeUnit.MILLISECONDS);
@@ -334,6 +401,7 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
                     busyCompletions.remove(id);
                     LOGGER.warning("UltiCloud: the player-link handler failed for completion " + id
                             + "; no result is sent and the gateway will redeliver.");
+                    exit.run();
                     return;
                 }
                 // The module may complete its future on any thread, the server thread included. The result is
@@ -348,16 +416,19 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
                                 answer(live != null && live.isOpen() ? live : connection, id, outcome);
                             } finally {
                                 busyCompletions.remove(id);
+                                exit.run();
                             }
                         }
                     });
                 } catch (java.util.concurrent.RejectedExecutionException stopped) {
                     busyCompletions.remove(id);
+                    exit.run();
                     LOGGER.warning("UltiCloud: the player-link result for completion " + id
                             + " was not sent because cloud features are stopping; the gateway will redeliver.");
                 }
             }
         });
+        return true;
     }
 
     private void onExpired(CloudRequest request, CloudChannel connection) {

@@ -1,16 +1,15 @@
 package com.ultikits.ultitools.entities;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.logging.Logger;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
@@ -18,152 +17,51 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.manager.CommandExecutionManager;
-import com.ultikits.ultitools.manager.FileOperationManager;
 import com.ultikits.ultitools.manager.RemoteActionLog;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+import com.ultikits.ultitools.utils.V2StubSession;
 
 /**
- * Proves the whole remote-surface policy spine end to end on {@code execute_command} — the tracer
- * task's single deliverable — and pins {@code ping}'s {@link Capability#NONE} bypass and
- * {@code file_operation}'s capability resolver, which the same dispatch-table change reaches.
+ * Proves the remote-surface policy spine end to end on the protocol v2 path: every operator switch refuses its v2
+ * request types. Rewritten in plan 22-23 (checker B-W6): the v1 tracer drove the removed v1 dispatch table
+ * ({@code execute_command}, {@code file_operation}, {@code upload_config}); its switch assertions now run on the
+ * connection's router against the in-process stub, with each switch turned off after the handshake, as the operator
+ * would (S-66: the router re-reads the switch for every request).
  * <p>
- * Reaches {@link PluginInitiationUtils#handleInboundMessage} and
- * {@link PluginInitiationUtils#inboundDispatchTable()} via reflection: this class lives in
- * {@code entities}, a different package from {@code utils}, per the plan's file layout — the
- * existing {@code PluginInitiationUtilsInboundMessageTest} reaches the same methods from within the
- * same package and needs no reflection; this class cannot.
- * <p>
- * Action-log entries are asserted by capturing them from a mocked {@link RemoteActionLog} rather
- * than by reading the file, so this test stays sub-second and filesystem-independent.
+ * Fates of the v1-only cases: the {@code Capability.NONE} bypass for {@code ping} has no v2 counterpart (the text
+ * {@code ping} is answered by the transport, below the router); the {@code file_operation} resolver's mapping is the
+ * public {@code PluginInitiationUtils#resolveFileOperationCapability}, pinned by {@code V2OnlySessionTest}; the
+ * {@code upload_config} acknowledgement shape no longer exists; a type-less frame is refused by the router's schema
+ * check ({@code AgentMessageRouterTest}).
  */
-@DisplayName("Capability 端到端网关 —— execute_command 追踪")
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reflection to reach package-private test seams
+@DisplayName("Capability 端到端网关 —— v2 开关追踪")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reflection to reset the UltiTools singleton
 class CapabilityGateTracerTest {
-
-    private Logger mockLogger;
-    private CommandExecutionManager mockCommandExecutionManager;
-    private FileOperationManager mockFileOperationManager;
-    private RemoteActionLog mockRemoteActionLog;
-    private UltiPanelWebSocketClient mockPanelWs;
-    private Object previousPanelWs;
-
-    @BeforeEach
-    void setUp() throws Exception {
-        mockLogger = mock(Logger.class);
-        mockCommandExecutionManager = mock(CommandExecutionManager.class);
-        mockFileOperationManager = mock(FileOperationManager.class);
-        mockRemoteActionLog = mock(RemoteActionLog.class);
-
-        // 必须用 Consumer 重载：先打桩、后发布。见 TestHelper 的 javadoc 与 issue #250。
-        TestHelper.mockUltiToolsInstance(ultiTools -> {
-            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
-            lenient().when(ultiTools.getConfig()).thenReturn(emptyConfig());
-            lenient().when(ultiTools.getCommandExecutionManager()).thenReturn(mockCommandExecutionManager);
-            lenient().when(ultiTools.getFileOperationManager()).thenReturn(mockFileOperationManager);
-            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
-        });
-
-        mockPanelWs = mock(UltiPanelWebSocketClient.class);
-        lenient().when(mockPanelWs.getServerId()).thenReturn("test-server-uuid");
-        previousPanelWs = setPanelWs(mockPanelWs);
-    }
-
-    @AfterEach
-    void tearDown() throws Exception {
-        // panelWS 是静态字段，不还原会漏给同一个 JVM 里后面的测试类。
-        setPanelWs(previousPanelWs);
-        Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-        instanceField.setAccessible(true);
-        instanceField.set(null, null);
-    }
-
-    private static YamlConfiguration emptyConfig() {
-        return new YamlConfiguration();
-    }
-
-    private static YamlConfiguration configWith(String path, boolean value) {
-        YamlConfiguration config = new YamlConfiguration();
-        config.set(path, value);
-        return config;
-    }
-
-    // As of plan 16-08 Task 2 the WebSocket client is CloudSession-owned, not a static field on
-    // PluginInitiationUtils. CloudSession itself is package-private (utils), so this different
-    // package (entities) cannot even compile a reference to it -- setWebSocketClientForTesting()
-    // is the seam PluginInitiationUtils exposes instead.
-    private Object setPanelWs(Object value) throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "setWebSocketClientForTesting", UltiPanelWebSocketClient.class);
-        method.setAccessible(true);
-        return method.invoke(null, (UltiPanelWebSocketClient) value);
-    }
-
-    private static void invokeHandleInboundMessage(JsonObject message) throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod("handleInboundMessage", JsonObject.class);
-        method.setAccessible(true);
-        method.invoke(null, message);
-    }
-
-    private static JsonObject executeCommandMessage(String command, String commandId) {
-        JsonObject data = new JsonObject();
-        data.addProperty("command", command);
-        data.addProperty("commandId", commandId);
-        JsonObject message = new JsonObject();
-        message.addProperty("type", "execute_command");
-        message.add("data", data);
-        return message;
-    }
-
-    private static JsonObject fileOperationMessage(String operation, String path) {
-        JsonObject data = new JsonObject();
-        data.addProperty("operation", operation);
-        data.addProperty("path", path);
-        JsonObject message = new JsonObject();
-        message.addProperty("type", "file_operation");
-        message.add("data", data);
-        return message;
-    }
-
-    /**
-     * The Worker's own acknowledgement shape for {@code upload_config} -- {@code
-     * {message, serverId, configType}}, per {@code PluginInitiationUtils#handleConfigUpload}'s own
-     * javadoc.
-     */
-    private static JsonObject uploadConfigAckMessage() {
-        JsonObject data = new JsonObject();
-        data.addProperty("message", "Configuration upload_config processed successfully");
-        data.addProperty("serverId", "test-server-uuid");
-        data.addProperty("configType", "plugin_config");
-        JsonObject message = new JsonObject();
-        message.addProperty("type", "upload_config");
-        message.add("data", data);
-        return message;
-    }
-
-    /** A genuine write-request shape for {@code upload_config} -- no {@code message} field. */
-    private static JsonObject uploadConfigWriteRequestMessage() {
-        JsonObject data = new JsonObject();
-        data.addProperty("configType", "plugin_config");
-        data.addProperty("configName", "config.yml");
-        data.add("configContent", new JsonObject());
-        data.addProperty("format", "yaml");
-        data.addProperty("backup", false);
-        JsonObject message = new JsonObject();
-        message.addProperty("type", "upload_config");
-        message.add("data", data);
-        return message;
-    }
 
     @Nested
     @DisplayName("Capability.isEnabled() 的出厂默认值")
     class NoConfigDefaults {
+
+        @BeforeEach
+        void setUp() {
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                    lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration()));
+        }
+
+        @AfterEach
+        void tearDown() throws Exception {
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+        }
 
         @Test
         @DisplayName("没有 ultipanel.capabilities 块时，commands 为 false、monitoring 为 true")
@@ -178,171 +76,156 @@ class CapabilityGateTracerTest {
     }
 
     @Nested
-    @DisplayName("execute_command 网关")
-    class ExecuteCommandGate {
+    @DisplayName("v2 开关网关（桩上的真实连接）")
+    @Timeout(value = 120, unit = TimeUnit.SECONDS)
+    class SwitchGate {
+
+        @TempDir
+        Path temp;
+
+        private V2StubSession session;
+
+        @BeforeEach
+        void setUp() {
+            MockBukkitHelper.ensureCleanState();
+        }
+
+        @AfterEach
+        void tearDown() throws Exception {
+            if (session != null) {
+                session.close();
+            }
+            MockBukkitHelper.safeUnmock();
+        }
+
+        private void start(boolean realCommands) throws Exception {
+            ServerMock server = MockBukkit.mock();
+            session = new V2StubSession(temp, server);
+            if (realCommands) {
+                session.realCommands();
+            }
+            for (Capability capability : switchedTypes().keySet()) {
+                session.config().set(capability.getConfigPath(), true);
+            }
+            session.start(null);
+            // Settle the handshake before a switch is turned off: "connected" is reported when the welcome is
+            // accepted, before the connection's established listeners run, and a listener that already sees a
+            // switch turned off reconnects so the next hello declares the new set (22-22 fix). A request sent on that
+            // closing connection is refused but its reply cannot be delivered (22-23 fix, gap 5). The welcome's
+            // status frame is sent by those listeners, after the reconnect check, so it marks the settled session.
+            session.reply("status", 1);
+        }
+
+        /** Each operator switch and the gateway request types it governs (the contract's capability names). */
+        private Map<Capability, String[]> switchedTypes() {
+            Map<Capability, String[]> types = new LinkedHashMap<>();
+            types.put(Capability.COMMANDS, new String[] {"command.execute"});
+            types.put(Capability.PLAYER_ACTIONS, new String[] {"player.action"});
+            types.put(Capability.FILE_READ, new String[] {"files.read", "files.list", "config.tree", "config.entries"});
+            types.put(Capability.FILE_WRITE, new String[] {"files.write", "config.update"});
+            types.put(Capability.FILE_DELETE, new String[] {"files.delete"});
+            types.put(Capability.SERVER_PROPERTIES, new String[] {"properties.get", "properties.update"});
+            types.put(Capability.MONITORING, new String[] {"snapshot.request"});
+            return types;
+        }
+
+        private JsonObject errorFor(String id, int index) throws InterruptedException {
+            JsonObject error = session.reply("error", index);
+            assertThat(error.get("replyTo").getAsString()).isEqualTo(id);
+            return error.getAsJsonObject("payload");
+        }
 
         @Test
-        @DisplayName("commands 禁用时：handler 不被调用，发送 capability_denied，记一条 DENIED")
-        void deniedWhenCommandsDisabled() throws Exception {
-            invokeHandleInboundMessage(executeCommandMessage("say hi", "c1"));
+        @DisplayName("tracer: commands switched off refuses command.execute; switched on again it runs")
+        void commandsSwitchRefusesAndAllows() throws Exception {
+            start(false);
+            session.config().set(Capability.COMMANDS.getConfigPath(), false);
 
-            verify(mockCommandExecutionManager, never()).executeCommand(any());
+            String id = session.send("command.execute", "say", null).get("id").getAsString();
+            JsonObject refusal = errorFor(id, 1);
+            assertThat(refusal.get("code").getAsString()).isEqualTo("capability_not_accepted");
+            assertThat(refusal.getAsJsonObject("details").get("capability").getAsString()).isEqualTo("commands");
+            assertThat(refusal.get("message").getAsString()).contains(Capability.COMMANDS.getConfigPath());
+            session.pass(300L);
+            assertThat(session.executions()).as("the refused command never ran").isZero();
+            assertThat(session.stub().gateway().received("command.ack")).isEmpty();
+            assertThat(session.actions()).as("the switch refusal writes exactly one DENIED entry").hasSize(1);
+            RemoteActionLog.Entry denied = session.actions().get(0);
+            assertThat(denied.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(denied.getCapability()).isEqualTo(Capability.COMMANDS.name());
+            assertThat(denied.getAction()).isEqualTo("command.execute");
+            assertThat(denied.getReason()).isEqualTo(Capability.COMMANDS.refusalMessage());
 
-            ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockPanelWs, times(1)).sendMessage(sent.capture());
-            JsonObject response = sent.getValue();
-            assertThat(response.get("type").getAsString()).isEqualTo("capability_denied");
-            JsonObject payload = response.getAsJsonObject("data");
-            assertThat(payload.get("type").getAsString()).isEqualTo("execute_command");
-            assertThat(payload.get("capability").getAsString()).isEqualTo("COMMANDS");
-            assertThat(payload.get("configKey").getAsString()).isEqualTo("ultipanel.capabilities.commands");
-            assertThat(payload.get("configFile").getAsString()).isEqualTo("plugins/UltiTools/config.yml");
-            assertThat(payload.get("commandId").getAsString()).isEqualTo("c1");
-            assertThat(payload.get("reason").getAsString())
-                    .contains("ultipanel.capabilities.commands")
-                    .contains("plugins/UltiTools/config.yml");
+            session.config().set(Capability.COMMANDS.getConfigPath(), true);
+            id = session.send("command.execute", "say", null).get("id").getAsString();
+            assertThat(session.reply("command.result", 1).get("replyTo").getAsString()).isEqualTo(id);
+            assertThat(session.executions()).isEqualTo(1);
+        }
 
-            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
-            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
-            RemoteActionLog.Entry entry = entryCaptor.getValue();
-            assertThat(entry.getCapability()).isEqualTo("COMMANDS");
-            assertThat(entry.getAction()).isEqualTo("execute_command");
-            assertThat(entry.getTarget()).isEqualTo("say hi");
+        @Test
+        @DisplayName("sweep: every switch refuses each of its v2 request types, naming the capability and the key")
+        void everySwitchRefusesItsTypes() throws Exception {
+            start(false);
+            int errors = 0;
+            List<String> refused = new ArrayList<>();
+            for (Map.Entry<Capability, String[]> entry : switchedTypes().entrySet()) {
+                Capability capability = entry.getKey();
+                session.config().set(capability.getConfigPath(), false);
+                for (String type : entry.getValue()) {
+                    String id = session.send(type, null, null).get("id").getAsString();
+                    JsonObject refusal = errorFor(id, ++errors);
+                    assertThat(refusal.get("code").getAsString()).as(type).isEqualTo("capability_not_accepted");
+                    assertThat(refusal.getAsJsonObject("details").get("capability").getAsString()).as(type)
+                            .isEqualTo(session.stub().contract().message(type).capability());
+                    assertThat(refusal.get("message").getAsString()).as(type).contains(capability.getConfigPath());
+                    refused.add(type);
+                }
+                session.config().set(capability.getConfigPath(), true);
+            }
+            assertThat(refused).hasSize(12);
+            assertThat(session.executions()).isZero();
+            // FEATURES.md ultitools.remote.file-refusal-audit and UAT-CHECKLIST.md
+            // ultitools.capability.commands.neg-disabled: every switch refusal is exactly one DENIED entry naming the
+            // switch, with the refusal sentence that names its configuration key as the reason. The router records the
+            // entry after it sent the refusal, so wait for the twelfth entry, then let a stray thirteenth show.
+            session.await(() -> session.actions().size() >= 12, "the twelfth DENIED entry");
+            session.pass(300L);
+            assertThat(session.actions()).as("one DENIED entry per refused request").hasSize(12);
+            int index = 0;
+            for (Map.Entry<Capability, String[]> entry : switchedTypes().entrySet()) {
+                for (String type : entry.getValue()) {
+                    RemoteActionLog.Entry denied = session.actions().get(index++);
+                    assertThat(denied.getVerdict()).as(type).isEqualTo(RemoteActionLog.Verdict.DENIED);
+                    assertThat(denied.getCapability()).as(type).isEqualTo(entry.getKey().name());
+                    assertThat(denied.getAction()).as(type).isEqualTo(type);
+                    assertThat(denied.getActor()).as(type).isEqualTo("panel");
+                    assertThat(denied.getReason()).as(type).isEqualTo(entry.getKey().refusalMessage());
+                }
+            }
+        }
+
+        /**
+         * CR-01 (06-REVIEW.md) on v2: with commands on, a blocklisted command is refused by the command manager's own
+         * check, which writes exactly one DENIED entry; the router's gate passes the request and records nothing, so
+         * no second, false ALLOWED entry can appear (the v1 gate used to add one).
+         */
+        @Test
+        @DisplayName("CR-01: a blocklisted command with commands on records exactly one DENIED entry")
+        void blocklistedCommandRecordsExactlyOneDeniedEntry() throws Exception {
+            start(true);
+            JsonObject payload = new JsonObject();
+            payload.addProperty("command", "op");
+            String id = session.send("command.execute", "say", payload).get("id").getAsString();
+
+            JsonObject result = session.reply("command.result", 1);
+            assertThat(result.get("replyTo").getAsString()).isEqualTo(id);
+            assertThat(result.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("command_blocked");
+            session.pass(300L);
+            assertThat(session.actions()).hasSize(1);
+            RemoteActionLog.Entry entry = session.actions().get(0);
             assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
-            assertThat(entry.getReason()).contains("ultipanel.capabilities.commands");
-        }
-
-        @Test
-        @DisplayName("commands 启用时：handler 被调用一次，网关自身不再记录（CR-01：execute_command"
-                + " 由处理器自己的 AccessDecision 检查记录裁决），不发送拒绝消息")
-        void allowedWhenCommandsEnabled() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig())
-                    .thenReturn(configWith("ultipanel.capabilities.commands", true));
-
-            invokeHandleInboundMessage(executeCommandMessage("say hi", "c1"));
-
-            verify(mockCommandExecutionManager, times(1)).executeCommand(any());
-            verify(mockPanelWs, never()).sendMessage(any());
-
-            // CR-01 (06-REVIEW.md): execute_command declares VerdictRecorder.HANDLER — the real
-            // CommandExecutionManager.executeCommand() records its own ALLOWED/DENIED verdict from
-            // its own isCommandAllowed() check, so dispatchWithCapabilityGate must not also record
-            // one here. This mock never calls record() itself, so zero interactions is exactly the
-            // fixed behaviour; see CapabilityGateRealCollaboratorsTest for the real-collaborators
-            // proof that only one entry (the handler's) survives.
-            verify(mockRemoteActionLog, never()).record(any());
-        }
-    }
-
-    @Nested
-    @DisplayName("Capability.NONE 完全绕过网关")
-    class NoneBypassesGate {
-
-        @Test
-        @DisplayName("ping：不检查能力、不记录 action-log，处理器照常响应 pong")
-        void pingBypassesGateAndIsNeverLogged() throws Exception {
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "ping");
-
-            invokeHandleInboundMessage(message);
-
-            ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockPanelWs, times(1)).sendMessage(sent.capture());
-            assertThat(sent.getValue().get("type").getAsString()).isEqualTo("pong");
-
-            verify(mockRemoteActionLog, never()).record(any());
-        }
-    }
-
-    @Nested
-    @DisplayName("file_operation 的 resolver")
-    class FileOperationResolver {
-
-        @Test
-        @DisplayName("operation=write 解析为 FILE_WRITE（默认关闭 -> 拒绝）")
-        void writeResolvesToFileWriteAndIsDeniedByDefault() throws Exception {
-            invokeHandleInboundMessage(fileOperationMessage("write", "x"));
-
-            verify(mockFileOperationManager, never()).handleFileOperation(any());
-
-            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
-            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
-            RemoteActionLog.Entry entry = entryCaptor.getValue();
-            assertThat(entry.getCapability()).isEqualTo("FILE_WRITE");
-            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
-            assertThat(entry.getTarget()).isEqualTo("x");
-        }
-
-        @Test
-        @DisplayName("operation=read 解析为 FILE_READ（默认开启 -> 放行），网关自身不再记录"
-                + "（CR-01：file_operation 由处理器自己的 recordFileDecision 记录裁决）")
-        void readResolvesToFileReadAndIsAllowedByDefault() throws Exception {
-            invokeHandleInboundMessage(fileOperationMessage("read", "x"));
-
-            verify(mockFileOperationManager, times(1)).handleFileOperation(any());
-
-            // CR-01 (06-REVIEW.md): file_operation declares VerdictRecorder.HANDLER — the real
-            // FileOperationManager.handleFileOperation() records its own verdict via
-            // recordFileDecision() from its own isPathAllowed() check, so
-            // dispatchWithCapabilityGate must not also record one here.
-            verify(mockRemoteActionLog, never()).record(any());
-        }
-    }
-
-    @Nested
-    @DisplayName("upload_config 的 resolver (Gate-2 finding, round 11)")
-    class UploadConfigResolver {
-
-        @Test
-        @DisplayName("Worker 的确认回执（带 message 字段）解析为 NONE -- 绕过网关，即便 file-write 出厂默认关闭")
-        void ackShapeResolvesToNoneAndBypassesTheGateEvenWithFileWriteDisabledByDefault() throws Exception {
-            // Before this fix, upload_config was gated by a FIXED Capability.FILE_WRITE constant
-            // -- with the shipped default (file-write: false), the Worker's own acknowledgement of
-            // this server's own outbound uploadConfig() push never reached handleConfigUpload's
-            // "message"-presence recognition at all: it was denied and recorded as a DENIED write
-            // for a message that was never attempting to write anything.
-            invokeHandleInboundMessage(uploadConfigAckMessage());
-
-            // Capability.NONE bypasses the gate entirely -- no capability_denied is sent, and
-            // dispatchWithCapabilityGate's own record() call is never reached for a NONE entry.
-            verify(mockPanelWs, never()).sendMessage(any());
-            verify(mockRemoteActionLog, never()).record(any());
-        }
-
-        @Test
-        @DisplayName("真正的写入请求（无 message 字段）仍解析为 FILE_WRITE（默认关闭 -> 拒绝）")
-        void writeRequestShapeStillResolvesToFileWriteAndIsDeniedByDefault() throws Exception {
-            invokeHandleInboundMessage(uploadConfigWriteRequestMessage());
-
-            ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockPanelWs, times(1)).sendMessage(sent.capture());
-            JsonObject response = sent.getValue();
-            assertThat(response.get("type").getAsString()).isEqualTo("capability_denied");
-            assertThat(response.getAsJsonObject("data").get("capability").getAsString())
-                    .isEqualTo("FILE_WRITE");
-
-            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
-            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
-            RemoteActionLog.Entry entry = entryCaptor.getValue();
-            assertThat(entry.getCapability()).isEqualTo("FILE_WRITE");
-            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
-        }
-    }
-
-    @Nested
-    @DisplayName("畸形/缺失 type 不受网关影响")
-    class MalformedTypeUnaffected {
-
-        @Test
-        @DisplayName("缺少 type 字段：仍走既有 WARNING 分支，网关从不触发")
-        void missingTypeStillTakesWarningBranchAndNeverReachesGate() throws Exception {
-            JsonObject message = new JsonObject();
-            message.addProperty("data", "irrelevant");
-
-            invokeHandleInboundMessage(message);
-
-            verify(mockRemoteActionLog, never()).record(any());
-            verify(mockPanelWs, never()).sendMessage(any());
+            assertThat(entry.getCapability()).isEqualTo(Capability.COMMANDS.name());
+            assertThat(entry.getTarget()).isEqualTo("op");
         }
     }
 }

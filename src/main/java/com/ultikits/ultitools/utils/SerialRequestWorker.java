@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.utils;
 
+import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -31,6 +32,11 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * <b>Close.</b> {@link #close()} drops the requests that had not started (their connection is gone, so a reply could
  * not reach the gateway, and an unanswered request is one the gateway reports as timed out -- never run twice) and
  * lets the running one finish. Never waits for the thread.
+ * <p>
+ * <b>Shutdown.</b> A request the {@link ShutdownGate} covers ({@code files.write}, {@code files.delete},
+ * {@code properties.update}) asks the gate again when it starts here, because it may have been queued before
+ * {@code UltiTools#onDisable} began: refused, it is answered with its shutting-down failure and never runs; let in, it
+ * keeps the gate's permit until it is answered, so {@code onDisable} waits for it before the action log closes.
  */
 final class SerialRequestWorker {
 
@@ -44,11 +50,23 @@ final class SerialRequestWorker {
 
     private final BlockingQueue<Runnable> queue;
     private final ThreadPoolExecutor executor;
+    private final ShutdownGate shutdown;
 
     /**
+     * A worker whose requests are never refused for a shutdown.
+     *
      * @param capacity how many requests may wait behind the running one; at least 1
      */
     SerialRequestWorker(int capacity) {
+        this(capacity, new ShutdownGate(ShutdownGate.Signal.OPEN, null));
+    }
+
+    /**
+     * @param capacity how many requests may wait behind the running one; at least 1
+     * @param shutdown the shutdown gate a covered request asks when it starts
+     */
+    SerialRequestWorker(int capacity, ShutdownGate shutdown) {
+        this.shutdown = Objects.requireNonNull(shutdown, "shutdown");
         this.queue = new ArrayBlockingQueue<>(Math.max(1, capacity));
         this.executor = new ThreadPoolExecutor(1, 1, IDLE_SECONDS, TimeUnit.SECONDS, queue, runnable -> {
             Thread thread = new Thread(runnable, THREAD_NAME);
@@ -82,7 +100,7 @@ final class SerialRequestWorker {
             executor.execute(new Runnable() {
                 @Override
                 public void run() {
-                    handle(handler, request, channel);
+                    handleUnlessShuttingDown(handler, request, channel);
                 }
             });
         } catch (RejectedExecutionException refused) {
@@ -93,6 +111,22 @@ final class SerialRequestWorker {
             LOGGER.warning("UltiCloud: too many file requests are waiting; " + request.type() + " was refused.");
             channel.replyError(request.id(), "error", "rate_limited",
                     "Too many file requests are waiting on this server; try again shortly.", null);
+        }
+    }
+
+    private void handleUnlessShuttingDown(CloudRequestHandler handler, CloudRequest request, CloudChannel channel) {
+        if (!ShutdownGate.covers(request.type())) {
+            handle(handler, request, channel);
+            return;
+        }
+        if (!shutdown.enter()) {
+            shutdown.refuse(request, channel);
+            return;
+        }
+        try {
+            handle(handler, request, channel);
+        } finally {
+            shutdown.exit();
         }
     }
 

@@ -2,6 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.websocket.CloudChannel;
+import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
 import org.jetbrains.annotations.ApiStatus;
 import java.util.HashMap;
@@ -38,6 +39,22 @@ public final class AgentMessageRouter {
     private final Predicate<String> capabilityEnabled;
     private final Function<String, String> refusalForCapability;
     private final LongSupplier clock;
+    private volatile SwitchRefusalListener switchRefusals;
+    private volatile ShutdownGate shutdown;
+
+    /**
+     * Hears every request the capability gate refused because the operator's switch (or the handshake) does not
+     * allow it, after its correlated {@code capability_not_accepted} reply was handed to the channel (22-23 fix): the
+     * place the remote action log records that refusal as one DENIED entry.
+     */
+    interface SwitchRefusalListener {
+        /**
+         * @param request    the refused request, never answered by a handler
+         * @param capability the contract capability name the gate refused
+         * @param message    the refusal text sent to the gateway
+         */
+        void refused(CloudRequest request, String capability, String message);
+    }
 
     /**
      * Creates a router using the system clock for warning throttling.
@@ -59,6 +76,25 @@ public final class AgentMessageRouter {
         this.capabilityEnabled = Objects.requireNonNull(capabilityEnabled, "capabilityEnabled");
         this.refusalForCapability = Objects.requireNonNull(refusalForCapability, "refusalForCapability");
         this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    /**
+     * Sets the listener told of each refusal by the capability gate; {@code null} removes it. A listener that throws
+     * never costs the request its reply, which was sent before the listener runs.
+     * @param listener the listener, or {@code null}
+     */
+    void onSwitchRefusal(SwitchRefusalListener listener) {
+        switchRefusals = listener;
+    }
+
+    /**
+     * Sets the shutdown gate ({@link ShutdownGate}): from the moment it refuses, every state-changing type it covers is
+     * answered with its shutting-down failure before the switch gate or a handler sees it; a request it lets in keeps
+     * the gate's permit for the whole switch check and handler call. {@code null} removes it.
+     * @param gate the gate, or {@code null}
+     */
+    void onShutdown(ShutdownGate gate) {
+        shutdown = gate;
     }
 
     /**
@@ -104,11 +140,39 @@ public final class AgentMessageRouter {
     }
 
     private void dispatch(Envelope envelope, CloudChannel channel) {
+        ShutdownGate gate = shutdown;
+        if (gate == null || !ShutdownGate.covers(envelope.type)) {
+            dispatchAdmitted(envelope, channel);
+            return;
+        }
+        // The shutdown gate is separate from, and ahead of, the switch gate (22-23 shutdown-window round).
+        if (!gate.enter()) {
+            gate.refuse(envelope.request(), channel);
+            return;
+        }
+        try {
+            dispatchAdmitted(envelope, channel);
+        } finally {
+            gate.exit();
+        }
+    }
+
+    private void dispatchAdmitted(Envelope envelope, CloudChannel channel) {
         AgentMessageTypes.Spec spec = AgentMessageTypes.spec(envelope.type);
         String capability = spec.capability();
         if (spec.direction() == AgentMessageTypes.Direction.DOWN && capability != null
                 && !capabilityEnabled.test(capability)) {
-            refuse(channel, envelope.id, capability, refusalForCapability.apply(capability));
+            String message = refusalForCapability.apply(capability);
+            refuse(channel, envelope.id, capability, message);
+            SwitchRefusalListener listener = switchRefusals;
+            if (listener != null) {
+                try {
+                    listener.refused(envelope.request(), capability, message);
+                } catch (RuntimeException failure) {
+                    LOGGER.warning("UltiCloud: a refused request could not be recorded ("
+                            + failure.getClass().getSimpleName() + ").");
+                }
+            }
             return;
         }
         CloudRequestHandler handler = handlers.get(envelope.type);

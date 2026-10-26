@@ -1,11 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import java.io.IOException;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.function.BiConsumer;
-import java.util.function.Function;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 
@@ -13,26 +9,24 @@ import org.bukkit.Bukkit;
 import org.bukkit.plugin.IllegalPluginAccessException;
 import org.jetbrains.annotations.ApiStatus;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.PanelMessageEvent;
-import com.ultikits.ultitools.manager.RemoteActionLog;
-import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
-import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
- * Utility class for plugin initialization and WebSocket communication.
- * Handles account login, WebSocket connection, and message processing
- * for UltiPanel integration.
+ * Start-up and shutdown entry points of the UltiCloud connection.
+ * <p>
+ * As of 6.3.1 the connection speaks UltiCloud protocol v2 only: {@link #initWebsocket()} starts the current
+ * session's agent connection, and every inbound request is routed by the v2 agent router that
+ * {@link CloudFeatures} registers per connection. The protocol v1 inbound dispatch this class used to hold (its
+ * message-type table, the capability gate in front of it, the per-type v1 handlers and the v1 handshake callback)
+ * was removed in 6.3.1 (D-01: no v1 adapter); every public member keeps its 6.3.0 signature (D-29).
  *
  * @author wisdomme
  * @since 6.0.0
@@ -40,29 +34,6 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 public class PluginInitiationUtils {
 
     static final String LEGACY_TOKEN_REMOVED_KEY = "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.";
-
-    /** {@code server_properties} is handled by its own dedicated manager — it is not a real config file path. */
-    private static final String SERVER_PROPERTIES_FILE = "server_properties";
-
-    /**
-     * The inbound-message dispatch table: message {@code type} string to the {@link InboundHandlerEntry}
-     * that serves it.
-     * <p>
-     * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
-     * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
-     * finding). A switch multiplies independent path counts by the number of branches; a lookup
-     * does not, so the paths through {@link #handleInboundMessage} are now bounded by its guards
-     * rather than by how many message types exist. Built once, statically, and never mutated after
-     * construction — see {@link #buildInboundHandlers()}.
-     * <p>
-     * Not module-visible and never will be: this is framework-internal routing for the fixed set of
-     * panel protocol messages. Module-facing panel messaging is a separate, deliberately narrower
-     * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
-     * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
-     * this repository already has twice, in its command-executor and GUI generations.
-     */
-    private static final Map<String, InboundHandlerEntry> INBOUND_HANDLERS =
-            Collections.unmodifiableMap(buildInboundHandlers());
 
     /**
      * The elapsed-time threshold above which a {@link PanelMessageEvent} publish is considered
@@ -83,17 +54,6 @@ public class PluginInitiationUtils {
      */
     private static volatile boolean acceptingPanelMessages = true;
 
-    // Round-8 external review finding (16-10, PR #464): the prior comment here claimed "all field
-    // declarations precede all methods", but that was false at the time it was written --
-    // currentWebSocketClient() and setWebSocketClientForTesting() below were already two methods
-    // ahead of these three fields, an incomplete PMD FieldDeclarationsShouldBeAtStartOfClass fix
-    // from the Phase 06 Codacy remediation commit that a later addition (this class's cloud-session
-    // methods) silently reopened. All three fields now genuinely precede every method in this
-    // class. Both INBOUND_HANDLERS's and SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS's initializers
-    // remain static-method-call / literal expressions with no dependency on declaration order
-    // relative to other members (buildInboundHandlers() does not reference any other field in this
-    // class; see the Phase 06 Codacy remediation commit for the original verification).
-
     /**
      * Starts accepting inbound panel work again; called by {@code UltiTools#onEnable}.
      *
@@ -106,15 +66,120 @@ public class PluginInitiationUtils {
 
     /**
      * Stops accepting inbound panel work (UltiTools-Reborn#621); called as the very first step of
-     * {@code UltiTools#onDisable}. From this moment an inbound panel message, a completing handshake
-     * and every scheduler hand-off reachable from the WebSocket thread is dropped with one FINE line
-     * instead of scheduling a task for a plugin that is being disabled.
+     * {@code UltiTools#onDisable}. From this moment every scheduler hand-off reachable from the
+     * UltiCloud connection's threads is dropped with one FINE line instead of scheduling a task for a
+     * plugin that is being disabled.
+     * <p>
+     * As of 6.3.1 (protocol v2, maintainer decision of 2026-10-26) every request that changes server
+     * state -- a command, a power action, a player action, a file write or delete, a
+     * {@code server.properties} or configuration update, a module request, a credential rotation --
+     * is refused from this moment with a failure reply saying the server is shutting down (a command
+     * is acknowledged and answered with a failed {@code command.result}, so it is never run again
+     * after a restart); read-only requests are still answered until {@code onDisable} closes the
+     * connection. Before it returns, this method waits (at most {@value #PANEL_CHANGE_DRAIN_MS} ms)
+     * for every state change that started earlier to finish -- including the work such a request
+     * handed to another thread: a module responder running for a {@code module.request}, the
+     * player-link handler running for a {@code player.link.completed} -- so each one, and its
+     * action-log entry, is complete before {@code onDisable} closes the action log. A request handed
+     * to the server thread is not waited for: it runs in a later tick, which never comes once the
+     * server stops, and Bukkit cancels the task when UltiTools disables. Such a request accepted
+     * before UltiTools' own disable starts -- while the server is already stopping, for example
+     * while plugins loaded after UltiTools disable -- is not carried out and gets no result.
+     * Must not be called by a thread inside such a change.
      *
      * @since 6.3.0
      */
     @ApiStatus.Internal
     public static void stopAcceptingPanelMessages() {
         acceptingPanelMessages = false;
+        awaitPanelChanges();
+    }
+
+    /**
+     * How long {@link #stopAcceptingPanelMessages()} waits for the state changes already running
+     * (a file write, a {@code server.properties} update, a module responder or player-link handler
+     * a request was handed to); each takes milliseconds, so the bound is reached only by a stalled
+     * disk or a module handler that does not end.
+     */
+    static final long PANEL_CHANGE_DRAIN_MS = 5000L;
+
+    /**
+     * Guards {@link #panelChangesRunning}; {@link #stopAcceptingPanelMessages()} waits on it for the
+     * count to reach zero (22-23 shutdown-window round). A count, not a read-write lock, because a
+     * permit is returned by whichever thread ends the change: a request handed to a module
+     * responder's worker or to the player-link handler thread keeps its permit until that work
+     * ends (22-23 second verification).
+     */
+    private static final Object PANEL_CHANGES = new Object();
+
+    /** How many permits {@link #enterPanelChange()} gave that were not returned yet. Guarded by {@link #PANEL_CHANGES}. */
+    private static int panelChangesRunning;
+
+    /** {@link ShutdownGate}'s production signal: {@link #enterPanelChange()} and {@link #exitPanelChange()}. */
+    static final ShutdownGate.Signal PANEL_CHANGE_SIGNAL = new ShutdownGate.Signal() {
+        @Override
+        public boolean enter() {
+            return enterPanelChange();
+        }
+
+        @Override
+        public void exit() {
+            exitPanelChange();
+        }
+    };
+
+    /**
+     * The shutdown signal of every remote state change ({@link ShutdownGate}): takes a permit and
+     * returns {@code true} only while {@link #isAcceptingPanelMessages()} holds; the caller then
+     * calls {@link #exitPanelChange()} exactly once, from any thread, when the change and its
+     * action-log entry are done, including work it handed to another thread. Returns {@code false},
+     * holding nothing, from the first step of {@code onDisable} on. Never blocks for longer than
+     * another caller's check.
+     *
+     * @return whether the state change may run
+     */
+    static boolean enterPanelChange() {
+        synchronized (PANEL_CHANGES) {
+            // The flag is cleared before stopAcceptingPanelMessages takes this monitor, so a permit
+            // given here is always one the wait sees.
+            if (!isAcceptingPanelMessages()) {
+                return false;
+            }
+            panelChangesRunning++;
+            return true;
+        }
+    }
+
+    /** Returns a permit {@link #enterPanelChange()} gave; may run on a thread other than the one that entered. */
+    static void exitPanelChange() {
+        synchronized (PANEL_CHANGES) {
+            if (panelChangesRunning > 0) {
+                panelChangesRunning--;
+            }
+            if (panelChangesRunning == 0) {
+                PANEL_CHANGES.notifyAll();
+            }
+        }
+    }
+
+    private static void awaitPanelChanges() {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PANEL_CHANGE_DRAIN_MS);
+        synchronized (PANEL_CHANGES) {
+            try {
+                while (panelChangesRunning > 0) {
+                    long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+                    if (remaining <= 0) {
+                        PanelConnectionLog.log(Level.WARNING, "UltiCloud: a remote change was still running "
+                                + PANEL_CHANGE_DRAIN_MS + " ms after UltiTools started disabling; it may finish "
+                                + "after the action log closed.");
+                        return;
+                    }
+                    PANEL_CHANGES.wait(remaining);
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**
@@ -172,30 +237,11 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * The WebSocket client belonging to {@link CloudSession#current()}, or {@code null} if none is
-     * connected.
-     * <p>
-     * Before plan 16-08 Task 2 this was a static field ({@code panelWS}) set once by
-     * {@code initWebsocket()} and read everywhere a handler needed to send a response. It is now
-     * session-owned state (D-16): a session's WebSocket client dies with the session
-     * ({@link CloudSession#invalidate()} disconnects and clears it), so "which client is current"
-     * and "which session is current" can never disagree. Every call site that used to read the bare
-     * {@code panelWS} field now calls this method instead — same read, same nullability, just
-     * sourced from the session that actually owns the client.
-     */
-    private static UltiPanelWebSocketClient currentWebSocketClient() {
-        return CloudSession.current().getWebSocketClient();
-    }
-
-    /**
-     * Test-only: installs {@code client} as {@link CloudSession#current()}'s WebSocket client and
+     * Test-only: installs {@code client} as {@link CloudSession#current()}'s legacy WebSocket client and
      * returns whatever was there before. Package-private, reached via reflection from
-     * {@code CapabilityGateIndependenceTest} (a different package, {@code manager}) -- the same
-     * idiom that test class already uses to reach {@link #initializeManagers()} and
-     * {@link #onWebSocketOpened(UltiPanelWebSocketClient)}. Exists because {@code CloudSession}
-     * itself is package-private and cannot be named from outside {@code utils}; this method is the
-     * seam a cross-package test needs instead of reflecting into {@code CloudSession}'s own field
-     * directly (which it could not even compile a reference to).
+     * {@code CapabilityGateIndependenceTest} (package {@code manager}), which drives the legacy manager
+     * wiring kept unreachable until 6.4.0 (S-67); {@code CloudSession} itself is package-private and cannot
+     * be named from outside {@code utils}.
      *
      * @param client the client to install, or {@code null}
      * @return the client that was previously installed, or {@code null}
@@ -315,459 +361,13 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * The wiring performed once a handshake succeeds.
-     * <p>
-     * <b>The parameter is this handshake's own client; the method body never re-reads
-     * {@link CloudSession#current()}'s client reference for the calls before
-     * {@link #initializeManagers()}.</b> onOpen is an asynchronous callback: by the time it runs,
-     * {@code disableCloud()} may already have closed and cleared the owning session's client
-     * ({@code /ulticloud logout}, or the reconnect budget being exhausted — the latter runs on the
-     * WebSocket thread), or {@code reinitWebSocket} may already have swapped it for a different
-     * instance. Re-reading the session's client reference here would make
-     * {@code subscribeToServer} / {@code uploadConfig} / {@code uploadServerProperties} all
-     * silently hit a stale or null reference — {@link #initializeManagers()} itself is guarded by a
-     * lock-held re-check (now the session's own monitor), but the code around it here is not.
-     * <p>
-     * Sending a message on an already-disconnected client is safe: {@code sendMessage} logs one
-     * WARNING and returns when not connected. The real danger is a null reference, so what this fixes
-     * is reference stability, not connection state.
-     * <p>
-     * Package-private rather than private — only so it can be tested. Triggering it otherwise would
-     * require a real authenticated token and a real WebSocket handshake; same treatment as
-     * {@link #handleInboundMessage}.
-     * <p>
-     * <b>Compatibility overload (WR-07, 16-REVIEW-cloud.md):</b> the real production registration
-     * ({@link #initWebsocket(CloudSession)}) calls {@link #onWebSocketOpened(CloudSession,
-     * UltiPanelWebSocketClient)} directly with the session it lexically captured at registration
-     * time. This single-argument overload exists only so
-     * {@code CloudReconnectStateMachineTest#lateHandshakeDoesNotDereferenceClearedClient} and
-     * {@code CapabilityGateIndependenceTest} keep reaching this exact reflected signature (16-08's
-     * own decision to preserve it) — it falls back to {@link CloudSession#current()}, which is
-     * exactly the re-read WR-07 flags as unsafe in production, but is harmless here since nothing
-     * calls this overload from a real handshake path any more.
-     */
-    static void onWebSocketOpened(UltiPanelWebSocketClient client) {
-        onWebSocketOpened(CloudSession.current(), client);
-    }
-
-    /**
-     * The real implementation behind {@link #onWebSocketOpened(UltiPanelWebSocketClient)}.
-     *
-     * @param session the session whose client actually connected -- captured lexically by the
-     *                caller, never re-read from {@link CloudSession#current()} (WR-07)
-     * @param client  this handshake's own client (see this method's parent javadoc for why the
-     *                client parameter itself must not be re-read from the session either)
-     */
-    static void onWebSocketOpened(CloudSession session, UltiPanelWebSocketClient client) {
-        if (!isAcceptingPanelMessages()) {
-            // A handshake completing while UltiTools is disabling (#621) wires nothing: the
-            // subscription, manager wiring and uploads below would only schedule tasks the
-            // scheduler refuses.
-            logDroppedWhileDisabling("websocket handshake");
-            return;
-        }
-        PanelConnectionLog.log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
-
-        // The handshake has genuinely succeeded — this is the only place where the phrase
-        // "reconnection succeeded" actually holds. The outer budget is also only reset here —
-        // resetting it inside reinitWebSocket would treat "a client was built" as success, and the
-        // budget would never run out. See issue #181 / #223.
-        onWebSocketConnected(session);
-        PanelConnectionLog.log(Level.INFO,
-            "WebSocket connected to UltiPanel");
-
-        // Subscribe to the current server
-        client.subscribeToServer(client.getServerId());
-
-        // Initialize all managers -- on the captured `session` directly, NOT via the static
-        // initializeManagers() delegator (which re-reads CloudSession.current()). Round-1 Codex
-        // review finding, plan 16-10: if a logout invalidates `session` and a fresh login installs
-        // a brand-new (not-yet-connected) session before this late handshake reaches this line, the
-        // static delegator's re-read would see the NEW session -- which passes isCurrent() despite
-        // having no token or client yet -- and wire managers against it using THIS handshake's
-        // client, undoing the logout's teardown with an unrelated client reference. Calling
-        // session.initializeManagers() directly means the currency gate this method already relies
-        // on (see CloudSession#initializeManagers()'s own javadoc) is evaluated against the
-        // session that actually owns this handshake, matching the discipline this whole method's
-        // own javadoc states for the client parameter.
-        session.initializeManagers();
-
-        // Upload config
-        uploadConfig(client);
-
-        // Upload server properties to the cloud — gated by the SERVER_PROPERTIES capability switch (D-11/D-12)
-        if (Capability.SERVER_PROPERTIES.isEnabled()) {
-            uploadServerProperties(client);
-        } else {
-            logSkippedCapability(Capability.SERVER_PROPERTIES);
-        }
-    }
-
-    /**
-     * A dispatch-table entry pairing a handler with the {@link Capability} that must be enabled
-     * before it runs (D-10), and with which side records that decision's verdict in the
-     * {@link RemoteActionLog} (CR-01, 06-REVIEW.md).
-     * <p>
-     * Exposes exactly two static factories and no capability-free, verdict-recorder-free
-     * construction path — this is the whole point of D-10: {@link #of(Capability, VerdictRecorder,
-     * BiConsumer)} and {@link #resolved(Function, VerdictRecorder, BiConsumer)} are the only ways
-     * to build an entry, both take these arguments in fixed positions, and neither has a shorter
-     * overload or a default.
-     * <p>
-     * <b>Precisely stated (corrected per IN-01, 06-REVIEW.md — an earlier revision of this javadoc
-     * overstated this):</b> omitting either argument from a call site IS a genuine {@code javac}
-     * compile error — there is no shorter overload to fall back to. Passing a {@code null}
-     * capability, resolver, or {@link VerdictRecorder}, however, compiles cleanly (a
-     * reference-typed parameter accepts {@code null} at the language level) and is instead rejected
-     * by an {@link IllegalArgumentException} thrown from {@link #of}/{@link #resolved} the moment
-     * {@link #buildInboundHandlers()} runs — at class-initialization time, before the server
-     * finishes starting, not by the compiler. Together the two guarantees still mean a new message
-     * type cannot silently ship ungated or with an undeclared verdict recorder — the argument slot
-     * is mandatory (compile-time) and a {@code null} value fails immediately and loudly
-     * (class-load-time) — but the {@code null}-rejection half is not literally a compile error.
-     * <p>
-     * {@link #of(Capability, VerdictRecorder, BiConsumer)} covers every entry whose capability is
-     * fixed by the message {@code type} alone; {@link #resolved(Function, VerdictRecorder,
-     * BiConsumer)} covers the entries whose capability depends on the message's own {@code data}:
-     * {@code file_operation} (its {@code operation} field), {@code upload_config} (the
-     * acknowledgement shape versus a write request) and {@code update_config} (whether
-     * {@code fileName} names the {@code server_properties} target).
-     */
-    static final class InboundHandlerEntry {
-        private final Capability capability;
-        private final Function<JsonObject, Capability> resolver;
-        private final VerdictRecorder verdictRecorder;
-        private final BiConsumer<JsonObject, JsonObject> handler;
-
-        private InboundHandlerEntry(Capability capability, Function<JsonObject, Capability> resolver,
-                                     VerdictRecorder verdictRecorder, BiConsumer<JsonObject, JsonObject> handler) {
-            this.capability = capability;
-            this.resolver = resolver;
-            this.verdictRecorder = verdictRecorder;
-            this.handler = handler;
-        }
-
-        /**
-         * An entry whose capability is a fixed constant.
-         *
-         * @param capability      the required capability — use {@link Capability#NONE} for
-         *                        protocol-level and echo messages that carry no operator-facing
-         *                        policy
-         * @param verdictRecorder which side records the enabled-branch verdict — see
-         *                        {@link VerdictRecorder}
-         * @param handler         the handler to invoke once the gate clears
-         * @return the entry
-         */
-        static InboundHandlerEntry of(Capability capability, VerdictRecorder verdictRecorder,
-                                       BiConsumer<JsonObject, JsonObject> handler) {
-            if (capability == null) {
-                throw new IllegalArgumentException("capability must not be null — declare Capability.NONE explicitly");
-            }
-            if (verdictRecorder == null) {
-                throw new IllegalArgumentException("verdictRecorder must not be null — declare GATE or HANDLER");
-            }
-            return new InboundHandlerEntry(capability, null, verdictRecorder, handler);
-        }
-
-        /**
-         * An entry whose capability depends on the inbound message's own {@code data} — for
-         * example {@code file_operation}, whose true capability depends on the {@code operation}
-         * field (D-10's resolver case, D-09); see this class's own javadoc for every such entry.
-         *
-         * @param resolver        a function from the message's {@code data} to the
-         *                        {@link Capability} it requires
-         * @param verdictRecorder which side records the enabled-branch verdict — see
-         *                        {@link VerdictRecorder}
-         * @param handler         the handler to invoke once the gate clears
-         * @return the entry
-         */
-        static InboundHandlerEntry resolved(Function<JsonObject, Capability> resolver,
-                                             VerdictRecorder verdictRecorder,
-                                             BiConsumer<JsonObject, JsonObject> handler) {
-            if (resolver == null) {
-                throw new IllegalArgumentException("resolver must not be null — declare a Capability.of(...) entry instead");
-            }
-            if (verdictRecorder == null) {
-                throw new IllegalArgumentException("verdictRecorder must not be null — declare GATE or HANDLER");
-            }
-            return new InboundHandlerEntry(null, resolver, verdictRecorder, handler);
-        }
-
-        /**
-         * Resolves this entry's required capability against one message's {@code data}.
-         *
-         * @param data the message's {@code data} object, possibly {@code null}
-         * @return the required {@link Capability}
-         */
-        Capability resolveCapability(JsonObject data) {
-            return capability != null ? capability : resolver.apply(data);
-        }
-
-        BiConsumer<JsonObject, JsonObject> getHandler() {
-            return handler;
-        }
-
-        /**
-         * Whether this entry's own handler already records its {@link RemoteActionLog} verdict —
-         * see {@link VerdictRecorder#HANDLER}.
-         *
-         * @return {@code true} if the handler records its own verdict, so
-         *         {@link #dispatchWithCapabilityGate} must not record a second, blanket entry
-         */
-        boolean recordsOwnVerdict() {
-            return verdictRecorder == VerdictRecorder.HANDLER;
-        }
-    }
-
-    /**
-     * Which side of a capability-gated dispatch records the {@link RemoteActionLog} verdict for
-     * the enabled branch (CR-01, 06-REVIEW.md).
-     * <p>
-     * Exactly two entries — {@code execute_command} and {@code file_operation} — invoke a handler
-     * that performs its own, independent, finer-grained {@code AccessDecision} check
-     * ({@code CommandExecutionManager#isCommandAllowed}/{@code FileOperationManager#isPathAllowed})
-     * and records its own verdict from that check; every other capability-gated entry has no
-     * second policy layer to conflict with. Before this enum existed,
-     * {@code dispatchWithCapabilityGate} recorded a blanket {@code ALLOWED} entry on every enabled
-     * branch regardless of which case it was, producing a contradictory second log line — a real
-     * {@code DENIED} from the handler's own check immediately followed by a false {@code ALLOWED}
-     * from the gate — for every blocklisted command and every credential/out-of-root file request.
-     * A required field (verified by inspecting every entry's handler for its own
-     * {@link RemoteActionLog} write) is what stops a newly added entry from silently repeating that
-     * mistake, rather than a defaulted or inferred value. Precisely: omitting the argument is a
-     * genuine compile error; a {@code null} value compiles but is rejected immediately at
-     * class-initialization time — see {@link InboundHandlerEntry}'s own javadoc for the exact
-     * boundary between the two (IN-01, 06-REVIEW.md).
-     */
-    enum VerdictRecorder {
-        /**
-         * {@link #dispatchWithCapabilityGate} records the {@link RemoteActionLog.Verdict#ALLOWED}
-         * entry on the enabled branch — the default shape for an entry with no second policy
-         * layer.
-         */
-        GATE,
-        /**
-         * The handler records its own verdict from its own, finer-grained {@code AccessDecision}
-         * check — {@link #dispatchWithCapabilityGate} must not also record one, or the log gets
-         * two contradictory lines for one request.
-         */
-        HANDLER
-    }
-
-    /**
-     * Builds {@link #INBOUND_HANDLERS}. Each entry invokes exactly the same target its former
-     * {@code case} label invoked — this method is the byte-for-byte routing record of the switch it
-     * replaces, not a redesign of it. {@code log_stream} and {@code log_stream_control} share one
-     * {@link BiConsumer} instance, preserving the fall-through the two case labels used to express.
-     *
-     * @return a table from message {@code type} to the {@link InboundHandlerEntry} that serves it
-     */
-    private static Map<String, InboundHandlerEntry> buildInboundHandlers() {
-        Map<String, InboundHandlerEntry> handlers = new HashMap<>();
-
-        // System-level base messages — protocol-layer/echo messages, explicitly declared
-        // Capability.NONE (D-10): never blocked, never recorded. The NONE branch never reaches
-        // recordAction, so VerdictRecorder's value has no effect here; GATE is declared uniformly.
-        handlers.put("ping",
-                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handlePing(message)));
-        handlers.put("pong",
-                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handlePong(data)));
-        handlers.put("subscribe", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
-                (message, data) -> handleSubscribe(data)));
-        handlers.put("unsubscribe", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
-                (message, data) -> handleUnsubscribe(data)));
-        handlers.put("notification", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
-                (message, data) -> handleNotification(data)));
-        handlers.put("error",
-                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handleError(data)));
-
-        // Server monitoring messages — the handler performs no second-layer decision, the gate
-        // records ALLOWED (VerdictRecorder.GATE).
-        handlers.put("server_status", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
-                (message, data) -> handleServerStatusRequest(data)));
-        handlers.put("plugin_list", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
-                (message, data) -> handlePluginListRequest(data)));
-        handlers.put("player_event", InboundHandlerEntry.of(Capability.PLAYER_EVENTS, VerdictRecorder.GATE,
-                (message, data) -> handlePlayerEvent(data)));
-        handlers.put("metrics_data", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
-                (message, data) -> handleMetricsRequest(data)));
-
-        // Operation-control messages — execute_command's handler performs its own isCommandAllowed()
-        // second-layer decision and records its own result (CommandExecutionManager.executeCommand),
-        // so it declares VerdictRecorder.HANDLER (CR-01).
-        handlers.put("execute_command", InboundHandlerEntry.of(Capability.COMMANDS, VerdictRecorder.HANDLER,
-                (message, data) -> UltiTools.getInstance().getCommandExecutionManager().executeCommand(data)));
-        handlers.put("command_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
-                (message, data) -> handleCommandResult(data)));
-        // file_operation's capability depends on data.operation, not a constant — D-10's resolver
-        // scenario (D-09). The handler performs its own isPathAllowed() second-layer decision and
-        // records its own result (FileOperationManager.recordFileDecision), so it likewise declares
-        // VerdictRecorder.HANDLER (CR-01).
-        handlers.put("file_operation", InboundHandlerEntry.resolved(
-                PluginInitiationUtils::resolveFileOperationCapability, VerdictRecorder.HANDLER,
-                (message, data) -> UltiTools.getInstance().getFileOperationManager().handleFileOperation(data)));
-        handlers.put("file_operation_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
-                (message, data) -> handleFileOperationResult(data)));
-
-        // Data-stream messages — log_stream and log_stream_control share the same handler; this is
-        // the equivalent of the fall-through the two former case labels used to express. The handler
-        // performs no second-layer decision.
-        BiConsumer<JsonObject, JsonObject> logStreamHandler =
-                (message, data) -> UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
-        handlers.put("log_stream", InboundHandlerEntry.of(Capability.LOGS, VerdictRecorder.GATE, logStreamHandler));
-        handlers.put("log_stream_control",
-                InboundHandlerEntry.of(Capability.LOGS, VerdictRecorder.GATE, logStreamHandler));
-        // backup_operation is a pure logging placeholder today, but its declared intent is a
-        // file-producing operation — so it is declared FILE_WRITE on the stricter side rather than
-        // waiting to revisit the declaration once the stub implementation lands. The handler performs
-        // no second-layer decision.
-        handlers.put("backup_operation", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
-                (message, data) -> handleBackupOperation(data)));
-        handlers.put("backup_progress", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
-                (message, data) -> handleBackupProgress(data)));
-
-        // Config-management messages — the handler performs no second-layer decision.
-        //
-        // Gate-2 finding (round 11): upload_config is NOT gated by a fixed constant like most
-        // entries -- it carries traffic in BOTH directions on the same type (see
-        // handleConfigUpload's own javadoc), and only the write-request direction actually needs
-        // FILE_WRITE. A fixed Capability.FILE_WRITE here denied the Worker's own acknowledgement
-        // of the server's OWN outbound uploadConfig() push under the shipped default
-        // (file-write: false) -- the acknowledgement never reached handleConfigUpload's
-        // "message"-presence recognition at all, and was instead recorded as a DENIED write in
-        // the action log for a message that was never attempting to write anything.
-        handlers.put("upload_config", InboundHandlerEntry.resolved(
-                PluginInitiationUtils::resolveUploadConfigCapability, VerdictRecorder.GATE,
-                (message, data) -> handleConfigUpload(data)));
-        // update_config's capability follows its target: a fileName that names the
-        // server_properties target (a get without content, a write with content) is routed to
-        // ServerPropertiesManager and is governed by SERVER_PROPERTIES alone; every other target
-        // (a named config file, the whole config, the content-less echo) is governed by
-        // FILE_WRITE alone. A fixed FILE_WRITE here let the file-write switch open
-        // server.properties and kept the server-properties switch from governing it (case
-        // 180e5fe3). The resolver and both handler branches share one predicate.
-        handlers.put("update_config", InboundHandlerEntry.resolved(
-                PluginInitiationUtils::resolveUpdateConfigCapability, VerdictRecorder.GATE,
-                (message, data) -> handleConfigUpdate(data)));
-        handlers.put("server_properties",
-                InboundHandlerEntry.of(Capability.SERVER_PROPERTIES, VerdictRecorder.GATE, (message, data) -> {
-                    if (UltiTools.getInstance().getServerPropertiesManager() != null) {
-                        UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
-                    }
-                }));
-        handlers.put("server_properties_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
-                (message, data) ->
-                // Response from this plugin forwarded back by DO — ignore silently
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received server_properties_result echo — ignoring")));
-
-        // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
-        handlers.put("auth_complete", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) ->
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received auth_complete message: " + (data != null ? data.toString() : "null"))));
-        handlers.put("magic_link_response",
-                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) ->
-                        UltiTools.getInstance().getLogger().log(Level.FINE,
-                                "Received magic_link_response message: " + (data != null ? data.toString() : "null"))));
-
-        return handlers;
-    }
-
-    /**
-     * Resolves {@code file_operation}'s required capability from the message's {@code operation}
-     * field (D-09, D-10's Pitfall 4). Delegates to {@link #resolveFileOperationCapability(String)}.
-     *
-     * @param data the message's {@code data} object, possibly {@code null}
-     * @return the required capability
-     */
-    private static Capability resolveFileOperationCapability(JsonObject data) {
-        String operation = data != null ? readString(data, "operation") : null;
-        return resolveFileOperationCapability(operation);
-    }
-
-    /**
-     * Resolves {@code upload_config}'s required capability from the message's own shape (Gate-2
-     * finding, round 11) -- {@code upload_config} carries traffic in BOTH directions on the same
-     * type (see {@link #handleConfigUpload}'s own javadoc): {@link #uploadConfig} sends the
-     * server's own aggregated config UP on every reconnect, and the Worker's generic
-     * {@code response.type = message.type} echo sends the acknowledgement of that push back down
-     * this SAME inbound type. Only the genuine write-request direction needs
-     * {@link Capability#FILE_WRITE}; the acknowledgement is a protocol echo carrying no
-     * operator-facing policy and resolves to {@link Capability#NONE}, same as this class's other
-     * echo/acknowledgement entries ({@code server_properties_result}, {@code auth_complete}).
-     * <p>
-     * Uses the SAME presence-only heuristic {@link #handleConfigUpload} itself uses to recognise
-     * the acknowledgement ({@code data.has("message")}) -- deliberately the one heuristic, not two
-     * independently-maintained copies of it; see that method's own javadoc for the heuristic's
-     * documented fragility against a future second real producer.
-     *
-     * @param data the message's {@code data} object, possibly {@code null}
-     * @return {@link Capability#NONE} for the acknowledgement shape, {@link Capability#FILE_WRITE}
-     *         otherwise
-     */
-    private static Capability resolveUploadConfigCapability(JsonObject data) {
-        if (data != null && data.has("message")) {
-            return Capability.NONE;
-        }
-        return Capability.FILE_WRITE;
-    }
-
-    /**
-     * Resolves {@code update_config}'s required capability from the target the handler will
-     * actually route to (D-04, case 180e5fe3): {@link Capability#SERVER_PROPERTIES} when
-     * {@code fileName} names the {@code server_properties} target, which {@link #handleConfigUpdate}
-     * sends to {@link ServerPropertiesManager} as a get (no content) or {@link #applyConfigUpdate}
-     * as a write (with content); {@link Capability#FILE_WRITE} for every other target.
-     * <p>
-     * Reads {@code fileName} with the same {@link #readString} and tests it with the same
-     * {@link #isServerPropertiesTarget} the two handler branches use, so no payload shape can be
-     * classified one way and routed the other -- in particular a single-element array
-     * {@code ["server_properties"]}, which {@code readString} unwraps, is classified as the
-     * server-properties target it is routed to. A value {@code readString} cannot read (a JSON
-     * object raises {@link UnsupportedOperationException}; an array whose size is not one raises
-     * {@link IllegalStateException}) classifies as {@link Capability#FILE_WRITE}: the handler
-     * cannot read it either, so such a message never reaches any manager. Absent {@code data}
-     * likewise classifies as {@link Capability#FILE_WRITE}; the handler returns at once for it.
-     *
-     * @param data the message's {@code data} object, possibly {@code null}
-     * @return {@link Capability#SERVER_PROPERTIES} for the server-properties target,
-     *         {@link Capability#FILE_WRITE} otherwise
-     */
-    private static Capability resolveUpdateConfigCapability(JsonObject data) {
-        if (data == null) {
-            return Capability.FILE_WRITE;
-        }
-        String fileName;
-        try {
-            fileName = readString(data, "fileName");
-        } catch (UnsupportedOperationException | IllegalStateException unreadable) {
-            // The handler's own readString raises the same exception, so it routes nowhere.
-            return Capability.FILE_WRITE;
-        }
-        return isServerPropertiesTarget(fileName) ? Capability.SERVER_PROPERTIES : Capability.FILE_WRITE;
-    }
-
-    /**
-     * Whether an {@code update_config} {@code fileName} names the {@code server_properties} target
-     * rather than a config file. The single test shared by {@link #resolveUpdateConfigCapability},
-     * the get branch of {@link #handleConfigUpdate} and the write branch of
-     * {@link #applyConfigUpdate} (D-04), so classification and routing cannot drift apart.
-     *
-     * @param fileName the {@code fileName} as read by {@link #readString}, possibly {@code null}
-     * @return {@code true} if the message targets {@code server.properties}
-     */
-    private static boolean isServerPropertiesTarget(String fileName) {
-        return SERVER_PROPERTIES_FILE.equals(fileName);
-    }
-
-    /**
-     * The single {@code operation} name to {@link Capability} mapping, shared between this class's
-     * D-10 dispatch-table resolver above and {@code FileOperationManager}'s own action-log
-     * recording (D-22, Plan 06-04 Task 1) — so the two mappings cannot drift apart. {@code list}
-     * resolves to {@link Capability#FILE_READ} — listing is reading. An unrecognised or absent
-     * operation also resolves to {@link Capability#FILE_READ}, the most-permitted of the three, so
-     * an unknown verb reaching the dispatch table is still gated and still reaches
-     * {@code handleFileOperation}'s own unsupported-operation branch.
+     * The single file {@code operation} name to {@link Capability} mapping, read by
+     * {@code FileOperationManager}'s action-log recording (D-22, Plan 06-04 Task 1). The mapping is unchanged
+     * from 6.3.0 and covers the operation names of the protocol v2 file requests ({@code files.read},
+     * {@code files.list}, {@code files.write}, {@code files.delete}): {@code write} needs
+     * {@link Capability#FILE_WRITE}, {@code delete} needs {@link Capability#FILE_DELETE}, and {@code read},
+     * {@code list} (listing is reading) and an unrecognised or absent operation resolve to
+     * {@link Capability#FILE_READ}, the most permitted of the three, so an unknown verb is still gated.
      *
      * @param operation the {@code operation} field's value, possibly {@code null}
      * @return the required capability
@@ -783,317 +383,30 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Package-private accessor for {@link #INBOUND_HANDLERS}, exposed only so
-     * {@code PluginInitiationUtilsDispatchTableTest} can assert the table's key set and entry
-     * identities without duplicating {@link #buildInboundHandlers()}'s routing record in a second
-     * place. Not a registration point — the returned map is already unmodifiable.
-     *
-     * @return the unmodifiable inbound dispatch table
-     */
-    static Map<String, InboundHandlerEntry> inboundDispatchTable() {
-        return INBOUND_HANDLERS;
-    }
-
-    /**
-     * Whether {@code messageType} is one of the framework's own {@link #INBOUND_HANDLERS} entries
-     * — the single source {@code PanelResponderRegistry.registerResponder} consults before letting
-     * a module claim a message type (D-26, WIRE-16, Plan 06-08 Task 1). Deliberately a separate,
-     * narrower predicate rather than widening {@link #inboundDispatchTable()}'s visibility: that
-     * accessor's own javadoc says it is test-only and not a registration point, and a boolean
-     * membership check is exactly the narrower thing a registration point actually needs — it
-     * cannot read, mutate, or iterate the table itself.
+     * Whether {@code messageType} is a message type of the framework's own protocol: the single source
+     * {@code PanelResponderRegistry.registerResponder} consults before letting a module claim a message type
+     * (D-26, WIRE-16, Plan 06-08 Task 1).
      * <p>
-     * Exact {@code String} key membership, matching {@link #INBOUND_HANDLERS}'s own
-     * {@code HashMap} key semantics: no case folding, no Unicode normalization.
+     * As of 6.3.1 the answer comes from the UltiCloud protocol v2 message registry (the frozen 2.0.0 contract's
+     * message table, for example {@code command.execute}, {@code files.read} or {@code module.request}); a
+     * module's responder key ({@code <module>.<action>}, for example {@code ultimail.inbox.list}) is not one of
+     * them, and neither is a removed protocol v1 type name. Exact {@code String} membership: no case folding,
+     * no Unicode normalization.
      *
      * @param messageType the message type to check, possibly {@code null}
-     * @return {@code true} if the framework's own dispatch table already serves this exact type
+     * @return {@code true} if the framework's own protocol defines this exact type
      */
     public static boolean isFrameworkOwnedType(String messageType) {
-        return messageType != null && INBOUND_HANDLERS.containsKey(messageType);
-    }
-
-    /**
-     * Handles an inbound WebSocket message dispatched by the panel.
-     * <p>
-     * Extracted out of {@code initWebsocket()}'s lambda for the sole purpose of letting it be called
-     * directly by a unit test: it used to be an anonymous lambda passed to
-     * {@code setMessageHandler}, and constructing that required a real authenticated token and a
-     * real WebSocket client, so this path's malformed-input handling had no test coverage at all.
-     * See issue #234.
-     * <p>
-     * Package-private rather than public — it is not a public API, only testable this way.
-     *
-     * @param message the message dispatched by the panel, may be {@code null}
-     */
-    static void handleInboundMessage(JsonObject message) {
-        if (message == null) {
-            PanelConnectionLog.log(Level.WARNING,
-                FrameworkText.text("[WebSocket消息处理] 收到 null 消息，已忽略"));
-            return;
-        }
-
-        // type and data share the same guard. This used to be
-        // message.get("type").getAsString(): with a missing type field, get() returns null and
-        // .getAsString() immediately throws an NPE — and that call sat outside the try, so the
-        // catch below could not catch it.
-        //
-        // That NPE does not interrupt the receive loop — UltiPanelWebSocketClient.onMessage wraps
-        // messageHandler.accept in its own try. But it would be logged as "WebSocket message parse
-        // failed" when parsing had in fact succeeded: the message was silently dropped, the
-        // diagnostic pointed in the wrong direction, and that call site only passed
-        // e.getMessage(), no stack trace.
-        //
-        // Uses isJsonPrimitive rather than !isJsonNull: the latter only guards against a JSON null
-        // and not against type being an object or array — in that case getAsString() throws
-        // UnsupportedOperationException. A non-primitive type belongs to the same class of
-        // malformed input as a missing field, a JSON null, or an empty string, and should take the
-        // same WARNING branch rather than being logged as SEVERE under "an error occurred while
-        // handling the message."
-        //
-        // The superseded WIRE-17 dispatch cluster (deleted in 6.3.0, GEN-11) used !isJsonNull()
-        // for this same check, which only guards a JSON null and not a non-primitive type — this
-        // path deliberately does not repeat that gap.
-        String type = null;
-        JsonObject data = null;
-        // Tracks whether this message should reach PanelMessageEvent subscribers (WIRE-16).
-        // Stays false — the safe default — unless the dispatch below explicitly earns it: an
-        // entry-less (unknown) type earns it after its warning, and dispatchWithCapabilityGate's
-        // return value earns it for a known type (true for Capability.NONE and for an enabled
-        // capability, false for a denied one). Carrying the gate's own outcome here means the
-        // gate and the publish can never disagree — there is no second, independent check.
-        boolean shouldPublishEvent = false;
-        try {
-            if (message.has("type") && message.get("type").isJsonPrimitive()) {
-                type = message.get("type").getAsString();
-            }
-            if (type == null || type.isEmpty()) {
-                PanelConnectionLog.log(Level.WARNING,
-                    FrameworkText.format("[WebSocket消息处理] 消息缺少有效的 type 字段，已忽略: %s",
-                        new Gson().toJson(message)));
-                // Early return — the type never resolved, so there is nothing a subscriber could
-                // filter on. This also means the trailing publish call below is never reached.
-                return;
-            }
-            if (!isAcceptingPanelMessages()) {
-                // UltiTools is disabling (#621): nothing is dispatched, nothing is scheduled, and
-                // the trailing publish below is not reached. One FINE line names the type.
-                logDroppedWhileDisabling(type);
-                return;
-            }
-
-            data = message.has("data") && message.get("data").isJsonObject()
-                ? message.getAsJsonObject("data") : null;
-
-            // Log that the received message has started processing
-            PanelConnectionLog.log(Level.FINE,
-                FrameworkText.format("[WebSocket消息处理] 类型: %s, 开始处理", type));
-
-            // Lookup replaces the former 24-case switch — see INBOUND_HANDLERS. Every entry
-            // invokes the same target its former case label invoked; an absent entry is the same
-            // "unknown type" outcome the former default branch produced.
-            InboundHandlerEntry entry = INBOUND_HANDLERS.get(type);
-            if (entry != null) {
-                shouldPublishEvent = dispatchWithCapabilityGate(type, message, data, entry);
-            } else {
-                // Module-owned responders are served from this exact branch — the same lookup
-                // that serves the framework's own 24 types — rather than a second dispatch
-                // mechanism (01-CONTEXT D-10/D-11, WIRE-16, Plan 06-08). A registered responder
-                // earns its own dispatch and reply; a genuinely unknown type keeps today's
-                // behaviour unchanged (one warning, no reply, to avoid feedback loops with the
-                // server).
-                PanelResponderRegistry responderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
-                if (responderRegistry != null && responderRegistry.hasResponder(type)) {
-                    dispatchToResponder(type, data, responderRegistry);
-                } else {
-                    PanelConnectionLog.log(Level.WARNING,
-                        FrameworkText.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
-                    // Don't send error responses to avoid feedback loops with server
-                }
-                // Unknown to the framework's own dispatch table is exactly the case WIRE-16
-                // exists to serve — a module's own responder for a type the framework does not
-                // own. No capability gate applies (there is no entry to resolve one from), so
-                // this is unconditionally publishable, whether or not a responder actually
-                // served it.
-                shouldPublishEvent = true;
-            }
-        } catch (Exception e) {
-            PanelConnectionLog.log(Level.SEVERE,
-                FrameworkText.format("处理消息类型 %s 时发生错误: %s", type, e.getMessage()), e);
-            // Don't send error responses to avoid feedback loops with server
-            // shouldPublishEvent stays at its default (false): an exception mid-dispatch means
-            // the framework cannot say the message was actually handled, so this conservatively
-            // does not publish rather than guessing.
-        }
-
-        // Log that message processing has completed
-        PanelConnectionLog.log(Level.FINE,
-            FrameworkText.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
-
-        // One added statement at the end of the bridge (D-29, issue #237, WIRE-16). Appended
-        // rather than inserted: removing this call must leave the 24 pre-existing message types
-        // working exactly as they do today. Only reached when type resolved (the early return
-        // above skips it for a malformed type) and shouldPublishEvent was earned above.
-        if (shouldPublishEvent) {
-            publishPanelMessageEvent(type, message, data);
-        }
-    }
-
-    /**
-     * Dispatches {@code type} to its registered responder and, once the registry's returned future
-     * settles, sends at most one reply through the session's WebSocket client that was current when
-     * the request was admitted (WIRE-16, D-27; UltiTools-Reborn#677).
-     * <p>
-     * The current {@link CloudSession} and its WebSocket client are captured here, when the request
-     * is admitted. The result is sent only to that client of that session, and only while UltiTools
-     * accepts panel work ({@link #isAcceptingPanelMessages()}), the admitted session is still
-     * current (no logout replaced it), the session's client is still the admitted client (no
-     * reconnect replaced it) and that client is still connected. Otherwise the reply is dropped
-     * with one FINE line naming the type and the panel's own timeout applies; a reply is not
-     * redirected to the client of a newer session or connection. The check and the send run on whichever thread settles the outcome, or at once on
-     * the dispatching thread when {@link PanelResponderRegistry#dispatch} returns an outcome that is
-     * already settled (an unknown type, a refusal, or a registry that has shut down).
-     * <p>
-     * No Bukkit main-thread hop here, deliberately: unlike {@link PanelMessageEvent}'s publish
-     * (which must run on the main thread because a subscriber may touch Bukkit API), sending a
-     * reply over the WebSocket client is plain network I/O — the same off-main-thread pattern
-     * {@code CommandExecutionManager}/{@code FileOperationManager} already use for their own
-     * outbound replies.
-     * <p>
-     * The reply always carries the message type and the request's {@code requestId} (echoed from
-     * {@code data}), and either the responder's result or an {@code error} member naming the
-     * failure. An object result's members are carried next to {@code requestId}, as in 6.3.0; a
-     * "no content" result ({@link com.google.gson.JsonNull}) carries {@code requestId} alone, as a
-     * success; an array or primitive result is carried under {@code result}.
-     * {@link PanelResponderRegistry#dispatch} guarantees its returned
-     * future always settles one way or the other, so this method never has to guess. When the
-     * request carried no {@code requestId}, the reply is logged rather than sent: the panel has no
-     * way to correlate an uncorrelated reply, matching {@link #sendCapabilityRefusal}'s same
-     * reasoning for {@code commandId}/{@code operationId}.
-     * <p>
-     * The reply is built from a copy of the responder's result; the object the responder returned
-     * is never changed, so a responder may return the same cached object for every request.
-     *
-     * @param type     the message type, already confirmed to have a registered responder
-     * @param data     the message's {@code data} object, possibly {@code null}
-     * @param registry the registry to dispatch through
-     */
-    /**
-     * The v1 reply body for a responder's outcome, before {@code requestId} is added: always a new
-     * object, so the responder's own result is never changed. A failure or "no content" gives an
-     * empty object, an object result a copy of it, and an array or primitive result an object
-     * holding a copy under {@code result}.
-     *
-     * @param result    the registry's successful outcome, possibly {@code null}
-     * @param throwable the registry's failure, or {@code null}
-     * @return a fresh reply body
-     */
-    static JsonObject responderReplyPayload(JsonElement result, Throwable throwable) {
-        if (throwable != null || result == null || result.isJsonNull()) {
-            return new JsonObject();
-        }
-        if (result.isJsonObject()) {
-            return result.getAsJsonObject().deepCopy();
-        }
-        JsonObject payload = new JsonObject();
-        payload.add("result", result.deepCopy());
-        return payload;
-    }
-
-    private static void dispatchToResponder(String type, JsonObject data, PanelResponderRegistry registry) {
-        String requestId = data != null ? readString(data, "requestId") : null;
-        CloudSession admittedSession = CloudSession.current();
-        UltiPanelWebSocketClient admittedClient = admittedSession.getWebSocketClient();
-        registry.dispatch(type, data, requestId).whenComplete((result, throwable) -> {
-            if (requestId == null || requestId.isEmpty()) {
-                PanelConnectionLog.log(Level.FINE,
-                    String.format("Responder reply for type '%s' not sent — request carried no requestId", type));
-                return;
-            }
-            if (!isAcceptingPanelMessages()) {
-                logDroppedWhileDisabling("responder reply for type '" + type + "'");
-                return;
-            }
-            if (admittedClient == null) {
-                PanelConnectionLog.log(Level.FINE,
-                    "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
-                return;
-            }
-            if (!isAdmittedConnectionLive(admittedSession, admittedClient)) {
-                PanelConnectionLog.log(Level.FINE, "Responder reply for type '" + type
-                    + "' not sent: the panel connection admitted for the request has closed or been replaced");
-                return;
-            }
-            // Each reply is built from its own copy: a responder may return one cached object for
-            // every call, and replies run concurrently, so writing requestId into that object would
-            // let one reply carry another request's id and would change the responder's object.
-            JsonObject payload = responderReplyPayload(result, throwable);
-            payload.addProperty("requestId", requestId);
-            if (throwable != null) {
-                payload.addProperty("error", rootCauseMessage(throwable));
-            }
-
-            JsonObject response = new JsonObject();
-            response.addProperty("type", type);
-            response.add("data", payload);
-            response.addProperty("serverId", admittedClient.getServerId());
-            admittedClient.sendMessage(response);
-        });
-    }
-
-    /**
-     * Whether the client captured when a responder request was admitted can still carry its reply:
-     * the admitted session is still current, its client is still the admitted client, and that client
-     * is still connected.
-     *
-     * @param admittedSession the session that was current when the request was admitted
-     * @param admittedClient  that session's client at admission, not {@code null}
-     * @return {@code true} when the reply may be sent through {@code admittedClient}
-     */
-    // PMD.CompareObjectsWithEquals: deliberate reference-identity check. "The same connection" is
-    // the same client object; a reconnect installs a new client instance on the session, and the
-    // client does not override equals(), so equals() would say the same thing while suggesting
-    // value equality.
-    @SuppressWarnings("PMD.CompareObjectsWithEquals")
-    private static boolean isAdmittedConnectionLive(CloudSession admittedSession,
-                                                    UltiPanelWebSocketClient admittedClient) {
-        return admittedSession.isCurrent()
-            && admittedSession.getWebSocketClient() == admittedClient
-            && admittedClient.isConnected();
-    }
-
-    /**
-     * The deepest non-null message on {@code throwable}'s cause chain, falling back to the
-     * throwable's own class name when every message is {@code null} — a bare
-     * {@code NullPointerException} carries no message at all, and an empty {@code error} field
-     * would tell the panel operator nothing.
-     *
-     * @param throwable the throwable to describe
-     * @return a human-readable description, never {@code null}
-     */
-    // PMD.CompareObjectsWithEquals: deliberate reference-identity check, not a false economy.
-    // This walks a cause chain looking for a self-referential cycle (getCause() returning the
-    // same instance) — reference identity is precisely what must be tested here, and
-    // Throwable does not override equals(), so .equals() would behave identically while
-    // *saying* something the code does not mean (value equality, not "is this the same object
-    // I started from").
-    @SuppressWarnings("PMD.CompareObjectsWithEquals")
-    private static String rootCauseMessage(Throwable throwable) {
-        Throwable deepest = throwable;
-        while (deepest.getCause() != null && deepest.getCause() != deepest) {
-            deepest = deepest.getCause();
-        }
-        return deepest.getMessage() != null ? deepest.getMessage() : deepest.getClass().getSimpleName();
+        return messageType != null && AgentMessageTypes.types().contains(messageType);
     }
 
     /**
      * Bridges a panel message the framework has already handled onto the module-facing
-     * {@link EventBus} (WIRE-16). This is the single publish site, invoked from exactly two places:
-     * the v1 inbound path ({@link #handleInboundMessage}) and the UltiCloud protocol v2 module
-     * bridge ({@link ModuleRequestHandler}), which publishes one event per module-owned request.
-     * The second call site exists because {@code PanelMessageEvent} is public since 6.3.0 and a
-     * module subscribing to observe its own panel traffic must keep receiving it after the v1 path
-     * is removed.
+     * {@link EventBus} (WIRE-16). This is the single publish site, invoked from the UltiCloud
+     * protocol v2 module bridge ({@link ModuleRequestHandler}), which publishes one event per
+     * module-owned request. It is kept because {@code PanelMessageEvent} is public since 6.3.0 and
+     * a module subscribing to observe its own panel traffic keeps receiving it now that the
+     * protocol v1 inbound path is removed (6.3.1).
      * <p>
      * {@link EventBus#publishAsync} was considered and rejected: it submits to an async worker
      * pool and never reaches the main thread, so it does not address Paper's AsyncCatcher at
@@ -1150,153 +463,6 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * The single enforcement point for every inbound capability (D-10). Resolves the entry's
-     * required capability against {@code data}; {@link Capability#NONE} runs the handler with no
-     * check and no action-log entry. Otherwise: enabled runs the handler and, unless the entry's
-     * own handler already records its verdict ({@link InboundHandlerEntry#recordsOwnVerdict()},
-     * CR-01), records one {@link RemoteActionLog.Verdict#ALLOWED} entry; disabled sends one
-     * {@code capability_denied} reply and records one {@link RemoteActionLog.Verdict#DENIED} entry
-     * — the handler is never invoked on the denied path, so there is only ever one writer there.
-     * <p>
-     * {@code execute_command} and {@code file_operation} are the two entries whose handler performs
-     * its own, finer-grained {@code AccessDecision} check and records its own verdict from that
-     * check — recording a second, blanket {@code ALLOWED} entry here for those two would produce a
-     * contradictory second log line (see 06-REVIEW.md CR-01) for every blocklisted command and
-     * every credential/out-of-root file request.
-     *
-     * @param type    the message type, used for the action-log {@code action} and the refusal payload
-     * @param message the full inbound message
-     * @param data    the message's {@code data} object, possibly {@code null}
-     * @param entry   the dispatch-table entry that serves this type
-     * @return whether the message should also reach {@link PanelMessageEvent} subscribers —
-     *         {@code true} for {@link Capability#NONE} and for an enabled capability, {@code
-     *         false} for a denied one. The caller carries this straight into the publish decision
-     *         so the gate and the publish can never disagree (see {@link #handleInboundMessage}).
-     */
-    private static boolean dispatchWithCapabilityGate(String type, JsonObject message, JsonObject data,
-                                                     InboundHandlerEntry entry) {
-        Capability capability = entry.resolveCapability(data);
-        if (capability == Capability.NONE) {
-            entry.getHandler().accept(message, data);
-            return true;
-        }
-        if (capability.isEnabled()) {
-            entry.getHandler().accept(message, data);
-            if (!entry.recordsOwnVerdict()) {
-                recordAction(capability, type, data, RemoteActionLog.Verdict.ALLOWED, null);
-            }
-            return true;
-        }
-        sendCapabilityRefusal(type, data, capability);
-        recordAction(capability, type, data, RemoteActionLog.Verdict.DENIED, capability.refusalMessage());
-        return false;
-    }
-
-    /**
-     * Sends one {@code capability_denied} outbound message naming the config key, the config file,
-     * the refusal reason, and echoing whichever correlation id the inbound message carried
-     * ({@code commandId}, {@code operationId} or {@code requestId}) so the panel can correlate the
-     * refusal with the request that caused it. Not reusing the existing {@code error} message type
-     * — see {@link #handleInboundMessage}'s own comment on why unsolicited {@code error} replies are
-     * avoided on this path. A logged no-op when no client is connected.
-     *
-     * @param type       the inbound message type that was refused
-     * @param data       the message's {@code data} object, possibly {@code null}
-     * @param capability the capability that refused it
-     */
-    private static void sendCapabilityRefusal(String type, JsonObject data, Capability capability) {
-        if (currentWebSocketClient() == null) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                    "Capability refusal for " + type + " not sent — no WebSocket client connected");
-            return;
-        }
-        JsonObject payload = new JsonObject();
-        payload.addProperty("type", type);
-        payload.addProperty("capability", capability.name());
-        payload.addProperty("configKey", capability.getConfigPath());
-        payload.addProperty("configFile", "plugins/UltiTools/config.yml");
-        payload.addProperty("reason", capability.refusalMessage());
-
-        if (data != null) {
-            copyIfPresent(data, payload, "commandId");
-            copyIfPresent(data, payload, "operationId");
-            copyIfPresent(data, payload, "requestId");
-        }
-
-        JsonObject response = new JsonObject();
-        response.addProperty("type", "capability_denied");
-        response.add("data", payload);
-        response.addProperty("serverId", currentWebSocketClient().getServerId());
-        currentWebSocketClient().sendMessage(response);
-    }
-
-    /** Copies {@code field} from {@code source} to {@code target} only when present and non-null. */
-    private static void copyIfPresent(JsonObject source, JsonObject target, String field) {
-        String value = readString(source, field);
-        if (value != null) {
-            target.addProperty(field, value);
-        }
-    }
-
-    /**
-     * Records one action-log entry for a capability-gated inbound message. A {@code null}
-     * {@code UltiTools.getInstance().getRemoteActionLog()} is a silent no-op — the existing
-     * inbound-message tests mock {@code UltiTools} and return null for it.
-     */
-    private static void recordAction(Capability capability, String type, JsonObject data,
-                                      RemoteActionLog.Verdict verdict, String reason) {
-        RemoteActionLog log = UltiTools.getInstance().getRemoteActionLog();
-        if (log == null) {
-            return;
-        }
-        String action = resolveActionLogAction(type, data);
-        String target = resolveActionLogTarget(type, data);
-        String actor = resolveActor(data);
-        RemoteActionLog.Entry entry = verdict == RemoteActionLog.Verdict.ALLOWED
-                ? RemoteActionLog.Entry.allowed(capability, action, target, actor)
-                : RemoteActionLog.Entry.denied(capability, action, target, actor, reason);
-        log.record(entry);
-    }
-
-    /** The action-log {@code action} field — the message type, extended with the resolved sub-operation for {@code file_operation}. */
-    private static String resolveActionLogAction(String type, JsonObject data) {
-        if ("file_operation".equals(type) && data != null) {
-            String operation = readString(data, "operation");
-            if (operation != null) {
-                return type + ":" + operation;
-            }
-        }
-        return type;
-    }
-
-    /** The action-log {@code target} field — the command text, file path, or message type otherwise. */
-    private static String resolveActionLogTarget(String type, JsonObject data) {
-        if (data == null) {
-            return type;
-        }
-        if ("execute_command".equals(type)) {
-            String command = readString(data, "command");
-            return command != null ? command : type;
-        }
-        if ("file_operation".equals(type)) {
-            String path = readString(data, "path");
-            return path != null ? path : type;
-        }
-        return type;
-    }
-
-    /**
-     * The action-log {@code actor} field — the inbound {@code executor} field verbatim, or the
-     * literal {@code "panel"} when absent. The framework cannot attribute a remote command to an
-     * individual panel operator today (see {@link RemoteActionLog.Entry}'s javadoc), so this never
-     * invents a per-operator identity.
-     */
-    private static String resolveActor(JsonObject data) {
-        String executor = data != null ? readString(data, "executor") : null;
-        return executor != null ? executor : "panel";
-    }
-
-    /**
      * Wires all WebSocket managers up to the current connection, on {@link CloudSession#current()}.
      * <p>
      * This method hangs off {@code onConnectHandler}, and an in-flight handshake can still land
@@ -1337,636 +503,6 @@ public class PluginInitiationUtils {
         UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
                 "[UltiPanel] Skipped %s wiring — capability disabled (%s)",
                 capability.name(), capability.getConfigPath()));
-    }
-
-    /**
-     * Handles a config update.
-     *
-     * <p>This path used to disagree with the panel in three places, and each failure was silent
-     * (issue #236): the panel sends content in {@code data.configData}, and this read
-     * {@code data.config}; the panel names the file with {@code data.fileName}, and this never read
-     * it except for {@code server_properties}; the panel does not send {@code requestId}, and this
-     * used whether {@code requestId} was present as the test for "is this a request" — when it was
-     * missing, the code just logged one {@code Level.FINE} line and dropped the message, and
-     * {@code FINE} does not print under the default log configuration. So the panel got an HTTP 200,
-     * nothing changed on the server, and neither side reported an error.
-     *
-     * <p>The test is now "is there config content": no content means this is an echo/acknowledgement,
-     * content means it is a request, and a missing {@code requestId} is still applied — it just logs
-     * a WARNING explaining that the result cannot be reported back.
-     *
-     * <p>Package-private rather than private — only so it can be tested.
-     */
-    static void handleConfigUpdate(JsonObject data) {
-        if (data == null || queueConfigCallback(() -> handleConfigUpdate(data.deepCopy()))) { return; }
-        if (data == null) {
-            return;
-        }
-
-        String fileName = readString(data, "fileName");
-        String requestId = readString(data, "requestId");
-        String configContent = readConfigContent(data);
-
-        // server_properties's "get" request: no content is still a legitimate request, not an echo.
-        if (isServerPropertiesTarget(fileName) && configContent == null) {
-            ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
-            if (spm != null) {
-                JsonObject spData = new JsonObject();
-                spData.addProperty("action", "get");
-                spm.handleServerProperties(spData);
-            }
-            return;
-        }
-
-        // No config content = an acknowledgement bounced back by the forwarding layer, or this
-        // server's own echo. This is the one case where doing nothing is still normal, so it stays
-        // at FINE.
-        if (configContent == null) {
-            if (data.has("message") && !data.get("message").isJsonNull()) {
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                        FrameworkText.format("收到服务器配置更新确认: %s", data.get("message").getAsString()));
-            } else {
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                        FrameworkText.text("收到不含配置内容的 update_config 消息，按回声处理"));
-            }
-            return;
-        }
-
-        if (requestId == null) {
-            // This used to just return here. A missing requestId is the counterpart's protocol
-            // defect, not "this message need not be handled" — treating it as the latter dresses
-            // the defect up as a normal path.
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.text("收到不含 requestId 的配置更新请求，仍会应用，但无法向面板回报结果"));
-        }
-
-        try {
-            applyConfigUpdate(fileName, configContent);
-            sendConfigUpdateResponse(requestId, true, null);
-        } catch (IOException | RuntimeException e) {
-            // RuntimeException is caught too: JsonParser throws it when configData is malformed.
-            // This class of failure used to bubble all the way up to handleInboundMessage's catch and
-            // get logged as "an error occurred while handling message type update_config" — and the
-            // panel would never get a reply.
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.format("应用配置更新失败（文件: %s）: %s", fileName, e.getMessage()), e);
-            sendConfigUpdateResponse(requestId, false, e.getMessage());
-        }
-    }
-
-    /** Reads a string field that may be missing, or may be a JSON null. */
-    private static String readString(JsonObject data, String field) {
-        return (data.has(field) && !data.get(field).isJsonNull())
-                ? data.get(field).getAsString() : null;
-    }
-
-    /**
-     * Reads the config content, preferring {@code data.configData}.
-     *
-     * <p>{@code data.config} used to be the only field this method read, but no producer of it can
-     * be found anywhere in the tree — the panel has always sent {@code configData}. It is kept only
-     * for compatibility with a possible third-party panel; reading it logs a deprecation warning.
-     */
-    private static String readConfigContent(JsonObject data) {
-        String configData = readString(data, "configData");
-        if (configData != null) {
-            return configData;
-        }
-        String legacy = readString(data, "config");
-        if (legacy != null) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.text("update_config 使用了已废弃的 data.config 字段，请改用 data.configData"));
-        }
-        return legacy;
-    }
-
-    /**
-     * Decides where to write based on {@code fileName}.
-     *
-     * <p>The three branches correspond to three payload shapes — exactly what the former
-     * "fileName is never read" covered up: {@code server_properties} is a flat property table
-     * handed to its own dedicated manager; a named file is that one config file's own
-     * {@code {key: value}} map; and no file name at all means the full nested structure from
-     * {@link com.ultikits.ultitools.manager.ConfigManager#toJson()}.
-     */
-    private static void applyConfigUpdate(String fileName, String configContent) throws IOException {
-        if (isServerPropertiesTarget(fileName)) {
-            ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
-            if (spm == null) {
-                throw new IOException("ServerPropertiesManager is not available");
-            }
-            // Goes through applySetAll rather than handleServerProperties in order to get a return
-            // value back. The latter is void, so this path used to be able only to unconditionally
-            // report success — the status the panel got meant "the message finished processing," not
-            // "the config took effect," and those two things diverge the moment the SAFE_KEYS
-            // whitelist blocks a key. See issue #281.
-            // Both messages are still sent: applySetAll sends its own server_properties_result, and
-            // an exception thrown here is turned by the caller into config_update_response's error.
-            ServerPropertiesManager.SetAllResult result = spm.applySetAll(
-                    com.google.gson.JsonParser.parseString(configContent).getAsJsonObject());
-            if (!result.isSuccess()) {
-                throw new IOException(result.describeFailure());
-            }
-            return;
-        }
-        if (fileName == null || fileName.trim().isEmpty()) {
-            ConfigEditorUtils.updateConfigMap(configContent);
-            return;
-        }
-        ConfigEditorUtils.updateConfigMap(fileName, configContent);
-    }
-
-    /**
-     * Sends back one {@code config_update_response}.
-     *
-     * <p>The payload sits in {@code data}, matching every other plugin-to-Worker message
-     * (see {@code CommandExecutionManager.sendCommandResult}). This one used to be a flat write with
-     * fields hanging directly off the top level; the Worker side reads both shapes
-     * (ultipanel-api-worker#30), so this change did not need to ship simultaneously with the panel.
-     */
-    private static void sendConfigUpdateResponse(String requestId, boolean success, String error) {
-        if (requestId == null || currentWebSocketClient() == null) {
-            return;
-        }
-        JsonObject payload = new JsonObject();
-        payload.addProperty("requestId", requestId);
-        payload.addProperty("status", success ? "success" : "error");
-        if (error != null) {
-            payload.addProperty("error", error);
-        }
-
-        JsonObject response = new JsonObject();
-        response.addProperty("type", "config_update_response");
-        response.add("data", payload);
-        response.addProperty("serverId", currentWebSocketClient().getServerId());
-        currentWebSocketClient().sendMessage(response);
-    }
-    
-    // ========== System base message handlers ==========
-
-    /**
-     * Handles a ping message
-     */
-    private static void handlePing(JsonObject message) {
-        // Send pong response
-        JsonObject pongResponse = new JsonObject();
-        pongResponse.addProperty("type", "pong");
-        pongResponse.addProperty("timestamp", System.currentTimeMillis());
-        
-        JsonObject pongData = new JsonObject();
-        pongData.addProperty("timestamp", System.currentTimeMillis());
-        pongResponse.add("data", pongData);
-        
-        currentWebSocketClient().sendMessage(pongResponse);
-        PanelConnectionLog.log(Level.FINE, "Responded to ping with pong");
-    }
-    
-    /**
-     * Handles a pong message
-     */
-    private static void handlePong(JsonObject data) {
-        PanelConnectionLog.log(Level.FINE, "Received pong response");
-        if (data != null && data.has("timestamp") && !data.get("timestamp").isJsonNull()) {
-            long serverTimestamp = data.get("timestamp").getAsLong();
-            long currentTime = System.currentTimeMillis();
-            long latency = currentTime - serverTimestamp;
-            PanelConnectionLog.log(Level.FINE, "WebSocket latency: " + latency + "ms");
-        }
-    }
-    
-    /**
-     * Handles a subscribe message
-     */
-    private static void handleSubscribe(JsonObject data) {
-        if (data != null) {
-            boolean subscribed = safeGetBoolean(data, "subscribed", false);
-            String serverId = safeGetString(data, "serverId");
-            String message = safeGetString(data, "message");
-            if (subscribed) {
-                PanelConnectionLog.log(Level.INFO,
-                    FrameworkText.format("成功订阅服务器: %s - %s", serverId, message));
-            } else {
-                PanelConnectionLog.log(Level.WARNING,
-                    FrameworkText.format("订阅服务器失败: %s - %s", serverId, message));
-            }
-        }
-    }
-    
-    /**
-     * Handles an unsubscribe message
-     */
-    private static void handleUnsubscribe(JsonObject data) {
-        if (data != null) {
-            String serverId = safeGetString(data, "serverId");
-            PanelConnectionLog.log(Level.INFO,
-                FrameworkText.format("已取消订阅服务器: %s", serverId));
-        }
-    }
-    
-    /**
-     * Handles a notification message
-     */
-    private static void handleNotification(JsonObject data) {
-        if (data != null) {
-            String message = safeGetString(data, "message");
-            String clientId = safeGetString(data, "clientId");
-            PanelConnectionLog.log(Level.INFO,
-                FrameworkText.format("[服务器通知] %s (客户端ID: %s)", message, clientId));
-        }
-    }
-    
-    /**
-     * Handles an error message
-     */
-    private static void handleError(JsonObject data) {
-        if (data != null) {
-            String errorMessage = safeGetString(data, "message");
-            PanelConnectionLog.log(Level.SEVERE,
-                FrameworkText.format("[WebSocket错误] %s", errorMessage));
-        }
-    }
-    
-    // ========== Server monitoring message handlers ==========
-
-    /**
-     * Handles a player event
-     */
-    private static void handlePlayerEvent(JsonObject data) {
-        if (data != null) {
-            String eventType = safeGetString(data, "eventType");
-            JsonObject player = data.has("player") && data.get("player").isJsonObject()
-                ? data.getAsJsonObject("player") : null;
-            if (player != null) {
-                String playerName = safeGetString(player, "name");
-                PanelConnectionLog.log(Level.INFO,
-                    FrameworkText.format("[玩家事件] %s: %s", eventType, playerName));
-            }
-        }
-    }
-    
-    // ========== Operation control message handlers ==========
-
-    /**
-     * Handles a command execution result
-     */
-    private static void handleCommandResult(JsonObject data) {
-        // command_result messages are echoed back from DO — already logged by
-        // CommandExecutionManager, so we only log at FINE (debug) level here.
-        if (data != null) {
-            PanelConnectionLog.log(Level.FINE,
-                FrameworkText.format("[命令执行结果] %s", data));
-        }
-    }
-    
-    /**
-     * Handles a file operation result
-     */
-    private static void handleFileOperationResult(JsonObject data) {
-        if (data != null) {
-            String operationId = safeGetString(data, "operationId");
-            boolean success = safeGetBoolean(data, "success", false);
-            String operation = safeGetString(data, "operation");
-            String path = safeGetString(data, "path");
-            String message = safeGetString(data, "message");
-            PanelConnectionLog.log(Level.INFO,
-                FrameworkText.format("[文件操作结果] ID: %s, 操作: %s, 路径: %s, 成功: %s, 消息: %s",
-                    operationId, operation, path, success, message));
-            if (!success && message != null) {
-                PanelConnectionLog.log(Level.WARNING,
-                    FrameworkText.format("文件操作失败: %s", message));
-            }
-        }
-    }
-    
-    // ========== Data stream message handlers ==========
-
-    /**
-     * Handles a backup operation
-     */
-    private static void handleBackupOperation(JsonObject data) {
-        if (data != null) {
-            String operation = safeGetString(data, "operation");
-            String operationId = safeGetString(data, "operationId");
-            PanelConnectionLog.log(Level.INFO,
-                FrameworkText.format("[备份操作] 操作类型: %s, ID: %s", operation, operationId));
-        }
-    }
-    
-    /**
-     * Handles backup progress
-     */
-    private static void handleBackupProgress(JsonObject data) {
-        if (data != null) {
-            String operationId = safeGetString(data, "operationId");
-            double progress = safeGetDouble(data, "progress", 0.0);
-            String currentStep = safeGetString(data, "currentStep");
-            boolean completed = safeGetBoolean(data, "completed", false);
-            PanelConnectionLog.log(Level.INFO,
-                FrameworkText.format("[备份进度] ID: %s, 进度: %.1f%%, 当前步骤: %s, 完成: %s",
-                    operationId, progress, currentStep, completed));
-        }
-    }
-    
-    /** Queues a whole panel config callback; never waits while a caller may hold an entity monitor. */
-    private static boolean queueConfigCallback(Runnable callback) {
-        if (Bukkit.getServer() == null || Bukkit.isPrimaryThread()) { return false; }
-        // Dropped while disabling (#621): still "handled", so the caller does not run it inline.
-        scheduleUnlessDisabling("panel config callback",
-            () -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), callback));
-        return true;
-    }
-
-    // ========== Config management message handlers ==========
-
-    /**
-     * Handles a config upload.
-     *
-     * <p>{@code upload_config} carries traffic in <b>both</b> directions on the same message type:
-     * {@link #uploadConfig(UltiPanelWebSocketClient)} sends the server's own aggregated config up on
-     * every reconnect, and the Worker's own message handler echoes that request's {@code type}
-     * straight back as its acknowledgement ({@code websocket-server.ts:454},
-     * {@code response.type = message.type}) — so the acknowledgement lands right back in this same
-     * inbound handler. Its payload is always {@code {message, serverId, configType}}, distinguishable
-     * only by the {@code message} field; recognize it there and stop (issue #359). The former
-     * {@code data.has("requestId")} gate is deleted rather than fixed — nothing anywhere in the
-     * system (panel, frontend, or Worker route) ever populates that field on an {@code upload_config}
-     * payload, so no code path here reads it any more.
-     */
-    private static void handleConfigUpload(JsonObject data) {
-        if (data == null || queueConfigCallback(() -> handleConfigUpload(data.deepCopy()))) { return; }
-        if (data == null) {
-            return;
-        }
-
-        // Worker acknowledgement of the server's own uploadConfig() push -- see issue #359.
-        //
-        // WR-04: this is a PRESENCE-ONLY heuristic, not a structural discriminator -- any
-        // upload_config payload carrying a "message" field is treated as the Worker's
-        // acknowledgement, unconditionally, before the configType-based write logic below ever
-        // runs. Correct against the one real sender that exists today (the Worker's generic
-        // response.type = message.type echo never includes configContent, and the plugin's own
-        // uploadConfig() push never includes "message"), but if a FUTURE legitimate write
-        // request-shaped payload ever also carried a "message" field (e.g. a client-supplied
-        // comment, or an error description alongside configType), it would be silently absorbed
-        // here as an "acknowledgement" -- no write happens, and no response is sent at all, so
-        // the sender gets no feedback. If upload_config ever gains a second real producer,
-        // prefer a structural marker (a role/direction field, or the absence of configContent)
-        // over field presence alone.
-        if (data.has("message")) {
-            String message = data.get("message").getAsString();
-            PanelConnectionLog.log(Level.FINE,
-                FrameworkText.format("收到服务器配置上传确认: %s", message));
-            return;
-        }
-
-        String configType = data.has("configType") ? data.get("configType").getAsString() : null;
-
-        if (configType == null || configType.trim().isEmpty()) {
-            sendErrorResponse("Valid configuration type is required");
-            return;
-        }
-
-        String configName = data.has("configName") ? data.get("configName").getAsString() : null;
-
-        UltiTools.getInstance().getLogger().log(Level.FINE,
-            FrameworkText.format("[配置上传] 类型: %s, 名称: %s", configType, configName));
-
-        try {
-            // Handle the config upload logic
-            handleConfigUploadLogic(data);
-
-            // Send success response
-            JsonObject response = new JsonObject();
-            response.addProperty("type", "upload_config_response");
-            response.addProperty("status", "success");
-            response.addProperty("serverId", currentWebSocketClient().getServerId());
-            currentWebSocketClient().sendMessage(response);
-
-        } catch (Exception e) {
-            sendErrorResponse("Failed to upload config: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Handles the config upload logic.
-     *
-     * <p>{@code upload_config} accepts {@code plugin_config} only (#435, D-13). {@code
-     * server_properties} is rejected naming the message that actually handles it — the dedicated
-     * {@code server_properties} message routed to
-     * {@link com.ultikits.ultitools.manager.ServerPropertiesManager#handleServerProperties}.
-     * {@code permissions} is defined nowhere in the system, so it is not given a meaning here — it
-     * falls to the pre-existing fail-closed {@code default}, whose wording already says exactly
-     * what a dedicated branch would.
-     */
-    private static void handleConfigUploadLogic(JsonObject data) throws Exception {
-        String configType = data.get("configType").getAsString();
-
-        // Gate-2 finding (review round 14, #467): branch on configType BEFORE reading
-        // configName/format/backup -- fields relevant only to plugin_config uploads. The
-        // documented negative-request shape (UAT-CHECKLIST.md:
-        // ultitools.remote.upload-config.neg-permissions) sends only configType, so reading
-        // those fields unconditionally threw an implementation-specific NullPointerException
-        // before the intended rejection message below was ever reached. Regression test:
-        // PluginInitiationUtilsTest$HandleConfigUploadLogicRejectionOrderingTests.
-        switch (configType) {
-            case "plugin_config":
-                Object configContent = data.get("configContent");
-                String configName = data.get("configName").getAsString();
-                String format = data.get("format").getAsString();
-                boolean backup = data.get("backup").getAsBoolean();
-
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                    FrameworkText.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s",
-                        configType, configName, format, backup));
-
-                if (!(configContent instanceof JsonObject)) {
-                    throw new IllegalArgumentException(
-                        "Configuration content is required for plugin_config uploads");
-                }
-                ConfigEditorUtils.updateConfigMap(new Gson().toJson(configContent));
-                break;
-            case "server_properties":
-                throw new IllegalArgumentException(
-                    "server_properties config is not accepted via upload_config; "
-                        + "send it as a server_properties message instead");
-            default:
-                // Also covers "permissions": nothing in the system defines that type's semantics
-                // (#435, D-13), so it is left to this same fail-closed rejection rather than
-                // inventing one here.
-                throw new IllegalArgumentException("Unsupported config type: " + configType);
-        }
-    }
-
-    // ========== Utility methods ==========
-
-    /**
-     * Sends an error response
-     */
-    private static void sendErrorResponse(String errorMessage) {
-        JsonObject errorResponse = new JsonObject();
-        errorResponse.addProperty("type", "error");
-        errorResponse.addProperty("timestamp", System.currentTimeMillis());
-        
-        JsonObject errorData = new JsonObject();
-        errorData.addProperty("message", errorMessage);
-        errorResponse.add("data", errorData);
-        
-        currentWebSocketClient().sendMessage(errorResponse);
-    }
-    
-    /**
-     * Handles a plugin list request
-     */
-    private static void handlePluginListRequest(JsonObject data) {
-        try {
-            // Only handle explicit plugin list requests (carrying a requestId); ignore server acknowledgement messages
-            if (data != null && data.has("requestId")) {
-                String requestId = data.get("requestId").getAsString();
-                
-                JsonObject response = new JsonObject();
-                response.addProperty("type", "plugin_list");
-                response.addProperty("serverId", currentWebSocketClient().getServerId());
-                response.addProperty("timestamp", System.currentTimeMillis());
-                response.addProperty("requestId", requestId);
-                
-                JsonObject responseData = new JsonObject();
-                JsonArray plugins = new JsonArray();
-                
-                // Collect all plugin info
-                for (org.bukkit.plugin.Plugin plugin : org.bukkit.Bukkit.getPluginManager().getPlugins()) {
-                    JsonObject pluginInfo = new JsonObject();
-                    pluginInfo.addProperty("name", plugin.getName());
-                    pluginInfo.addProperty("version", plugin.getDescription().getVersion());
-                    pluginInfo.addProperty("enabled", plugin.isEnabled());
-                    pluginInfo.addProperty("author", String.join(", ", plugin.getDescription().getAuthors()));
-                    pluginInfo.addProperty("description", plugin.getDescription().getDescription());
-                    plugins.add(pluginInfo);
-                }
-                
-                responseData.add("plugins", plugins);
-                responseData.addProperty("totalCount", plugins.size());
-                response.add("data", responseData);
-                
-                currentWebSocketClient().sendMessage(response);
-            } else {
-                // Recognize and ignore server acknowledgement messages
-                if (data != null && data.has("message")) {
-                    String message = data.get("message").getAsString();
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        FrameworkText.format("收到服务器插件列表确认: %s", message));
-                } else {
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        FrameworkText.text("收到服务器插件列表消息，但不包含requestId，忽略处理"));
-                }
-            }
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "Error handling plugin list request: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Handles a server status request
-     */
-    private static void handleServerStatusRequest(JsonObject data) {
-        try {
-            // Only handle explicit status requests (carrying a requestId); ignore server acknowledgement messages
-            if (data != null && data.has("requestId")) {
-                String requestId = data.get("requestId").getAsString();
-                UltiTools.getInstance().getLogger().log(Level.FINE, 
-                    FrameworkText.format("收到服务器状态请求，请求ID: %s", requestId));
-
-                // Immediately send the current server status, including the request id
-                UltiTools.getInstance().getServerMonitorManager().sendServerStatusWithRequestId(requestId);
-            } else {
-                // Ignore server acknowledgement messages and other non-request messages
-                if (data != null && data.has("message")) {
-                    String message = data.get("message").getAsString();
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        FrameworkText.format("收到服务器状态确认: %s", message));
-                } else {
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        FrameworkText.text("收到服务器状态消息，但不包含requestId，忽略处理"));
-                }
-            }
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("处理服务器状态请求失败: %s", e.getMessage()), e);
-        }
-    }
-    
-    /**
-     * Handles a metrics data request
-     */
-    private static void handleMetricsRequest(JsonObject data) {
-        try {
-            // Only handle explicit metrics data requests (carrying a requestId); ignore server acknowledgement messages
-            if (data != null && data.has("requestId")) {
-                String requestId = data.get("requestId").getAsString();
-                UltiTools.getInstance().getServerMonitorManager().sendMetricsDataWithRequestId(requestId);
-            } else {
-                // Recognize and ignore server acknowledgement messages
-                if (data != null && data.has("message")) {
-                    String message = data.get("message").getAsString();
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        FrameworkText.format("收到服务器性能数据确认: %s", message));
-                } else {
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        FrameworkText.text("收到服务器性能数据消息，但不包含requestId，忽略处理"));
-                }
-            }
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "Error handling metrics request: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Uploads the local config to the server
-     */
-    private static void uploadConfig(UltiPanelWebSocketClient client) {
-        if (queueConfigCallback(() -> uploadConfig(client))) { return; }
-        JsonObject configMessage = new JsonObject();
-        configMessage.addProperty("type", "upload_config");
-        
-        JsonObject data = new JsonObject();
-        data.addProperty("configType", "plugin_config");  // The required config type
-        data.addProperty("configName", "UltiTools.yml");   // The config file name
-        data.addProperty("configContent", ConfigEditorUtils.getConfigMapString());
-        data.addProperty("format", "yaml");                // The format info
-        data.addProperty("backup", true);                  // The backup flag
-        data.addProperty("comment", ConfigEditorUtils.getCommentMapString());
-        data.addProperty("serverId", client.getServerId());
-        
-        configMessage.add("data", data);
-        configMessage.addProperty("serverId", client.getServerId());
-        
-        UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("正在上传本地配置..."));
-        client.sendMessage(configMessage);
-        UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("配置上传成功!"));
-    }
-
-    /**
-     * Upload server.properties safe keys to cloud for panel editing.
-     */
-    private static void uploadServerProperties(UltiPanelWebSocketClient client) {
-        ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
-        if (spm == null) return;
-
-        Map<String, String> props = spm.getSafeProperties();
-        if (props.isEmpty()) return;
-
-        JsonObject propsJson = new JsonObject();
-        for (Map.Entry<String, String> entry : props.entrySet()) {
-            propsJson.addProperty(entry.getKey(), entry.getValue());
-        }
-
-        JsonObject message = new JsonObject();
-        message.addProperty("type", "server_properties_result");
-        message.addProperty("serverId", client.getServerId());
-
-        message.add("data", propsJson);
-
-        UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("正在上传服务器属性配置..."));
-        client.sendMessage(message);
-        UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("服务器属性配置上传成功!"));
     }
 
     /** Restarts the current session's v2 connection without loading or refreshing a user token. */
@@ -2151,38 +687,6 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Compatibility overload (WR-07, 16-REVIEW-cloud.md): falls back to
-     * {@link CloudSession#current()}, preserved only because {@code CloudReconnectStateMachineTest}
-     * calls this exact no-arg signature directly to exercise the budget-reset behaviour in
-     * isolation. No production handshake path calls this overload any more --
-     * {@link #onWebSocketOpened(CloudSession, UltiPanelWebSocketClient)} calls
-     * {@link #onWebSocketConnected(CloudSession)} with its own captured session instead.
-     */
-    static void onWebSocketConnected() {
-        onWebSocketConnected(CloudSession.current());
-    }
-
-    /**
-     * Called when a reconnection succeeds: resets {@code session}'s own outer budget.
-     * <p>
-     * Only a <b>genuinely successful handshake</b> is entitled to reset the budget. Resetting it
-     * inside {@code reinitWebSocket} instead would treat "a client was built" as success, the budget
-     * would never run out, and the gate would amount to nothing added.
-     * <p>
-     * <b>WR-07 (16-REVIEW-cloud.md):</b> takes the session explicitly rather than re-reading
-     * {@link CloudSession#current()} -- every other callback registered by
-     * {@link #initWebsocket(CloudSession)} captures its session lexically at registration time
-     * specifically so a late-firing callback acts upon the session that started it, not whichever
-     * session happens to be current by the time the callback fires. This method used to be the one
-     * place in this diff that broke that discipline.
-     *
-     * @param session the session whose handshake actually succeeded
-     */
-    static void onWebSocketConnected(CloudSession session) {
-        session.getBackoff().reset();
-    }
-
-    /**
      * Atomically, inside the session's own lock: "re-check that {@code session} is still current →
      * connect → start the refresh schedule."
      * <p>
@@ -2304,33 +808,4 @@ public class PluginInitiationUtils {
         }
     }
 
-    // ========== Null-safe JSON accessors ==========
-
-    private static String safeGetString(JsonObject obj, String key) {
-        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) {
-            return null;
-        }
-        return obj.get(key).getAsString();
-    }
-
-    private static boolean safeGetBoolean(JsonObject obj, String key, boolean defaultValue) {
-        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) {
-            return defaultValue;
-        }
-        return obj.get(key).getAsBoolean();
-    }
-
-    private static long safeGetLong(JsonObject obj, String key, long defaultValue) {
-        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) {
-            return defaultValue;
-        }
-        return obj.get(key).getAsLong();
-    }
-
-    private static double safeGetDouble(JsonObject obj, String key, double defaultValue) {
-        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) {
-            return defaultValue;
-        }
-        return obj.get(key).getAsDouble();
-    }
 }

@@ -63,6 +63,36 @@ class AgentMessageRouterTest {
     }
 
     @Test
+    void theSwitchRefusalListenerHearsEachGateRefusalAfterItsReplyAndNeverAHandledRequest() {
+        List<String> heard = new ArrayList<>();
+        RecordingChannel channel = new RecordingChannel();
+        AgentMessageRouter refusing = new AgentMessageRouter(cap -> false, cap -> "Enable " + cap + ".");
+        refusing.onSwitchRefusal((request, capability, message) -> {
+            assertThat(channel.frames()).as("the reply is sent before the listener runs").hasSize(1);
+            heard.add(request.type() + "|" + request.id() + "|" + capability + "|" + message);
+        });
+        refusing.dispatch(frame("command.execute").toString(), channel);
+        assertError(channel, ID, "capability_not_accepted");
+        assertThat(heard).containsExactly("command.execute|" + ID + "|commands|Enable commands.");
+
+        heard.clear();
+        AgentMessageRouter allowing = new AgentMessageRouter(cap -> true, cap -> "unused");
+        allowing.register("command.execute", mock(CloudRequestHandler.class));
+        allowing.onSwitchRefusal((request, capability, message) -> heard.add(request.type()));
+        allowing.dispatch(frame("command.execute").toString(), new RecordingChannel());
+        allowing.dispatch(frame("backups.list").toString(), new RecordingChannel());
+        assertThat(heard).as("a handled request and a capability without a handler are not switch refusals")
+                .isEmpty();
+
+        RecordingChannel throwing = new RecordingChannel();
+        refusing.onSwitchRefusal((request, capability, message) -> {
+            throw new IllegalStateException("log down");
+        });
+        refusing.dispatch(frame("command.execute").toString(), throwing);
+        assertError(throwing, ID, "capability_not_accepted");
+    }
+
+    @Test
     void enabledCapabilitiesAndRegisteredControlHandlersRun() {
         CloudRequestHandler handler = mock(CloudRequestHandler.class);
         AgentMessageRouter router = new AgentMessageRouter(cap -> true, cap -> "disabled");

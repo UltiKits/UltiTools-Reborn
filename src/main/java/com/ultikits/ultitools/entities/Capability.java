@@ -13,7 +13,8 @@ import com.ultikits.ultitools.UltiTools;
  * Each config-backed constant owns its own {@code ultipanel.capabilities.*} key, its own D-08
  * shipped default, and the comment lines the capability migration attaches when it writes the key
  * for the first time. {@link #isEnabled()} is the single config read every inbound and outbound
- * capability gate in this phase consults — see {@code PluginInitiationUtils.handleInboundMessage}.
+ * capability gate consults; as of 6.3.1 the UltiCloud protocol v2 router reads it for every
+ * request.
  *
  * @since 6.3.0
  */

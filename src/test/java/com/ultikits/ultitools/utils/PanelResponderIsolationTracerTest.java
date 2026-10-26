@@ -2,10 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.mock;
 
 import java.lang.reflect.Field;
 import java.time.Duration;
@@ -28,18 +25,25 @@ import org.junit.jupiter.api.Timeout;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.PanelMessageEvent;
+import com.ultikits.ultitools.websocket.CloudChannel;
+import com.ultikits.ultitools.websocket.CloudLimits;
+import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * Tracer for case 2d5bd984 (UltiTools-Reborn#677): a module responder whose call blocks (a slow
- * database or disk call) must not hold the thread that reads the panel connection. Drives the real
- * inbound entry point, {@link PluginInitiationUtils#handleInboundMessage}, with a real
- * {@link PanelResponderRegistry} built through its public constructor and a real {@link EventBus}.
+ * database or disk call) must not hold the thread that reads the panel connection. Rewritten in plan
+ * 22-23 onto the protocol v2 path (the v1 inbound dispatch it used to drive is removed): the real
+ * {@link ModuleRequestHandler}, the handler the connection's router runs for {@code module.request}, with a
+ * real {@link PanelResponderRegistry} built through its public constructor and a real {@link EventBus}.
+ * Every assertion of the v1 tracer survives; the reply is now a {@code module.response} correlated by
+ * {@code replyTo}, and the deadline reply is the contract's {@code deadline_exceeded}.
  * <br>
  * 案例 2d5bd984 的示踪测试：阻塞的模块 responder 不得占住读取面板连接的线程。
  */
@@ -47,9 +51,11 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PanelResponderIsolationTracerTest {
 
-    private static final String TYPE_A = "module_a_slow_query";
-    private static final String TYPE_B = "module_b_fast_query";
-    /** Mirrors {@code PanelResponderRegistry.RESPONDER_TIMEOUT_MILLIS}; the timeout text below pins it. */
+    private static final String TYPE_A = "modulea.slow";
+    private static final String TYPE_B = "moduleb.fast";
+    private static final String ID_A = "01JB2Z8Y3K4M5N6P7Q8R9S0AAA";
+    private static final String ID_B = "01JB2Z8Y3K4M5N6P7Q8R9S0BBB";
+    /** Mirrors {@code PanelResponderRegistry.RESPONDER_TIMEOUT_MILLIS}. */
     private static final long DEADLINE_MILLIS = 3000L;
     private static final long BOUND_SECONDS = 10L;
 
@@ -57,17 +63,16 @@ class PanelResponderIsolationTracerTest {
     private Thread primaryThread;
     private EventBus eventBus;
     private PanelResponderRegistry registry;
-    private UltiPanelWebSocketClient previousPanelWs;
+    private ModuleRequestHandler handler;
     private CountDownLatch aStarted;
     private CountDownLatch aRelease;
     private CountDownLatch aReturning;
-    private final BlockingQueue<JsonObject> sent = new LinkedBlockingQueue<>();
+    private final RecordingChannel channel = new RecordingChannel();
     private final List<PanelMessageEvent> published = new CopyOnWriteArrayList<>();
     private final List<Boolean> publishedOnPrimary = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() {
-        CloudSession.resetForTesting();
         PluginInitiationUtils.startAcceptingPanelMessages();
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
@@ -95,12 +100,13 @@ class PanelResponderIsolationTracerTest {
             JsonObject result = new JsonObject();
             result.addProperty("from", "module-a");
             return CompletableFuture.completedFuture(result);
-        }, "module-a");
+        }, "ModuleA");
         registry.registerResponder(TYPE_B, data -> {
             JsonObject result = new JsonObject();
             result.addProperty("from", "module-b");
             return CompletableFuture.completedFuture(result);
-        }, "module-b");
+        }, "ModuleB");
+        handler = new ModuleRequestHandler(registry);
 
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             lenient().when(ultiTools.getLogger()).thenReturn(logger);
@@ -108,29 +114,18 @@ class PanelResponderIsolationTracerTest {
             lenient().when(ultiTools.getEventBus()).thenReturn(eventBus);
             lenient().when(ultiTools.getPanelResponderRegistry()).thenReturn(registry);
         });
-
-        UltiPanelWebSocketClient panelWs = mock(UltiPanelWebSocketClient.class);
-        lenient().when(panelWs.isConnected()).thenReturn(true);
-        lenient().when(panelWs.getServerId()).thenReturn("isolation-tracer-server");
-        doAnswer(invocation -> {
-            sent.add(invocation.getArgument(0));
-            return null;
-        }).when(panelWs).sendMessage(any(JsonObject.class));
-        previousPanelWs = PluginInitiationUtils.setWebSocketClientForTesting(panelWs);
     }
 
     @AfterEach
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears UltiTools' instance field, as ShutdownPanelMessageTracerTest does
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears UltiTools' instance field, as other tests do
     void tearDown() throws Exception {
         aRelease.countDown();
-        PluginInitiationUtils.setWebSocketClientForTesting(previousPanelWs);
         registry.shutdown();
         eventBus.shutdown();
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
         instanceField.set(null, null);
         MockBukkitHelper.safeUnmock();
-        CloudSession.resetForTesting();
     }
 
     /** Whether {@code thread} is the very thread that ran {@link #setUp}, the server's primary thread. */
@@ -148,25 +143,26 @@ class PanelResponderIsolationTracerTest {
         }
     }
 
-    private static JsonObject message(String type, String requestId) {
-        JsonObject data = new JsonObject();
-        data.addProperty("requestId", requestId);
-        JsonObject message = new JsonObject();
-        message.addProperty("type", type);
-        message.add("data", data);
-        return message;
-    }
-
-    private static String requestIdOf(JsonObject reply) {
-        return reply.getAsJsonObject("data").get("requestId").getAsString();
+    /** A {@code module.request} for {@code <module>.<action>} as the router hands it to the handler. */
+    private static CloudRequest request(String id, String type) {
+        int dot = type.indexOf('.');
+        JsonObject payload = new JsonObject();
+        payload.addProperty("module", type.substring(0, dot));
+        payload.addProperty("action", type.substring(dot + 1));
+        payload.add("params", new JsonObject());
+        JsonObject actor = new JsonObject();
+        actor.addProperty("userId", 42);
+        actor.add("minecraftUuid", JsonNull.INSTANCE);
+        payload.add("actor", actor);
+        return new CloudRequest(id, "module.request", 1761274800000L, null, payload);
     }
 
     @Test
     @DisplayName("case 2d5bd984: the inbound call returns while module A's responder is still blocked")
     void blockingResponderDoesNotHoldTheConnectionThread() throws Exception {
         assertTimeoutPreemptively(Duration.ofSeconds(1),
-                () -> PluginInitiationUtils.handleInboundMessage(message(TYPE_A, "req-a")),
-                "handleInboundMessage must return while module A's responder blocks inside its call");
+                () -> handler.handle(request(ID_A, TYPE_A), channel),
+                "the module.request handler must return while module A's responder blocks inside its call");
 
         assertThat(aStarted.await(BOUND_SECONDS, TimeUnit.SECONDS))
                 .as("module A's responder was called")
@@ -175,18 +171,20 @@ class PanelResponderIsolationTracerTest {
     }
 
     @Test
-    @DisplayName("while module A is blocked, module B's request is answered with B's requestId")
+    @DisplayName("while module A is blocked, module B's request is answered, correlated to B's request")
     void anotherModulesResponderIsServedWhileOneIsBlocked() throws Exception {
-        PluginInitiationUtils.handleInboundMessage(message(TYPE_A, "req-a"));
+        handler.handle(request(ID_A, TYPE_A), channel);
         assertThat(aStarted.await(BOUND_SECONDS, TimeUnit.SECONDS)).as("module A's responder was called").isTrue();
 
-        PluginInitiationUtils.handleInboundMessage(message(TYPE_B, "req-b"));
+        handler.handle(request(ID_B, TYPE_B), channel);
 
-        JsonObject reply = sent.poll(BOUND_SECONDS, TimeUnit.SECONDS);
+        JsonObject reply = channel.frames.poll(BOUND_SECONDS, TimeUnit.SECONDS);
         assertThat(reply).as("a reply was sent while module A is blocked").isNotNull();
-        assertThat(reply.get("type").getAsString()).isEqualTo(TYPE_B);
-        assertThat(requestIdOf(reply)).isEqualTo("req-b");
-        assertThat(reply.getAsJsonObject("data").get("from").getAsString()).isEqualTo("module-b");
+        assertThat(reply.get("type").getAsString()).isEqualTo("module.response");
+        assertThat(reply.get("replyTo").getAsString()).isEqualTo(ID_B);
+        assertThat(reply.getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(reply.getAsJsonObject("payload").getAsJsonObject("data").get("from").getAsString())
+                .isEqualTo("module-b");
         assertThat(aReturning.getCount()).as("module A's responder is still blocked").isEqualTo(1L);
     }
 
@@ -194,19 +192,17 @@ class PanelResponderIsolationTracerTest {
     @DisplayName("module A gets one deadline reply counted from admission and no second reply after it returns")
     void blockedResponderGetsOneDeadlineReplyCountedFromAdmission() throws Exception {
         long admittedNanos = System.nanoTime();
-        PluginInitiationUtils.handleInboundMessage(message(TYPE_A, "req-a"));
+        handler.handle(request(ID_A, TYPE_A), channel);
         assertThat(aStarted.await(BOUND_SECONDS, TimeUnit.SECONDS)).as("module A's responder was called").isTrue();
 
-        JsonObject reply = sent.poll(DEADLINE_MILLIS + 5000L, TimeUnit.MILLISECONDS);
+        JsonObject reply = channel.frames.poll(DEADLINE_MILLIS + 5000L, TimeUnit.MILLISECONDS);
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - admittedNanos);
 
         assertThat(reply).as("the deadline reply for module A").isNotNull();
-        assertThat(reply.get("type").getAsString()).isEqualTo(TYPE_A);
-        assertThat(requestIdOf(reply)).isEqualTo("req-a");
-        assertThat(reply.getAsJsonObject("data").get("error").getAsString())
-                .contains(TYPE_A)
-                .contains("module-a")
-                .contains("did not complete within " + DEADLINE_MILLIS + "ms");
+        assertThat(reply.get("type").getAsString()).isEqualTo("module.response");
+        assertThat(reply.get("replyTo").getAsString()).isEqualTo(ID_A);
+        assertThat(reply.getAsJsonObject("payload").get("status").getAsString()).isEqualTo("error");
+        assertThat(reply.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("deadline_exceeded");
         assertThat(elapsedMillis)
                 .as("the deadline counts from admission, not from the end of the blocked call")
                 .isLessThanOrEqualTo(DEADLINE_MILLIS + 1500L);
@@ -215,22 +211,79 @@ class PanelResponderIsolationTracerTest {
 
         aRelease.countDown();
         assertThat(aReturning.await(BOUND_SECONDS, TimeUnit.SECONDS)).as("module A's call returned").isTrue();
-        assertThat(sent.poll(500, TimeUnit.MILLISECONDS))
-                .as("no second reply for req-a once module A's late result arrives")
+        assertThat(channel.frames.poll(500, TimeUnit.MILLISECONDS))
+                .as("no second reply for module A's request once its late result arrives")
                 .isNull();
     }
 
     @Test
     @DisplayName("the PanelMessageEvent for module A's type is still published once, on the primary thread")
     void panelMessageEventStillPublishedOnTheMainThread() throws Exception {
-        PluginInitiationUtils.handleInboundMessage(message(TYPE_A, "req-a"));
+        handler.handle(request(ID_A, TYPE_A), channel);
         assertThat(aStarted.await(BOUND_SECONDS, TimeUnit.SECONDS)).as("module A's responder was called").isTrue();
 
-        server.getScheduler().performOneTick();
+        long end = System.currentTimeMillis() + BOUND_SECONDS * 1000L;
+        while (published.isEmpty() && System.currentTimeMillis() < end) {
+            server.getScheduler().performOneTick();
+            Thread.sleep(10L);
+        }
 
         assertThat(published).hasSize(1);
         assertThat(published.get(0).getType()).isEqualTo(TYPE_A);
         assertThat(publishedOnPrimary).containsExactly(true);
         assertThat(aReturning.getCount()).as("module A's responder is still blocked").isEqualTo(1L);
+    }
+
+    /** Records every frame the handler answers with, as {@code {type, replyTo, payload}}. */
+    private static final class RecordingChannel implements CloudChannel {
+        private final BlockingQueue<JsonObject> frames = new LinkedBlockingQueue<>();
+
+        @Override
+        public boolean isOpen() {
+            return true;
+        }
+
+        @Override
+        public CloudLimits limits() {
+            return CloudLimits.defaults();
+        }
+
+        @Override
+        public boolean send(String type, JsonObject payload) {
+            return false;
+        }
+
+        @Override
+        public boolean reply(String replyTo, String type, JsonObject payload) {
+            JsonObject frame = new JsonObject();
+            frame.addProperty("type", type);
+            frame.addProperty("replyTo", replyTo);
+            frame.add("payload", payload.deepCopy());
+            frames.add(frame);
+            return true;
+        }
+
+        @Override
+        public boolean replyOk(String replyTo, String type, JsonElement data) {
+            JsonObject payload = new JsonObject();
+            payload.addProperty("status", "ok");
+            payload.add("data", data == null ? JsonNull.INSTANCE : data.deepCopy());
+            return reply(replyTo, type, payload);
+        }
+
+        @Override
+        public boolean replyPartial(String replyTo, String type, JsonElement data, String codeOrNull,
+                String messageOrNull) {
+            return false;
+        }
+
+        @Override
+        public boolean replyError(String replyTo, String type, String code, String message, JsonObject detailsOrNull) {
+            JsonObject payload = new JsonObject();
+            payload.addProperty("status", "error");
+            payload.addProperty("code", code);
+            payload.addProperty("message", message);
+            return reply(replyTo, type, payload);
+        }
     }
 }

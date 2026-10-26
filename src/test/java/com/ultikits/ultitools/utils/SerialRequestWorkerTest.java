@@ -155,6 +155,46 @@ class SerialRequestWorkerTest {
         assertThat(channel.frames().get(0).get("replyTo").getAsString()).isEqualTo(ID_A);
     }
 
+    @Test
+    @DisplayName("a covered write queued before the disable and started after it is refused, never run (22-23)")
+    void queuedWriteStartingAfterTheDisableIsRefused() throws Exception {
+        ShutdownGateTest.TestSignal signal = new ShutdownGateTest.TestSignal();
+        worker = new SerialRequestWorker(4, new ShutdownGate(signal, null));
+        CloudRequestHandler wrapped = worker.wrap(blocking);
+        wrapped.handle(request(ID_A), channel);
+        waitFor(() -> !threads.isEmpty());
+        wrapped.handle(new CloudRequest(ID_B, "files.write", 1000L, null, new JsonObject()), channel);
+        signal.open.set(false);
+        release.countDown();
+        waitFor(() -> channel.frames().size() == 2);
+        Thread.sleep(100);
+
+        assertThat(handled).containsExactly(ID_A);
+        JsonObject refusal = channel.frames().get(1);
+        assertThat(refusal.get("type").getAsString()).isEqualTo("files.write.result");
+        assertThat(refusal.get("replyTo").getAsString()).isEqualTo(ID_B);
+        assertThat(refusal.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("internal_error");
+        assertThat(refusal.getAsJsonObject("payload").get("message").getAsString()).contains("shutting down");
+        assertThat(signal.entered.get()).as("the read-only listing asks no gate").isZero();
+    }
+
+    @Test
+    @DisplayName("control: a covered write let in holds the permit until it is answered")
+    void admittedWriteHoldsThePermitWhileItRuns() throws Exception {
+        ShutdownGateTest.TestSignal signal = new ShutdownGateTest.TestSignal();
+        worker = new SerialRequestWorker(4, new ShutdownGate(signal, null));
+        CloudRequestHandler wrapped = worker.wrap(new CloudRequestHandler() {
+            @Override
+            public void handle(CloudRequest request, CloudChannel reply) {
+                handled.add(request.id() + " entered=" + signal.entered.get() + " exited=" + signal.exited.get());
+                reply.replyError(request.id(), "files.write.result", "internal_error", "Written.", null);
+            }
+        });
+        wrapped.handle(new CloudRequest(ID_A, "files.write", 1000L, null, new JsonObject()), channel);
+        waitFor(() -> signal.exited.get() == 1);
+        assertThat(handled).containsExactly(ID_A + " entered=1 exited=0");
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             latch.await(20, TimeUnit.SECONDS);

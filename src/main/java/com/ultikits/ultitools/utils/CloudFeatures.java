@@ -81,6 +81,11 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * CPU and the server state and advances the telemetry cadence. {@code snapshot.request} is registered on every
  * connection. A {@code /ul reload} that changes an operator setting sends {@code settings.changed} once
  * ({@link #onReload()}).
+ * <p>
+ * <b>Shutdown (22-23 shutdown-window round).</b> Every connection's router and file worker share one
+ * {@link ShutdownGate} built from {@link Bindings#shutdown}: from the first step of {@code UltiTools#onDisable} every
+ * state-changing request is answered with its shutting-down failure and runs nothing, and a change already running
+ * holds the gate's permit until it is answered, so {@code onDisable} closes the action log only after it.
  *
  * @since 6.3.1
  */
@@ -128,7 +133,7 @@ public final class CloudFeatures {
         this.timers = Executors.newSingleThreadScheduledExecutor(daemon(HANDLER_THREAD_NAME + "-Timer"));
         this.ledger = new SessionDedupeLedger(() -> CloudSession.current().ledgerTarget());
         this.playerLinkChannel = new PlayerLinkChannel(this::liveChannel, ledger, bindings.onlineMode,
-                this::gatewayClockOffsetMillis, timers, handlerThread);
+                this::gatewayClockOffsetMillis, timers, handlerThread, bindings.shutdown);
         this.playerLinks = new CloudPlayerLinks(playerLinkChannel);
         this.capabilities = new AgentCapabilities(bindings.switches, bindings.errorReporting, this::moduleNames,
                 this::available);
@@ -216,12 +221,18 @@ public final class CloudFeatures {
         Objects.requireNonNull(rotation, "rotation");
         Objects.requireNonNull(agent, "agent");
         this.protocol = protocol;
-        final SerialRequestWorker worker = new SerialRequestWorker(bindings.fileQueueCapacity);
+        // The shutdown gate first (22-23 shutdown-window round): every state-changing request on this connection asks
+        // the one signal bindings.shutdown -- the router before the switch gate, the file worker again when it runs a
+        // queued write -- and the command handler reads the same flag through bindings.disabling.
+        ShutdownGate shutdown = new ShutdownGate(bindings.shutdown, ledger);
+        router.onShutdown(shutdown);
+        final SerialRequestWorker worker = new SerialRequestWorker(bindings.fileQueueCapacity, shutdown);
         SerialRequestWorker previous = fileWorker;
         fileWorker = worker;
         if (previous != null) {
             previous.close();
         }
+        router.onSwitchRefusal(this::recordSwitchRefusal);
         registerCommands(router);
         registerPower(router);
         registerPlayerActions(router);
@@ -481,7 +492,7 @@ public final class CloudFeatures {
         if (registry == null) {
             return;
         }
-        final ModuleRequestHandler modules = new ModuleRequestHandler(registry);
+        final ModuleRequestHandler modules = new ModuleRequestHandler(registry, bindings.shutdown);
         router.register(MODULE_REQUEST, new CloudRequestHandler() {
             @Override
             public void handle(CloudRequest request, CloudChannel reply) {
@@ -533,6 +544,33 @@ public final class CloudFeatures {
                         + "before the power action; buffered player join/leave events may be lost.");
             }
         }
+    }
+
+    /**
+     * Records a request the capability gate refused as exactly one DENIED entry (FEATURES.md
+     * {@code ultitools.remote.file-refusal-audit}, as 6.3.0 did): the switch that decides the capability, the request
+     * type as action, its {@code command} or {@code path} as target when it carries one (the type otherwise), the
+     * panel as actor and the refusal sentence naming the configuration key as reason. A capability no
+     * {@link Capability} switch decides records nothing. Writes only the action log, never an operator file.
+     */
+    private void recordSwitchRefusal(CloudRequest request, String capability, String message) {
+        Capability decidedBy = AgentCapabilities.switchFor(capability);
+        if (decidedBy == null) {
+            return;
+        }
+        recordAction(RemoteActionLog.Entry.denied(decidedBy, request.type(), refusalTarget(request), PANEL_ACTOR,
+                message));
+    }
+
+    private static String refusalTarget(CloudRequest request) {
+        JsonObject payload = request.payload();
+        for (String field : new String[] {"command", "path"}) {
+            JsonElement value = payload.get(field);
+            if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+                return value.getAsString();
+            }
+        }
+        return request.type();
     }
 
     /** One action-log entry; a failing log never reaches the handler, so the request still gets its reply. */
@@ -596,6 +634,11 @@ public final class CloudFeatures {
         Executor mainThread;
         /** Whether the plugin is being disabled. */
         BooleanSupplier disabling;
+        /**
+         * The shutdown signal every state-changing request asks ({@link ShutdownGate}); never refuses unless bound.
+         * {@link #forPlugin} binds it to the flag {@link #disabling} reads.
+         */
+        ShutdownGate.Signal shutdown = ShutdownGate.Signal.OPEN;
         /** The stop and restart of {@code server.power}. */
         Supplier<PowerActionHandler.PowerExecutor> power;
         /** Receives one entry per remote player or power action. */
@@ -646,6 +689,7 @@ public final class CloudFeatures {
             bindings.mainThread = runnable -> PluginInitiationUtils.scheduleUnlessDisabling("UltiCloud request",
                     () -> Bukkit.getScheduler().runTask(plugin, runnable));
             bindings.disabling = () -> !PluginInitiationUtils.isAcceptingPanelMessages();
+            bindings.shutdown = PluginInitiationUtils.PANEL_CHANGE_SIGNAL;
             bindings.monitor = plugin::getServerMonitorManager;
             bindings.errors = plugin::getErrorReportCollector;
             bindings.mainTimer = task -> {
