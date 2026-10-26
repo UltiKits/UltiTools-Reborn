@@ -1,334 +1,243 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Handler;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
-import org.bukkit.Bukkit;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.IllegalPluginAccessException;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitScheduler;
+import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.mockito.MockedStatic;
-import org.mockito.Mockito;
-import org.mockito.stubbing.Answer;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.scheduler.BukkitSchedulerMock;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.events.EventBus;
-import com.ultikits.ultitools.events.PanelMessageEvent;
-import com.ultikits.ultitools.manager.CommandExecutionManager;
-import com.ultikits.ultitools.websocket.PanelResponderRegistry;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+import com.ultikits.ultitools.entities.Capability;
 
 /**
- * Tracer for UltiTools-Reborn#621: a panel message that arrives while UltiTools is disabling must
- * not make the WebSocket thread schedule work for the disabled plugin. Bukkit flips
- * {@code isEnabled()} to {@code false} before it calls {@code onDisable()}, and Paper's
- * {@code CraftScheduler} then rejects every task with {@link IllegalPluginAccessException}; the
- * scheduler used here does exactly that, so the base's behaviour (a WARNING with the full stack in
- * the stop log) is reproduced deterministically.
+ * Tracer for UltiTools-Reborn#621 on the protocol v2 path (rewritten in plan 22-23; the v1 tracer drove the removed v1
+ * inbound dispatch): a remote request that arrives while UltiTools is disabling must not make the connection's
+ * threads schedule work for the disabled plugin, and no new remote action may run. Bukkit flips {@code isEnabled()}
+ * to {@code false} before it calls {@code onDisable()}, and Paper's {@code CraftScheduler} then rejects every task with
+ * {@link IllegalPluginAccessException}; the scheduler here does exactly that, so a regression shows as a recorded
+ * call for the disabled plugin instead of the WARNING with a stack trace a real server prints. The framework runs the
+ * production server-thread hop ({@code scheduleUnlessDisabling} and the Bukkit scheduler) on the in-process stub.
  * <br>
- * #621 的示踪测试：UltiTools 正在禁用时到达的面板消息不得让 WebSocket 线程为已禁用的插件调度任务。
+ * #621 的示踪测试（v2）：UltiTools 正在禁用时到达的远程请求不得为已禁用的插件调度任务，也不得执行新的远程动作。
  */
-@DisplayName("#621 panel messages while UltiTools is disabling")
+@DisplayName("#621 remote requests while UltiTools is disabling")
+@Timeout(value = 120, unit = TimeUnit.SECONDS)
 class ShutdownPanelMessageTracerTest {
 
-    private static final String MODULE_TYPE = "fixture_module_query";
+    @TempDir
+    Path temp;
 
-    private ServerMock server;
-    private EventBus eventBus;
-    private PanelResponderRegistry responders;
-    private UltiPanelWebSocketClient panelWs;
-    private UltiPanelWebSocketClient previousPanelWs;
-    private MockedStatic<Bukkit> bukkit;
-    private final List<LogRecord> records = new CopyOnWriteArrayList<>();
-    private final List<PanelMessageEvent> published = new CopyOnWriteArrayList<>();
-    private final List<String> disabledScheduling = new CopyOnWriteArrayList<>();
-    private final List<String> enabledScheduling = new CopyOnWriteArrayList<>();
-    private final List<String> respondedTypes = new CopyOnWriteArrayList<>();
-    private final CountDownLatch responded = new CountDownLatch(1);
+    private ValidatingServer server;
+    private V2StubSession session;
+    private final AtomicInteger responderCalls = new AtomicInteger();
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
-
-        Logger logger = Logger.getLogger("UltiTools-ShutdownTracer-" + UUID.randomUUID());
-        logger.setUseParentHandlers(false);
-        logger.setLevel(Level.ALL);
-        logger.addHandler(new Handler() {
-            @Override
-            public void publish(LogRecord record) {
-                records.add(record);
-            }
-
-            @Override
-            public void flush() {
-                // nothing buffered
-            }
-
-            @Override
-            public void close() {
-                // nothing to release
-            }
-        });
-
-        eventBus = new EventBus();
-        eventBus.subscribe(PanelMessageEvent.class, published::add);
-        responders = new PanelResponderRegistry();
-        responders.registerResponder(MODULE_TYPE, data -> {
-            respondedTypes.add(MODULE_TYPE);
-            responded.countDown();
+        server = MockBukkit.mock(new ValidatingServer());
+        session = new V2StubSession(temp, server).productionMainThread();
+        session.config().set(Capability.COMMANDS.getConfigPath(), true);
+        session.config().set(Capability.PLAYER_ACTIONS.getConfigPath(), true);
+        session.config().set(Capability.FILE_WRITE.getConfigPath(), true);
+        session.config().set(Capability.SERVER_PROPERTIES.getConfigPath(), true);
+        session.config().set(Capability.POWER_ACTIONS.getConfigPath(), true);
+        session.responders().registerResponder("ultimail.inbox.list", data -> {
+            responderCalls.incrementAndGet();
             return CompletableFuture.completedFuture(new JsonObject());
-        }, "FixtureModule");
-
-        TestHelper.mockUltiToolsInstance(ultiTools -> {
-            lenient().when(ultiTools.getLogger()).thenReturn(logger);
-            lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
-            lenient().when(ultiTools.getEventBus()).thenReturn(eventBus);
-            lenient().when(ultiTools.getCommandExecutionManager()).thenReturn(mock(CommandExecutionManager.class));
-            lenient().when(ultiTools.getPanelResponderRegistry()).thenReturn(responders);
-        });
-
-        panelWs = mock(UltiPanelWebSocketClient.class);
-        lenient().when(panelWs.getServerId()).thenReturn("tracer-server");
-        previousPanelWs = PluginInitiationUtils.setWebSocketClientForTesting(panelWs);
-
-        // A scheduler that behaves like Paper's CraftScheduler#validate: a task for a disabled
-        // plugin is refused with IllegalPluginAccessException; otherwise MockBukkit runs it.
-        BukkitScheduler real = server.getScheduler();
-        Answer<Object> validating = invocation -> {
-            Object[] args = invocation.getArguments();
-            if (args.length > 0 && args[0] instanceof Plugin) {
-                String call = invocation.getMethod().getName();
-                if (!((Plugin) args[0]).isEnabled()) {
-                    disabledScheduling.add(call);
-                    throw new IllegalPluginAccessException("Plugin attempted to register task while disabled");
-                }
-                enabledScheduling.add(call);
-            }
-            try {
-                return invocation.getMethod().invoke(real, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
-        };
-        BukkitScheduler scheduler = mock(BukkitScheduler.class, validating);
-        bukkit = Mockito.mockStatic(Bukkit.class, Mockito.CALLS_REAL_METHODS);
-        bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+        }, "UltiMail");
+        session.start(null);
     }
 
     @AfterEach
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears UltiTools' instance field, as PanelMessageEventDispatchTest does
     void tearDown() throws Exception {
-        bukkit.close();
-        try {
-            setAccepting(true);
-        } catch (NoSuchMethodException absentOnTheBase) {
-            // the base has no flag; nothing to restore
-        }
-        PluginInitiationUtils.setWebSocketClientForTesting(previousPanelWs);
-        responders.shutdown();
-        eventBus.shutdown();
-        Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-        instanceField.setAccessible(true);
-        instanceField.set(null, null);
+        session.close();
+        server.getScheduler().shutdown();
         MockBukkitHelper.safeUnmock();
     }
 
-    /**
-     * The accepting flag is reached reflectively so that this class compiles on the base, where
-     * the flag does not exist yet; there the call fails and the test that needs it errors.
-     */
-    private static void setAccepting(boolean accepting) throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                accepting ? "startAcceptingPanelMessages" : "stopAcceptingPanelMessages");
-        method.invoke(null);
+    private static String sha256(byte[] bytes) throws java.security.NoSuchAlgorithmException {
+        StringBuilder hex = new StringBuilder();
+        for (byte value : java.security.MessageDigest.getInstance("SHA-256").digest(bytes)) {
+            hex.append(String.format("%02x", value));
+        }
+        return hex.toString();
     }
 
-    private static void disabling() {
+    private void disabling() {
         when(UltiTools.getInstance().isEnabled()).thenReturn(false);
     }
 
-    private static JsonObject message(String type) {
-        JsonObject data = new JsonObject();
-        data.addProperty("requestId", "r-" + type);
-        if ("subscribe".equals(type)) {
-            // the reply the panel sends after a successful subscription
-            data.addProperty("subscribed", true);
-            data.addProperty("serverId", "tracer-server");
-            data.addProperty("message", "Subscribed to the server");
-        }
-        JsonObject message = new JsonObject();
-        message.addProperty("type", type);
-        message.add("data", data);
-        return message;
-    }
-
     private List<LogRecord> at(Level level) {
-        return records.stream().filter(r -> r.getLevel().equals(level)).collect(Collectors.toList());
+        return session.pluginLog().stream().filter(r -> r.getLevel().equals(level)).collect(Collectors.toList());
     }
 
-    private List<String> messages(Level level) {
-        return at(level).stream().map(LogRecord::getMessage).collect(Collectors.toList());
-    }
-
-    private void assertDroppedQuietly(String type) {
-        assertThat(at(Level.WARNING)).as("WARNING lines (%s)", type)
+    private void assertQuiet(String what) {
+        assertThat(at(Level.WARNING)).as("WARNING lines (%s)", what)
                 .extracting(r -> r.getMessage() + " | thrown: " + r.getThrown()).isEmpty();
-        assertThat(messages(Level.SEVERE)).as("SEVERE lines (%s)", type).isEmpty();
-        assertThat(disabledScheduling).as("scheduler calls for the disabled plugin (%s)", type).isEmpty();
-        List<LogRecord> fine = at(Level.FINE);
-        assertThat(fine).as("FINE lines (%s): %s", type, messages(Level.FINE)).hasSize(1);
-        assertThat(fine.get(0).getMessage()).contains(type);
-        assertThat(fine.get(0).getThrown()).isNull();
+        assertThat(at(Level.SEVERE)).as("SEVERE lines (%s)", what).isEmpty();
+        assertThat(server.getScheduler().disabledCalls).as("scheduler calls for the disabled plugin (%s)", what)
+                .isEmpty();
     }
 
     @Nested
-    @DisplayName("tracer: the subscribe reply seen on the real server")
+    @DisplayName("tracer: a remote command while disabling")
     class Tracer {
 
         @Test
-        @DisplayName("a subscribe reply while disabling: nothing scheduled, one FINE line, no WARNING")
-        void subscribeReplyWhileDisablingIsDroppedQuietly() {
+        @DisplayName("a command.execute while disabling: acknowledged, never executed, nothing scheduled, no WARNING")
+        void commandWhileDisablingIsDroppedQuietly() throws Exception {
             disabling();
 
-            PluginInitiationUtils.handleInboundMessage(message("subscribe"));
+            String id = session.send("command.execute", "say", null).get("id").getAsString();
+            assertThat(session.reply("command.ack", 1).get("replyTo").getAsString()).isEqualTo(id);
+            session.pass(500L);
 
-            assertDroppedQuietly("subscribe");
-            assertThat(published).isEmpty();
+            assertThat(session.executions()).isZero();
+            assertThat(session.stub().gateway().received("command.result")).isEmpty();
+            assertQuiet("command.execute");
         }
 
         @Test
-        @DisplayName("the accepting flag alone, cleared first in onDisable, drops the message too")
+        @DisplayName("the accepting flag alone, cleared first in onDisable, drops the command too")
         void clearedFlagDropsEvenBeforeBukkitReportsDisabled() throws Exception {
-            setAccepting(false);
+            PluginInitiationUtils.stopAcceptingPanelMessages();
+            int scheduledBefore = server.getScheduler().enabledCalls.size();
 
-            PluginInitiationUtils.handleInboundMessage(message("subscribe"));
-            server.getScheduler().performOneTick();
+            session.send("command.execute", "say", null);
+            session.reply("command.ack", 1);
+            session.pass(500L);
 
-            assertDroppedQuietly("subscribe");
-            assertThat(enabledScheduling).isEmpty();
-            assertThat(published).isEmpty();
+            assertThat(session.executions()).isZero();
+            assertThat(session.stub().gateway().received("command.result")).isEmpty();
+            assertThat(server.getScheduler().enabledCalls.subList(scheduledBefore,
+                    server.getScheduler().enabledCalls.size())).as("nothing new scheduled at all").isEmpty();
+            assertQuiet("command.execute");
         }
 
         @Test
-        @DisplayName("control: while enabled the same reply is handled and published exactly as before")
-        void enabledReplyIsHandledAsBefore() {
-            PluginInitiationUtils.handleInboundMessage(message("subscribe"));
-            server.getScheduler().performOneTick();
+        @DisplayName("control: while enabled the same command is executed on the server thread and answered")
+        void enabledCommandIsHandledAsBefore() throws Exception {
+            String id = session.send("command.execute", "say", null).get("id").getAsString();
+            JsonObject result = session.reply("command.result", 1);
 
-            assertThat(enabledScheduling).containsExactly("runTask");
-            assertThat(published).hasSize(1);
-            assertThat(published.get(0).getType()).isEqualTo("subscribe");
-            assertThat(messages(Level.WARNING)).isEmpty();
+            assertThat(result.get("replyTo").getAsString()).isEqualTo(id);
+            assertThat(session.executions()).isEqualTo(1);
+            assertThat(server.getScheduler().enabledCalls).contains("runTask");
+            assertQuiet("control");
         }
     }
 
     @Nested
-    @DisplayName("sweep: every inbound type behind the same check")
+    @DisplayName("sweep: every remote action behind the same check")
     class Sweep {
 
+        /**
+         * The requests that need the server thread (power, player action, configuration, command) run nothing while
+         * disabling: their hand-off goes through {@code scheduleUnlessDisabling}. The requests served off the server
+         * thread -- {@code properties.*} and {@code files.*} on the connection's file worker, {@code module.request} on
+         * the responder registry's workers -- are still served until {@code onDisable} closes the connection a moment
+         * later; for them this case pins only the #621 guarantee (nothing is scheduled for the disabled plugin, no
+         * WARNING). Recorded as an open question in 22-23-SUMMARY.md, not changed here.
+         */
         @Test
-        @DisplayName("each of the framework-owned types while disabling is dropped quietly")
-        void everyFrameworkOwnedTypeIsDropped() {
+        @DisplayName("every remote request while disabling: nothing scheduled for the disabled plugin, no WARNING; "
+                + "server-thread actions do not run")
+        void everyRemoteRequestWhileDisablingIsQuiet() throws Exception {
+            PlayerActionEndToEndTest.KickablePlayer player =
+                    new PlayerActionEndToEndTest.KickablePlayer(server, "Notch_fan");
+            server.addPlayer(player);
             disabling();
-            List<String> types = new ArrayList<>(PluginInitiationUtils.inboundDispatchTable().keySet());
-            assertThat(types).as("control: the dispatch table is populated").contains("subscribe", "execute_command");
+            int scheduledBefore = server.getScheduler().enabledCalls.size();
 
-            for (String type : types) {
-                records.clear();
-                PluginInitiationUtils.handleInboundMessage(message(type));
-                assertDroppedQuietly(type);
+            String[][] requests = {
+                    {"server.power", "stop"},
+                    {"player.action", "kick-with-reason"},
+                    {"config.update", "two-changes"},
+                    {"command.execute", "say"},
+                    {"files.list", "root"},
+                    {"properties.get", "all"},
+                    {"module.request", "ultimail"},
+                    {"snapshot.request", "all"},
+            };
+            for (String[] request : requests) {
+                session.send(request[0], request[1], null);
             }
-            assertThat(published).isEmpty();
-            verify(panelWs, never()).sendMessage(any(JsonObject.class));
+            session.pass(1500L);
+
+            assertThat(session.executions()).as("command executed").isZero();
+            assertThat(player.isOnline()).as("the player was not kicked").isTrue();
+            assertThat(server.getScheduler().enabledCalls.subList(scheduledBefore,
+                    server.getScheduler().enabledCalls.size())).as("no power stop or other task was scheduled")
+                    .isEmpty();
+            assertThat(session.stub().gateway().received("player.action.result")).isEmpty();
+            assertThat(session.stub().gateway().received("config.update.result")).isEmpty();
+            assertQuiet("sweep");
         }
 
         @Test
-        @DisplayName("a module-claimed responder type while disabling is dropped before its responder runs")
-        void moduleResponderTypeIsDropped() throws Exception {
-            disabling();
+        @DisplayName("control: while enabled a properties update, a module request and a player kick run")
+        void enabledRequestsRun() throws Exception {
+            PlayerActionEndToEndTest.KickablePlayer player =
+                    new PlayerActionEndToEndTest.KickablePlayer(server, "Notch_fan");
+            server.addPlayer(player);
+            Path properties = session.serverRoot().resolve("server.properties");
+            byte[] before = "motd=Old\nview-distance=10\npvp=true\n".getBytes(StandardCharsets.UTF_8);
+            Files.write(properties, before);
+            JsonObject base = new JsonObject();
+            base.addProperty("baseVersion", sha256(before));
 
-            PluginInitiationUtils.handleInboundMessage(message(MODULE_TYPE));
+            session.send("properties.update", "motd-and-view-distance", base);
+            session.send("module.request", "ultimail", null);
+            session.send("player.action", "kick-with-reason", null);
+            JsonObject update = session.reply("properties.update.result", 1);
+            session.reply("module.response", 1);
+            session.reply("player.action.result", 1);
 
-            assertThat(responded.await(300, TimeUnit.MILLISECONDS)).as("the responder did not run").isFalse();
-            assertDroppedQuietly(MODULE_TYPE);
-            assertThat(respondedTypes).isEmpty();
+            assertThat(new String(Files.readAllBytes(properties), StandardCharsets.UTF_8)).as(update.toString())
+                    .contains("motd=Welcome");
+            assertThat(responderCalls.get()).isEqualTo(1);
+            assertThat(player.isOnline()).as("the player was kicked").isFalse();
+            assertQuiet("control");
         }
-
-        @Test
-        @DisplayName("control: a module-claimed responder type while enabled reaches its responder")
-        void moduleResponderTypeWhileEnabledIsServed() throws Exception {
-            PluginInitiationUtils.handleInboundMessage(message(MODULE_TYPE));
-            server.getScheduler().performOneTick();
-
-            assertThat(responded.await(5, TimeUnit.SECONDS)).as("the responder ran").isTrue();
-            assertThat(respondedTypes).containsExactly(MODULE_TYPE);
-            assertThat(published).hasSize(1);
-        }
-
-        @Test
-        @DisplayName("a handshake completing while disabling wires nothing and schedules nothing")
-        void handshakeWhileDisablingWiresNothing() {
-            disabling();
-
-            PluginInitiationUtils.onWebSocketOpened(panelWs);
-
-            assertThat(disabledScheduling).isEmpty();
-            verify(panelWs, never()).subscribeToServer(anyString());
-            assertThat(messages(Level.WARNING)).isEmpty();
-            assertThat(messages(Level.SEVERE)).isEmpty();
-        }
-    }
-
-    /**
-     * Gate-1 WR-03: the entry drops above stop everything before an inner guard is reached, so these
-     * reach the inner guards directly -- the scheduler refusing in the moment between the check and
-     * the call, and one inner site (the remote command hand-off) while disabling.
-     */
-    @Nested
-    @DisplayName("inner guards: the race branch and one hand-off site")
-    class InnerGuards {
 
         @Test
         @DisplayName("the scheduler refuses after the check passed: dropped, null, one FINE line, no WARNING")
         void refusalBetweenCheckAndSchedulerIsDropped() {
+            int before = at(Level.FINE).size();
             Object scheduled = PluginInitiationUtils.scheduleUnlessDisabling("race probe", () -> {
                 throw new IllegalPluginAccessException("Plugin attempted to register task while disabled");
             });
 
             assertThat(scheduled).isNull();
-            assertDroppedQuietly("race probe");
+            List<LogRecord> fine = at(Level.FINE);
+            assertThat(fine).hasSize(before + 1);
+            assertThat(fine.get(fine.size() - 1).getMessage()).contains("race probe");
+            assertThat(fine.get(fine.size() - 1).getThrown()).isNull();
+            assertQuiet("race probe");
         }
 
         @Test
@@ -337,24 +246,69 @@ class ShutdownPanelMessageTracerTest {
             Object scheduled = PluginInitiationUtils.scheduleUnlessDisabling("accepted probe", () -> "task");
 
             assertThat(scheduled).isEqualTo("task");
-            assertThat(at(Level.FINE)).isEmpty();
+        }
+    }
+
+    /** A MockBukkit server whose scheduler refuses a disabled plugin's task the way Paper's does. */
+    static final class ValidatingServer extends ServerMock {
+        private ValidatingScheduler validating;
+
+        @Override
+        public ValidatingScheduler getScheduler() {
+            if (validating == null) {
+                validating = new ValidatingScheduler();
+            }
+            return validating;
+        }
+    }
+
+    /** Records every scheduling call by whether its plugin was enabled; refuses a disabled one. */
+    static final class ValidatingScheduler extends BukkitSchedulerMock {
+        final List<String> enabledCalls = new CopyOnWriteArrayList<>();
+        final List<String> disabledCalls = new CopyOnWriteArrayList<>();
+
+        private void check(Plugin plugin, String call) {
+            if (!plugin.isEnabled()) {
+                disabledCalls.add(call);
+                throw new IllegalPluginAccessException("Plugin attempted to register task while disabled");
+            }
+            enabledCalls.add(call);
         }
 
-        @Test
-        @DisplayName("the remote command hand-off while disabling schedules nothing and logs no WARNING")
-        void remoteCommandHandOffWhileDisablingIsDropped() {
-            CommandExecutionManager manager = new CommandExecutionManager();
-            disabling();
-            JsonObject data = new JsonObject();
-            data.addProperty("command", "say hi");
-            data.addProperty("commandId", "c1");
+        @Override
+        public BukkitTask runTask(Plugin plugin, Runnable task) {
+            check(plugin, "runTask");
+            return super.runTask(plugin, task);
+        }
 
-            manager.executeCommand(data);
+        @Override
+        public BukkitTask runTaskLater(Plugin plugin, Runnable task, long delay) {
+            check(plugin, "runTaskLater");
+            return super.runTaskLater(plugin, task, delay);
+        }
 
-            assertThat(disabledScheduling).as("scheduler calls for the disabled plugin").isEmpty();
-            assertThat(messages(Level.WARNING)).isEmpty();
-            assertThat(messages(Level.SEVERE)).isEmpty();
-            assertThat(messages(Level.FINE)).anyMatch(line -> line.contains("remote command"));
+        @Override
+        public BukkitTask runTaskTimer(Plugin plugin, Runnable task, long delay, long period) {
+            check(plugin, "runTaskTimer");
+            return super.runTaskTimer(plugin, task, delay, period);
+        }
+
+        @Override
+        public BukkitTask runTaskAsynchronously(Plugin plugin, Runnable task) {
+            check(plugin, "runTaskAsynchronously");
+            return super.runTaskAsynchronously(plugin, task);
+        }
+
+        @Override
+        public int scheduleSyncDelayedTask(Plugin plugin, Runnable task, long delay) {
+            check(plugin, "scheduleSyncDelayedTask");
+            return super.scheduleSyncDelayedTask(plugin, task, delay);
+        }
+
+        @Override
+        public int scheduleSyncDelayedTask(Plugin plugin, Runnable task) {
+            check(plugin, "scheduleSyncDelayedTask");
+            return super.scheduleSyncDelayedTask(plugin, task);
         }
     }
 }
