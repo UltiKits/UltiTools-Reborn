@@ -12,12 +12,9 @@ import org.jetbrains.annotations.ApiStatus;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
-import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.PanelMessageEvent;
-import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * Start-up and shutdown entry points of the UltiCloud connection.
@@ -237,23 +234,6 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Test-only: installs {@code client} as {@link CloudSession#current()}'s legacy WebSocket client and
-     * returns whatever was there before. Package-private, reached via reflection from
-     * {@code CapabilityGateIndependenceTest} (package {@code manager}), which drives the legacy manager
-     * wiring kept unreachable until 6.4.0 (S-67); {@code CloudSession} itself is package-private and cannot
-     * be named from outside {@code utils}.
-     *
-     * @param client the client to install, or {@code null}
-     * @return the client that was previously installed, or {@code null}
-     */
-    static UltiPanelWebSocketClient setWebSocketClientForTesting(UltiPanelWebSocketClient client) {
-        CloudSession session = CloudSession.current();
-        UltiPanelWebSocketClient previous = session.getWebSocketClient();
-        session.setWebSocketClient(client);
-        return previous;
-    }
-
-    /**
      * Loads the saved server credential into the current session without any network I/O.
      * No user token is loaded, refreshed or sent to a legacy registration endpoint.
      *
@@ -294,58 +274,6 @@ public class PluginInitiationUtils {
     /** Stops device-login polling; the server credential never expires, so no refresh scheduler exists. */
     public static void stopCredentialSchedulers() {
         CloudSession.current().stopPolling();
-    }
-
-    /**
-     * Login to UltiPanel using an existing token (a saved 6.3.0 token).
-     * Registers or updates the server without needing username/password.
-     * <p>
-     * Package-private as of plan 16-09 (D-18) -- a public static method accepting a
-     * {@link TokenEntity} is exactly the static bypass D-18's structural invariant forbids. Reached
-     * only through {@link #resumeSavedCredentialOnStartup()}; the 6.3.0 magic-link login that also
-     * called it was replaced by the protocol v2 device login in 6.3.1 (plan 22-01).
-     *
-     * @param existingToken the pre-authenticated token
-     * @return true if server registration/update succeeded
-     * @throws IOException if an I/O error occurs
-     */
-    static boolean loginWithToken(TokenEntity existingToken) throws IOException {
-        String uuid = CommonUtils.getUltiToolsUUID();
-        int port = org.bukkit.Bukkit.getServer().getPort();
-        String domain = "";
-        boolean ssl = true;
-
-        try (Response uuidResponse = HttpRequestUtils.getServerByUUID(uuid, existingToken)) {
-            if (uuidResponse.getStatus() == 404) {
-                String serverName = org.bukkit.Bukkit.getServer().getName();
-                if (serverName == null || serverName.trim().isEmpty()) {
-                    serverName = "MC Server";
-                }
-                if (serverName.length() > 64) {
-                    serverName = serverName.substring(0, 64);
-                }
-                try (Response registerResponse = HttpRequestUtils.registerServer(uuid, serverName, port, domain, ssl, existingToken)) {
-                    if (!registerResponse.isOk()) {
-                        UltiTools.getInstance().getLogger().log(Level.WARNING,
-                            "Server registration failed: HTTP " + registerResponse.getStatus() + " - " + registerResponse.body());
-                        return false;
-                    }
-                }
-            } else if (uuidResponse.isOk()) {
-                try (Response updateResponse = HttpRequestUtils.updateServer(uuid, port, domain, ssl, existingToken)) {
-                    if (!updateResponse.isOk()) {
-                        UltiTools.getInstance().getLogger().log(Level.WARNING,
-                            "Server update failed: HTTP " + updateResponse.getStatus() + " - " + updateResponse.body());
-                        return false;
-                    }
-                }
-            } else {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    "Failed to check server status: HTTP " + uuidResponse.getStatus() + " - " + uuidResponse.body());
-                return false;
-            }
-        }
-        return true;
     }
 
     /**
@@ -462,49 +390,6 @@ public class PluginInitiationUtils {
         }
     }
 
-    /**
-     * Wires all WebSocket managers up to the current connection, on {@link CloudSession#current()}.
-     * <p>
-     * This method hangs off {@code onConnectHandler}, and an in-flight handshake can still land
-     * after {@code /ulticloud logout}. Without a guard, the listeners {@code disableCloud()} just
-     * tore down would be reinstalled verbatim by this late-arriving onOpen — the exact same "no one
-     * owns the decision" defect from #181/#223, resurfacing in a different place.
-     * <p>
-     * As of 16-08 Task 2 the actual wiring and its re-check-while-locked guard both live on
-     * {@link CloudSession} itself (its own intrinsic lock replaces the former global
-     * the former global lifecycle lock — see {@link CloudSession#initializeManagers()}). This method is
-     * now a one-line delegator, kept package-private (not private) only so it can still be reached
-     * by name via reflection from tests in other packages (see the two review rounds on PR #264 for
-     * why the guard exists at all).
-     */
-    static void initializeManagers() {
-        CloudSession.current().initializeManagers();
-    }
-
-    /**
-     * Logs one INFO entry for a skipped outbound capability, naming which capability and which
-     * config key caused the skip.
-     * <p>
-     * This log line matters especially for {@link Capability#MONITORING}: {@code sendBatchUpdate}
-     * firing every 5 seconds is the panel's only source of liveness updates — turning monitoring off
-     * stops those updates, and whether the panel then shows the server as offline depends on the
-     * panel's own status cache (the Worker's cache has no expiry), so the panel may keep showing the
-     * last status. Either way the symptom (frozen dashboard values) points operators in the wrong
-     * direction (they go check the network and the token, not the config). D-08 already
-     * set monitoring's out-of-the-box default to enabled as the first layer of mitigation; this log
-     * line is the second.
-     * <p>
-     * Package-private (not private) as of 16-08 Task 2 -- {@link CloudSession}'s own
-     * {@code wireManagers()} calls this too, now that the wiring logic lives there.
-     *
-     * @param capability the capability that was skipped
-     */
-    static void logSkippedCapability(Capability capability) {
-        UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
-                "[UltiPanel] Skipped %s wiring — capability disabled (%s)",
-                capability.name(), capability.getConfigPath()));
-    }
-
     /** Restarts the current session's v2 connection without loading or refreshing a user token. */
     public static void reinitWebSocket() {
         reinitWebSocket(CloudSession.current());
@@ -534,11 +419,9 @@ public class PluginInitiationUtils {
      * WR-01, this now happens INSIDE {@link CloudSession#invalidate()} rather than as a separate,
      * unlocked step before it -- see that method's own javadoc), and stops the server monitor and
      * the player-event listener — all part of what makes the statement "cloud features are
-     * disabled" true. As of 16-08 Task 2 this no longer needs its own
-     * the former global lifecycle lock: {@link CloudSession#invalidate()} and
-     * {@link CloudSession#initializeManagers()} both synchronize on the session instance itself, so
-     * wiring and teardown are mutually exclusive on that lock without a separate global one. See
-     * the two review rounds on PR #264 for the original race this replaces.
+     * disabled" true. The teardown synchronizes on the session instance itself
+     * ({@link CloudSession#invalidate()}); see the two review rounds on PR #264 for the original race
+     * the former global lifecycle lock guarded.
      * <p>
      * <b>CR-01 (16-REVIEW-cloud.md):</b> {@link #disableCloud(CloudSession)} -- the overload internal
      * callers use -- returns the exact session that overload tore down, captured by the caller
@@ -601,24 +484,23 @@ public class PluginInitiationUtils {
      * @return {@code session}
      */
     private static CloudSession doDisableCloud(CloudSession session) {
-        // Invalidating the session covers what used to be five separate steps: shut down the log
-        // stream manager, stop the refresh schedule, stop the magic-link polling, close the
-        // WebSocket client, and invalidate anything already in flight. One call, one lock (the
+        // Invalidating the session covers what used to be several separate steps: shut down the log
+        // stream manager, stop the device-login polling, close the agent connection, and invalidate
+        // anything already in flight. One call, one lock (the
         // session's own), so none of those pieces can be caught mid-transition by a concurrent
         // activation. See CloudSession#invalidate()'s own javadoc for why this single call is
         // sufficient where the old code needed a careful multi-step order. This step always runs,
         // regardless of currency -- a session invalidating itself again after already being
         // superseded is a harmless no-op (see CloudSession#invalidate()'s own idempotency note).
         teardownStep("invalidating the cloud session (shuts down the log stream manager, stops the "
-                + "refresh scheduler, the polling, closes the WebSocket client, and discards "
-                + "anything already in flight)",
+                + "polling, closes the agent connection, and discards anything already in flight)",
             session::invalidate);
 
         // Round-1 review, fourth pass (16-10, PR #464): the currency check and the two
         // global-manager teardown steps below must be ATOMIC with session replacement, not just
         // consulted once before them. A one-time, unlocked read here (the prior fix's shape) still
         // leaves a TOCTOU window: another login's startNew() -- and, immediately afterward, that
-        // fresh session's own onOpen wiring the same global managers -- can land in the gap between
+        // fresh session's own connection start reaching the same global managers -- can land in the gap between
         // this check and the actual stopMonitoring()/shutdown() calls, so the stale teardown below
         // still runs and undoes wiring that belongs to a session that, by the time it executes,
         // already exists and is already current.
@@ -627,7 +509,7 @@ public class PluginInitiationUtils {
         // CloudSession#startNew() itself already synchronizes on -- no new lock object, no
         // cross-package change. The reasoning: startNew() is the only thing that can make
         // `session != CloudSession.current()` become true, and a newly-installed session's own
-        // wireManagers() call cannot begin before startNew() itself returns (the session object
+        // connection cannot start before startNew() itself returns (the session object
         // does not exist yet). Serializing this whole check-then-act block against startNew()
         // therefore serializes it, transitively, against the new session's wiring too: either this
         // block finishes entirely before any subsequent startNew() call can even start (so nothing
@@ -687,51 +569,6 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Atomically, inside the session's own lock: "re-check that {@code session} is still current →
-     * connect → start the refresh schedule."
-     * <p>
-     * Making only the credential-write step atomic against logout is not enough: after committing a
-     * credential, magic-link polling still has to do {@code initWebsocket()} +
-     * {@code session.startTokenRefreshScheduler()}, and that sequence is what actually connects the
-     * server back. If logout lands in the gap between "commit succeeded" and "activation started,"
-     * teardown tears down a connection that has not been built yet, and the polling thread goes
-     * ahead and builds it anyway — undoing the logout.
-     * <p>
-     * This method synchronizes on {@code session} itself, the same monitor
-     * {@link CloudSession#invalidate()} uses, so the two can only ever happen as a whole, one after
-     * the other: either activation completes first and is then torn down (clean), or teardown
-     * happens first and this method, re-checking {@code session}'s own currency while holding the
-     * lock, sees it is no longer current and returns false directly (also clean). Checking
-     * {@code session.isCurrent()} rather than comparing against a shared counter is exactly what
-     * makes this re-check ordering-independent (D-16/D-18): the session this call was handed either
-     * still is what it was, or it is not, regardless of how many other sessions have come and gone
-     * in between. As of 16-08 Task 2 there is no separate "enable" step: a session that passes this
-     * check is, by definition, the thing "enabled" now means.
-     * <p>
-     * Deliberately does <b>not</b> call {@code loginWithToken()} while holding the lock — that is an
-     * HTTP round trip, and doing it under the lock would block {@code /ulticloud logout} on the main
-     * thread for several seconds. It only registers the server with the panel and does not change
-     * local state, so running it again outside the lock is harmless.
-     *
-     * @param session the session the caller recorded when this login/activation started
-     * @return {@code true} if activated; {@code false} if the session had already been invalidated
-     *         and activation was abandoned
-     * @throws IOException if establishing the connection fails
-     */
-    static boolean activateCloudIfCurrent(CloudSession session) throws IOException {
-        synchronized (session) {
-            if (!session.isCurrent()) {
-                UltiTools.getInstance().getLogger().log(Level.INFO,
-                    "Cloud activation aborted — a logout happened while this login was completing");
-                return false;
-            }
-            initWebsocket(session);
-            session.startTokenRefreshScheduler();
-            return true;
-        }
-    }
-
-    /**
      * Ensures the current session is usable, replacing it with a fresh one if it has been
      * invalidated.
      * <p>
@@ -743,14 +580,14 @@ public class PluginInitiationUtils {
      * As of 16-08 Task 2 there is no separate enabled flag to flip: "enabled" simply
      * means {@link CloudSession#current()} is not invalidated. If it already is not (the common
      * case -- most callers reach this with a perfectly good session already installed), the session
-     * itself is not replaced; doing so for no reason would gratuitously drop its token and its
-     * WebSocket client. Only a session that {@link CloudSession#invalidate()} already ran on
+     * itself is not replaced; doing so for no reason would gratuitously drop its credential and its
+     * connection. Only a session that {@link CloudSession#invalidate()} already ran on
      * (typically {@code disableCloud()}, without a following {@code /ulticloud login}) gets
      * replaced.
      * <p>
      * <b>16-10 gap-closure addendum (round-12 review, PR #464):</b> {@link CloudSession#getBackoff()}
      * is reset unconditionally below, regardless of whether the session itself needed replacing --
-     * unlike the token and the WebSocket client, reconnect-attempt history is NOT worth preserving
+     * unlike the credential and the connection, reconnect-attempt history is NOT worth preserving
      * across a call to this method. Both of this method's own documented call sites -- cloud login
      * at server startup, and after a successful {@code /ulticloud login} -- are, by definition, a
      * fresh start of the connection-attempt cycle, matching the pre-6.3.0 global backoff's own
@@ -783,29 +620,4 @@ public class PluginInitiationUtils {
     public static void stopWebsocket() {
         CloudSession.current().invalidate();
     }
-
-    private static UltiPanelWebSocketClient getPanelWebsocketClient(TokenEntity token) throws IOException {
-        String apiUrl = UltiTools.getEnv().getString("api-url");
-        if (apiUrl == null || apiUrl.trim().isEmpty()) {
-            throw new IOException("API URL not configured in env.yml");
-        }
-        apiUrl = apiUrl.trim();
-
-        // Derive WebSocket URL from the API base URL
-        String wsUrl;
-        if (apiUrl.startsWith("https://")) {
-            wsUrl = "wss://" + apiUrl.substring("https://".length()) + "/ws";
-        } else if (apiUrl.startsWith("http://")) {
-            wsUrl = "ws://" + apiUrl.substring("http://".length()) + "/ws";
-        } else {
-            wsUrl = "wss://" + apiUrl + "/ws";
-        }
-
-        try {
-            return new UltiPanelWebSocketClient(wsUrl, CommonUtils.getUltiToolsUUID(), token.getAccess_token());
-        } catch (java.net.URISyntaxException e) {
-            throw new IOException("Invalid WebSocket URL: " + wsUrl, e);
-        }
-    }
-
 }

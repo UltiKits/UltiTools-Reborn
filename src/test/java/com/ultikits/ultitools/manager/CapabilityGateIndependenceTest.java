@@ -1,18 +1,10 @@
 package com.ultikits.ultitools.manager;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.contains;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -26,17 +18,20 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.TestHelper;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
- * Proves the four outbound capabilities (D-12) close by never starting their collection — never by
- * dropping data at a send exit — and that every {@code UltiTools} WebSocket manager getter stays
- * non-null regardless of capability configuration, because construction stays capability-free
- * (D-11).
+ * Proves the cloud teardown stays unconditional: whatever the capability switches say, logging out
+ * stops the server monitor and the player-event listener (the symmetry half of D-11/D-12).
  * <p>
- * Reaches {@code PluginInitiationUtils.initializeManagers()} via reflection: this class lives in
- * {@code manager}, a different package from {@code utils}. The wiring it drives is the legacy (protocol v1)
- * manager wiring that 6.3.1 keeps unreachable until 6.4.0 (S-67).
+ * Plan 22-24 removed the protocol v1 manager wiring ({@code PluginInitiationUtils.initializeManagers()},
+ * reachable only from the v1 handshake callback 22-23 deleted) and with it the nine cases that drove it
+ * through a mocked v1 client: monitoring, logs and player events skipped while their switch is off and started
+ * once while on, resolved independently of one another, and every manager still handed the v1 client with all
+ * switches off. On protocol v2 the same switches decide what the connection collects and declares:
+ * {@code OutboundWiringEndToEndTest} (telemetry only with a monitor, the logs switch off sends no
+ * {@code log.lines}, the player-event and error switches off send no frame), {@code AgentCapabilitiesTest} and
+ * {@code InboundWiringTest#helloDeclaresTheSwitches}; {@code NoV1RuntimePathTest} proves no framework path hands a
+ * manager a v1 client any more.
  * <p>
  * Plan 22-23 removed the v1 handshake callback ({@code onWebSocketOpened}) and with it the two
  * server-properties cases (no upload on connect while the switch is off, upload while on). On protocol v2 nothing
@@ -44,8 +39,8 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * is on ({@code InboundWiringTest#helloDeclaresTheSwitches}) and a request is refused while it is off
  * ({@code CapabilityGateTracerTest}).
  */
-@DisplayName("能力开关的出站独立性 —— wireManagers")
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reflection to reach package-private test seams
+@DisplayName("能力开关与云拆线的对称性")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // tearDown clears the UltiTools singleton
 class CapabilityGateIndependenceTest {
 
     private Logger mockLogger;
@@ -58,8 +53,6 @@ class CapabilityGateIndependenceTest {
     private ErrorReportCollector mockErrorReportCollector;
     private RemoteActionLog mockRemoteActionLog;
     private ConfigManager mockConfigManager;
-    private UltiPanelWebSocketClient mockPanelWs;
-    private Object previousPanelWs;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -92,18 +85,11 @@ class CapabilityGateIndependenceTest {
                     .thenAnswer(invocation -> invocation.getArgument(0));
         });
 
-        mockPanelWs = mock(UltiPanelWebSocketClient.class);
-        lenient().when(mockPanelWs.getServerId()).thenReturn("test-server-uuid");
-        lenient().when(mockPanelWs.isConnected()).thenReturn(true);
-        previousPanelWs = setPanelWs(mockPanelWs);
-
         PluginInitiationUtils.enableCloud();
     }
 
     @AfterEach
     void tearDown() throws Exception {
-        // panelWS 是静态字段，不还原会漏给同一个 JVM 里后面的测试类。
-        setPanelWs(previousPanelWs);
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
         instanceField.set(null, null);
@@ -111,19 +97,6 @@ class CapabilityGateIndependenceTest {
 
     private static YamlConfiguration emptyConfig() {
         return new YamlConfiguration();
-    }
-
-    private static YamlConfiguration configWith(String path, boolean value) {
-        YamlConfiguration config = new YamlConfiguration();
-        config.set(path, value);
-        return config;
-    }
-
-    private static YamlConfiguration configWithTwo(String pathA, boolean valueA, String pathB, boolean valueB) {
-        YamlConfiguration config = new YamlConfiguration();
-        config.set(pathA, valueA);
-        config.set(pathB, valueB);
-        return config;
     }
 
     private static YamlConfiguration configWithAllEightDisabled() {
@@ -134,163 +107,6 @@ class CapabilityGateIndependenceTest {
             }
         }
         return config;
-    }
-
-    private Object setPanelWs(Object value) throws Exception {
-        // As of plan 16-08 Task 2 the WebSocket client is CloudSession-owned, not a static field on
-        // PluginInitiationUtils. CloudSession itself is package-private (utils), so this different
-        // package (manager) cannot even compile a reference to it -- setWebSocketClientForTesting()
-        // is the seam PluginInitiationUtils exposes instead, reached the same reflective way this
-        // class already reaches initializeManagers().
-        Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "setWebSocketClientForTesting", UltiPanelWebSocketClient.class);
-        method.setAccessible(true);
-        return method.invoke(null, (UltiPanelWebSocketClient) value);
-    }
-
-    private static void invokeInitializeManagers() throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod("initializeManagers");
-        method.setAccessible(true);
-        method.invoke(null);
-    }
-
-    @Nested
-    @DisplayName("monitoring 能力")
-    class MonitoringCapability {
-
-        @Test
-        @DisplayName("禁用时：仍设置 client 引用，但从不调用 startMonitoring，并记一条 INFO")
-        void disabledSkipsStartMonitoringButStillSetsClient() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig())
-                    .thenReturn(configWith(Capability.MONITORING.getConfigPath(), false));
-
-            invokeInitializeManagers();
-
-            verify(mockServerMonitorManager).setWebSocketClient(mockPanelWs);
-            verify(mockServerMonitorManager, never()).startMonitoring();
-            verify(mockLogger).log(eq(Level.INFO), contains(Capability.MONITORING.getConfigPath()));
-        }
-
-        @Test
-        @DisplayName("启用时：startMonitoring 恰好被调用一次")
-        void enabledCallsStartMonitoringExactlyOnce() throws Exception {
-            invokeInitializeManagers();
-
-            verify(mockServerMonitorManager, times(1)).startMonitoring();
-        }
-    }
-
-    @Nested
-    @DisplayName("logs 能力")
-    class LogsCapability {
-
-        @Test
-        @DisplayName("禁用时：LogStreamManager.initialize 从不被调用，并记一条 INFO")
-        void disabledSkipsInitialize() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig())
-                    .thenReturn(configWith(Capability.LOGS.getConfigPath(), false));
-
-            invokeInitializeManagers();
-
-            verify(mockLogStreamManager, never()).initialize(any());
-            verify(mockLogger).log(eq(Level.INFO), contains(Capability.LOGS.getConfigPath()));
-        }
-
-        @Test
-        @DisplayName("启用时：initialize 恰好被调用一次")
-        void enabledCallsInitializeExactlyOnce() throws Exception {
-            invokeInitializeManagers();
-
-            verify(mockLogStreamManager, times(1)).initialize(mockPanelWs);
-        }
-    }
-
-    @Nested
-    @DisplayName("player-events 能力")
-    class PlayerEventsCapability {
-
-        @Test
-        @DisplayName("禁用时：PlayerEventManager.initialize 从不被调用，并记一条 INFO")
-        void disabledSkipsInitialize() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig())
-                    .thenReturn(configWith(Capability.PLAYER_EVENTS.getConfigPath(), false));
-
-            invokeInitializeManagers();
-
-            verify(mockPlayerEventManager, never()).initialize(any());
-            verify(mockLogger).log(eq(Level.INFO), contains(Capability.PLAYER_EVENTS.getConfigPath()));
-        }
-
-        @Test
-        @DisplayName("启用时：initialize 恰好被调用一次")
-        void enabledCallsInitializeExactlyOnce() throws Exception {
-            invokeInitializeManagers();
-
-            verify(mockPlayerEventManager, times(1)).initialize(mockPanelWs);
-        }
-    }
-
-    @Nested
-    @DisplayName("D-11：全部八个能力关闭时，构造与 getter 均不受影响")
-    class NullSafetyAcrossAllCapabilitiesDisabled {
-
-        @Test
-        @DisplayName("每一个 UltiTools WebSocket 管理器 getter 仍然非空，且接线不抛异常")
-        void everyManagerGetterStaysNonNull() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig()).thenReturn(configWithAllEightDisabled());
-
-            invokeInitializeManagers();
-
-            assertThat(UltiTools.getInstance().getServerMonitorManager()).isNotNull();
-            assertThat(UltiTools.getInstance().getCommandExecutionManager()).isNotNull();
-            assertThat(UltiTools.getInstance().getFileOperationManager()).isNotNull();
-            assertThat(UltiTools.getInstance().getServerPropertiesManager()).isNotNull();
-            assertThat(UltiTools.getInstance().getLogStreamManager()).isNotNull();
-            assertThat(UltiTools.getInstance().getPlayerEventManager()).isNotNull();
-            assertThat(UltiTools.getInstance().getErrorReportCollector()).isNotNull();
-
-            // 每个管理器仍然拿到了 client 引用——只有「启动采集」被关掉，管理器本身从未被
-            // 摘掉或替换成 null（D-11）。
-            verify(mockServerMonitorManager).setWebSocketClient(mockPanelWs);
-            verify(mockCommandExecutionManager).setWebSocketClient(mockPanelWs);
-            verify(mockFileOperationManager).setWebSocketClient(mockPanelWs);
-            verify(mockServerPropertiesManager).setWebSocketClient(mockPanelWs);
-
-            verify(mockServerMonitorManager, never()).startMonitoring();
-            verify(mockLogStreamManager, never()).initialize(any());
-            verify(mockPlayerEventManager, never()).initialize(any());
-        }
-    }
-
-    @Nested
-    @DisplayName("能力之间彼此独立解析（D-11, REMOTE-01 adjacency edge）")
-    class IndependentResolution {
-
-        @Test
-        @DisplayName("monitoring 关闭、logs 开启：logs 仍按自己的键决定，不受 monitoring 影响")
-        void monitoringOffLogsOnAreResolvedIndependently() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig()).thenReturn(configWithTwo(
-                    Capability.MONITORING.getConfigPath(), false,
-                    Capability.LOGS.getConfigPath(), true));
-
-            invokeInitializeManagers();
-
-            verify(mockServerMonitorManager, never()).startMonitoring();
-            verify(mockLogStreamManager, times(1)).initialize(mockPanelWs);
-        }
-
-        @Test
-        @DisplayName("logs 关闭、monitoring 开启：monitoring 仍按自己的键决定，不受 logs 影响")
-        void logsOffMonitoringOnAreResolvedIndependently() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig()).thenReturn(configWithTwo(
-                    Capability.LOGS.getConfigPath(), false,
-                    Capability.MONITORING.getConfigPath(), true));
-
-            invokeInitializeManagers();
-
-            verify(mockServerMonitorManager, times(1)).startMonitoring();
-            verify(mockLogStreamManager, never()).initialize(any());
-        }
     }
 
     @Nested

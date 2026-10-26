@@ -73,11 +73,7 @@ class CloudReconnectStateMachineTest {
             // 此时静态字段还是 null。改成 answer 之后求值推迟到真正被调用时，那时已经发布完毕。
             lenient().when(ultiTools.getLogStreamManager())
                     .thenAnswer(invocation -> LogStreamManager.getInstance());
-            // CloudSession#wireManagers() 对这两个 manager 的取用没有 null 判空（与
-            // ServerPropertiesManager/PlayerEventManager 不同）——不打桩的话，任何真正走完整
-            // wireManagers() 路径（本类新增的 #465 用例需要）的用例都会在这里 NPE，被外层那个
-            // 大 try/catch 吞掉，永远走不到日志流那一步。16-10 补丁新增，此前本类的用例都只走
-            // initializeManagers() 的闸门检查本身，从未真正跑完整段接线。
+            // 16-10 补丁为 v1 的 wireManagers() 路径加的两个桩；22-24 删除了那段接线，桩保留无害。
             lenient().when(ultiTools.getCommandExecutionManager())
                     .thenReturn(mock(com.ultikits.ultitools.manager.CommandExecutionManager.class));
             lenient().when(ultiTools.getFileOperationManager())
@@ -262,51 +258,6 @@ class CloudReconnectStateMachineTest {
             assertThat(countFrameworkHandlersOnRootLogger())
                     .as("「云功能已关闭」应当包含不再劫持 root logger")
                     .isZero();
-        }
-
-        @Test
-        @DisplayName("#465（16-10 补丁）：一个已经被取代的旧会话，迟到的第二次拆线不得摘掉新会话"
-                + "刚刚装好的日志 handler")
-        void staleInvalidateOfASupersededSessionDoesNotDetachTheReplacementsLogHandler() {
-            // 1. 旧会话真正接好线（走完整的 wireManagers() 路径，而不是像本类其它用例那样直接
-            //    调 LogStreamManager.getInstance().initialize(...)）——只有这样才会记下
-            //    logStreamOwner = sessionOld，本用例要验的正是这份记录起作用。
-            CloudSession sessionOld = CloudSession.current();
-            PluginInitiationUtils.initializeManagers();
-            assertThat(countFrameworkHandlersOnRootLogger())
-                    .as("前置条件：旧会话已经接好了自己的日志 handler")
-                    .isEqualTo(1);
-
-            // 2. 旧会话第一次、正常地被拆线（例如一次真正的重连预算耗尽）——它当时确实是
-            //    logStreamOwner，所以这次关闭合法生效。
-            PluginInitiationUtils.disableCloud();
-            assertThat(countFrameworkHandlersOnRootLogger())
-                    .as("前置条件：旧会话第一次被拆线之后，日志 handler 已经摘掉")
-                    .isZero();
-
-            // 3. 一次新的登录换上全新会话，并接好它自己的日志流——这是 issue #465 描述的
-            //    「replacement session has completed onOpen」。
-            CloudSession sessionNew = CloudSession.startNew();
-            PluginInitiationUtils.initializeManagers();
-            assertThat(countFrameworkHandlersOnRootLogger())
-                    .as("前置条件：新会话已经接好了自己的日志 handler")
-                    .isEqualTo(1);
-
-            // 4. 复现 issue #465：一次迟到的重连耗尽回调，为 sessionOld（一个早已被取代、自己
-            //    也早已失效过一次的会话）再次调用 disableCloud(sessionOld)——doDisableCloud()
-            //    自己的注释就说明了这一步"总是无条件执行，不管当前性"：session::invalidate()
-            //    不看 currency 就会再跑一次，包括里面的日志流关闭步骤。
-            PluginInitiationUtils.disableCloud(sessionOld);
-
-            assertThat(countFrameworkHandlersOnRootLogger())
-                    .as("#465：迟到的旧会话第二次拆线，不得摘掉新会话刚刚装好的日志 handler")
-                    .isEqualTo(1);
-
-            // sessionNew 参与前置条件断言之外，本身也是本用例要证明「新会话不受影响」的对象——
-            // 显式确认它自己也还认为自己是当前会话，没有被这次针对 sessionOld 的调用误伤。
-            assertThat(sessionNew.isCurrent())
-                    .as("新会话不应被这次针对旧会话的迟到拆线连带影响")
-                    .isTrue();
         }
 
         @Test
@@ -603,7 +554,7 @@ class CloudReconnectStateMachineTest {
     /**
      * CR-02 (16-REVIEW-cloud.md): {@code reinitWebSocket}'s second confirmation, through to the
      * connection actually being established, must be covered by {@code session}'s own monitor --
-     * the same pattern {@code activateCloudIfCurrent} already used. Without it, an {@code invalidate()}
+     * the same pattern the 6.3.0 {@code activateCloudIfCurrent} used. Without it, an {@code invalidate()}
      * landing in that window leaves an already-invalidated session holding a live, authenticated
      * WebSocket connection nothing ever closes.
      */
@@ -798,34 +749,6 @@ class CloudReconnectStateMachineTest {
     class LateHandshakeIsIgnored {
 
         @Test
-        @DisplayName("云已关闭时 initializeManagers 直接返回")
-        void managersAreNotWiredWhenCloudDisabled() {
-            // logout 之后仍可能有一次在途的握手落地。没有这道闸的话，disableCloud() 刚摘掉的
-            // 监听器会被这次迟到的 onOpen 原样装回去——「谁都不是所有者」的毛病换个地方重现。
-            PluginInitiationUtils.disableCloud();
-
-            PluginInitiationUtils.initializeManagers();
-
-            // 断言接线动作本身没发生，而不是数 getServerMonitorManager() 被取过几次：
-            // 拆线路径现在也要取这个 manager 来 stopMonitoring，调用计数已不能区分两者。
-            Mockito.verify(mockMonitor, Mockito.never()).setWebSocketClient(Mockito.any());
-            Mockito.verify(mockMonitor).stopMonitoring();
-            assertThat(loggedAt(Level.FINE))
-                    .anySatisfy(line -> assertThat(line).contains("跳过管理器初始化"));
-        }
-
-        @Test
-        @DisplayName("云开启时照常接线")
-        void managersAreWiredWhenCloudEnabled() {
-            // 负向对照：闸门只该拦住关闭态，正常路径必须原样通过。
-            PluginInitiationUtils.enableCloud();
-
-            PluginInitiationUtils.initializeManagers();
-
-            Mockito.verify(UltiTools.getInstance(), Mockito.atLeastOnce()).getServerMonitorManager();
-        }
-
-        @Test
         @DisplayName("拆线之后到达的握手回调不得踩空会话已清空的客户端引用")
         void lateHandshakeDoesNotDereferenceClearedClient() {
             try {
@@ -858,12 +781,13 @@ class CloudReconnectStateMachineTest {
             // 之前，disableCloud() 完全可以插进来把会话置为失效并拆干净，随后接线一侧继续往下
             // 又装回去。状态位表达不了「检查与动作之间不许有人插队」，只有锁能。见 PR #264
             // 第二轮评审。6.3.0 起这把锁不再是一个独立的静态字段，而就是当前会话对象自己的
-            // 监视器——initializeManagers()/invalidate() 都在其上做 synchronized，本用例直接
-            // 用 CloudSession.current() 本身作为锁对象，不需要反射。
+            // 监视器——reinitWebSocket()（建连一侧）/invalidate() 都在其上做 synchronized，本用例
+            // 直接用 CloudSession.current() 本身作为锁对象，不需要反射。22-24 删除了 v1 的管理器
+            // 接线 initializeManagers()，建连一侧改由 v2 的 reinitWebSocket() 代表。
             Object lock = CloudSession.current();
 
             Runnable[] actions = {
-                PluginInitiationUtils::initializeManagers,
+                PluginInitiationUtils::reinitWebSocket,
                 PluginInitiationUtils::disableCloud
             };
 
@@ -902,12 +826,12 @@ class CloudReconnectStateMachineTest {
     }
 
     @Nested
-    @DisplayName("#465/#466 死锁自由性压测——CloudSession.class / 会话监视器 / LOG_WIRING_LOCK 这条锁序"
+    @DisplayName("#465/#466 死锁自由性压测——CloudSession.class / 会话监视器 / 连接监视器这条锁序"
             + "在四类并发路径下不得出现反序")
     class LockOrderDeadlockFreedom {
 
         @Test
-        @DisplayName("startNew / login / initializeManagers / disableCloud 四类操作并发混跑 200 轮，"
+        @DisplayName("startNew / login / reinitWebSocket / disableCloud 四类操作并发混跑 200 轮，"
                 + "ThreadMXBean 必须报告零死锁且全部任务在超时内完成")
         // PMD.JUnitTestsShouldIncludeAssert: 真正的断言在 runOneStressRound() 这个共享私有方法里
         // （lock-order-freedom 压测的主体逻辑），与本仓库 CLAUDE.md「Suppressing PMD in tests」
@@ -927,7 +851,7 @@ class CloudReconnectStateMachineTest {
         /**
          * 四类操作各提交 200 次到一个 4 线程池，混跑到全部完成，然后用
          * {@link ThreadMXBean#findDeadlockedThreads()} 核实没有任何线程互相卡死。之所以是
-         * "至少 200 轮或 2 秒"这个量级，是因为 CloudSession.class -> 会话监视器 -> LOG_WIRING_LOCK
+         * "至少 200 轮或 2 秒"这个量级，是因为 CloudSession.class -> 会话监视器 -> 连接监视器
          * 这条锁序里的任何一次反序，在四线程池、数百次提交的规模下几乎必然在合理时间内触发一次
          * AB-BA 死锁；单次串行调用测不出这类问题，因为死锁本身就是排队顺序的产物。
          */
@@ -945,16 +869,17 @@ class CloudReconnectStateMachineTest {
                             // 本用例只关心死锁自由性，不关心业务结果本身
                         }
                     });
-                    // 并发路径二：initializeManagers()——会话监视器外层，LOG_WIRING_LOCK 内层。
+                    // 并发路径二：reinitWebSocket()——会话监视器外层，连接的监视器内层（22-24 删除了
+                    // v1 的 initializeManagers() 与 LOG_WIRING_LOCK，建连路径由它代表）。
                     pool.submit(() -> {
                         try {
-                            PluginInitiationUtils.initializeManagers();
+                            PluginInitiationUtils.reinitWebSocket();
                         } catch (Throwable ignored) {
                             // 同上
                         }
                     });
-                    // 并发路径三：disableCloud()——先（不持锁）invalidate 自己的会话监视器 +
-                    // LOG_WIRING_LOCK，再（分开）CloudSession.class，两段不嵌套。
+                    // 并发路径三：disableCloud()——先（不持锁）invalidate 自己的会话监视器，
+                    // 再（分开）CloudSession.class，两段不嵌套。
                     pool.submit(() -> {
                         try {
                             PluginInitiationUtils.disableCloud();
@@ -986,8 +911,8 @@ class CloudReconnectStateMachineTest {
                 long[] deadlockedThreadIds = threadBean.findDeadlockedThreads();
 
                 assertThat(deadlockedThreadIds)
-                        .as("#465/#466：CloudSession.class -> 会话监视器 -> LOG_WIRING_LOCK 这条"
-                                + "文档化锁序，必须在 startNew/login/initializeManagers/disableCloud"
+                        .as("#465/#466：CloudSession.class -> 会话监视器 -> 连接监视器 这条"
+                                + "文档化锁序，必须在 startNew/login/reinitWebSocket/disableCloud"
                                 + "四类并发路径下保持一致，不能出现 AB-BA 死锁")
                         .isNull();
                 assertThat(completed)
