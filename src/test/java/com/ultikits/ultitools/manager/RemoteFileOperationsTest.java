@@ -66,6 +66,8 @@ class RemoteFileOperationsTest {
     private AgentMessageRouter router;
     private RecordingChannel channel;
     private List<RemoteActionLog.Entry> audit;
+    /** Whether the server is disabling, as the handler's read-audit check sees it. */
+    private volatile boolean disabling;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -84,7 +86,7 @@ class RemoteFileOperationsTest {
         files = new FileOperationManager();
         pointManagerAt(files, tmp, tmp.resolve("plugins"), tmp.resolve("logs"));
         audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
-        handler = new RemoteFileOperations(files, tmp.toFile(), audit::add);
+        handler = new RemoteFileOperations(files, tmp.toFile(), audit::add, () -> !disabling);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("files.list", handler);
         router.register("files.read", handler);
@@ -535,6 +537,29 @@ class RemoteFileOperationsTest {
             assertThat(audit.get(i).getReason()).as(type + " " + path)
                     .isEqualTo(only(channel).getAsJsonObject("payload").get("message").getAsString());
         }
+    }
+
+    @Test
+    @DisplayName("while the server disables, reads and listings are answered but not recorded; a write still is")
+    void readsWhileDisablingAreAnsweredButNotAudited() throws IOException {
+        Path config = write("plugins/UltiTools/config.yml", "a: 1\n");
+        disabling = true;
+
+        router.dispatch(readRequest("plugins/UltiTools/config.yml").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertError(readRequest(".ultikits/credentials.json"), "path_not_allowed");
+        assertError(listRequest(".ultikits"), "path_not_allowed");
+        channel.clear();
+        router.dispatch(listRequest("plugins").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(audit).as("no read is recorded once the disable started").isEmpty();
+
+        // A write the shutdown gate admitted before the disable started is still recorded when it completes.
+        channel.clear();
+        router.dispatch(writeRequest("plugins/UltiTools/config.yml", "a: 2\n",
+                RemoteFilesEndToEndTest.sha256(Files.readAllBytes(config))).toString(), channel);
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0).getAction()).isEqualTo("files.write");
     }
 
     @Test

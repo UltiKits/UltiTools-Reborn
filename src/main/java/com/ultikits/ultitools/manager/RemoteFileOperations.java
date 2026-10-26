@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -28,6 +29,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.ContractPrimitives;
 import com.ultikits.ultitools.utils.PayloadReader;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.PosixAttributePreserver;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
@@ -53,8 +55,8 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * panel received. A malformed payload is answered by the router before it reaches a decision and
  * records nothing. Content is never recorded. The log itself is injected, so the handler stays
  * testable and the wiring (plan 22-21) binds it to the live {@code RemoteActionLog}. Reads keep
- * being answered while the server disables; one answered after the action log closed leaves no
- * line, which loses no change because a read changes nothing.</p>
+ * being answered while the server disables, but from the first step of the disable they are no
+ * longer recorded: the disable closes the action log, and a read changes nothing.</p>
  *
  * <p>It is package-private on purpose: {@code resolveTarget} and {@code ResolvedTarget} are
  * package-private, and keeping the handler in this package is what makes calling them — rather
@@ -124,6 +126,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
     private final FileOperationManager files;
     private final File serverRoot;
     private final Consumer<RemoteActionLog.Entry> actionLog;
+    private final BooleanSupplier readsAudited;
 
     /** Test seam; see {@link #setWriteGate(Runnable)}. */
     private volatile Runnable writeGate;
@@ -139,9 +142,25 @@ final class RemoteFileOperations implements CloudRequestHandler {
      */
     RemoteFileOperations(FileOperationManager files, File serverRoot,
                          Consumer<RemoteActionLog.Entry> actionLog) {
+        this(files, serverRoot, actionLog, PluginInitiationUtils::isAcceptingPanelMessages);
+    }
+
+    /**
+     * Creates the handler with an explicit answer to "are reads recorded now".
+     *
+     * @param files        as for {@link #RemoteFileOperations(FileOperationManager, File, Consumer)}
+     * @param serverRoot   as for {@link #RemoteFileOperations(FileOperationManager, File, Consumer)}
+     * @param actionLog    as for {@link #RemoteFileOperations(FileOperationManager, File, Consumer)}
+     * @param readsAudited whether a {@code files.read} or {@code files.list} decision is recorded; production asks
+     *                     {@link PluginInitiationUtils#isAcceptingPanelMessages()}, so from the first step of the
+     *                     disable a read is still answered but writes no line to the closing action log
+     */
+    RemoteFileOperations(FileOperationManager files, File serverRoot,
+                         Consumer<RemoteActionLog.Entry> actionLog, BooleanSupplier readsAudited) {
         this.files = files;
         this.serverRoot = serverRoot;
         this.actionLog = actionLog;
+        this.readsAudited = readsAudited;
     }
 
     /**
@@ -251,7 +270,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
         data.addProperty("content", decodeUtf8(bytes));
         data.addProperty("version", sha256Hex(bytes));
         data.addProperty("sizeBytes", bytes.length);
-        auditAllowed(Capability.FILE_READ, FILES_READ, path);
+        auditReadAllowed(FILES_READ, path);
         channel.replyOk(request.id(), FILES_READ_RESULT, data);
     }
 
@@ -316,7 +335,7 @@ final class RemoteFileOperations implements CloudRequestHandler {
         data.addProperty("path", path);
         data.add("entries", entries);
         data.addProperty("truncated", truncated);
-        auditAllowed(Capability.FILE_READ, FILES_LIST, path);
+        auditReadAllowed(FILES_LIST, path);
         channel.replyOk(request.id(), FILES_LIST_RESULT, data);
     }
 
@@ -669,14 +688,14 @@ final class RemoteFileOperations implements CloudRequestHandler {
      */
     private void refuseRead(CloudChannel channel, String replyTo, String path, String code, String message) {
         String reason = capped(message);
-        auditDenied(Capability.FILE_READ, FILES_READ, path, reason);
+        auditReadDenied(FILES_READ, path, reason);
         error(channel, replyTo, FILES_READ_RESULT, code, reason);
     }
 
     /** Answers a refused {@code files.list} and records it, as {@link #refuseRead} does. */
     private void refuseList(CloudChannel channel, String replyTo, String path, String code, String message) {
         String reason = capped(message);
-        auditDenied(Capability.FILE_READ, FILES_LIST, path, reason);
+        auditReadDenied(FILES_LIST, path, reason);
         error(channel, replyTo, FILES_LIST_RESULT, code, reason);
     }
 
@@ -693,6 +712,23 @@ final class RemoteFileOperations implements CloudRequestHandler {
 
     private void auditDenied(Capability capability, String action, String target, String reason) {
         record(RemoteActionLog.Entry.denied(capability, action, target, PANEL_ACTOR, reason));
+    }
+
+    /**
+     * Records a served read or listing, unless the server is disabling: the disable closes the action log, and a
+     * read changes nothing, so leaving it out loses no change (the shutdown window records no remote action).
+     */
+    private void auditReadAllowed(String action, String target) {
+        if (readsAudited.getAsBoolean()) {
+            auditAllowed(Capability.FILE_READ, action, target);
+        }
+    }
+
+    /** Records a refused read or listing, unless the server is disabling, as {@link #auditReadAllowed} does. */
+    private void auditReadDenied(String action, String target, String reason) {
+        if (readsAudited.getAsBoolean()) {
+            auditDenied(Capability.FILE_READ, action, target, reason);
+        }
     }
 
     /**

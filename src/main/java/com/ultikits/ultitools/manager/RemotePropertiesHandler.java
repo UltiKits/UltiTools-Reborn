@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -16,6 +17,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.ContractPrimitives;
 import com.ultikits.ultitools.utils.PayloadReader;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
@@ -45,7 +47,8 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * <p><b>Every read is recorded too</b>, as 6.3.0 recorded its {@code server_properties} read: one
  * entry per {@code properties.get}, ALLOWED with the target {@code server.properties} when the
  * values were sent, DENIED with the text the panel received otherwise. Values are never
- * recorded.</p>
+ * recorded. From the first step of the disable a get is still answered but no longer recorded:
+ * the disable closes the action log, and a read changes nothing.</p>
  *
  * <p>Per-key results follow the contract: {@code ok} when every requested key was written,
  * {@code partial} when at least one was refused or is absent from the file while the others were
@@ -77,17 +80,33 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
 
     private final ServerPropertiesManager properties;
     private final Consumer<RemoteActionLog.Entry> actionLog;
+    private final BooleanSupplier readsAudited;
 
     /**
      * Creates the handler over the manager that owns the file.
      *
      * @param properties the manager whose read and update operations this handler exposes
-     * @param actionLog  receives one entry per update request, or {@code null} when the caller has
+     * @param actionLog  receives one entry per decided request, or {@code null} when the caller has
      *                   no action log to write to (tests and headless harnesses)
      */
     RemotePropertiesHandler(ServerPropertiesManager properties, Consumer<RemoteActionLog.Entry> actionLog) {
+        this(properties, actionLog, PluginInitiationUtils::isAcceptingPanelMessages);
+    }
+
+    /**
+     * Creates the handler with an explicit answer to "are reads recorded now".
+     *
+     * @param properties   the manager whose read and update operations this handler exposes
+     * @param actionLog    as for {@link #RemotePropertiesHandler(ServerPropertiesManager, Consumer)}
+     * @param readsAudited whether a {@code properties.get} is recorded; production asks
+     *                     {@link PluginInitiationUtils#isAcceptingPanelMessages()}, so from the first step of the
+     *                     disable a get is still answered but writes no line to the closing action log
+     */
+    RemotePropertiesHandler(ServerPropertiesManager properties, Consumer<RemoteActionLog.Entry> actionLog,
+                            BooleanSupplier readsAudited) {
         this.properties = properties;
         this.actionLog = actionLog;
+        this.readsAudited = readsAudited;
     }
 
     @Override
@@ -150,7 +169,9 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
         data.add("values", values);
         data.add("writable", writable);
         data.addProperty("version", snapshot.getVersion());
-        auditAllowed(PROPERTIES_GET, GET_TARGET);
+        if (readsAudited.getAsBoolean()) {
+            auditAllowed(PROPERTIES_GET, GET_TARGET);
+        }
         channel.replyOk(request.id(), PROPERTIES_GET_RESULT, data);
     }
 
@@ -341,8 +362,10 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
      */
     private void refuseGet(CloudChannel channel, String replyTo, String code, String message) {
         String reason = capped(message);
-        record(RemoteActionLog.Entry.denied(Capability.SERVER_PROPERTIES, PROPERTIES_GET, GET_TARGET,
-                PANEL_ACTOR, reason));
+        if (readsAudited.getAsBoolean()) {
+            record(RemoteActionLog.Entry.denied(Capability.SERVER_PROPERTIES, PROPERTIES_GET, GET_TARGET,
+                    PANEL_ACTOR, reason));
+        }
         error(channel, replyTo, PROPERTIES_GET_RESULT, code, reason);
     }
 

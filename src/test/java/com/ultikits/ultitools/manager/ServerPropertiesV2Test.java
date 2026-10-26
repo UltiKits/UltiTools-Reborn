@@ -72,6 +72,8 @@ class ServerPropertiesV2Test {
     private AgentMessageRouter router;
     private RecordingChannel channel;
     private List<RemoteActionLog.Entry> audit;
+    /** Whether the server is disabling, as the handler's read-audit check sees it. */
+    private volatile boolean disabling;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -89,7 +91,7 @@ class ServerPropertiesV2Test {
         Files.write(propsFile, SAMPLE.getBytes(StandardCharsets.UTF_8));
         properties = new ServerPropertiesManager(tmp.toFile());
         audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
-        handler = new RemotePropertiesHandler(properties, audit::add);
+        handler = new RemotePropertiesHandler(properties, audit::add, () -> !disabling);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("properties.get", handler);
         router.register("properties.update", handler);
@@ -351,6 +353,17 @@ class ServerPropertiesV2Test {
         router.dispatch(ContractFixtures.invalidFrames("properties.get").get(0).frame().toString(), channel);
         assertThat(only(channel).getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
         assertThat(audit).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("while the server disables a get is answered but not recorded")
+    void getWhileDisablingIsAnsweredButNotAudited() throws IOException {
+        disabling = true;
+        router.dispatch(ContractFixtures.object("fixtures/agent/properties.get/valid/all.json").toString(), channel);
+        assertThat(only(channel).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        Files.delete(propsFile);
+        assertGetError("not_found");
+        assertThat(audit).isEmpty();
     }
 
     // --------------------------------------------------------------------------------------
