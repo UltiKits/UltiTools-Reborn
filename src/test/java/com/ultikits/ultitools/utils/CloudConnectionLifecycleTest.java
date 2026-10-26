@@ -11,6 +11,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
@@ -43,11 +45,18 @@ class CloudConnectionLifecycleTest {
     private Gateway gateway;
     private AgentConnectionLoopbackTest.RawGateway raw;
     private Object previousPlugin;
+    /**
+     * The agent threads this test's own sessions started, oldest first. A thread is never looked up by its name: the
+     * name is JVM-wide, so an agent thread another test class left running (or one still winding down) would be taken
+     * for this test's, and every join or state check on it would fail.
+     */
+    private final List<Thread> agentThreads = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
         previousPlugin = UltiTools.getInstance();
         CloudSession.resetForTesting();
+        CloudSession.setAgentRuntimeForTesting(this::recordingAgentExecutor, null, null);
         ApiRateLimiter.resetAll();
         PluginInitiationUtils.startAcceptingPanelMessages();
         credentialFile = tempDir.resolve("credentials.json");
@@ -320,6 +329,37 @@ class CloudConnectionLifecycleTest {
     }
 
     @Test
+    void agentThreadIsTheOneThisSessionStartedEvenBesideAnotherWithTheSameName() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        List<Thread> decoys = new CopyOnWriteArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            Thread decoy = new Thread(() -> {
+                try {
+                    release.await();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }, "UltiTools-Cloud-Agent");
+            decoy.setDaemon(true);
+            decoy.start();
+            decoys.add(decoy);
+        }
+        try {
+            openGateway();
+            startSaved();
+            await(() -> gateway.peer != null, "connection beside the decoys");
+            Thread agent = agentThread();
+            assertThat(agent).isNotNull().isNotIn(decoys);
+            CloudSession.current().invalidate();
+            agent.join(2000);
+            assertThat(agent.isAlive()).isFalse();
+            assertThat(decoys).allMatch(Thread::isAlive);
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
     void oldTokenNeverTriggersRefreshRegistrationOrLegacySocket() throws Exception {
         raw = new AgentConnectionLoopbackTest.RawGateway(request -> AgentConnectionLoopbackTest.reply401());
         HttpRequestUtils.setBaseUrlForTesting("http://127.0.0.1:" + raw.port());
@@ -409,9 +449,19 @@ class CloudConnectionLifecycleTest {
                 AgentConnection.Timing.of(5000, 30000, 90000, 600000, 100));
     }
 
-    private static Thread agentThread() {
-        return Thread.getAllStackTraces().keySet().stream()
-                .filter(t -> t.isAlive() && "UltiTools-Cloud-Agent".equals(t.getName())).findFirst().orElse(null);
+    /** @return the agent thread of the connection this test started last, or {@code null} before the first one */
+    private Thread agentThread() {
+        return agentThreads.isEmpty() ? null : agentThreads.get(agentThreads.size() - 1);
+    }
+
+    /** The production agent executor (one daemon thread, same name), recording the thread it starts. */
+    private ScheduledExecutorService recordingAgentExecutor() {
+        return Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "UltiTools-Cloud-Agent");
+            thread.setDaemon(true);
+            agentThreads.add(thread);
+            return thread;
+        });
     }
 
     private static ServerCredential credential(String suffix) {
