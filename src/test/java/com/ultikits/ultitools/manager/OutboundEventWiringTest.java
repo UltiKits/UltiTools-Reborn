@@ -73,7 +73,9 @@ class OutboundEventWiringTest {
         }
         assertThat(payload.get("fingerprint").getAsString()).isEqualTo(padded.toString()).matches("^[0-9a-f]{8,64}$");
         assertThat(payload.get("exceptionType").getAsString()).isEqualTo(IllegalStateException.class.getName());
-        assertThat(payload.get("moduleName").getAsString()).isEqualTo("UltiChat");
+        // No module named UltiChat is loaded here, so the report is not attributed (22-26 fix, item 8):
+        // moduleName is a catalogue identifier or null, never free text (ErrorReportModuleIdentifierTest).
+        assertThat(payload.get("moduleName").isJsonNull()).isTrue();
         assertThat(payload.getAsJsonObject("trigger").get("kind").getAsString()).isEqualTo("scheduler");
         assertThat(payload.get("location").getAsString())
                 .isEqualTo("OutboundEventWiringTest.failure");

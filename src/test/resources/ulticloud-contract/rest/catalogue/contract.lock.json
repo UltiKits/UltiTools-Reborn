@@ -1,0 +1,11 @@
+{
+  "contract": "rest-v1-catalogue",
+  "contractVersion": "1.0.0",
+  "manifestSha256": "673feab2e47d38d79bfa3e57e3bf525749389d6cbebb49944e1b15cb31f9abd2",
+  "sourceRepository": "UltiKits/ulticloud",
+  "sourceRef": "main",
+  "sourceCommit": "682735c9a240bce44e90a3622d23b4adda9e9c2c",
+  "sourcePath": "packages/contracts/generated/rest-v1/catalogue/1.0.0",
+  "frozen": true,
+  "provenance": "Frozen release 1.0.0 (RELEASES.json), extracted with git archive and never edited."
+}

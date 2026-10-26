@@ -14,6 +14,8 @@ import java.util.Map;
 
 public final class ContractFixtures {
     public static final String ROOT = "ulticloud-contract/v2/2.0.0";
+    /** The frozen catalogue REST contract 1.0.0 (UltiKits/ulticloud main 682735c9), vendored byte for byte. */
+    public static final String CATALOGUE_ROOT = "ulticloud-contract/rest/catalogue/1.0.0";
 
     private ContractFixtures() { }
 
@@ -62,6 +64,55 @@ public final class ContractFixtures {
     public static List<Fixture> restBodies(String operation, String part, boolean valid) {
         return fixtures("fixtures/agent-rest/" + operation + "/" + part + "/"
                 + (valid ? "valid/" : "invalid/"), valid, "body");
+    }
+
+    /**
+     * @param relativePath a path inside the catalogue contract, as its MANIFEST names it
+     * @return the file's text
+     */
+    public static String catalogueText(String relativePath) {
+        return resource(CATALOGUE_ROOT + "/" + relativePath);
+    }
+
+    /** @return every file the catalogue contract's MANIFEST names */
+    public static List<String> cataloguePaths() {
+        JsonObject manifest = JsonParser.parseString(catalogueText("MANIFEST.json")).getAsJsonObject();
+        List<String> paths = new ArrayList<>();
+        for (Map.Entry<String, com.google.gson.JsonElement> entry : manifest.getAsJsonObject("files").entrySet()) {
+            paths.add(entry.getKey());
+        }
+        return paths;
+    }
+
+    /**
+     * The catalogue fixtures of one operation and part, as CATALOGUE.md lays them out: a valid
+     * fixture is the value itself, an invalid one wraps it as {@code {expect, why, body}}.
+     *
+     * @param operation the operation, e.g. {@code versionGet}
+     * @param part      {@code query}, {@code response}, {@code error} or {@code headers}
+     * @param valid     whether to read the valid or the invalid directory
+     * @return the fixtures, in MANIFEST order
+     */
+    public static List<Fixture> catalogueFixtures(String operation, String part, boolean valid) {
+        String prefix = "fixtures/" + operation + "/" + part + "/" + (valid ? "valid/" : "invalid/");
+        List<Fixture> fixtures = new ArrayList<>();
+        for (String path : cataloguePaths()) {
+            if (path.startsWith(prefix) && path.endsWith(".json")) {
+                JsonObject json = JsonParser.parseString(catalogueText(path)).getAsJsonObject();
+                fixtures.add(new Fixture(path, valid ? "valid" : json.get("expect").getAsString(),
+                        valid ? "" : json.get("why").getAsString(), valid ? json : json.getAsJsonObject("body")));
+            }
+        }
+        return fixtures;
+    }
+
+    /**
+     * @param path a catalogue fixture path, e.g. {@code fixtures/versionGet/response/valid/public-download.json}
+     * @return the fixture's body: the file itself for a valid one, its {@code body} for an invalid one
+     */
+    public static JsonObject catalogueBody(String path) {
+        JsonObject json = JsonParser.parseString(catalogueText(path)).getAsJsonObject();
+        return path.contains("/invalid/") ? json.getAsJsonObject("body") : json;
     }
 
     public static JsonArray legacyUuidCases() {

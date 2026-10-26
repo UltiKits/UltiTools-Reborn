@@ -1,0 +1,19 @@
+{
+  "expect": "invalid",
+  "why": "sha256 is lower-case hex",
+  "body": {
+    "data": {
+      "version": "1.2.0",
+      "isLatest": true,
+      "publishedAt": "2026-10-01T12:00:00.000Z",
+      "sizeBytes": 48213,
+      "sha256": "4F6C1E9A0B7D3C2E8F5A6B1C9D0E7F3A2B4C5D6E7F8091A2B3C4D5E6F7089A1B",
+      "changelog": "Fixes kit cooldowns after a restart.",
+      "apiLevel": 631,
+      "download": {
+        "kind": "public",
+        "url": "https://api.ultikits.com/v1/catalogue/modules/ultikits.kits/versions/1.2.0/download"
+      }
+    }
+  }
+}

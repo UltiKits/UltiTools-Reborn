@@ -1,0 +1,7 @@
+{
+  "expect": "invalid",
+  "why": "x-content-sha256 is required",
+  "body": {
+    "content-disposition": "attachment; filename=\"UltiKits-1.2.0.jar\""
+  }
+}

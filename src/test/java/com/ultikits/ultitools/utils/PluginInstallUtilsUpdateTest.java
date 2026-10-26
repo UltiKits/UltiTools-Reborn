@@ -9,7 +9,6 @@ import java.util.jar.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.ultikits.ultitools.contract.PendingFixture;
 
 /**
  * Tests for PluginInstallUtils.findPluginJar() and updatePlugin().
@@ -20,7 +19,6 @@ import com.ultikits.ultitools.contract.PendingFixture;
  * 主要测试 findPluginJar()，因为 updatePlugin() 需要复杂的静态方法+文件系统+网络模拟。
  */
 @DisplayName("PluginInstallUtils Update Tests")
-@PendingFixture
 class PluginInstallUtilsUpdateTest {
 
     @TempDir
@@ -274,7 +272,7 @@ class PluginInstallUtilsUpdateTest {
                         com.ultikits.ultitools.stub.StubCatalogue.VERSION);
 
                 PluginInstallUtils.downloadVerified(CatalogueClient.absoluteDownloadUrl(version.downloadUrl()),
-                        "demo-1.1.jar", tempDir);
+                        version, "demo-1.1.jar", tempDir);
 
                 assertThat(new File(tempDir, "demo-1.1.jar")).exists();
                 assertThat(new File(tempDir, "demo-1.1.jar.part")).doesNotExist();
@@ -292,7 +290,7 @@ class PluginInstallUtilsUpdateTest {
                         com.ultikits.ultitools.stub.StubCatalogue.VERSION);
                 String url = CatalogueClient.absoluteDownloadUrl(version.downloadUrl());
 
-                assertThatThrownBy(() -> PluginInstallUtils.downloadVerified(url, "demo-1.1.jar", tempDir))
+                assertThatThrownBy(() -> PluginInstallUtils.downloadVerified(url, version, "demo-1.1.jar", tempDir))
                         .isInstanceOf(IOException.class)
                         .hasMessageContaining("hash mismatch");
 
@@ -320,6 +318,8 @@ class PluginInstallUtilsUpdateTest {
                     ModuleUpdateFixtures.loadedModule("Demo", "1.0", "demo");
             java.util.concurrent.atomic.AtomicReference<ModuleFileTransactions.Downloader> bound =
                     new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<ModuleFileTransactions.Catalogue> boundCatalogue =
+                    new java.util.concurrent.atomic.AtomicReference<>();
             File staging = new File(tempDir, "staged-work");
             assertThat(staging.mkdirs()).isTrue();
 
@@ -333,6 +333,7 @@ class PluginInstallUtilsUpdateTest {
                                          org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                                          org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                                          .thenAnswer(invocation -> {
+                                             boundCatalogue.set(invocation.getArgument(3));
                                              bound.set(invocation.getArgument(4));
                                              return ModuleFileTransactions.StageResult.of(
                                                      ModuleFileTransactions.StageResult.Outcome.FAILED,
@@ -358,7 +359,8 @@ class PluginInstallUtilsUpdateTest {
 
                 assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
                 assertThat(bound.get()).as("stageUpdate bound a downloader").isNotNull();
-                String link = PluginInstallUtils.getPluginVersionDownloadLink(
+                // The transaction asks the bound catalogue for the link before it downloads it.
+                String link = boundCatalogue.get().downloadLink(
                         "demo", com.ultikits.ultitools.stub.StubCatalogue.VERSION);
                 assertThatThrownBy(() -> bound.get().download(link, "demo-1.1.jar", staging))
                         .isInstanceOf(IOException.class)

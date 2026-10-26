@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/rest/v1/catalogue/1.0.0/versionDownload.headers.200.schema.json",
+  "type": "object",
+  "properties": {
+    "x-content-sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "content-disposition": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^attachment; filename=\"[A-Za-z0-9.-]+\\.jar\"$"
+    }
+  },
+  "required": [
+    "x-content-sha256",
+    "content-disposition"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,27 @@
+{
+  "expect": "invalid",
+  "why": "a withdrawn version has no download URL",
+  "body": {
+    "data": {
+      "items": [
+        {
+          "version": "1.0.0",
+          "isLatest": false,
+          "publishedAt": "2026-06-02T08:00:00.000Z",
+          "sizeBytes": 45001,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "changelog": null,
+          "apiLevel": null,
+          "download": {
+            "kind": "withdrawn",
+            "withdrawnAt": "2026-07-01T10:15:00.000Z",
+            "url": "https://api.ultikits.com/v1/catalogue/modules/ultikits.kits/versions/1.0.0/download"
+          }
+        }
+      ],
+      "total": 1,
+      "page": 1,
+      "pageSize": 20
+    }
+  }
+}

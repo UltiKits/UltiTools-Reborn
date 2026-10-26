@@ -707,26 +707,76 @@ public class PluginInstallUtils {
         PluginManager pluginManager = ultiTools.getPluginManager();
         // The loaded modules are read by staging under its lock, not snapshotted here: an uninstall
         // completing between a snapshot and the lock would be missed (Codex round 16).
+        StagingCatalogue staging = new StagingCatalogue();
         return new ModuleFileTransactions(ultiTools.getDataFolder()).stageUpdate(identifyString,
                 () -> new ArrayList<>(pluginManager.getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
-                CATALOGUE, PluginInstallUtils::downloadVerified,
-                recordedMainClass(pluginManager.getModuleJarIndex()));
+                staging, staging, recordedMainClass(pluginManager.getModuleJarIndex()));
     }
 
     /**
-     * The staging downloader: the same verification the install applies, because a staged update
-     * becomes the module that loads at the next start. The version's link is its {@code
-     * download.url}; the metadata it is checked against is read again from that version's own
-     * route, so staging never trusts a hash it did not just fetch.
+     * The catalogue and downloader of one staging call (plan 22-26 fix round).
+     *
+     * <p>The catalogue contract makes a {@code download.url} an opaque address: it must not be built
+     * or parsed, and its shape may change inside a contract version. So the download is verified
+     * against the version this staging has just read through the contract's version route (the
+     * module's identifier and the version, {@link CatalogueClient#version(String, String)}), which is
+     * also where its link came from, and never against a route derived from the URL. A link this
+     * staging did not just obtain from the catalogue is not downloaded.
+     *
+     * <p>One instance serves one call of {@link ModuleFileTransactions#stageUpdate}, which asks for
+     * the link and then downloads it on the same thread; it is not shared.
+     */
+    static final class StagingCatalogue implements ModuleFileTransactions.Catalogue,
+            ModuleFileTransactions.Downloader {
+        private volatile CatalogueClient.Version resolved;
+        private volatile String resolvedLink;
+
+        @Override
+        public String latestVersion(String identifyString) {
+            return CATALOGUE.latestVersion(identifyString);
+        }
+
+        @Override
+        public String downloadLink(String identifyString, String version) {
+            resolved = null;
+            resolvedLink = null;
+            if (version == null || version.trim().isEmpty()) {
+                return null;
+            }
+            CatalogueClient.Version found = CatalogueClient.version(identifyString, version.trim());
+            String link = found == null ? null : CatalogueClient.absoluteDownloadUrl(found.downloadUrl());
+            if (link != null) {
+                resolved = found;
+                resolvedLink = link;
+            }
+            return link;
+        }
+
+        @Override
+        public void download(String link, String fileName, File folder) throws IOException {
+            CatalogueClient.Version metadata = resolved;
+            if (metadata == null || link == null || !link.equals(resolvedLink)) {
+                throw new IOException("the version's catalogue entry could not be read");
+            }
+            downloadVerified(link, metadata, fileName, folder);
+        }
+    }
+
+    /**
+     * The staging download: the same verification the install applies, because a staged update
+     * becomes the module that loads at the next start. The link is the version's {@code
+     * download.url}, used as written; the metadata it is checked against is the version object the
+     * caller has just read through the contract's version route, so staging never trusts a hash it
+     * did not just fetch.
      *
      * @param link     the absolute version download URL
+     * @param metadata the version, as the catalogue's version route just answered it
      * @param fileName the file name to write
      * @param folder   the folder to write it into
-     * @throws IOException when the catalogue offers no readable metadata or the file does not verify
+     * @throws IOException when the catalogue offers no public download or the file does not verify
      */
-    static void downloadVerified(String link, String fileName, File folder) throws IOException {
-        String metadataPath = CatalogueClient.metadataPathOf(link);
-        CatalogueClient.Version metadata = metadataPath == null ? null : CatalogueClient.versionAt(metadataPath);
+    static void downloadVerified(String link, CatalogueClient.Version metadata, String fileName, File folder)
+            throws IOException {
         if (metadata == null) {
             throw new IOException("the version's catalogue entry could not be read");
         }

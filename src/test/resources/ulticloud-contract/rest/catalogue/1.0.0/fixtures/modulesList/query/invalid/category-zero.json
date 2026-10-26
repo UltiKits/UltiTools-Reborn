@@ -1,0 +1,7 @@
+{
+  "expect": "invalid",
+  "why": "category is a positive category id",
+  "body": {
+    "category": 0
+  }
+}

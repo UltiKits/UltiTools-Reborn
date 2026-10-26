@@ -27,7 +27,6 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
@@ -37,7 +36,6 @@ import com.ultikits.ultitools.stub.StubCatalogue;
  * and the operator is told once, without the installed file ever existing.
  */
 @DisplayName("/upm install against the v2 catalogue: a matching JAR installs, a tampered one is discarded")
-@PendingFixture
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class CatalogueInstallEndToEndTest {
 
@@ -122,12 +120,12 @@ class CatalogueInstallEndToEndTest {
     @Test
     @DisplayName("a JAR whose hash and byte count match the version is installed, byte for byte")
     void matchingJar_isInstalled() throws IOException {
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1");
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
 
         assertThat(result.isInstalled()).isTrue();
-        assertThat(result.getFileName()).isEqualTo("demo-1.1.jar");
-        assertThat(modulesFolderNames()).containsExactly("demo-1.1.jar");
-        assertThat(Files.readAllBytes(new File(modules, "demo-1.1.jar").toPath()))
+        assertThat(result.getFileName()).isEqualTo("demo-1.1.0.jar");
+        assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar");
+        assertThat(Files.readAllBytes(new File(modules, "demo-1.1.0.jar").toPath()))
                 .isEqualTo(catalogue.jar());
     }
 
@@ -136,20 +134,20 @@ class CatalogueInstallEndToEndTest {
     void tamperedJar_isDiscardedBeforeStaging() {
         catalogue.mode(StubCatalogue.Mode.TAMPER_HASH);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1");
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getFileName()).isNull();
         assertThat(modulesFolderNames()).isEmpty();
         // The catalogue text of plan 22-22; the mocked framework has no language loaded, so the key itself is shown.
         assertThat(messages()).containsExactly(
-                String.format(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED, "demo", "1.1"));
+                String.format(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED, "demo", "1.1.0"));
     }
 
     @Test
     @DisplayName("only /v1/catalogue/* is requested, no request carries Authorization, no /plugin/* is reached")
     void onlyV2CataloguePathsAreRequested() {
-        assertThat(PluginInstallUtils.installReporting("demo", "1.1").isInstalled()).isTrue();
+        assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").isInstalled()).isTrue();
 
         List<String> paths = catalogue.paths();
         assertThat(paths).isNotEmpty();
@@ -176,7 +174,7 @@ class CatalogueInstallEndToEndTest {
         void longDescription_isRead() {
             catalogue.longDescription(25_000);
 
-            PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1");
+            PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
 
             assertThat(result.isInstalled()).isTrue();
             assertThat(PluginInstallUtils.getPlugin("demo").getDescription()).hasSize(50_000);
@@ -252,13 +250,13 @@ class CatalogueInstallEndToEndTest {
         void foreignDownloadUrl_isRefusedWithoutARequest() {
             catalogue.mode(StubCatalogue.Mode.FOREIGN_URL);
 
-            PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1");
+            PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
 
             assertThat(result.isInstalled()).isFalse();
             assertThat(catalogue.paths()).as("nothing was requested from the foreign host or locally")
                     .noneMatch(path -> path.endsWith("/download"));
             assertThat(messages()).containsExactly(
-                    "demo 1.1 was refused: the download is not on the catalogue host; nothing was installed.");
+                    "demo 1.1.0 was refused: the download is not on the catalogue host; nothing was installed.");
             assertThat(modulesFolderNames()).isEmpty();
         }
 
@@ -267,9 +265,9 @@ class CatalogueInstallEndToEndTest {
         void forbidden_isNotAvailable() {
             catalogue.mode(StubCatalogue.Mode.FORBIDDEN);
 
-            assertThat(PluginInstallUtils.installReporting("demo", "1.1").isInstalled()).isFalse();
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").isInstalled()).isFalse();
 
-            assertThat(messages()).containsExactly("demo 1.1 is not available for download"
+            assertThat(messages()).containsExactly("demo 1.1.0 is not available for download"
                     + " (withdrawn, unpublished or not licensed); nothing was installed.");
             assertThat(modulesFolderNames()).isEmpty();
         }
@@ -279,10 +277,10 @@ class CatalogueInstallEndToEndTest {
         void serverError_isATransportFailure() {
             catalogue.mode(StubCatalogue.Mode.SERVER_ERROR);
 
-            assertThat(PluginInstallUtils.installReporting("demo", "1.1").isInstalled()).isFalse();
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").isInstalled()).isFalse();
 
             assertThat(messages()).containsExactly(
-                    "Could not download demo 1.1 (the download did not complete); nothing was installed.");
+                    "Could not download demo 1.1.0 (the download did not complete); nothing was installed.");
             assertThat(modulesFolderNames()).isEmpty();
         }
 
@@ -290,22 +288,22 @@ class CatalogueInstallEndToEndTest {
         @DisplayName("integrity failures share the catalogue reason; unavailable and incomplete downloads keep their own lines")
         void everyKindHasItsOwnLine() {
             List<String> lines = new ArrayList<>();
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.HASH_MISMATCH));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.SIZE_MISMATCH));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.HEADER_MISMATCH));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.MISSING_METADATA));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.NOT_AVAILABLE));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1", VerifiedDownload.Kind.IO_ERROR));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.HASH_MISMATCH));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.SIZE_MISMATCH));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.HEADER_MISMATCH));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.MISSING_METADATA));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.NOT_AVAILABLE));
+            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.IO_ERROR));
 
             // Plan 22-22: every integrity failure is the one catalogue reason (which check failed is on the FINE line);
             // a version not offered and a download that did not complete keep their own lines.
-            String integrity = String.format(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED, "demo", "1.1");
+            String integrity = String.format(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED, "demo", "1.1.0");
             assertThat(lines.subList(0, 4)).containsOnly(integrity);
             assertThat(lines.subList(3, 6)).doesNotHaveDuplicates();
-            assertThat(lines.get(4)).isEqualTo("demo 1.1 is not available for download"
+            assertThat(lines.get(4)).isEqualTo("demo 1.1.0 is not available for download"
                     + " (withdrawn, unpublished or not licensed); nothing was installed.");
             assertThat(lines.get(5)).isEqualTo(
-                    "Could not download demo 1.1 (the download did not complete); nothing was installed.");
+                    "Could not download demo 1.1.0 (the download did not complete); nothing was installed.");
         }
     }
 
@@ -319,12 +317,13 @@ class CatalogueInstallEndToEndTest {
     class DownloadOrigin {
 
         @Test
-        @DisplayName("a relative path is joined; an absolute URL is accepted only on the same origin")
+        @DisplayName("an absolute URL is accepted only on the same origin; a relative path is refused (contract 1.0.0)")
         void onlyTheSameOriginIsAccepted() {
             String base = catalogue.baseUrl();
-            String path = "/v1/catalogue/modules/demo/versions/1.1/download";
+            String path = "/v1/catalogue/modules/demo/versions/1.1.0/download";
 
-            assertThat(CatalogueClient.absoluteDownloadUrl(path)).isEqualTo(base + path);
+            // The frozen contract makes every download URL absolute; plan 22-18 joined relative ones.
+            assertThat(CatalogueClient.absoluteDownloadUrl(path)).isNull();
             assertThat(CatalogueClient.absoluteDownloadUrl(base + path)).isEqualTo(base + path);
 
             String host = base.substring("http://".length());
@@ -345,7 +344,7 @@ class CatalogueInstallEndToEndTest {
         void foreignUrlMakesNoRequest() {
             catalogue.mode(StubCatalogue.Mode.FOREIGN_URL);
 
-            assertThat(PluginInstallUtils.installReporting("demo", "1.1").isInstalled()).isFalse();
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").isInstalled()).isFalse();
 
             assertThat(catalogue.paths()).as("only the metadata routes were asked")
                     .noneMatch(requested -> requested.endsWith("/download"));

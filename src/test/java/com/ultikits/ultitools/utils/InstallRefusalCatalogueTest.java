@@ -29,7 +29,6 @@ import org.mockito.MockedStatic;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
@@ -39,7 +38,6 @@ import com.ultikits.ultitools.stub.StubCatalogue;
  * log line.
  */
 @DisplayName("/upm refusal reasons of the v2 catalogue are catalogue text")
-@PendingFixture
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class InstallRefusalCatalogueTest {
 
@@ -82,11 +80,11 @@ class InstallRefusalCatalogueTest {
     void integrityFailureIsRefusedWithItsReason(StubCatalogue.Mode mode) {
         catalogue.mode(mode);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1");
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1");
+        assertThat(result.getReasonArgs()).containsExactly("demo", StubCatalogue.VERSION);
     }
 
     @Test

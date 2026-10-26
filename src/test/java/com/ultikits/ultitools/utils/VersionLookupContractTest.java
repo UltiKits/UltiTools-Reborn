@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.sun.net.httpserver.HttpServer;
-import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
@@ -30,7 +29,6 @@ import com.ultikits.ultitools.stub.StubCatalogue;
  * for a module, each answering {@code {data: ...}}.
  */
 @DisplayName("D19-032: public version lookups unchanged; internal lookups tell 'none offered' from 'failed'")
-@PendingFixture
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class VersionLookupContractTest {
 
@@ -48,9 +46,9 @@ class VersionLookupContractTest {
     @BeforeEach
     void setUp() throws IOException {
         frameworkStatus = 200;
-        frameworkBody = StubCatalogue.sample("framework.json");
+        frameworkBody = StubCatalogue.frameworkSample("6.3.1");
         moduleStatus = 200;
-        moduleBody = StubCatalogue.sample("module.json");
+        moduleBody = StubCatalogue.moduleCardSample("demo", "Demo");
         versionsStatus = 200;
         versionsBody = pageWith("1.2");
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -87,10 +85,10 @@ class VersionLookupContractTest {
         return "{\"data\":" + payload + "}";
     }
 
-    /** The pending versions page's shape carrying one version of the sample module. */
+    /** The vendored versions page carrying one version of the module. */
     private static String pageWith(String version) {
         return StubCatalogue.versionsPageOf(StubCatalogue.versionSample(version,
-                "/v1/catalogue/modules/demo/versions/" + version + "/download"));
+                StubCatalogue.API_ORIGIN + "/v1/catalogue/modules/demo/versions/" + version + "/download"));
     }
 
     /**

@@ -1,0 +1,27 @@
+{
+  "expect": "invalid",
+  "why": "icon URLs accept https: only",
+  "body": {
+    "data": {
+      "items": [
+        {
+          "id": "01JB2Z8Y3K4M5N6P7Q8R9S0ABC",
+          "name": "UltiKits",
+          "identifier": "ultikits.kits",
+          "shortDescription": "Starter kits with cooldowns and permissions.",
+          "iconUrl": "http://api.ultikits.com/v1/catalogue/modules/ultikits.kits/icon",
+          "category": {
+            "id": 3,
+            "name": "Gameplay"
+          },
+          "downloads": 1520,
+          "latestVersion": "1.2.0",
+          "updatedAt": "2026-10-01T12:00:00.000Z"
+        }
+      ],
+      "total": 1,
+      "page": 1,
+      "pageSize": 20
+    }
+  }
+}

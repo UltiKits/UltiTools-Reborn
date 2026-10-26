@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/rest/v1/catalogue/1.0.0/versionsList.query.schema.json",
+  "type": "object",
+  "properties": {
+    "page": {
+      "default": 1,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "pageSize": {
+      "default": 20,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "apiLevel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 99999
+    },
+    "minApiLevel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 99999
+    },
+    "includeWithdrawn": {
+      "default": "false",
+      "type": "string",
+      "enum": [
+        "true",
+        "false"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

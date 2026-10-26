@@ -40,7 +40,6 @@ import org.mockito.MockedStatic;
 import com.sun.net.httpserver.HttpServer;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.contract.PendingFixture;
 import com.ultikits.ultitools.stub.StubCatalogue;
 import com.ultikits.ultitools.utils.PluginInstallUtilsTestAccess;
 import com.ultikits.ultitools.utils.VersionUtils;
@@ -58,7 +57,6 @@ import com.ultikits.ultitools.utils.VersionUtils;
  * 启动时的更新检查：UltiTools 禁用时停止；只有每一次查询都确认没有新版本时才报告"全部最新"。
  */
 @DisplayName("D19-032: the start-up update check stops on disable and never reports up to date after a failed lookup")
-@PendingFixture
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class UpdateCheckShutdownAndOutcomeTest {
 
@@ -71,7 +69,7 @@ class UpdateCheckShutdownAndOutcomeTest {
 
     /** What the stub catalogue answers; a test changes these before running the check. */
     private volatile Answer newest = new Answer(200, StubCatalogue.frameworkSample("6.3.0"));
-    private volatile Answer pluginGet = new Answer(200, StubCatalogue.sample("module.json"));
+    private volatile Answer pluginGet = new Answer(200, StubCatalogue.moduleCardSample("demo", "Demo"));
     private volatile Answer latest = new Answer(200, versionsPage("1.0"));
     /** Runs inside the stub while it answers the framework lookup (before the answer is sent). */
     private volatile Runnable onNewest = () -> { };
@@ -154,10 +152,10 @@ class UpdateCheckShutdownAndOutcomeTest {
         server.stop(0);
     }
 
-    /** The pending versions page's shape carrying one version of the sample module. */
+    /** The vendored versions page carrying one version of the module. */
     private static String versionsPage(String version) {
         return StubCatalogue.versionsPageOf(StubCatalogue.versionSample(version,
-                "/v1/catalogue/modules/demo/versions/" + version + "/download"));
+                StubCatalogue.API_ORIGIN + "/v1/catalogue/modules/demo/versions/" + version + "/download"));
     }
 
     /** Runs the check against the stub with UltiTools 6.3.0 (API level 630) and the given modules. */

@@ -1,0 +1,28 @@
+{
+  "data": {
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0DEF",
+    "name": "UltiLegacy",
+    "identifier": "ultikits.legacy",
+    "shortDescription": "Starter kits with cooldowns and permissions.",
+    "iconUrl": null,
+    "category": {
+      "id": 3,
+      "name": "Gameplay"
+    },
+    "downloads": 1520,
+    "latestVersion": null,
+    "updatedAt": "2026-10-01T12:00:00.000Z",
+    "description": null,
+    "publishedAt": "2026-06-02T08:00:00.000Z",
+    "compatibleApiVersions": "6.3.x",
+    "tags": [],
+    "developer": {
+      "name": "UltiKits Team",
+      "avatarInitial": "U"
+    },
+    "likes": 3,
+    "versionCount": 0,
+    "commentCount": 1,
+    "latest": null
+  }
+}

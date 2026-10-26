@@ -18,7 +18,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 import java.io.IOException;
 import java.io.StringWriter;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -33,10 +32,12 @@ import java.util.regex.Pattern;
  * a missing, extra or wrongly typed field becomes a correlated {@code invalid_message} before any
  * module code runs.</p>
  *
- * <p>The responder is looked up by the type {@code <module>.<action>}, and only while the
- * responder's owner module name, lower-cased, equals the payload's {@code module}: a request can
- * never reach another module's responder, and one that would is answered {@code module_not_found}
- * without dispatching (T-22-99). The responder receives a fresh object holding a copy of
+ * <p>The payload's {@code module} is the module's UltiCloud identifier -- its identify-string,
+ * lower-case ({@link ModuleIds}), never its {@code plugin.yml} name. The responder is the one {@link
+ * PanelResponderRegistry#moduleRequestType(String, String)} names: registered under {@code
+ * <module>.<action>} or, as in 6.3.0, under {@code <owner name lower-cased>.<action>}, and owned by the
+ * module with that identifier. A request can never reach another module's responder, and one that
+ * would is answered {@code module_not_found} without dispatching (T-22-99). The responder receives a fresh object holding a copy of
  * {@code params} plus the {@code actor} object exactly as received; the plugin neither derives nor
  * overrides the actor, which the authenticated gateway channel vouches for (T-22-98).</p>
  *
@@ -142,9 +143,10 @@ final class ModuleRequestHandler implements CloudRequestHandler {
 
         JsonObject data = params.deepCopy();
         data.add("actor", actor.deepCopy());
-        String messageType = module + "." + action;
-        String owner = registry.ownerModuleOf(messageType);
-        if (owner == null || !owner.toLowerCase(Locale.ROOT).equals(module)) {
+        // The module is addressed by its identifier (its identify-string, lower-case), never by its
+        // plugin.yml name; a responder registered under the 6.3.0 name form is found too (22-26 fix).
+        String messageType = registry.moduleRequestType(module, action);
+        if (messageType == null) {
             channel.replyError(request.id(), RESPONSE_TYPE, "module_not_found", NO_RESPONDER_MESSAGE, null);
             return;
         }
