@@ -66,13 +66,17 @@ class AgentRestConformanceTest {
 
     /** One request as the stub saw it. */
     private static final class Recorded {
+        final String method;
         final String path;
         final String contentType;
+        final String contentLength;
         final byte[] body;
 
         Recorded(HttpExchange exchange, byte[] body) {
+            this.method = exchange.getRequestMethod();
             this.path = exchange.getRequestURI().getPath();
             this.contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+            this.contentLength = exchange.getRequestHeaders().getFirst("Content-Length");
             this.body = body;
         }
 
@@ -361,8 +365,10 @@ class AgentRestConformanceTest {
         assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.REVOKED);
         assertThat(requests).hasSize(1);
         assertThat(requests.get(0).path).isEqualTo("/v1/agent/credential/revoke");
+        assertThat(requests.get(0).method).isEqualTo("POST");
         assertThat(requests.get(0).body).as("no request body").isEmpty();
-        assertThat(requests.get(0).contentType).isNull();
+        assertThat(requests.get(0).contentLength).isEqualTo("0");
+        assertThat(requests.get(0).contentType).isIn(null, "application/x-www-form-urlencoded");
     }
 
     @Test

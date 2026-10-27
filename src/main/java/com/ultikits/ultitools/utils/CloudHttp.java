@@ -58,7 +58,8 @@ final class CloudHttp {
      * @param path         a constant path beginning with {@code /}
      * @param bodyOrNull   the JSON body, sent as UTF-8 with
      *                     {@code Content-Type: application/json; charset=utf-8}; {@code null} sends
-     *                     an empty POST with no {@code Content-Type}
+     *                     an empty POST without a JSON {@code Content-Type} (the JDK may add its
+     *                     default form media type)
      * @param bearerOrNull the value after {@code Bearer } in the {@code Authorization} header, or
      *                     {@code null} for a public route
      * @return the outcome; never {@code null}
@@ -120,11 +121,15 @@ final class CloudHttp {
             if (bearer != null) {
                 connection.setRequestProperty("Authorization", "Bearer " + bearer);
             }
+            // The JDK silently retries a non-streamed POST after a connection reset. Stream even
+            // an empty POST so a credential revoke can never be sent twice by the transport.
+            connection.setDoOutput(true);
+            connection.setFixedLengthStreamingMode(body == null ? 0 : body.length);
             if (body != null) {
-                connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                connection.setFixedLengthStreamingMode(body.length);
-                try (OutputStream out = connection.getOutputStream()) {
+            }
+            try (OutputStream out = connection.getOutputStream()) {
+                if (body != null) {
                     out.write(body);
                 }
             }

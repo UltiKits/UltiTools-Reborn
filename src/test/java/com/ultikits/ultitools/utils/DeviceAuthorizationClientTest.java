@@ -60,12 +60,14 @@ class DeviceAuthorizationClientTest {
 
     /** One request as the stub saw it on the wire. */
     private static final class Recorded {
+        final String method;
         final String path;
         final String contentType;
         final String contentLength;
         final byte[] body;
 
         Recorded(HttpExchange exchange, byte[] body) {
+            this.method = exchange.getRequestMethod();
             this.path = exchange.getRequestURI().getPath();
             this.contentType = exchange.getRequestHeaders().getFirst("Content-Type");
             this.contentLength = exchange.getRequestHeaders().getFirst("Content-Length");
@@ -223,6 +225,8 @@ class DeviceAuthorizationClientTest {
 
         assertThat(cloudRequests).hasSize(1);
         assertThat(cloudRequests.get(0).path).isEqualTo("/v1/device/token");
+        assertThat(cloudRequests.get(0).method).isEqualTo("POST");
+        assertThat(cloudRequests.get(0).contentType).isEqualTo("application/json; charset=utf-8");
         assertThat(cloudRequests.get(0).text()).isEqualTo("{\"deviceCode\":\"dc-1\"}");
     }
 
@@ -311,6 +315,23 @@ class DeviceAuthorizationClientTest {
         assertThat(otherRequests).isEmpty();
         assertThat(cloudRequests).hasSize(1);
         assertThat(result.kind()).isNotEqualTo(DeviceAuthorizationClient.PollResult.Kind.GRANTED);
+    }
+
+    @Test
+    @DisplayName("a null-body revoke returns a 302 without forwarding its bearer")
+    void emptyPostRedirectIsNotFollowed() {
+        responder.set(exchange -> {
+            exchange.getResponseHeaders().set("Location", baseUrl(other) + "/v1/agent/credential/revoke");
+            send(exchange, 302, "{}");
+        });
+
+        CloudHttp.Response response = CloudHttp.postJson("/v1/agent/credential/revoke", null, SECRET);
+
+        assertThat(response.outcome()).isEqualTo(CloudHttp.Outcome.OK);
+        assertThat(response.status()).isEqualTo(302);
+        assertThat(cloudRequests).hasSize(1);
+        assertThat(otherRequests).isEmpty();
+        assertThat(response.toString()).doesNotContain(SECRET);
     }
 
     // ---- 429 and Retry-After ----
@@ -424,10 +445,10 @@ class DeviceAuthorizationClientTest {
     }
 
     @Test
-    @DisplayName("postJson with a null body sends zero body bytes and no Content-Type")
+    @DisplayName("postJson with a null body sends Content-Length: 0 without a JSON Content-Type")
     // A JSON Content-Type on an empty body would make a strict backend try to parse "" (contract
     // answer 14: the revoke call has no body).
-    void emptyPostSendsNoBodyAndNoContentType() {
+    void emptyPostSendsZeroContentLengthWithoutJsonContentType() {
         responder.set(answer(200, "{\"data\":{\"revoked\":true}}"));
 
         CloudHttp.Response response = CloudHttp.postJson("/v1/agent/credential/revoke", null, "ucs_x");
@@ -435,12 +456,15 @@ class DeviceAuthorizationClientTest {
         assertThat(response.outcome()).isEqualTo(CloudHttp.Outcome.OK);
         assertThat(response.status()).isEqualTo(200);
         assertThat(cloudRequests).hasSize(1);
+        assertThat(cloudRequests.get(0).method).isEqualTo("POST");
         assertThat(cloudRequests.get(0).body).isEmpty();
-        assertThat(cloudRequests.get(0).contentType).isNull();
-        // HttpURLConnection adds a form Content-Type to any request that opens an output stream, so
-        // the empty POST opens none and carries no Content-Length either: a request without one has a
-        // zero-length body (RFC 9112 section 6.3). A "0" would be equally valid.
-        assertThat(cloudRequests.get(0).contentLength).isIn(null, "0");
+        // Streaming prevents a hidden retry. The JDK may add its default form media type, but an
+        // empty revoke must not claim to be JSON and make the backend parse an empty JSON document.
+        assertThat(cloudRequests.get(0).contentType).isIn(null, "application/x-www-form-urlencoded");
+        assertThat(cloudRequests.get(0).contentLength).isEqualTo("0");
+        System.out.println("CloudHttp empty POST accepted: Content-Length=" + cloudRequests.get(0).contentLength
+                + ", bodyBytes=" + cloudRequests.get(0).body.length
+                + ", Content-Type=" + cloudRequests.get(0).contentType + ", status=" + response.status());
         assertThat(response.toString()).doesNotContain("ucs_x");
     }
 

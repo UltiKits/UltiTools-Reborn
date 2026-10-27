@@ -58,7 +58,9 @@ class CloudLogoutRevokeTest {
     final CountDownLatch requestArrived = new CountDownLatch(1);
     final CountDownLatch replyAllowed = new CountDownLatch(1);
     volatile String authorization;
+    volatile String method;
     volatile String contentType;
+    volatile String contentLength;
     volatile int bodyBytes;
     volatile boolean credentialPresentAtRevoke;
     volatile Boolean sessionCurrentAtRevoke;
@@ -140,8 +142,10 @@ class CloudLogoutRevokeTest {
         assertThat(sessionCurrentAtRevoke).as("session still current when the revoke arrived").isFalse();
         assertThat(connectedAtRevoke).as("still connected when the revoke arrived").isFalse();
         assertThat(authorization).isEqualTo("Bearer " + SECRET);
+        assertThat(method).isEqualTo("POST");
         assertThat(bodyBytes).isZero();
-        assertThat(contentType).isNull();
+        assertThat(contentLength).isEqualTo("0");
+        assertThat(contentType).isIn(null, "application/x-www-form-urlencoded");
         assertThat(credentialPresentAtRevoke).isTrue();
         assertThat(ServerCredentialStore.load()).isNotNull();
         replyAllowed.countDown();
@@ -328,7 +332,9 @@ class CloudLogoutRevokeTest {
     private void answer(HttpExchange exchange) throws IOException {
         try {
             authorization = exchange.getRequestHeaders().getFirst("Authorization");
+            method = exchange.getRequestMethod();
             contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+            contentLength = exchange.getRequestHeaders().getFirst("Content-Length");
             while (exchange.getRequestBody().read() != -1) { bodyBytes++; }
             credentialPresentAtRevoke = CredentialStore.read().data().containsKey("cloud_credential");
             sessionCurrentAtRevoke = CloudSession.current().isCurrent();
