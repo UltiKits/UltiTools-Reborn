@@ -158,7 +158,13 @@ class UltiCloudUatRowsTest {
             "ultitools.remote.server-properties-safe-keys.neg-absent-on-server",
             "ultitools.remote.server-properties-one-line",
             "ultitools.config.protected-file-server",
-            "ultitools.config.operator-bytes.anchored-file"));
+            "ultitools.config.operator-bytes.anchored-file",
+            // Additional stub/staging cloud and remote rows guarded by the same inventory conventions.
+            "ultitools.runtime.stop-log-clean",
+            "ultitools.lifecycle.reload-keeps-registrations",
+            "ultitools.capability.file-write.update-config",
+            "ultitools.remote.command-blocklist.empty-list",
+            "ultitools.config.config-yml"));
 
     /** Rows of 6.3.0 that protocol 2.0.0 retired (magic-link login and protocol v1 messages), in either document. */
     static final List<String> RETIRED_IDS = Collections.unmodifiableList(Arrays.asList(
