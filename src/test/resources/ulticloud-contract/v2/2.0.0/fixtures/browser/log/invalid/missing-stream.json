@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "数据帧必须带 stream",
+  "frame": {
+    "type": "log",
+    "seq": 41,
+    "lines": [
+      {
+        "seq": 41,
+        "at": "2026-10-24T03:00:00.000Z",
+        "level": "INFO",
+        "message": "Done (3.2s)!"
+      }
+    ]
+  }
+}

@@ -3,9 +3,11 @@ package com.ultikits.ultitools.events;
 import com.google.gson.JsonObject;
 
 /**
- * Published once for every inbound panel message the framework has already handled — appended as
- * the very last statement of {@code PluginInitiationUtils#handleInboundMessage(JsonObject)}, after
- * the framework's own dispatch has completed. A module subscribes to this event on the existing
+ * Published once for every inbound panel message the framework has already handled. As of 6.3.1
+ * (UltiCloud protocol v2) that is one event per {@code module.request} that reached a module's
+ * responder, published after the request was handed to it, with the module's responder key
+ * ({@code <module>.<action>}) as the type; the protocol v1 inbound dispatch that also published it
+ * was removed in 6.3.1. A module subscribes to this event on the existing
  * {@link EventBus} to observe panel traffic without the framework growing a second, module-visible
  * protocol surface.
  * <p>

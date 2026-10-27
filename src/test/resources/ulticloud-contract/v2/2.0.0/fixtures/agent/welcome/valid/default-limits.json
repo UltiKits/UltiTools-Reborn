@@ -1,0 +1,30 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "welcome",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "protocol": 2,
+    "serverId": "01JB2Z8Y3K4M5N6P7Q8R9S0SRV",
+    "accepted": [
+      "telemetry",
+      "logs"
+    ],
+    "limits": {
+      "maxFrameBytes": 1048576,
+      "log": {
+        "ratePerSec": 50,
+        "burst": 200,
+        "lineMaxBytes": 8192,
+        "batchMaxLines": 100
+      },
+      "outboxMax": 1000,
+      "commandDedupeMax": 1000,
+      "commandDedupeTtlSeconds": 86400,
+      "commandOutputMaxBytes": 65536,
+      "fileMaxBytes": 393216
+    },
+    "serverTime": 1761274800000
+  }
+}

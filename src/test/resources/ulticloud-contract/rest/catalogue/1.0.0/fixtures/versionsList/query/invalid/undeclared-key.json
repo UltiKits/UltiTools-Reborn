@@ -1,0 +1,7 @@
+{
+  "expect": "invalid",
+  "why": "undeclared query keys are rejected",
+  "body": {
+    "framework": "6.3.0"
+  }
+}

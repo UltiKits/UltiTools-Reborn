@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "控制帧不带 stream",
+  "frame": {
+    "type": "ready",
+    "stream": "logs",
+    "serverId": "01JB2Z8Y3K4M5N6P7Q8R9S0SRV",
+    "subscribed": [],
+    "resumedFrom": {}
+  }
+}

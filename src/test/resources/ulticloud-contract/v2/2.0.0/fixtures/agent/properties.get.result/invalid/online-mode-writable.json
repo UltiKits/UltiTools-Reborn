@@ -1,0 +1,21 @@
+{
+  "expect": "invalid_message",
+  "why": "正版验证不在可写表里（用户决定第 15 条）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "properties.get.result",
+    "ts": 1761274800000,
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+    "payload": {
+      "status": "ok",
+      "data": {
+        "values": {},
+        "writable": [
+          "online-mode"
+        ],
+        "version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  }
+}

@@ -47,7 +47,6 @@ import java.util.stream.Stream;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.AfterEach;
@@ -656,11 +655,9 @@ class CredentialStoreTest {
         }
     }
 
-    private static TokenEntity syntheticToken() {
-        TokenEntity token = new TokenEntity();
-        token.setAccess_token("synthetic-access-token");
-        token.setRefresh_token("synthetic-refresh-token");
-        return token;
+    /** A synthetic protocol v2 server credential: the writers of 6.3.1 store this, not a user token. */
+    private static ServerCredential syntheticCredential() {
+        return DeviceLoginTestSupport.credential("Synthetic");
     }
 
     @ParameterizedTest(name = "{0}")
@@ -697,23 +694,57 @@ class CredentialStoreTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("unreadableContents")
-    @DisplayName("saving or clearing the cloud token refuses to overwrite an unreadable file (#573)")
-    void tokenSaveAndClearRefuseToOverwriteAnUnreadableFile(String kind, String content) throws IOException {
+    @DisplayName("saving or deleting the server credential refuses to overwrite an unreadable file (#573)")
+    void credentialSaveAndDeleteRefuseToOverwriteAnUnreadableFile(String kind, String content) throws IOException {
+        // Plan 22-24: the 6.3.0 user-token store (TokenStore) is deleted; the credential writers of 6.3.1 are
+        // ServerCredentialStore's, and they keep the #573 refusal the token store had.
         pinNoPre630Location();
         byte[] before = content.getBytes(StandardCharsets.UTF_8);
         Files.write(dataFile, before);
-        TokenStore tokenStore = new TokenStore();
 
-        assertThatThrownBy(() -> tokenStore.save(syntheticToken()))
-                .as("a login or refresh must not replace a %s credential file", kind)
+        assertThatThrownBy(() -> ServerCredentialStore.save(syntheticCredential()))
+                .as("a login must not replace a %s credential file", kind)
                 .isInstanceOf(DataAccessException.class)
                 .hasMessageContaining(dataFile.toAbsolutePath().toString());
-        assertThatThrownBy(() -> tokenStore.clearIfMatches(syntheticToken()))
+        assertThatThrownBy(() -> ServerCredentialStore.deleteIfMatches(syntheticCredential().getCredentialId()))
                 .as("a logout must not rewrite a %s credential file", kind)
                 .isInstanceOf(DataAccessException.class);
+        assertThat(ServerCredentialStore.removeLegacyToken())
+                .as("the 6.3.0-token cleanup leaves a %s credential file alone", kind)
+                .isEqualTo(ServerCredentialStore.LegacyTokenRemoval.NONE);
 
         assertThat(Files.readAllBytes(dataFile)).isEqualTo(before);
         assertThat(namesIn(tempDir)).containsExactly("data.json");
+    }
+
+    /**
+     * Plan 22-24 (CLOUD-02, S-47): the 6.3.0 {@code cloud_token} entry is removed at the first start of 6.3.1 and no
+     * later writer puts it back -- a device login, a credential rotation and a logout all write the document again,
+     * and none of them re-creates it. The first-start warning and its wording are pinned by 22-06's
+     * {@code LegacyTokenCleanupTest}; {@code NoV1RuntimePathTest} proves no other class names the entry at all.
+     */
+    @Test
+    @DisplayName("a 6.3.0 cloud_token is removed at the first start and never written again (CLOUD-02)")
+    void aLegacyUserTokenIsRemovedOnceAndNeverRewritten() throws IOException {
+        pinNoPre630Location();
+        Files.write(dataFile, ("{\"uuid\":\"0123456789abcdef0123456789abcdef\","
+                + "\"cloud_token\":{\"access_token\":\"synthetic-access-token\","
+                + "\"refresh_token\":\"synthetic-refresh-token\"}}").getBytes(StandardCharsets.UTF_8));
+
+        assertThat(ServerCredentialStore.removeLegacyToken())
+                .isEqualTo(ServerCredentialStore.LegacyTokenRemoval.REMOVED_UNLINKED);
+        assertThat(CredentialStore.read().data()).doesNotContainKey("cloud_token").containsKey("uuid");
+
+        ServerCredential linked = syntheticCredential();
+        ServerCredentialStore.save(linked);
+        assertThat(CredentialStore.read().data()).doesNotContainKey("cloud_token").containsKey("cloud_credential");
+        assertThat(ServerCredentialStore.replace(linked.getServerId(), "ucs_ROTATEDSECRET", "cred-rotated")).isTrue();
+        assertThat(CredentialStore.read().data()).doesNotContainKey("cloud_token");
+        assertThat(ServerCredentialStore.deleteIfMatches("cred-rotated")).isTrue();
+        assertThat(CredentialStore.read().data()).doesNotContainKey("cloud_token").doesNotContainKey("cloud_credential")
+                .containsEntry("uuid", "0123456789abcdef0123456789abcdef");
+        assertThat(ServerCredentialStore.removeLegacyToken())
+                .as("a second start finds nothing to remove").isEqualTo(ServerCredentialStore.LegacyTokenRemoval.NONE);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -899,7 +930,6 @@ class CredentialStoreTest {
     void unreadableCurrentFileBlocksEveryEntryPoint(String kind, String content) throws IOException {
         DualFileFixture files = new DualFileFixture(tempDir);
         byte[] currentBefore = files.placeCurrent(content);
-        TokenStore tokenStore = new TokenStore();
         SoftAssertions softly = new SoftAssertions();
 
         CredentialStore.ReadResult read = CredentialStore.read();
@@ -919,14 +949,22 @@ class CredentialStoreTest {
         softly.assertThat(uuid).as("%s: getUltiToolsUUID() fails instead of starting a new identity", kind)
                 .isInstanceOf(IOException.class);
 
-        Throwable save = catchThrowable(() -> tokenStore.save(syntheticToken()));
-        files.softlyKeepsBothFiles(softly, kind + ", after TokenStore.save()", currentBefore);
-        softly.assertThat(save).as("%s: TokenStore.save() refuses", kind).isInstanceOf(DataAccessException.class);
-
-        Throwable clear = catchThrowable(() -> tokenStore.clearIfMatches(syntheticToken()));
-        files.softlyKeepsBothFiles(softly, kind + ", after TokenStore.clearIfMatches()", currentBefore);
-        softly.assertThat(clear).as("%s: TokenStore.clearIfMatches() refuses", kind)
+        // Plan 22-24: the deleted user-token store's two writers are replaced by the 6.3.1 credential writers.
+        Throwable save = catchThrowable(() -> ServerCredentialStore.save(syntheticCredential()));
+        files.softlyKeepsBothFiles(softly, kind + ", after ServerCredentialStore.save()", currentBefore);
+        softly.assertThat(save).as("%s: ServerCredentialStore.save() refuses", kind)
                 .isInstanceOf(DataAccessException.class);
+
+        Throwable delete = catchThrowable(
+                () -> ServerCredentialStore.deleteIfMatches(syntheticCredential().getCredentialId()));
+        files.softlyKeepsBothFiles(softly, kind + ", after ServerCredentialStore.deleteIfMatches()", currentBefore);
+        softly.assertThat(delete).as("%s: ServerCredentialStore.deleteIfMatches() refuses", kind)
+                .isInstanceOf(DataAccessException.class);
+
+        ServerCredentialStore.LegacyTokenRemoval removal = ServerCredentialStore.removeLegacyToken();
+        files.softlyKeepsBothFiles(softly, kind + ", after ServerCredentialStore.removeLegacyToken()", currentBefore);
+        softly.assertThat(removal).as("%s: the 6.3.0-token cleanup writes nothing", kind)
+                .isEqualTo(ServerCredentialStore.LegacyTokenRemoval.NONE);
         softly.assertAll();
     }
 

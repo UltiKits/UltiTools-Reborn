@@ -1,0 +1,51 @@
+{
+  "expect": "invalid",
+  "why": "at most five tags",
+  "body": {
+    "data": {
+      "id": "01JB2Z8Y3K4M5N6P7Q8R9S0ABC",
+      "name": "UltiKits",
+      "identifier": "ultikits.kits",
+      "shortDescription": "Starter kits with cooldowns and permissions.",
+      "iconUrl": "https://api.ultikits.com/v1/catalogue/modules/ultikits.kits/icon",
+      "category": {
+        "id": 3,
+        "name": "Gameplay"
+      },
+      "downloads": 1520,
+      "latestVersion": "1.2.0",
+      "updatedAt": "2026-10-01T12:00:00.000Z",
+      "description": "Give players starter kits.\n\nEach kit has a cooldown and an optional permission.",
+      "publishedAt": "2026-06-02T08:00:00.000Z",
+      "compatibleApiVersions": "6.3.x",
+      "tags": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f"
+      ],
+      "developer": {
+        "name": "UltiKits Team",
+        "avatarInitial": "U"
+      },
+      "likes": 42,
+      "versionCount": 2,
+      "commentCount": 5,
+      "latest": {
+        "version": "1.2.0",
+        "isLatest": true,
+        "publishedAt": "2026-10-01T12:00:00.000Z",
+        "sizeBytes": 48213,
+        "sha256": "4f6c1e9a0b7d3c2e8f5a6b1c9d0e7f3a2b4c5d6e7f8091a2b3c4d5e6f7089a1b",
+        "changelog": "Fixes kit cooldowns after a restart.",
+        "apiLevel": 631,
+        "download": {
+          "kind": "public",
+          "url": "https://api.ultikits.com/v1/catalogue/modules/ultikits.kits/versions/1.2.0/download"
+        }
+      }
+    }
+  }
+}

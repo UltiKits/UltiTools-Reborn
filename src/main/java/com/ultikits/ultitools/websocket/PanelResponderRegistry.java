@@ -1,8 +1,12 @@
 package com.ultikits.ultitools.websocket;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,11 +22,14 @@ import java.util.logging.Logger;
 
 import org.jetbrains.annotations.ApiStatus;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.utils.ModuleIds;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
 /**
@@ -30,18 +37,31 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  * message type the framework itself does not own (WIRE-16, D-26/D-27).
  * <p>
  * A module owns at most one responder per message type. Ownership is decided against exactly one
- * source of truth for the framework's own types — {@link PluginInitiationUtils#isFrameworkOwnedType}
- * — so a module can never silently take over {@code execute_command} or any of the framework's other
- * 23 inbound message types; that check runs before the module-owner check, and both refusals throw a
- * typed {@link PluginModuleException} naming the offender rather than a raw {@code RuntimeException}.
+ * source of truth for the framework's own types — {@link PluginInitiationUtils#isFrameworkOwnedType},
+ * which as of 6.3.1 answers from the UltiCloud protocol v2 message registry — so a module can never
+ * silently take over {@code command.execute} or any other message type of the framework's protocol;
+ * that check runs before the module-owner check, and both refusals throw a typed
+ * {@link PluginModuleException} naming the offender rather than a raw {@code RuntimeException}.
  * <p>
- * A module-owned type is served from the exact same lookup {@code PluginInitiationUtils
- * #handleInboundMessage} already uses for the framework's own 24 types — its unknown-type branch
- * consults this registry, not a second dispatch mechanism (01-CONTEXT D-10/D-11).
+ * A module-owned type ({@code <module>.<action>}) is served by the protocol v2 {@code module.request}
+ * handler, which looks the type up in this registry, not through a second dispatch mechanism
+ * (01-CONTEXT D-10/D-11). The protocol v1 inbound dispatch that used to consult it was removed in 6.3.1.
  * <p>
  * Deliberately does not require a {@code <module>:<type>} namespace prefix — D-26 rejected that as a
  * cross-repository protocol convention the panel would also have to honour, rather than an in-repo
  * check the framework can enforce alone.
+ *
+ * <h2>Result shapes</h2>
+ * A responder answers with a future of any {@link JsonElement}: an object, an array, a primitive,
+ * or "no content". The future completing with Java {@code null} or with {@link JsonNull} means
+ * "answered successfully, no content", and {@link #dispatch} then settles with
+ * {@link JsonNull#INSTANCE}; it never settles successfully with a Java {@code null}. Only a
+ * responder that returns no future at all ({@code null} instead of a future), throws, or whose
+ * future completes exceptionally fails the request. Over UltiCloud protocol v2 the result becomes
+ * the {@code data} of an {@code ok} {@code module.response} unchanged, including {@code data: null}.
+ * A responder written against 6.3.0, typed {@code Function<JsonObject, CompletableFuture<JsonObject>>},
+ * keeps compiling and behaving as before, except that completing with {@code null} is now a success
+ * with no content rather than a failure.
  *
  * <h2>Scheduling contract for responders</h2>
  * <ul>
@@ -228,7 +248,7 @@ public class PanelResponderRegistry {
      * <p>
      * Validates all three arguments first. Then checks
      * {@link PluginInitiationUtils#isFrameworkOwnedType(String)} before checking module ownership —
-     * deliberately in that order, so a module attempting {@code execute_command} is told the
+     * deliberately in that order, so a module attempting {@code command.execute} is told the
      * framework owns it, not that some other module does. Finally uses an atomic
      * {@code putIfAbsent}-shaped check so a collision — with the framework, with another module, or
      * with the same module registering twice — always throws rather than silently displacing an
@@ -241,10 +261,28 @@ public class PanelResponderRegistry {
      * on the main thread, scheduled by the responder itself. See the class documentation for the
      * full scheduling contract.
      *
+     * <h4>UltiCloud protocol v2 module types</h4>
+     * <p>A module that answers UltiCloud protocol v2 {@code module.request} messages registers its
+     * responder under {@code <prefix>.<action>}, where the prefix is either the module's own name
+     * lower-cased (as in 6.3.0) or its UltiCloud module identifier. UltiCloud addresses the module by
+     * its identifier: its {@code identify-string}, lower-case ({@link ModuleIds}), which for some
+     * modules differs from the name. The v2 bridge takes {@code module} and {@code action} from the
+     * request payload and dispatches only to a responder of the module whose identifier equals {@code
+     * module} and registered under {@code <module>.<action>} or {@code <its name lower-cased>.<action>};
+     * any other request is answered {@code module_not_found} and never dispatched (D-25, contract
+     * answer 11). An action therefore needs no namespace of its own: the module is the namespace. The
+     * identifier is taken from the recorded module instance (see {@code ownerModule}); a responder with
+     * no instance recorded or listed, or whose module declares no usable identify-string, keeps the
+     * 6.3.0 behaviour: its owner name lower-cased stands for the identifier.</p>
+     *
      * @param messageType the exact message type string this responder will serve, matched by
      *                    {@code String.equals} — no case folding, no Unicode normalization
      * @param responder   the responder function, invoked with the inbound message's {@code data}
-     *                    and returning a {@link CompletableFuture} that resolves the reply
+     *                    and returning a {@link CompletableFuture} that resolves the reply: any
+     *                    {@link JsonElement} (object, array or primitive), or {@code null} /
+     *                    {@link JsonNull} for "answered, no content"; see "Result shapes" in the
+     *                    class documentation. Returning {@code null} instead of a future is a
+     *                    failure
      * @param ownerModule the name of the module registering this responder. The responder is
      *                    recorded against a module instance (#506, #562 item 1): the module the
      *                    framework is loading on this thread, if any; otherwise the copy listed as
@@ -258,8 +296,8 @@ public class PanelResponderRegistry {
      *                                   another registration (including the same module's own
      *                                   prior registration) already claims it
      */
-    public void registerResponder(String messageType, Function<JsonObject, CompletableFuture<JsonObject>> responder,
-            String ownerModule) {
+    public void registerResponder(String messageType,
+            Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>> responder, String ownerModule) {
         registerResponder(messageType, responder, ownerModule, null);
     }
 
@@ -275,7 +313,8 @@ public class PanelResponderRegistry {
      * admission, possibly concurrent calls finishing out of order, so it must be thread-safe.
      *
      * @param messageType   the exact message type string this responder will serve
-     * @param responder     the responder function
+     * @param responder     the responder function; its result shapes are those of {@link
+     *                      #registerResponder(String, Function, String)}
      * @param ownerModule   the name of the module registering this responder
      * @param ownerInstance the module instance registering it; {@code null} records the module the
      *                      framework is loading on this thread, if any (see {@link
@@ -289,8 +328,9 @@ public class PanelResponderRegistry {
      *                                   another registration already claims it
      * @since 6.3.0
      */
-    public void registerResponder(String messageType, Function<JsonObject, CompletableFuture<JsonObject>> responder,
-            String ownerModule, UltiToolsPlugin ownerInstance) {
+    public void registerResponder(String messageType,
+            Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>> responder, String ownerModule,
+            UltiToolsPlugin ownerInstance) {
         if (messageType == null || messageType.isEmpty()) {
             throw new IllegalArgumentException("messageType must not be null or empty");
         }
@@ -451,6 +491,109 @@ public class PanelResponderRegistry {
     }
 
     /**
+     * The module name owning the responder registered for the exact string {@code messageType}, as
+     * the registration recorded it. A read-only view of the ownership a dispatch of this type would
+     * use, so a caller can decide whether a request may reach it before admitting it.
+     *
+     * @param messageType the message type to look up, possibly {@code null}
+     * @return the owner module name, or {@code null} when no responder owns this exact type
+     * @since 6.3.1
+     */
+    public String ownerModuleOf(String messageType) {
+        ResponderEntry entry = messageType == null ? null : responders.get(messageType);
+        return entry == null ? null : entry.ownerModule;
+    }
+
+    /**
+     * The UltiCloud module identifier of the module that owns responders under {@code ownerModule}
+     * (22-26 fix round): the identify-string of the recorded module instance, or of the copy listed
+     * as loaded under that name, lower-cased ({@link ModuleIds#of(UltiToolsPlugin)}); when neither
+     * gives one, the owner name itself through the same derivation, as in 6.3.0. Internal, not for
+     * module use.
+     *
+     * @param ownerModule an owner module name as {@link #ownerModules()} lists it
+     * @return the identifier, or {@code null} when the module owns no responder or none can be derived
+     * @since 6.3.1
+     */
+    @ApiStatus.Internal
+    public String moduleIdentifierOf(String ownerModule) {
+        if (ownerModule == null) {
+            return null;
+        }
+        String fallback = null;
+        for (ResponderEntry entry : responders.values()) {
+            if (ownerModule.equals(entry.ownerModule)) {
+                String id = identifierOf(entry);
+                if (entry.ownerInstance != null && id != null) {
+                    return id;
+                }
+                if (fallback == null) {
+                    fallback = id;
+                }
+            }
+        }
+        return fallback;
+    }
+
+    /**
+     * The registered message type a UltiCloud {@code module.request} for {@code moduleIdentifier}
+     * and {@code action} is dispatched to (22-26 fix round), or {@code null} when there is none: the
+     * type {@code <moduleIdentifier>.<action>}, or {@code <owner name lower-cased>.<action>} as 6.3.0
+     * registered it, and only when the module owning that responder has {@code moduleIdentifier} as
+     * its identifier ({@link #moduleIdentifierOf(String)}). The identifier form wins when both exist.
+     * Compared lower-case. Internal, not for module use.
+     *
+     * @param moduleIdentifier the request's {@code module}
+     * @param action           the request's {@code action}
+     * @return the type to dispatch, or {@code null} when no responder of that module serves the action
+     * @since 6.3.1
+     */
+    @ApiStatus.Internal
+    public String moduleRequestType(String moduleIdentifier, String action) {
+        if (moduleIdentifier == null || action == null) {
+            return null;
+        }
+        String id = moduleIdentifier.toLowerCase(java.util.Locale.ROOT);
+        String direct = id + "." + action;
+        ResponderEntry exact = responders.get(direct);
+        if (exact != null && id.equals(identifierOf(exact))) {
+            return direct;
+        }
+        for (Map.Entry<String, ResponderEntry> registered : responders.entrySet()) {
+            ResponderEntry entry = registered.getValue();
+            String legacy = entry.ownerModule.toLowerCase(java.util.Locale.ROOT) + "." + action;
+            if (registered.getKey().equals(legacy) && id.equals(identifierOf(entry))) {
+                return legacy;
+            }
+        }
+        return null;
+    }
+
+    /** The identifier of an entry's module; see {@link #moduleIdentifierOf(String)}. */
+    private static String identifierOf(ResponderEntry entry) {
+        UltiToolsPlugin owner = entry.ownerInstance != null ? entry.ownerInstance : listedCopyNamed(entry.ownerModule);
+        String id = ModuleIds.of(owner);
+        return id != null ? id : ModuleIds.of(entry.ownerModule);
+    }
+
+    /**
+     * The distinct module names owning at least one registered responder, in ascending name order.
+     * A read-only snapshot: later registrations and removals do not change the returned list. One
+     * name appears once however many types the module owns, and a module with no responder at the
+     * moment of the call does not appear at all.
+     *
+     * @return an unmodifiable list of owner module names; empty when no responder is registered
+     * @since 6.3.1
+     */
+    public List<String> ownerModules() {
+        Set<String> names = new TreeSet<>();
+        for (ResponderEntry entry : responders.values()) {
+            names.add(entry.ownerModule);
+        }
+        return Collections.unmodifiableList(new ArrayList<>(names));
+    }
+
+    /**
      * Admits a request for {@code messageType}'s registered responder and returns its outcome at
      * once, without waiting for the responder: admission captures the responder registered now
      * (and its owner), a copy of {@code data}, the calling thread's context class loader and this
@@ -458,11 +601,14 @@ public class PanelResponderRegistry {
      * {@link #RESPONDER_TIMEOUT_MILLIS}, and queues the call for a worker thread. The returned future
      * settles exactly once — the single reply-shape point every outcome routes through (D-27):
      * <ul>
-     *   <li>the responder's future completes with a value — that value;</li>
+     *   <li>the responder's future completes with a {@link JsonElement} other than {@link JsonNull}
+     *       — that value, whatever its shape (object, array or primitive);</li>
+     *   <li>the responder's future completes with {@code null} or {@link JsonNull} — {@link
+     *       JsonNull#INSTANCE}, a success with no content;</li>
      *   <li>the responder throws, including a checked exception thrown sneakily or a linkage error
      *       from a closed module class loader — that throwable;</li>
-     *   <li>the responder returns {@code null}, or its future completes with {@code null} — an
-     *       explicit {@link IllegalStateException} naming the type and owning module;</li>
+     *   <li>the responder returns {@code null} instead of a future — an explicit {@link
+     *       IllegalStateException} naming the type and owning module;</li>
      *   <li>the responder's future completes exceptionally — that exception, relayed;</li>
      *   <li>the deadline passes while the request waits, runs or awaits its future — {@link
      *       PluginModuleException#responderTimedOut(String, String, long)} naming the owner
@@ -489,15 +635,40 @@ public class PanelResponderRegistry {
      * @param requestId    the request's correlation id — not used by {@code dispatch} itself, but
      *                     accepted so the call site does not have to separately track it; reserved
      *                     for the caller assembling the outbound reply
-     * @return a future that always settles — successfully with the responder's result, or
-     *         exceptionally with a failure describing what went wrong
+     * @return a future that always settles — successfully with the responder's result, never a
+     *         Java {@code null} ({@link JsonNull#INSTANCE} for "no content"), or exceptionally with
+     *         a failure describing what went wrong
      */
-    public CompletableFuture<JsonObject> dispatch(String messageType, JsonObject data, String requestId) {
-        CompletableFuture<JsonObject> outcome = new CompletableFuture<>();
+    public CompletableFuture<JsonElement> dispatch(String messageType, JsonObject data, String requestId) {
+        return dispatch(messageType, data, requestId, null);
+    }
+
+    /**
+     * {@link #dispatch(String, JsonObject, String)}, also telling the caller when the module's work
+     * for the request has ended (22-23 second verification): {@code workEnded} runs exactly once,
+     * after the responder call returned and the future it returned completed, or as soon as the
+     * request settles without the responder having started (no responder, the queue full, the
+     * registry shut down, the deadline or a cancel while it waited). Unlike the returned future it
+     * does not run at the deadline while the responder is still running. It never runs for a
+     * responder whose future never completes. It runs on whichever thread ends the work; a
+     * {@code workEnded} that throws is ignored. Internal, not for module use.
+     *
+     * @param messageType see {@link #dispatch(String, JsonObject, String)}
+     * @param data        see {@link #dispatch(String, JsonObject, String)}
+     * @param requestId   see {@link #dispatch(String, JsonObject, String)}
+     * @param workEnded   runs once when the module's work for this request has ended; {@code null} for none
+     * @return see {@link #dispatch(String, JsonObject, String)}
+     * @since 6.3.1
+     */
+    @ApiStatus.Internal
+    public CompletableFuture<JsonElement> dispatch(String messageType, JsonObject data, String requestId,
+            Runnable workEnded) {
+        CompletableFuture<JsonElement> outcome = new CompletableFuture<>();
         ResponderEntry entry = responders.get(messageType);
         if (entry == null) {
             outcome.completeExceptionally(
                     new IllegalStateException("No responder registered for '" + messageType + "'"));
+            runQuietly(workEnded);
             return outcome;
         }
 
@@ -505,7 +676,7 @@ public class PanelResponderRegistry {
         // its data freely, while the caller keeps reading its own object (for example to publish a
         // PanelMessageEvent of the request as received).
         JsonObject requestData = data == null ? null : data.deepCopy();
-        Invocation invocation = new Invocation(messageType, entry, requestData, outcome);
+        Invocation invocation = new Invocation(messageType, entry, requestData, outcome, workEnded);
         admitted.add(invocation);
         // Any settlement, including a caller's cancel, frees the queue slot and the deadline.
         outcome.whenComplete((value, failure) -> invocation.release());
@@ -526,6 +697,19 @@ public class PanelResponderRegistry {
             invocation.settle(null, workers.isShutdown() ? invocation.shutDownFailure() : invocation.refusal());
         }
         return outcome;
+    }
+
+    // PMD.AvoidCatchingGenericException: a caller's completion hook must never break a settlement.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static void runQuietly(Runnable hook) {
+        if (hook == null) {
+            return;
+        }
+        try {
+            hook.run();
+        } catch (RuntimeException ignored) {
+            LOGGER.fine("A panel responder completion hook failed.");
+        }
     }
 
     /**
@@ -601,12 +785,12 @@ public class PanelResponderRegistry {
      * when the registration named one, the module instance (#506).
      */
     private static final class ResponderEntry {
-        private final Function<JsonObject, CompletableFuture<JsonObject>> responder;
+        private final Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>> responder;
         private final String ownerModule;
         private final UltiToolsPlugin ownerInstance;
 
-        private ResponderEntry(Function<JsonObject, CompletableFuture<JsonObject>> responder, String ownerModule,
-                UltiToolsPlugin ownerInstance) {
+        private ResponderEntry(Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>> responder,
+                String ownerModule, UltiToolsPlugin ownerInstance) {
             this.responder = responder;
             this.ownerModule = ownerModule;
             this.ownerInstance = ownerInstance;
@@ -621,26 +805,37 @@ public class PanelResponderRegistry {
         private final String messageType;
         private final ResponderEntry entry;
         private final JsonObject data;
-        private final CompletableFuture<JsonObject> outcome;
+        private final CompletableFuture<JsonElement> outcome;
         /** The admitting thread's context class loader, installed for the call. */
         private final ClassLoader admittingLoader;
         /** This registry's registration scope on the admitting thread, possibly {@code null}. */
         private final UltiToolsPlugin admittingScope;
         private volatile ScheduledFuture<?> deadline;
+        /** Runs once when the module's work ends; see {@link #dispatch(String, JsonObject, String, Runnable)}. */
+        private final Runnable workEnded;
+        /** Set by whichever comes first: a worker starting the call, or a settlement before it started. */
+        private final AtomicBoolean claimed = new AtomicBoolean();
+        private final AtomicBoolean ended = new AtomicBoolean();
 
         private Invocation(String messageType, ResponderEntry entry, JsonObject data,
-                CompletableFuture<JsonObject> outcome) {
+                CompletableFuture<JsonElement> outcome, Runnable workEnded) {
             this.messageType = messageType;
             this.entry = entry;
             this.data = data;
             this.outcome = outcome;
+            this.workEnded = workEnded;
             this.admittingLoader = Thread.currentThread().getContextClassLoader();
             this.admittingScope = registrationScopeOwner.get();
         }
 
         @Override
         public void run() {
+            if (!claimed.compareAndSet(false, true)) {
+                // Settled before it started; release() ended the work.
+                return;
+            }
             if (outcome.isDone()) {
+                endWork();
                 return;
             }
             // The start of a call. shutdown() writes its volatile flag before it does anything else,
@@ -650,22 +845,44 @@ public class PanelResponderRegistry {
             // has started; it runs to the end and its result is dropped.
             if (shutDown) {
                 settle(null, shutDownFailure());
+                endWork();
                 return;
             }
-            CompletableFuture<JsonObject> responderFuture = callResponder();
+            CompletableFuture<? extends JsonElement> responderFuture = null;
+            boolean returned = false;
+            try {
+                responderFuture = callResponder();
+                returned = true;
+            } finally {
+                if (!returned) {
+                    // callResponder rethrew an Error after settling the request.
+                    endWork();
+                }
+            }
             if (responderFuture == null) {
+                endWork();
                 return;
             }
             responderFuture.whenComplete((value, throwable) -> {
-                if (throwable != null) {
-                    settle(null, throwable);
-                } else if (value == null) {
-                    settle(null, new IllegalStateException("Responder for '" + messageType
-                            + "' (owned by module '" + entry.ownerModule + "') completed with null"));
-                } else {
-                    settle(value, null);
+                try {
+                    if (throwable != null) {
+                        settle(null, throwable);
+                    } else {
+                        // "Answered, no content": Java null and JsonNull both settle as JsonNull, so no
+                        // consumer ever sees a Java null for a successful outcome.
+                        settle(value == null ? JsonNull.INSTANCE : value, null);
+                    }
+                } finally {
+                    endWork();
                 }
             });
+        }
+
+        /** Runs {@link #workEnded} once. */
+        private void endWork() {
+            if (ended.compareAndSet(false, true)) {
+                runQuietly(workEnded);
+            }
         }
 
         /**
@@ -676,8 +893,8 @@ public class PanelResponderRegistry {
         // PMD.AvoidCatchingGenericException: this is the boundary to module code; any exception,
         // including a checked one thrown sneakily, must become the request's outcome.
         @SuppressWarnings("PMD.AvoidCatchingGenericException")
-        private CompletableFuture<JsonObject> callResponder() {
-            CompletableFuture<JsonObject> responderFuture;
+        private CompletableFuture<? extends JsonElement> callResponder() {
+            CompletableFuture<? extends JsonElement> responderFuture;
             Thread worker = Thread.currentThread();
             ClassLoader savedLoader = worker.getContextClassLoader();
             UltiToolsPlugin savedScope = registrationScopeOwner.get();
@@ -719,6 +936,10 @@ public class PanelResponderRegistry {
                 task.cancel(false);
             }
             admitted.remove(this);
+            if (claimed.compareAndSet(false, true)) {
+                // Settled before a worker started it: the responder never runs.
+                endWork();
+            }
         }
 
         private RejectedExecutionException refusal() {
@@ -745,7 +966,7 @@ public class PanelResponderRegistry {
          * {@link CompletableFuture} runs later-registered dependents first, so a caller waiting on
          * the outcome must find the deadline already gone. A second settlement is a no-op.
          */
-        private void settle(JsonObject value, Throwable failure) {
+        private void settle(JsonElement value, Throwable failure) {
             ScheduledFuture<?> task = deadline;
             if (task != null) {
                 task.cancel(false);

@@ -81,9 +81,10 @@ class FrameworkTextCatalogueInvariantTest {
                     "the four bilingual config.yml comment constants: English first, Chinese supplement, "
                             + "written into the operator's config file, not shown as output "
                             + "(root CLAUDE.md, Code Style & Constraints)"),
-            new Exemption("com/ultikits/ultitools/entities/Capability.java", 9,
+            new Exemption("com/ultikits/ultitools/entities/Capability.java", 11,
                     "the capability comment lines the migration writes into config.yml, bilingual by design "
-                            + "(English first, Chinese supplement) like the four constants above"),
+                            + "(English first, Chinese supplement) like the four constants above; eleven since "
+                            + "the power-actions and player-actions switches were added"),
             new Exemption("com/ultikits/ultitools/services/impl/DefaultEmailService.java", 6,
                     "the verification e-mail is bilingual on purpose: each Chinese line is paired with its "
                             + "English line, because the recipient's language is not the server's"),

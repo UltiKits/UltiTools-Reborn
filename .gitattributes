@@ -2,3 +2,5 @@
 src/test/resources/config-golden/** -text
 # Framework config.yml fixtures (plan 17-66) are released bytes; no checkout may convert their line endings.
 src/test/resources/framework-config/** -text
+# Frozen protocol contracts are compared byte for byte; no checkout may convert their line endings.
+src/test/resources/ulticloud-contract/** -text

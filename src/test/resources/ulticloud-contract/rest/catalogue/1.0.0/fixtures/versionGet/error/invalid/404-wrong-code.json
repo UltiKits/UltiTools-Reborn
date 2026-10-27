@@ -1,0 +1,11 @@
+{
+  "expect": "invalid",
+  "why": "user_not_found is not an error this route returns",
+  "body": {
+    "error": {
+      "code": "user_not_found",
+      "message": "Version not found.",
+      "requestId": "01JB2Z8Y3K4M5N6P7Q8R9S0REQ"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "op_result",
+  "stream": "commands",
+  "opId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "kind": "player.action",
+  "state": "failed",
+  "result": null,
+  "error": {
+    "code": "server_offline",
+    "message": "server disconnected"
+  },
+  "finishedAt": "2026-10-24T03:00:00.000Z"
+}

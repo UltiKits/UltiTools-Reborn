@@ -3,22 +3,17 @@ package com.ultikits.ultitools.events;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,18 +35,22 @@ import org.mockbukkit.mockbukkit.ServerMock;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.TestHelper;
-import com.ultikits.ultitools.websocket.PanelResponderRegistry;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * {@link PanelMessageEvent}'s own shape (Task 1), and — added by later tasks in the same plan —
- * its bridging publish from {@code PluginInitiationUtils#handleInboundMessage} (Task 2) and the
- * slow-handler warning that publish produces (Task 3). Kept as one class because all three groups
- * exercise the same extension point end to end; see 06-07-PLAN.md.
+ * its bridging publish (Task 2) and the slow-handler warning that publish produces (Task 3). Kept as
+ * one class because all three groups exercise the same extension point end to end; see 06-07-PLAN.md.
+ * <p>
+ * Plan 22-23 removed the protocol v1 inbound path ({@code PluginInitiationUtils#handleInboundMessage}).
+ * The publish groups now drive the single publish site, {@code PluginInitiationUtils#publishPanelMessageEvent},
+ * which the protocol v2 module bridge ({@code ModuleRequestHandler}) calls once per module request; that the
+ * bridge calls it once, on the main thread, and not for a request that reached no responder is proven on the stub
+ * by {@code ModuleRequestEndToEndTest} ("PanelMessageEvent bridge"). Three v1-only cases were deleted with the path:
+ * a type-less message publishing nothing, an unknown type still publishing, and a capability-denied v1 message
+ * publishing nothing (on v2 the router refuses before any handler, so nothing is published).
  * <br>
  * {@link PanelMessageEvent} 自身的形状（Task 1），以及本计划后续任务在同一个类里补充的：
  * 从 {@code PluginInitiationUtils#handleInboundMessage} 发布该事件的桥接行为（Task 2），
@@ -157,72 +156,45 @@ class PanelMessageEventDispatchTest {
     }
 
     /**
-     * Reaches {@code PluginInitiationUtils#handleInboundMessage} and {@code panelWS} via
-     * reflection: this class lives in {@code events}, a different package from {@code utils} —
-     * same reason {@code CapabilityGateTracerTest} needs reflection (see its own javadoc).
+     * Reaches the package-private {@code PluginInitiationUtils#publishPanelMessageEvent} via reflection: this class
+     * lives in {@code events}, a different package from {@code utils}.
      */
-    private static void invokeHandleInboundMessage(JsonObject message) throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod("handleInboundMessage", JsonObject.class);
+    private static void publish(JsonObject message) throws Exception {
+        Method method = PluginInitiationUtils.class.getDeclaredMethod("publishPanelMessageEvent",
+                String.class, JsonObject.class, JsonObject.class);
         method.setAccessible(true);
-        method.invoke(null, message);
-    }
-
-    // As of plan 16-08 Task 2 the WebSocket client is CloudSession-owned, not a static field on
-    // PluginInitiationUtils. CloudSession itself is package-private (utils), so this different
-    // package (events) cannot even compile a reference to it -- setWebSocketClientForTesting()
-    // is the seam PluginInitiationUtils exposes instead.
-    private static Object setPanelWs(Object value) throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "setWebSocketClientForTesting", UltiPanelWebSocketClient.class);
-        method.setAccessible(true);
-        return method.invoke(null, (UltiPanelWebSocketClient) value);
+        JsonObject data = message.has("data") && message.get("data").isJsonObject()
+                ? message.getAsJsonObject("data") : null;
+        method.invoke(null, message.get("type").getAsString(), message, data);
     }
 
     private static YamlConfiguration emptyConfig() {
         return new YamlConfiguration();
     }
 
-    private static YamlConfiguration configWith(String path, boolean value) {
-        YamlConfiguration config = new YamlConfiguration();
-        config.set(path, value);
-        return config;
-    }
-
-    private static JsonObject executeCommandMessage(String command, String commandId) {
-        JsonObject data = new JsonObject();
-        data.addProperty("command", command);
-        data.addProperty("commandId", commandId);
-        JsonObject message = new JsonObject();
-        message.addProperty("type", "execute_command");
-        message.add("data", data);
-        return message;
-    }
-
+    /** A module request's event shape, as {@code ModuleRequestHandler} publishes it ({@code <module>.<action>}). */
     private static JsonObject notificationMessage(String text) {
         JsonObject data = new JsonObject();
         data.addProperty("message", text);
         JsonObject message = new JsonObject();
-        message.addProperty("type", "notification");
+        message.addProperty("type", "ultimail.notify");
         message.add("data", data);
         return message;
     }
 
     /**
-     * One added statement at the end of {@code handleInboundMessage}, on the main thread (Task 2).
+     * The bridging publish, on the main thread (Task 2).
      * Every case here needs a real {@link EventBus} and a real Bukkit scheduler — MockBukkit's —
      * to prove the publish actually reaches the main thread rather than merely getting queued.
      */
     @Nested
-    @DisplayName("桥接发布 —— handleInboundMessage 末尾追加的那一条语句")
+    @DisplayName("桥接发布 —— publishPanelMessageEvent")
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     class PublishBridge {
 
         private ServerMock server;
         private EventBus eventBus;
         private Logger mockLogger;
-        private CommandExecutionManager mockCommandExecutionManager;
-        private UltiPanelWebSocketClient mockPanelWs;
-        private Object previousPanelWs;
         private final List<PanelMessageEvent> received = new CopyOnWriteArrayList<>();
 
         @BeforeEach
@@ -235,23 +207,16 @@ class PanelMessageEventDispatchTest {
             eventBus.subscribe(PanelMessageEvent.class, received::add);
 
             mockLogger = mock(Logger.class);
-            mockCommandExecutionManager = mock(CommandExecutionManager.class);
 
             TestHelper.mockUltiToolsInstance(ultiTools -> {
                 lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
                 lenient().when(ultiTools.getConfig()).thenReturn(emptyConfig());
                 lenient().when(ultiTools.getEventBus()).thenReturn(eventBus);
-                lenient().when(ultiTools.getCommandExecutionManager()).thenReturn(mockCommandExecutionManager);
             });
-
-            mockPanelWs = mock(UltiPanelWebSocketClient.class);
-            lenient().when(mockPanelWs.getServerId()).thenReturn("test-server-uuid");
-            previousPanelWs = setPanelWs(mockPanelWs);
         }
 
         @AfterEach
         void tearDown() throws Exception {
-            setPanelWs(previousPanelWs);
             eventBus.shutdown();
             Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
             instanceField.setAccessible(true);
@@ -260,18 +225,15 @@ class PanelMessageEventDispatchTest {
         }
 
         @Test
-        @DisplayName("被允许的消息恰好发布一次 PanelMessageEvent")
-        void publishesExactlyOnceForAllowedGatedMessage() throws Exception {
-            lenient().when(UltiTools.getInstance().getConfig())
-                    .thenReturn(configWith("ultipanel.capabilities.commands", true));
-
-            invokeHandleInboundMessage(executeCommandMessage("say hi", "c1"));
+        @DisplayName("一次发布恰好产生一个 PanelMessageEvent")
+        void publishesExactlyOnceForOnePublish() throws Exception {
+            publish(notificationMessage("say hi"));
             server.getScheduler().performOneTick();
 
             assertThat(received).hasSize(1);
             PanelMessageEvent event = received.get(0);
-            assertThat(event.getType()).isEqualTo("execute_command");
-            assertThat(event.getData().get("command").getAsString()).isEqualTo("say hi");
+            assertThat(event.getType()).isEqualTo("ultimail.notify");
+            assertThat(event.getData().get("message").getAsString()).isEqualTo("say hi");
         }
 
         @Test
@@ -288,14 +250,14 @@ class PanelMessageEventDispatchTest {
 
             runOffPrimaryThread(() -> {
                 try {
-                    invokeHandleInboundMessage(notificationMessage("hi"));
+                    publish(notificationMessage("hi"));
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
             });
 
             // The subscriber must not have fired yet — proves this is a scheduled hop, not an
-            // in-line synchronous call from handleInboundMessage.
+            // in-line synchronous call from the publish.
             if (!received.isEmpty()) {
                 invokedBeforeTick.set(true);
             }
@@ -308,94 +270,46 @@ class PanelMessageEventDispatchTest {
         }
 
         @Test
-        @DisplayName("type 缺失/为空时不发布任何事件")
-        void malformedTypePublishesNothing() throws Exception {
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "");
-
-            invokeHandleInboundMessage(message);
-            server.getScheduler().performOneTick();
-
-            assertThat(received).isEmpty();
-        }
-
-        @Test
-        @DisplayName("未知类型（表中无条目）仍然发布")
-        void unknownTypeStillPublishes() throws Exception {
-            JsonObject data = new JsonObject();
-            data.addProperty("k", "v");
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "definitely_not_a_real_type");
-            message.add("data", data);
-
-            invokeHandleInboundMessage(message);
-            server.getScheduler().performOneTick();
-
-            assertThat(received).hasSize(1);
-            assertThat(received.get(0).getType()).isEqualTo("definitely_not_a_real_type");
-        }
-
-        @Test
-        @DisplayName("被能力网关拒绝的消息不发布任何事件")
-        void capabilityDeniedMessagePublishesNothing() throws Exception {
-            // commands 出厂默认关闭（D-08），无需额外打桩。
-            invokeHandleInboundMessage(executeCommandMessage("say hi", "c1"));
-            server.getScheduler().performOneTick();
-
-            verify(mockPanelWs, times(1)).sendMessage(any());
-            verify(mockCommandExecutionManager, never()).executeCommand(any());
-            assertThat(received).isEmpty();
-        }
-
-        @Test
-        @DisplayName("订阅者抛异常不会让 handleInboundMessage 的调用路径炸掉")
+        @DisplayName("订阅者抛异常不会让发布的调用路径炸掉")
         // PMD.AvoidThrowingRawExceptionTypes: driving the subscriber's failure path IS the
-        // test — it proves handleInboundMessage's call path survives a throwing subscriber.
+        // test — it proves the publish's call path survives a throwing subscriber.
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void throwingHandlerDoesNotPropagate() throws Exception {
             eventBus.subscribe(PanelMessageEvent.class, event -> {
                 throw new RuntimeException("boom — deliberately thrown by a test subscriber");
             });
 
-            invokeHandleInboundMessage(notificationMessage("hi"));
+            publish(notificationMessage("hi"));
 
             assertThatCode(() -> server.getScheduler().performOneTick()).doesNotThrowAnyException();
         }
 
+        /**
+         * Rewritten in plan 22-23 (formerly drove a v1 module responder): the event is built from copies taken when
+         * the publish is called, so the caller (the v2 module bridge hands the same objects to the responder) may
+         * change them before the main-thread task runs without changing what subscribers receive.
+         */
         @Test
-        @DisplayName("a module responder changing its request data does not change the published event")
-        void responderChangingItsDataDoesNotChangeThePublishedEvent() throws Exception {
-            PanelResponderRegistry registry = new PanelResponderRegistry();
-            CountDownLatch changed = new CountDownLatch(1);
-            registry.registerResponder("module_owned_echo", data -> {
-                data.remove("k");
-                data.addProperty("added", "by-responder");
-                changed.countDown();
-                return CompletableFuture.completedFuture(data);
-            }, "module-a");
-            lenient().when(UltiTools.getInstance().getPanelResponderRegistry()).thenReturn(registry);
-            try {
-                JsonObject data = new JsonObject();
-                data.addProperty("k", "v");
-                data.addProperty("requestId", "req-1");
-                JsonObject message = new JsonObject();
-                message.addProperty("type", "module_owned_echo");
-                message.add("data", data);
-                JsonObject asReceived = message.deepCopy();
+        @DisplayName("changing the request after the publish call does not change the published event")
+        void changingTheRequestAfterThePublishDoesNotChangeTheEvent() throws Exception {
+            JsonObject data = new JsonObject();
+            data.addProperty("k", "v");
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "ultimail.echo");
+            message.add("data", data);
+            JsonObject asReceived = message.deepCopy();
 
-                invokeHandleInboundMessage(message);
-                // The responder has finished changing its data before the event's main-thread task runs.
-                assertThat(changed.await(5, TimeUnit.SECONDS)).as("the responder ran").isTrue();
-                server.getScheduler().performOneTick();
+            publish(message);
+            data.remove("k");
+            data.addProperty("added", "by-responder");
+            message.addProperty("extra", "changed");
+            server.getScheduler().performOneTick();
 
-                assertThat(received).hasSize(1);
-                assertThat(received.get(0).getData())
-                        .as("the event's data is the request as received").isEqualTo(asReceived.getAsJsonObject("data"));
-                assertThat(received.get(0).getRawMessage())
-                        .as("the event's envelope is the request as received").isEqualTo(asReceived);
-            } finally {
-                registry.shutdown();
-            }
+            assertThat(received).hasSize(1);
+            assertThat(received.get(0).getData())
+                    .as("the event's data is the request as received").isEqualTo(asReceived.getAsJsonObject("data"));
+            assertThat(received.get(0).getRawMessage())
+                    .as("the event's envelope is the request as received").isEqualTo(asReceived);
         }
     }
 
@@ -415,8 +329,6 @@ class PanelMessageEventDispatchTest {
         private ServerMock server;
         private EventBus eventBus;
         private Logger mockLogger;
-        private UltiPanelWebSocketClient mockPanelWs;
-        private Object previousPanelWs;
 
         @BeforeEach
         void setUp() throws Exception {
@@ -432,15 +344,10 @@ class PanelMessageEventDispatchTest {
                 lenient().when(ultiTools.getConfig()).thenReturn(emptyConfig());
                 lenient().when(ultiTools.getEventBus()).thenReturn(eventBus);
             });
-
-            mockPanelWs = mock(UltiPanelWebSocketClient.class);
-            lenient().when(mockPanelWs.getServerId()).thenReturn("test-server-uuid");
-            previousPanelWs = setPanelWs(mockPanelWs);
         }
 
         @AfterEach
         void tearDown() throws Exception {
-            setPanelWs(previousPanelWs);
             eventBus.shutdown();
             Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
             instanceField.setAccessible(true);
@@ -475,7 +382,7 @@ class PanelMessageEventDispatchTest {
         void fastSubscriberLogsNoWarning() throws Exception {
             eventBus.subscribe(PanelMessageEvent.class, event -> { /* fast — does nothing */ });
 
-            invokeHandleInboundMessage(notificationMessage("hi"));
+            publish(notificationMessage("hi"));
             server.getScheduler().performOneTick();
 
             assertThat(slowHandlerWarnings()).isEmpty();
@@ -486,12 +393,12 @@ class PanelMessageEventDispatchTest {
         void slowSubscriberLogsExactlyOneWarningNamingType() throws Exception {
             eventBus.subscribe(PanelMessageEvent.class, event -> sleepPastThreshold());
 
-            invokeHandleInboundMessage(notificationMessage("hi"));
+            publish(notificationMessage("hi"));
             server.getScheduler().performOneTick();
 
             List<String> warnings = slowHandlerWarnings();
             assertThat(warnings).hasSize(1);
-            assertThat(warnings.get(0)).contains("notification");
+            assertThat(warnings.get(0)).contains("ultimail.notify");
         }
 
         @Test
@@ -500,7 +407,7 @@ class PanelMessageEventDispatchTest {
             eventBus.subscribe(PanelMessageEvent.class, event -> sleepPastThreshold());
             eventBus.subscribe(PanelMessageEvent.class, event -> sleepPastThreshold());
 
-            invokeHandleInboundMessage(notificationMessage("hi"));
+            publish(notificationMessage("hi"));
             server.getScheduler().performOneTick();
 
             assertThat(slowHandlerWarnings()).hasSize(1);
@@ -559,17 +466,16 @@ class PanelMessageEventDispatchTest {
         }
 
         @Test
-        @DisplayName("getEventBus() 为 null 时 handleInboundMessage 正常返回，不抛异常")
+        @DisplayName("getEventBus() 为 null 时发布正常返回，不抛异常")
         void nullEventBusIsSilentNoOp() {
-            assertThatCode(() -> invokeHandleInboundMessage(notificationMessage("hi")))
+            assertThatCode(() -> publish(notificationMessage("hi")))
                     .doesNotThrowAnyException();
         }
     }
 
     /**
      * No Bukkit scheduler available (no server booted) — also a logged no-op. This is the case
-     * a plain, non-MockBukkit unit test like {@code PluginInitiationUtilsInboundMessageTest} is
-     * already in: {@code Bukkit.getServer()} is null there, so {@code Bukkit.getScheduler()}
+     * a plain, non-MockBukkit unit test is already in: {@code Bukkit.getServer()} is null there, so {@code Bukkit.getScheduler()}
      * would throw if it were ever reached.
      */
     @Nested
@@ -602,9 +508,9 @@ class PanelMessageEventDispatchTest {
         }
 
         @Test
-        @DisplayName("没有 Bukkit server 时 handleInboundMessage 正常返回，不抛异常")
+        @DisplayName("没有 Bukkit server 时发布正常返回，不抛异常")
         void noBukkitServerIsSilentNoOp() {
-            assertThatCode(() -> invokeHandleInboundMessage(notificationMessage("hi")))
+            assertThatCode(() -> publish(notificationMessage("hi")))
                     .doesNotThrowAnyException();
         }
     }

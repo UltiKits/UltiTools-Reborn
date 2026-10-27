@@ -11,6 +11,8 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -58,6 +60,7 @@ public class ServerPropertiesManager {
     private static final String FILE_NAME = "server.properties";
 
     private final File serverRoot;
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelWebSocketClient webSocketClient;
 
     private static final Set<String> SAFE_KEYS = new HashSet<>(Arrays.asList(
@@ -67,11 +70,44 @@ public class ServerPropertiesManager {
         "spawn-npcs", "enable-command-block"
     ));
 
+    /**
+     * The keys the frozen protocol 2.0.0 contract lets a panel read, in contract order.
+     * {@link #SAFE_KEYS} stays its own set: this list decides what {@link #readVersioned(int)}
+     * reports, not what the v1 write path accepts.
+     */
+    private static final List<String> V2_READABLE_KEYS = Collections.unmodifiableList(Arrays.asList(
+        "motd", "max-players", "difficulty", "gamemode", "spawn-protection", "view-distance",
+        "simulation-distance", "pvp", "allow-flight", "spawn-monsters", "allow-nether",
+        "enable-command-block", "online-mode", "white-list"));
+
+    /**
+     * The keys a remote update may change: the contract's twelve. It is deliberately independent of
+     * {@link #SAFE_KEYS}, which still contains the v1-only {@code spawn-animals} and
+     * {@code spawn-npcs}. {@code online-mode} and {@code white-list} must never join it: turning
+     * server authentication or the whitelist off from the panel is an elevation of privilege the
+     * operator has not granted (maintainer decision, user decision 15), so those two keys are
+     * readable and never writable.
+     */
+    private static final List<String> V2_WRITABLE_KEYS = Collections.unmodifiableList(Arrays.asList(
+        "motd", "max-players", "difficulty", "gamemode", "spawn-protection", "view-distance",
+        "simulation-distance", "pvp", "allow-flight", "spawn-monsters", "allow-nether",
+        "enable-command-block"));
+
     public ServerPropertiesManager(File serverRoot) {
         this.serverRoot = serverRoot;
     }
 
+    /**
+     * Sets the protocol v1 client the v1 senders of this manager reply over.
+     *
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
+        V1CloudNotice.once(ServerPropertiesManager.class, "setWebSocketClient");
         this.webSocketClient = client;
     }
 
@@ -103,6 +139,420 @@ public class ServerPropertiesManager {
 
     public boolean setProperty(String key, String value) {
         return writeProperty(key, value).outcome == WriteOutcome.WRITTEN;
+    }
+
+    /**
+     * The keys a remote update may change: the contract's twelve.
+     *
+     * @return an unmodifiable list of the writable keys, in contract order
+     */
+    public static List<String> writableKeys() {
+        return V2_WRITABLE_KEYS;
+    }
+
+    /**
+     * Reads {@code server.properties} for the protocol 2.0.0 panel: the fourteen readable keys
+     * that are present and parse to their contract type, the writable key set, and the version a
+     * later update must send back as its {@code baseVersion}.
+     *
+     * <p>The version is the SHA-256 of exactly the bytes this call read, so the values and the
+     * version always describe one file state; a key whose value does not parse to its type is left
+     * out rather than reported with a wrong type. The contract's RUNTIME_CHECKS {@code
+     * file-content} rule applies here too — the file must be valid UTF-8, within the connection's
+     * limit and free of C0 control characters other than TAB, LF and CR — because the panel reads
+     * this file to write it back.</p>
+     *
+     * @param maxContentBytes the connection's negotiated {@code fileMaxBytes}
+     * @return the snapshot, or which refusal prevented one
+     */
+    public PropertiesSnapshot readVersioned(int maxContentBytes) {
+        File propsFile = new File(serverRoot, FILE_NAME);
+        if (!propsFile.exists()) {
+            return PropertiesSnapshot.notFound();
+        }
+        byte[] bytes;
+        try {
+            bytes = Files.readAllBytes(propsFile.toPath());
+        } catch (IOException unreadable) {
+            LOGGER.log(Level.WARNING, "server.properties " + propsFile.getAbsolutePath()
+                    + " could not be read: " + unreadable.getClass().getSimpleName());
+            return PropertiesSnapshot.unreadable();
+        }
+        PropertiesText text = PropertiesText.decode(bytes);
+        if (!isEditableContent(bytes, text, maxContentBytes)) {
+            return PropertiesSnapshot.fileNotEditable();
+        }
+        Properties props;
+        try {
+            props = text.parse();
+        } catch (IllegalArgumentException malformedEscape) {
+            return PropertiesSnapshot.fileNotEditable();
+        }
+        Map<String, String> values = new LinkedHashMap<>();
+        for (String key : V2_READABLE_KEYS) {
+            String value = props.getProperty(key);
+            if (value != null) {
+                values.put(key, value);
+            }
+        }
+        return PropertiesSnapshot.ok(values, V2_WRITABLE_KEYS, versionOf(bytes));
+    }
+
+    /**
+     * Applies a protocol 2.0.0 properties update: for each requested key, replaces the value text
+     * of the physical line that defines it and nothing else, and only while {@code server.properties}
+     * still hashes to {@code baseVersion}.
+     *
+     * <p><b>Why this path cannot overwrite operator content</b> (configuration-layer rule): the
+     * version is computed from the bytes read inside {@link #WRITE_LOCK}, the comparison happens
+     * there too, and publication goes through {@link AtomicConfigWriter}, which re-reads the file
+     * under its own lock and replaces it only while it still holds those bytes. A panel edit
+     * therefore lands only when the operator is writing back the very content the panel read; any
+     * other state answers {@link PropertiesUpdateResult.Outcome#FILE_CHANGED} and leaves every byte
+     * in place. Keys outside the contract's twelve are refused per key even when a caller reaches
+     * this method directly — that refusal is the defence in depth behind the strict payload schema,
+     * so {@code online-mode} and {@code white-list} cannot be changed remotely by any route.</p>
+     *
+     * @param baseVersion the SHA-256 the panel read, or null to have the update refused as changed
+     * @param changes     the requested keys and their new values, already in their text form
+     * @return the per-key outcome, the version now on disk and, for a refusal, its reason
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Each per-key refusal is checked and reported separately.
+    public PropertiesUpdateResult updateWithBaseVersion(String baseVersion, Map<String, String> changes) {
+        File propsFile = new File(serverRoot, FILE_NAME);
+        if (!propsFile.exists()) {
+            return PropertiesUpdateResult.notFound();
+        }
+        Map<String, String> requested = changes == null
+                ? Collections.<String, String>emptyMap() : new LinkedHashMap<>(changes);
+
+        synchronized (WRITE_LOCK) {
+            Path path = propsFile.toPath();
+            PropertiesText original;
+            Properties before;
+            try {
+                original = PropertiesText.read(path);
+                before = original.parse();
+            } catch (IOException unreadable) {
+                LOGGER.log(Level.WARNING, "server.properties " + propsFile.getAbsolutePath()
+                        + " could not be read for an update: " + unreadable.getClass().getSimpleName());
+                return PropertiesUpdateResult.refused("server.properties could not be read");
+            } catch (IllegalArgumentException malformedEscape) {
+                return PropertiesUpdateResult.refused(
+                        "server.properties cannot be parsed (a malformed \\u escape)");
+            }
+
+            String currentVersion = versionOf(original.bytes);
+            if (baseVersion == null || !baseVersion.equals(currentVersion)) {
+                return PropertiesUpdateResult.fileChanged();
+            }
+
+            List<PropertyKeyResult> keys = new ArrayList<>();
+            byte[] buffer = original.bytes;
+            Properties current = before;
+            boolean anyApplied = false;
+            boolean anyRefused = false;
+            for (Map.Entry<String, String> change : requested.entrySet()) {
+                String key = change.getKey();
+                String value = change.getValue();
+                if (!V2_WRITABLE_KEYS.contains(key)) {
+                    keys.add(PropertyKeyResult.refused(key,
+                            "this key is not writable through the panel"));
+                    anyRefused = true;
+                    continue;
+                }
+                if (value == null) {
+                    keys.add(PropertyKeyResult.refused(key, "no value was supplied for this key"));
+                    anyRefused = true;
+                    continue;
+                }
+                if (current.getProperty(key) == null) {
+                    keys.add(PropertyKeyResult.refused(key, "server.properties does not define this key"));
+                    anyRefused = true;
+                    continue;
+                }
+                PropertiesText view = PropertiesText.decode(buffer);
+                List<Definition> definitions = view.definitionsOf(key);
+                if (definitions.size() > 1) {
+                    keys.add(PropertyKeyResult.refused(key,
+                            "the key is defined on more than one line (lines " + lineNumbers(definitions) + ")"));
+                    anyRefused = true;
+                    continue;
+                }
+                if (definitions.isEmpty()) {
+                    keys.add(PropertyKeyResult.refused(key, "the line defining the key cannot be located"));
+                    anyRefused = true;
+                    continue;
+                }
+                Definition definition = definitions.get(0);
+                if (definition.continued) {
+                    keys.add(PropertyKeyResult.refused(key, "the key's definition continues onto the next line (line "
+                            + (definition.line + 1) + ")"));
+                    anyRefused = true;
+                    continue;
+                }
+                byte[] next;
+                Properties after;
+                try {
+                    next = view.replaceValue(definition, value);
+                    after = PropertiesText.decode(next).parse();
+                } catch (CharacterCodingException unencodable) {
+                    keys.add(PropertyKeyResult.refused(key,
+                            "the new value cannot be encoded in the file's character encoding"));
+                    anyRefused = true;
+                    continue;
+                } catch (IllegalArgumentException malformedEscape) {
+                    keys.add(PropertyKeyResult.refused(key, "the edited file would not parse"));
+                    anyRefused = true;
+                    continue;
+                }
+                String failure = view.verify(next, definition, key, value, current);
+                if (failure != null) {
+                    keys.add(PropertyKeyResult.refused(key, failure));
+                    anyRefused = true;
+                    continue;
+                }
+                buffer = next;
+                current = after;
+                anyApplied = true;
+                keys.add(PropertyKeyResult.applied(key));
+            }
+
+            if (!anyApplied) {
+                return PropertiesUpdateResult.partial(keys, currentVersion);
+            }
+            if (!Arrays.equals(buffer, original.bytes)) {
+                try {
+                    AtomicConfigWriter.StagedWrite staged = AtomicConfigWriter.stage(path, buffer);
+                    if (!staged.commitIfUnchanged(original.bytes)) {
+                        return PropertiesUpdateResult.fileChanged();
+                    }
+                } catch (IOException failed) {
+                    LOGGER.log(Level.WARNING, "server.properties " + propsFile.getAbsolutePath()
+                            + " was not updated: " + failed.getClass().getSimpleName());
+                    return PropertiesUpdateResult.refused("server.properties could not be written");
+                }
+            }
+            String newVersion = versionOf(buffer);
+            return anyRefused
+                    ? PropertiesUpdateResult.partial(keys, newVersion)
+                    : PropertiesUpdateResult.applied(keys, newVersion);
+        }
+    }
+
+    /**
+     * The contract's RUNTIME_CHECKS {@code file-content} rule over {@code server.properties}: within
+     * the connection's limit, valid UTF-8 (the manager falls back to ISO-8859-1 for the server's own
+     * reading, but the panel only ever writes UTF-8) and no C0 control character other than TAB, LF
+     * and CR, and no DEL.
+     */
+    private static boolean isEditableContent(byte[] bytes, PropertiesText text, int maxContentBytes) {
+        if (bytes.length > maxContentBytes || !StandardCharsets.UTF_8.equals(text.charset)) {
+            return false;
+        }
+        for (int i = 0; i < text.text.length(); i++) {
+            char character = text.text.charAt(i);
+            boolean allowed = character == '\t' || character == '\n' || character == '\r';
+            if (!allowed && (character < 0x20 || character == 0x7F)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String versionOf(byte[] bytes) {
+        try {
+            StringBuilder hex = new StringBuilder(64);
+            for (byte value : MessageDigest.getInstance("SHA-256").digest(bytes)) {
+                hex.append(Character.forDigit((value >> 4) & 0xF, 16)).append(Character.forDigit(value & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException unattainable) {
+            throw new IllegalStateException("SHA-256 is required of every Java platform", unattainable);
+        }
+    }
+
+    /**
+     * One typed read of {@code server.properties} for the protocol 2.0.0 panel, as returned by
+     * {@link #readVersioned(int)}.
+     */
+    @ApiStatus.Internal
+    public static final class PropertiesSnapshot {
+        /** Why {@link #readVersioned(int)} did or did not produce values. */
+        public enum Outcome {
+            /** Values, writable keys and version describe one file state. */
+            OK,
+            /** The server root holds no server.properties. */
+            NOT_FOUND,
+            /** The file breaks the contract's file-content rule, or the server could not parse it. */
+            FILE_NOT_EDITABLE,
+            /** The file exists but could not be read. */
+            UNREADABLE
+        }
+
+        private final Outcome outcome;
+        private final Map<String, String> values;
+        private final List<String> writable;
+        private final String version;
+
+        private PropertiesSnapshot(Outcome outcome, Map<String, String> values, List<String> writable,
+                                   String version) {
+            this.outcome = outcome;
+            this.values = values;
+            this.writable = writable;
+            this.version = version;
+        }
+
+        private static PropertiesSnapshot ok(Map<String, String> values, List<String> writable, String version) {
+            return new PropertiesSnapshot(Outcome.OK, Collections.unmodifiableMap(new LinkedHashMap<>(values)),
+                    writable, version);
+        }
+
+        private static PropertiesSnapshot notFound() {
+            return new PropertiesSnapshot(Outcome.NOT_FOUND, Collections.<String, String>emptyMap(),
+                    Collections.<String>emptyList(), null);
+        }
+
+        private static PropertiesSnapshot fileNotEditable() {
+            return new PropertiesSnapshot(Outcome.FILE_NOT_EDITABLE, Collections.<String, String>emptyMap(),
+                    Collections.<String>emptyList(), null);
+        }
+
+        private static PropertiesSnapshot unreadable() {
+            return new PropertiesSnapshot(Outcome.UNREADABLE, Collections.<String, String>emptyMap(),
+                    Collections.<String>emptyList(), null);
+        }
+
+        /** @return whether the read produced values, and if not, why */
+        public Outcome getOutcome() {
+            return outcome;
+        }
+
+        /** @return the readable keys present in the file with their raw text values, in contract order */
+        public Map<String, String> getValues() {
+            return values;
+        }
+
+        /** @return the writable key set the panel may offer as editable */
+        public List<String> getWritable() {
+            return writable;
+        }
+
+        /** @return the SHA-256 of the bytes the values were read from, or {@code null} without values */
+        public String getVersion() {
+            return version;
+        }
+    }
+
+    /**
+     * The per-key result of {@link #updateWithBaseVersion(String, Map)}.
+     */
+    @ApiStatus.Internal
+    public static final class PropertiesUpdateResult {
+        /** The overall outcome of one update. */
+        public enum Outcome {
+            /** Every requested key was written. */
+            APPLIED,
+            /** At least one key was refused or absent; the accepted keys were written. */
+            PARTIAL,
+            /** The file no longer hashed to the base version; nothing was written. */
+            FILE_CHANGED,
+            /** The server root holds no server.properties. */
+            NOT_FOUND,
+            /** The file could not be read or written; nothing was written. */
+            REFUSED
+        }
+
+        private final Outcome outcome;
+        private final List<PropertyKeyResult> keys;
+        private final String version;
+        private final String reason;
+
+        private PropertiesUpdateResult(Outcome outcome, List<PropertyKeyResult> keys, String version, String reason) {
+            this.outcome = outcome;
+            this.keys = keys == null ? Collections.<PropertyKeyResult>emptyList() : Collections.unmodifiableList(keys);
+            this.version = version;
+            this.reason = reason;
+        }
+
+        private static PropertiesUpdateResult applied(List<PropertyKeyResult> keys, String version) {
+            return new PropertiesUpdateResult(Outcome.APPLIED, keys, version, null);
+        }
+
+        private static PropertiesUpdateResult partial(List<PropertyKeyResult> keys, String version) {
+            return new PropertiesUpdateResult(Outcome.PARTIAL, keys, version, null);
+        }
+
+        private static PropertiesUpdateResult fileChanged() {
+            return new PropertiesUpdateResult(Outcome.FILE_CHANGED, null, null, null);
+        }
+
+        private static PropertiesUpdateResult notFound() {
+            return new PropertiesUpdateResult(Outcome.NOT_FOUND, null, null, null);
+        }
+
+        private static PropertiesUpdateResult refused(String reason) {
+            return new PropertiesUpdateResult(Outcome.REFUSED, null, null, reason);
+        }
+
+        /** @return what happened overall */
+        public Outcome getOutcome() {
+            return outcome;
+        }
+
+        /** @return one result per requested key, in request order; empty when nothing was attempted */
+        public List<PropertyKeyResult> getKeys() {
+            return keys;
+        }
+
+        /** @return the SHA-256 of the bytes now on disk, or {@code null} when nothing was written */
+        public String getVersion() {
+            return version;
+        }
+
+        /** @return a safe refusal reason for {@link Outcome#REFUSED}, or {@code null} */
+        public String getReason() {
+            return reason;
+        }
+    }
+
+    /**
+     * What happened to one key of a protocol 2.0.0 properties update.
+     */
+    @ApiStatus.Internal
+    public static final class PropertyKeyResult {
+        private final String key;
+        private final boolean ok;
+        private final String message;
+
+        private PropertyKeyResult(String key, boolean ok, String message) {
+            this.key = key;
+            this.ok = ok;
+            this.message = message;
+        }
+
+        private static PropertyKeyResult applied(String key) {
+            return new PropertyKeyResult(key, true, null);
+        }
+
+        private static PropertyKeyResult refused(String key, String message) {
+            return new PropertyKeyResult(key, false, message);
+        }
+
+        /** @return the key this result is about */
+        public String getKey() {
+            return key;
+        }
+
+        /** @return whether the key's new value is now in the file */
+        public boolean isOk() {
+            return ok;
+        }
+
+        /** @return why the key was not written, or {@code null} when it was */
+        public String getMessage() {
+            return message;
+        }
     }
 
     /**
@@ -744,7 +1194,12 @@ public class ServerPropertiesManager {
      * Handle WebSocket message for server properties operations.
      *
      * @param data the message data
+     * @deprecated Use readVersioned(int) and updateWithBaseVersion(String, Map), which the protocol
+     *     2.0.0 session calls; this v1 handler replies only over the client handed to
+     *     setWebSocketClient. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void handleServerProperties(JsonObject data) {
         if (data == null) return;
 

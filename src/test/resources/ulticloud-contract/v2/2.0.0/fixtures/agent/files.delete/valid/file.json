@@ -1,0 +1,9 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "files.delete",
+  "ts": 1761274800000,
+  "payload": {
+    "path": "plugins/UltiChat/old.yml"
+  }
+}

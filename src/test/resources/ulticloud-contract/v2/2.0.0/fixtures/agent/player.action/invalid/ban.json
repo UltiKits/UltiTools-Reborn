@@ -1,0 +1,14 @@
+{
+  "expect": "invalid_message",
+  "why": "动作只有 kick、gamemode、teleport",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.action",
+    "ts": 1761274800000,
+    "payload": {
+      "action": "ban",
+      "player": "Steve"
+    }
+  }
+}

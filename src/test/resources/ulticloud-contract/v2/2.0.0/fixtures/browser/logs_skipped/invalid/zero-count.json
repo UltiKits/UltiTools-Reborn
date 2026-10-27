@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "count 至少为 1",
+  "frame": {
+    "type": "logs_skipped",
+    "stream": "logs",
+    "fromSeq": 1,
+    "toSeq": 1,
+    "count": 0
+  }
+}

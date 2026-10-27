@@ -1,0 +1,7 @@
+{
+  "expect": "invalid",
+  "why": "sort is one of popular, newest, updated, name",
+  "body": {
+    "sort": "hot"
+  }
+}

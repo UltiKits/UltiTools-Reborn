@@ -1,125 +1,90 @@
 package com.ultikits.ultitools.utils;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 
-import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 
 /**
- * Performs an authenticated UltiCloud request on a module's behalf, without ever handing the module
- * the server's UltiCloud token.
- * <p>
- * The framework deliberately never exposes the cloud credential to module code: the session that
- * holds it is package-private, and no public static member of this package accepts or returns a
- * {@link TokenEntity} (the Phase 16 token-non-exposure rule, enforced by a structural test). Some
- * module features nevertheless need UltiCloud to know that a request really comes from this server
- * -- UltiLogin's {@code /panel} link is the first. This class is the only way to get that: the
- * framework attaches the current session's bearer to one connection it opens itself, sends the
- * request, and returns only the HTTP status and response body.
- * <p>
- * <b>Allow-list (exact match per method).</b> Only these two requests are made:
- * <ul>
- *   <li>{@code POST /auth/magic-link} -- create a web login link ({@link #post(String, String)})</li>
- *   <li>{@code GET /auth/magic-link/poll} -- poll that link's outcome ({@link #get(String, Map)})</li>
- * </ul>
- * Anything else -- another path, an allowed path with the other method, or a path containing
- * {@code ..}, {@code //}, {@code \}, {@code %}, {@code ?} or {@code #} -- is answered with
- * {@link Outcome#PATH_NOT_ALLOWED} and no request is made. Query parameters travel only through the
- * {@code query} map. The list grows only by a documented contract change in a framework release; a
- * module cannot widen it.
- * <p>
- * <b>The token is never exposed.</b> It is never returned, the framework itself never logs it, it is
- * never placed in an exception message that reaches the caller or in {@link Result#toString()}, and
- * no public member of this class or of {@link Result} is typed {@link TokenEntity}. Redirects are not
- * followed, so the bearer is never re-sent to the host a {@code Location} header names; a 3xx is
- * returned to the caller as an ordinary result. One limit lies outside the framework: the JDK's own
- * HTTP client logger ({@code sun.net.www.protocol.http.HttpURLConnection}) prints request headers,
- * the bearer included, when an operator raises it to {@code FINE} or lower. Its default level does
- * not, and the same applies to every request the framework sends with this credential; do not enable
- * that logger on a production server.
- * <p>
- * <b>Threading.</b> Both methods block on network I/O (connect timeout 10 s, read timeout 30 s) and
- * refuse to run on the server's primary thread with an {@link IllegalStateException}. Call them from
- * an asynchronous task and hop back to the primary thread to act on the result.
- * <p>
- * <b>Side effects.</b> Besides the single HTTP exchange this class writes nothing: no file, no
- * configuration, no log line.
- * <p>
- * The order of checks is fixed: primary thread, then path, then session ({@link Outcome#NOT_CONNECTED}
- * when this server is not logged in to UltiCloud -- for example after {@code /ulticloud logout}),
- * then the HTTP exchange ({@link Outcome#OK} for any completed exchange whatever its status,
- * {@link Outcome#IO_ERROR} when the exchange could not complete).
+ * The removed UltiCloud v1 request helper; every call is answered {@link Outcome#PATH_NOT_ALLOWED}.
+ *
+ * <p>Protocol 2.0.0 has no v1 REST cloud, so the two magic-link requests this class used to make
+ * ({@code POST /auth/magic-link} and {@code GET /auth/magic-link/poll}) no longer reach anything and
+ * are refused without opening a connection. The first such call in a run writes one INFO line that
+ * names the replacement.</p>
+ *
+ * <p><b>Replacement.</b> UltiLogin 2.1.0 uses {@link CloudPlayerLinks}: the framework asks the
+ * gateway for a one-time player link and the gateway reports how the web user proved the game
+ * identity, so no module talks to a cloud endpoint itself and no module ever holds the server
+ * credential.</p>
+ *
+ * <p><b>Compatibility.</b> Every public type and member of 6.3.0 is still present with the same
+ * signatures; only behaviour and this documentation changed. As of 6.3.1 the class, its two calls
+ * and its two nested types are deprecated for removal in 6.4.0. UltiLogin 2.0.0 maps
+ * {@link Outcome#PATH_NOT_ALLOWED} to a link error and never retries, so its {@code /panel} fails in
+ * the way it already handles.</p>
+ *
+ * <p><b>Threading.</b> The methods no longer perform network I/O, but they keep the 6.3.0 contract
+ * and still refuse the server's primary thread with {@link IllegalStateException}; callers that
+ * already hop to an asynchronous task keep working unchanged.</p>
  *
  * @since 6.3.0
+ * @deprecated Use {@link CloudPlayerLinks} to link a player; protocol 2.0.0 has no v1 REST cloud, so
+ *     every call of this class is refused. Removed in 6.4.0.
+ * @removeIn 6.4.0
  */
+@Deprecated(since = "6.3.1", forRemoval = true)
 public final class UltiCloudRequests {
 
-    /** The one path {@link #post(String, String)} accepts. */
+    private static final Logger LOGGER = Logger.getLogger(UltiCloudRequests.class.getName());
+
+    /** The request path UltiLogin 2.0.0 used to create a link. */
     private static final String CREATE_PATH = "/auth/magic-link";
-    /** The one path {@link #get(String, Map)} accepts. */
+    /** The request path UltiLogin 2.0.0 used to poll that link. */
     private static final String POLL_PATH = "/auth/magic-link/poll";
-    /** Character sequences that are never part of an allowed path, checked before the exact match. */
-    private static final String[] FORBIDDEN_SEQUENCES = {"..", "//", "\\", "%", "?", "#"};
-    private static final int CONNECT_TIMEOUT_MS = 10_000;
-    private static final int READ_TIMEOUT_MS = 30_000;
+
+    private static final AtomicBoolean ANNOUNCED = new AtomicBoolean();
 
     private UltiCloudRequests() {
     }
 
     /**
-     * Sends {@code POST <api-url><path>} with {@code jsonBody} and this server's UltiCloud bearer.
+     * Answers {@link Outcome#PATH_NOT_ALLOWED} without opening a connection; no request is made.
      *
-     * @param path     must be exactly {@code /auth/magic-link}
-     * @param jsonBody the JSON request body, sent as UTF-8 with
-     *                 {@code Content-Type: application/json; charset=utf-8}; {@code null} sends an
-     *                 empty body
-     * @return the outcome; never {@code null}
+     * @param path the request path; only the two removed magic-link paths write a diagnostic
+     * @param jsonBody the JSON request body, ignored because nothing is sent
+     * @return {@link Outcome#PATH_NOT_ALLOWED} with no status code and no body
      * @throws IllegalStateException if called on the server's primary thread
+     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.0.0 has no v1
+     *     REST cloud, so this call is always refused. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static Result post(String path, String jsonBody) {
         requireOffPrimaryThread();
-        if (!isAllowed(path, CREATE_PATH)) {
-            return Result.withoutExchange(Outcome.PATH_NOT_ALLOWED);
-        }
-        String bearer = currentBearer();
-        if (bearer == null) {
-            return Result.withoutExchange(Outcome.NOT_CONNECTED);
-        }
-        byte[] body = jsonBody == null ? new byte[0] : jsonBody.getBytes(StandardCharsets.UTF_8);
-        return exchange("POST", path, bearer, body);
+        announceOnce(CREATE_PATH.equals(path) || POLL_PATH.equals(path));
+        return Result.withoutExchange(Outcome.PATH_NOT_ALLOWED);
     }
 
     /**
-     * Sends {@code GET <api-url><path>?<query>} with this server's UltiCloud bearer.
+     * Answers {@link Outcome#PATH_NOT_ALLOWED} without opening a connection; no request is made.
      *
-     * @param path  must be exactly {@code /auth/magic-link/poll}
-     * @param query query parameters, each name and value URL-encoded as UTF-8; {@code null} or empty
-     *              sends no query string; an entry with a {@code null} name is skipped and a
-     *              {@code null} value is sent as an empty value
-     * @return the outcome; never {@code null}
+     * @param path the request path; only the two removed magic-link paths write a diagnostic
+     * @param query query parameters, ignored because nothing is sent
+     * @return {@link Outcome#PATH_NOT_ALLOWED} with no status code and no body
      * @throws IllegalStateException if called on the server's primary thread
+     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.0.0 has no v1
+     *     REST cloud, so this call is always refused. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static Result get(String path, Map<String, String> query) {
         requireOffPrimaryThread();
-        if (!isAllowed(path, POLL_PATH)) {
-            return Result.withoutExchange(Outcome.PATH_NOT_ALLOWED);
-        }
-        String bearer = currentBearer();
-        if (bearer == null) {
-            return Result.withoutExchange(Outcome.NOT_CONNECTED);
-        }
-        String target = path + encodeQuery(query);
-        return exchange("GET", target, bearer, null);
+        announceOnce(POLL_PATH.equals(path) || CREATE_PATH.equals(path));
+        return Result.withoutExchange(Outcome.PATH_NOT_ALLOWED);
     }
 
     private static void requireOffPrimaryThread() {
@@ -131,137 +96,45 @@ public final class UltiCloudRequests {
         }
     }
 
-    private static boolean isAllowed(String path, String allowedPath) {
-        if (path == null) {
-            return false;
-        }
-        for (String forbidden : FORBIDDEN_SEQUENCES) {
-            if (path.contains(forbidden)) {
-                return false;
-            }
-        }
-        return allowedPath.equals(path);
-    }
-
-    /** @return the current session's access token value, or {@code null} when not connected */
-    private static String currentBearer() {
-        CloudSession session = CloudSession.current();
-        if (!session.hasValidToken()) {
-            return null;
-        }
-        TokenEntity token = session.getToken();
-        return token == null ? null : token.getAccess_token();
-    }
-
-    private static String encodeQuery(Map<String, String> query) {
-        if (query == null || query.isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (Map.Entry<String, String> entry : query.entrySet()) {
-            if (entry.getKey() == null) {
-                continue;
-            }
-            builder.append(builder.length() == 0 ? '?' : '&');
-            builder.append(urlEncode(entry.getKey()));
-            builder.append('=');
-            builder.append(urlEncode(entry.getValue() == null ? "" : entry.getValue()));
-        }
-        return builder.toString();
-    }
-
-    private static String urlEncode(String value) {
-        try {
-            return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
-        } catch (UnsupportedEncodingException e) {
-            // UTF-8 is a charset every JVM must support.
-            throw new IllegalStateException(e);
+    private static void announceOnce(boolean removedCall) {
+        if (removedCall && ANNOUNCED.compareAndSet(false, true)) {
+            LOGGER.info("UltiCloud: protocol 2.0.0 removed the v1 magic-link endpoint, so this call "
+                    + "cannot reach UltiCloud and returns PATH_NOT_ALLOWED; UltiLogin 2.1.0 uses "
+                    + "CloudPlayerLinks instead.");
         }
     }
 
-    // A RuntimeException is caught on purpose: the JDK validates header values and throws an
-    // unchecked IllegalArgumentException whose message is the whole value ("Bearer <token>") when
-    // the stored token contains CR or LF. Letting it reach the module would break the promise that
-    // no exception carries the token, so every failure of the exchange becomes IO_ERROR.
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
-    private static Result exchange(String method, String pathAndQuery, String bearer, byte[] body) {
-        String base = HttpRequestUtils.getBaseUrl();
-        if (base == null || base.trim().isEmpty()) {
-            return Result.withoutExchange(Outcome.IO_ERROR);
-        }
-        base = base.trim();
-        while (base.endsWith("/")) {
-            base = base.substring(0, base.length() - 1);
-        }
-        HttpURLConnection connection = null;
-        try {
-            // Not caller-controlled: the base is the framework's own env.yml api-url (a jar resource
-            // filled at build time), and pathAndQuery is one of the two allow-listed constants plus a
-            // URL-encoded query; a module cannot choose the host or the path.
-            // nosemgrep: java_ssrf_rule-SSRF
-            connection = (HttpURLConnection) new URL(base + pathAndQuery).openConnection();
-            // Never follow a redirect: following it would re-send the bearer to whatever host the
-            // Location header names. A 3xx is returned to the caller instead.
-            connection.setInstanceFollowRedirects(false);
-            connection.setRequestMethod(method);
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setUseCaches(false);
-            connection.setDoInput(true);
-            connection.setRequestProperty("Authorization", "Bearer " + bearer);
-            connection.setRequestProperty("Accept", "application/json");
-            if (body != null) {
-                connection.setDoOutput(true);
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                try (OutputStream out = connection.getOutputStream()) {
-                    out.write(body);
-                }
-            }
-            int status = connection.getResponseCode();
-            return new Result(Outcome.OK, status, readBody(connection, status));
-        } catch (IOException | RuntimeException e) {
-            // The exception is deliberately dropped, not logged or wrapped: the caller learns only
-            // that the exchange did not complete, and no message can carry request headers.
-            return Result.withoutExchange(Outcome.IO_ERROR);
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    private static String readBody(HttpURLConnection connection, int status) throws IOException {
-        InputStream in = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
-        if (in == null) {
-            return "";
-        }
-        try (InputStream stream = in) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = stream.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
-            }
-            return new String(out.toByteArray(), StandardCharsets.UTF_8);
-        }
+    /** Drops the once-per-run announcement so a test can observe it again. */
+    static void resetAnnouncementForTesting() {
+        ANNOUNCED.set(false);
     }
 
     /**
      * What happened to a request.
      *
      * @since 6.3.0
+     * @deprecated There is no replacement: {@link CloudPlayerLinks} reports its own outcomes.
+     *     Removed in 6.4.0 with {@link UltiCloudRequests}.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public enum Outcome {
-        /** An HTTP exchange completed; read {@link Result#getStatusCode()} (any 2xx-5xx, including 3xx). */
+        /**
+         * An HTTP exchange completed; read {@link Result#getStatusCode()}. Since 6.3.1 no call makes
+         * an exchange, so this value is only kept for source compatibility.
+         */
         OK,
         /**
-         * This server holds no valid UltiCloud session (never logged in, logged out, or the credential
-         * expired); no request was made.
+         * This server holds no valid UltiCloud session. Since 6.3.1 no call reads a session, so this
+         * value is only kept for source compatibility.
          */
         NOT_CONNECTED,
-        /** The method and path are not on the allow-list; no request was made. */
+        /** The call is not on the allow-list, which since 6.3.1 is every call; no request was made. */
         PATH_NOT_ALLOWED,
-        /** The exchange could not complete (connection, timeout or read failure). */
+        /**
+         * The exchange could not complete. Since 6.3.1 no call makes an exchange, so this value is
+         * only kept for source compatibility.
+         */
         IO_ERROR
     }
 
@@ -270,7 +143,11 @@ public final class UltiCloudRequests {
      * Carries no request header and no credential.
      *
      * @since 6.3.0
+     * @deprecated There is no replacement: {@link CloudPlayerLinks} reports its own outcomes.
+     *     Removed in 6.4.0 with {@link UltiCloudRequests}.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static final class Result {
 
         private final Outcome outcome;

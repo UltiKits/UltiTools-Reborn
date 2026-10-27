@@ -1,0 +1,8 @@
+{
+  "expect": "invalid",
+  "why": "legacyServerUuid 只属于 server",
+  "body": {
+    "clientKind": "cli",
+    "legacyServerUuid": "123e4567e89b12d3a456426614174000"
+  }
+}

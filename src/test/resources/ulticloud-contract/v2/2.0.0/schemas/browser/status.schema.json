@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/browser/status.schema.json",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "status"
+    },
+    "stream": {
+      "type": "string",
+      "const": "status"
+    },
+    "status": {
+      "type": "object",
+      "properties": {
+        "asOf": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+        },
+        "playerCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "maxPlayers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "tps": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "cpuPercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "memUsedMb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        },
+        "memMaxMb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        },
+        "software": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ultitoolsVersion": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+        },
+        "uptimeSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000000
+        },
+        "worldCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "asOf",
+        "playerCount",
+        "maxPlayers",
+        "tps",
+        "cpuPercent",
+        "memUsedMb",
+        "memMaxMb",
+        "software",
+        "ultitoolsVersion",
+        "uptimeSeconds",
+        "worldCount"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "type",
+    "stream",
+    "status"
+  ],
+  "additionalProperties": false
+}

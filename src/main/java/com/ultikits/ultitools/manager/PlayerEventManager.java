@@ -20,6 +20,7 @@ import org.bukkit.plugin.Plugin;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -27,7 +28,9 @@ import org.jetbrains.annotations.ApiStatus;
  * Player event manager.
  * Handles WebSocket messages for player-related events.
  */
-@SuppressWarnings("deprecation")
+// "deprecation": PlayerChatEvent; "removal": every member of this kept v1 sender holds or reads
+// the deprecated v1 client until 6.4.0 (S-67).
+@SuppressWarnings({"deprecation", "removal"})
 @ApiStatus.Internal
 public class PlayerEventManager implements Listener {
     /**
@@ -49,10 +52,11 @@ public class PlayerEventManager implements Listener {
     /**
      * Whether this instance has already hooked itself into the Bukkit event system.
      * <p>
-     * {@link #initialize(UltiPanelWebSocketClient)} is called by {@code initializeManagers()},
-     * which is itself hung on the WebSocket's {@code onConnectHandler} -- <b>it runs on every
-     * single onOpen</b>. Without this guard, N disconnect-reconnect cycles would register N
-     * copies of the listener, and the same player event would be sent out N times. See issue #180.
+     * In 6.3.0 {@link #initialize(UltiPanelWebSocketClient)} was called by the v1 manager wiring
+     * (removed in 6.3.1), which was itself hung on the WebSocket's {@code onConnectHandler} --
+     * <b>it ran on every single onOpen</b>. Without this guard, N disconnect-reconnect cycles would
+     * register N copies of the listener, and the same player event would be sent out N times. See
+     * issue #180.
      */
     private volatile boolean listenerRegistered = false;
 
@@ -67,11 +71,16 @@ public class PlayerEventManager implements Listener {
      * even after {@code disableCloud()}. See the PR #264 review.
      *
      * @param client the WebSocket client
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public synchronized void initialize(UltiPanelWebSocketClient client) {
-        // The client is a freshly constructed instance on every reconnect (see
-        // PluginInitiationUtils.getPanelWebsocketClient), so the reference must be updated
-        // unconditionally; only the registration action itself is idempotent.
+        V1CloudNotice.once(PlayerEventManager.class, "initialize");
+        // A caller may hand in a different client on every call (the 6.3.0 v1 wiring built a fresh
+        // one on every reconnect), so the reference must be updated unconditionally; only the
+        // registration action itself is idempotent.
         this.webSocketClient = client;
         registerEvents();
     }
@@ -118,8 +127,12 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-join event.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
     @EventHandler(priority = EventPriority.MONITOR)
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerJoin(PlayerJoinEvent event) {
         // Read once into a local variable and use that same reference throughout. The field is
         // volatile, and shutdown() could very well null it out from another thread between the
@@ -150,8 +163,12 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-quit event.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
     @EventHandler(priority = EventPriority.MONITOR)
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerQuit(PlayerQuitEvent event) {
         // Read once into a local variable and use that same reference throughout. The field is
         // volatile, and shutdown() could very well null it out from another thread between the
@@ -182,8 +199,16 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-chat event.
+     * <p>
+     * The message is passed through {@link SensitiveCommandRegistry#redactText} before it is sent,
+     * both in the event and in the debug log line, since a player may paste a command into chat.
+     * The chat itself, as other players and the local console see it, is not changed.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
     @EventHandler(priority = EventPriority.MONITOR)
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerChat(PlayerChatEvent event) {
         // Read once into a local variable and use that same reference throughout. The field is
         // volatile, and shutdown() could very well null it out from another thread between the
@@ -196,11 +221,12 @@ public class PlayerEventManager implements Listener {
         }
 
         Player player = event.getPlayer();
+        String message = redact(event.getMessage());
         JsonObject data = new JsonObject();
         data.addProperty("event_type", "player_chat");
         data.addProperty("player_name", player.getName());
         data.addProperty("player_uuid", player.getUniqueId().toString());
-        data.addProperty("message", event.getMessage());
+        data.addProperty("message", message);
         data.addProperty("format", event.getFormat());
 
         sendPlayerEvent(client, data);
@@ -208,7 +234,7 @@ public class PlayerEventManager implements Listener {
         // Also send a log-stream message (chat messages are usually frequent, use debug level)
         UltiTools.getInstance().getLogStreamManager().sendCustomLog(
             "debug",
-            FrameworkText.format("[聊天] <%s> %s", player.getName(), event.getMessage()),
+            FrameworkText.format("[聊天] <%s> %s", player.getName(), message),
             "plugin:UltiTools"
         );
     }
@@ -220,8 +246,12 @@ public class PlayerEventManager implements Listener {
      * {@code @EventListener} but was never registered, so this handler and the three below had
      * never fired. Registering that class alongside this one was not an option: both emitted the
      * same {@code player_event} message type, so join/quit/chat would have been sent twice.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
     @EventHandler(priority = EventPriority.MONITOR)
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerDeath(PlayerDeathEvent event) {
         // Read once into a local variable and use that same reference throughout. The field is
         // volatile, and shutdown() could very well null it out from another thread between the
@@ -247,8 +277,12 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-kick event.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
     @EventHandler(priority = EventPriority.MONITOR)
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerKick(PlayerKickEvent event) {
         // Read once into a local variable and use that same reference throughout. The field is
         // volatile, and shutdown() could very well null it out from another thread between the
@@ -272,8 +306,16 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-command event.
+     * <p>
+     * The event carries only the command's normalised name ({@link SensitiveCommandRegistry#commandName}:
+     * first token, leading {@code /} and namespace stripped, lower-cased), never its arguments, for
+     * every command whether or not it is registered as sensitive.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
     @EventHandler(priority = EventPriority.MONITOR)
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerCommandPreprocess(PlayerCommandPreprocessEvent event) {
         // Read once into a local variable and use that same reference throughout. The field is
         // volatile, and shutdown() could very well null it out from another thread between the
@@ -289,7 +331,7 @@ public class PlayerEventManager implements Listener {
         data.addProperty("event_type", "player_command");
         data.addProperty("player_name", player.getName());
         data.addProperty("player_uuid", player.getUniqueId().toString());
-        data.addProperty("command", event.getMessage());
+        data.addProperty("command", SensitiveCommandRegistry.commandName(event.getMessage()));
         data.addProperty("cancelled", event.isCancelled());
 
         sendPlayerEvent(client, data);
@@ -297,8 +339,12 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-world-change event.
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     *     reports player events itself. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
     @EventHandler(priority = EventPriority.MONITOR)
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void onPlayerChangedWorld(PlayerChangedWorldEvent event) {
         // Read once into a local variable and use that same reference throughout. The field is
         // volatile, and shutdown() could very well null it out from another thread between the
@@ -318,6 +364,16 @@ public class PlayerEventManager implements Listener {
         data.addProperty("to_world", player.getWorld().getName());
 
         sendPlayerEvent(client, data);
+    }
+
+    /**
+     * Redacts registered commands' arguments from text bound for UltiCloud. Without a framework
+     * instance nothing can have been registered, so the text is returned unchanged.
+     */
+    private static String redact(String text) {
+        UltiTools instance = UltiTools.getInstance();
+        SensitiveCommandRegistry registry = instance == null ? null : instance.getSensitiveCommandRegistry();
+        return registry == null ? text : registry.redactText(text);
     }
 
     /**
@@ -345,11 +401,11 @@ public class PlayerEventManager implements Listener {
     /**
      * Gets the server ID.
      * <p>
-     * Takes the UUID handed to the client at connect time (i.e. {@code
-     * CommonUtils.getUltiToolsUUID()}, see {@code PluginInitiationUtils.getPanelWebsocketClient}),
-     * consistent with every sibling manager. Before #180, this returned a hardcoded placeholder
-     * string, meaning every server worldwide sent out its {@code player_event} claiming the same
-     * identity, and the panel side had no way to route them.
+     * Takes the server ID the caller gave the client at construction (in 6.3.0 the v1 wiring, removed
+     * in 6.3.1, passed {@code CommonUtils.getUltiToolsUUID()}), consistent with every sibling
+     * manager. Before #180, this returned a hardcoded placeholder string, meaning every server
+     * worldwide sent out its {@code player_event} claiming the same identity, and the panel side
+     * had no way to route them.
      *
      * @return the server ID
      */

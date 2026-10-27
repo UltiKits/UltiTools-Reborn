@@ -1,0 +1,10 @@
+{
+  "expect": "invalid",
+  "why": "legacyServerUuid 必须是 canonicalLegacyUuid 规范化后的 32 位小写十六进制",
+  "body": {
+    "clientKind": "server",
+    "framework": "6.3.1",
+    "protocol": 2,
+    "legacyServerUuid": "123e4567-e89b-12d3-a456-426614174000"
+  }
+}

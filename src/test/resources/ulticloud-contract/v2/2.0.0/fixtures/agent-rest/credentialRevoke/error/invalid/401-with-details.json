@@ -1,0 +1,14 @@
+{
+  "expect": "invalid",
+  "why": "401 不带额外信息",
+  "body": {
+    "error": {
+      "code": "invalid_credential",
+      "message": "request refused",
+      "requestId": "req_01",
+      "details": {
+        "reason": "revoked"
+      }
+    }
+  }
+}

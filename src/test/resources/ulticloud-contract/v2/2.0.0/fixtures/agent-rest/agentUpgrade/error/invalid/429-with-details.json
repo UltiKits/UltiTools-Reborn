@@ -1,0 +1,14 @@
+{
+  "expect": "invalid",
+  "why": "429 的等待秒数只在 Retry-After 头里",
+  "body": {
+    "error": {
+      "code": "rate_limited",
+      "message": "request refused",
+      "requestId": "req_01",
+      "details": {
+        "retryAfterSeconds": 5
+      }
+    }
+  }
+}

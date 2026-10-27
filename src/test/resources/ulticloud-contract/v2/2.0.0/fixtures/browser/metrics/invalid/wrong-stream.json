@@ -1,0 +1,15 @@
+{
+  "expect": "invalid_message",
+  "why": "metrics 属于 status 流",
+  "frame": {
+    "type": "metrics",
+    "stream": "logs",
+    "point": {
+      "at": "2026-10-24T03:00:00.000Z",
+      "playerCount": 2,
+      "tps": 19.9,
+      "cpuPercent": 12.5,
+      "memUsedMb": 2048
+    }
+  }
+}

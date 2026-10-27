@@ -3,26 +3,17 @@ package com.ultikits.ultitools.websocket;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.timeout;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -35,8 +26,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.mockito.ArgumentCaptor;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -47,7 +38,6 @@ import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
@@ -72,13 +62,15 @@ class PanelResponderRegistryTest {
     void shouldRefuseFrameworkOwnedType() {
         PanelResponderRegistry registry = new PanelResponderRegistry();
 
-        assertThatThrownBy(() -> registry.registerResponder("execute_command", echoResponder(), "module-a"))
+        // As of 6.3.1 (plan 22-23) the framework's own types are the protocol v2 message types.
+        assertThatThrownBy(() -> registry.registerResponder("command.execute", echoResponder(), "module-a"))
                 .isInstanceOfSatisfying(PluginModuleException.class, e -> {
                     assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBSOCKET_RESPONDER_TYPE_OWNED_BY_FRAMEWORK);
                     assertThat(e.getMessage())
-                            .contains("execute_command")
+                            .contains("command.execute")
                             .containsIgnoringCase("framework");
                 });
+        registry.shutdown();
     }
 
     @Nested
@@ -215,7 +207,7 @@ class PanelResponderRegistryTest {
     /**
      * {@code dispatch} — one timeout in one place (D-27). Registers directly against a bare
      * {@link PanelResponderRegistry} instance; no Bukkit/MockBukkit needed since dispatch itself
-     * never touches Bukkit API — only {@link HandleInboundMessageWiring} below needs that.
+     * never touches Bukkit API.
      */
     @Nested
     @DisplayName("dispatch —— 单一超时点，单一回复形状")
@@ -230,7 +222,7 @@ class PanelResponderRegistryTest {
             result.addProperty("ok", true);
             registry.registerResponder("stats", data -> CompletableFuture.completedFuture(result), "module-a");
 
-            CompletableFuture<JsonObject> outcome = registry.dispatch("stats", new JsonObject(), "req-1");
+            CompletableFuture<JsonElement> outcome = registry.dispatch("stats", new JsonObject(), "req-1");
 
             assertThat(outcome.get(2, TimeUnit.SECONDS)).isSameAs(result);
         }
@@ -241,7 +233,7 @@ class PanelResponderRegistryTest {
             PanelResponderRegistry registry = new PanelResponderRegistry();
             registry.registerResponder("stalls", data -> new CompletableFuture<>(), "module-a");
 
-            CompletableFuture<JsonObject> outcome = registry.dispatch("stalls", new JsonObject(), "req-1");
+            CompletableFuture<JsonElement> outcome = registry.dispatch("stalls", new JsonObject(), "req-1");
 
             assertThatThrownBy(() -> outcome.get(PanelResponderRegistry.RESPONDER_TIMEOUT_MILLIS + 5000,
                     TimeUnit.MILLISECONDS))
@@ -262,7 +254,7 @@ class PanelResponderRegistryTest {
                 throw boom;
             }, "module-a");
 
-            CompletableFuture<JsonObject> outcome = registry.dispatch("throws", new JsonObject(), "req-1");
+            CompletableFuture<JsonElement> outcome = registry.dispatch("throws", new JsonObject(), "req-1");
             awaitSettled(outcome);
 
             assertThat(outcome).isCompletedExceptionally();
@@ -275,7 +267,7 @@ class PanelResponderRegistryTest {
             PanelResponderRegistry registry = new PanelResponderRegistry();
             registry.registerResponder("returns-null", data -> null, "module-a");
 
-            CompletableFuture<JsonObject> outcome = registry.dispatch("returns-null", new JsonObject(), "req-1");
+            CompletableFuture<JsonElement> outcome = registry.dispatch("returns-null", new JsonObject(), "req-1");
             awaitSettled(outcome);
 
             assertThat(outcome).isCompletedExceptionally();
@@ -300,174 +292,9 @@ class PanelResponderRegistryTest {
          * registry worker, so the outcome is not settled yet when {@code dispatch} returns. A
          * missed settlement surfaces as a {@code TimeoutException}.
          */
-        private void awaitSettled(CompletableFuture<JsonObject> outcome) throws Exception {
+        private void awaitSettled(CompletableFuture<JsonElement> outcome) throws Exception {
             outcome.handle((value, failure) -> null).get(5, TimeUnit.SECONDS);
         }
-    }
-
-    /**
-     * Reaches {@code PluginInitiationUtils#handleInboundMessage} and {@code panelWS} via
-     * reflection — same cross-package pattern {@code PanelMessageEventDispatchTest} already uses,
-     * since this test class lives in {@code websocket}, a different package from {@code utils}.
-     * <p>
-     * No MockBukkit needed: unlike {@code PanelMessageEvent}'s publish (which deliberately hops to
-     * the main thread via the Bukkit scheduler), sending a responder's reply is plain network I/O
-     * through {@code panelWS.sendMessage(...)} — the same off-main-thread pattern
-     * {@code CommandExecutionManager}/{@code FileOperationManager} already use for their own
-     * outbound replies.
-     */
-    @Nested
-    @DisplayName("handleInboundMessage 的未知类型分支 —— 转发给已注册的 responder（D-10/D-11）")
-    class HandleInboundMessageWiring {
-
-        private Logger mockLogger;
-        private UltiPanelWebSocketClient mockPanelWs;
-        private Object previousPanelWs;
-        private PanelResponderRegistry registry;
-
-        @BeforeEach
-        void setUp() throws Exception {
-            registry = new PanelResponderRegistry();
-            mockLogger = mock(Logger.class);
-            TestHelper.mockUltiToolsInstance(ultiTools -> {
-                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
-                lenient().when(ultiTools.getPanelResponderRegistry()).thenReturn(registry);
-            });
-            // The fixture's client belongs to a current session: an earlier test class may leave an
-            // invalidated session installed (JVM-wide), and a reply is sent only on the admitted
-            // client of a still-current session (#677). enableCloud() replaces only an invalidated one.
-            PluginInitiationUtils.enableCloud();
-            mockPanelWs = mock(UltiPanelWebSocketClient.class);
-            // The fixture represents a live panel connection.
-            lenient().when(mockPanelWs.isConnected()).thenReturn(true);
-            lenient().when(mockPanelWs.getServerId()).thenReturn("test-server-uuid");
-            previousPanelWs = setPanelWs(mockPanelWs);
-        }
-
-        // PMD.AvoidAccessibilityAlteration: reaches UltiTools' private static singleton field
-        // to reset it between tests — this framework's security model IS its visibility
-        // boundaries, so a test that needs to control the singleton lifecycle has no route but
-        // reflection. Annotated on the method, not the local Field variable declaration —
-        // setAccessible() is a separate statement, not a child of that declaration, so a
-        // suppression on the declaration alone does not cover it.
-        @AfterEach
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void tearDown() throws Exception {
-            setPanelWs(previousPanelWs);
-            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-            instanceField.setAccessible(true);
-            instanceField.set(null, null);
-        }
-
-        @Test
-        @DisplayName("有已注册 responder 的未知类型：responder 收到消息，回复携带 requestId")
-        void dispatchesToRegisteredResponderAndRepliesWithRequestId() throws Exception {
-            JsonObject responderResult = new JsonObject();
-            responderResult.addProperty("value", 42);
-            registry.registerResponder("my_module_stats",
-                    data -> CompletableFuture.completedFuture(responderResult), "module-a");
-
-            JsonObject data = new JsonObject();
-            data.addProperty("requestId", "req-42");
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "my_module_stats");
-            message.add("data", data);
-
-            invokeHandleInboundMessage(message);
-
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockPanelWs, timeout(2000).times(1)).sendMessage(captor.capture());
-            JsonObject sent = captor.getValue();
-            assertThat(sent.get("type").getAsString()).isEqualTo("my_module_stats");
-            JsonObject sentData = sent.getAsJsonObject("data");
-            assertThat(sentData.get("requestId").getAsString()).isEqualTo("req-42");
-            assertThat(sentData.get("value").getAsInt()).isEqualTo(42);
-        }
-
-        @Test
-        @DisplayName("既没有表条目也没有 responder 的类型：仍然只记一条告警，不发送任何回复")
-        void unknownTypeWithNoResponderStillWarnsAndSendsNothing() throws Exception {
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "definitely_unhandled_type");
-
-            invokeHandleInboundMessage(message);
-
-            assertThat(com.ultikits.ultitools.testutil.LoggedLines.at(mockLogger, Level.WARNING)).isNotEmpty();
-            verify(mockPanelWs, never()).sendMessage(any());
-        }
-
-        @Test
-        @DisplayName("responder 抛出/超时：仍然发送一条携带 error 字段的回复，而不是静默失败")
-        // PMD.AvoidThrowingRawExceptionTypes: driving the responder's failure path IS the test —
-        // it proves the error reply is sent even when a responder throws unchecked.
-        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-        void failingResponderStillSendsErrorReply() throws Exception {
-            registry.registerResponder("my_module_fails", data -> {
-                throw new RuntimeException("boom — deliberately thrown by a test responder");
-            }, "module-a");
-
-            JsonObject data = new JsonObject();
-            data.addProperty("requestId", "req-err");
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "my_module_fails");
-            message.add("data", data);
-
-            invokeHandleInboundMessage(message);
-
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockPanelWs, timeout(2000).times(1)).sendMessage(captor.capture());
-            JsonObject sentData = captor.getValue().getAsJsonObject("data");
-            assertThat(sentData.get("requestId").getAsString()).isEqualTo("req-err");
-            assertThat(sentData.has("error")).isTrue();
-        }
-
-        @Test
-        @DisplayName("请求没有携带 requestId 时不发送任何回复，只记录日志")
-        void noRequestIdMeansNoReplyIsSent() throws Exception {
-            CountDownLatch responded = new CountDownLatch(1);
-            registry.registerResponder("my_module_stats", data -> {
-                responded.countDown();
-                return CompletableFuture.completedFuture(new JsonObject());
-            }, "module-a");
-
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "my_module_stats");
-            message.add("data", new JsonObject());
-
-            invokeHandleInboundMessage(message);
-
-            assertThat(responded.await(5, TimeUnit.SECONDS)).as("the responder ran").isTrue();
-            verify(mockPanelWs, after(500).never()).sendMessage(any());
-        }
-    }
-
-    /**
-     * Reaches {@code PluginInitiationUtils#handleInboundMessage} via reflection: this class lives
-     * in {@code websocket}, a different package from {@code utils} — same reason
-     * {@code CapabilityGateTracerTest}/{@code PanelMessageEventDispatchTest} need reflection.
-     */
-    // PMD.AvoidAccessibilityAlteration: reaches a private method on PluginInitiationUtils —
-    // this framework's security model IS its visibility boundaries, and dispatch tests have no
-    // route to the panel-message entry point except reflection (see javadoc above).
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-    private static void invokeHandleInboundMessage(JsonObject message) throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod("handleInboundMessage", JsonObject.class);
-        method.setAccessible(true);
-        method.invoke(null, message);
-    }
-
-    // PMD.AvoidAccessibilityAlteration: reaches a package-private static method on
-    // PluginInitiationUtils to swap in a mock WebSocket client between tests — same
-    // visibility-boundary rationale. As of plan 16-08 Task 2 the client is CloudSession-owned
-    // (package-private, in `utils`), so this different package (`websocket`) cannot even compile
-    // a reference to it; setWebSocketClientForTesting() is the seam PluginInitiationUtils exposes
-    // instead of a raw field.
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-    private static Object setPanelWs(Object value) throws Exception {
-        Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "setWebSocketClientForTesting", UltiPanelWebSocketClient.class);
-        method.setAccessible(true);
-        return method.invoke(null, (UltiPanelWebSocketClient) value);
     }
 
     /**
@@ -572,27 +399,25 @@ class PanelResponderRegistryTest {
             assertThat(registry.hasResponder("type-c")).isTrue();
         }
 
+        /**
+         * Rewritten in plan 22-23: the protocol v1 unknown-type branch is gone. On protocol v2 a
+         * {@code module.request} for an unloaded module's key finds no owner and no responder, which
+         * {@code ModuleRequestHandler} answers {@code module_not_found}
+         * ({@code ModuleRequestEndToEndTest#requestWithoutResponderRepliesModuleNotFound}).
+         */
         @Test
-        @DisplayName("卸载后再收到该类型的入站消息会重新落回未知类型分支（一条告警，不回复）")
-        void afterUnloadInboundMessageTakesUnknownTypeBranchAgain() throws Exception {
+        @DisplayName("卸载后该类型不再有 owner，分发立即以失败结束（v2 回 module_not_found）")
+        void afterUnloadTheTypeHasNoOwnerAndDispatchFails() throws Exception {
             registry.registerResponder("type-a", echoResponder(), "ModuleOne");
             UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
             when(plugin.getPluginName()).thenReturn("ModuleOne");
             pluginManager.unregister(plugin);
 
-            UltiPanelWebSocketClient mockPanelWs = mock(UltiPanelWebSocketClient.class);
-            Object previous = setPanelWs(mockPanelWs);
-            try {
-                JsonObject message = new JsonObject();
-                message.addProperty("type", "type-a");
-
-                invokeHandleInboundMessage(message);
-
-                assertThat(com.ultikits.ultitools.testutil.LoggedLines.at(mockLogger, Level.WARNING)).isNotEmpty();
-                verify(mockPanelWs, never()).sendMessage(any());
-            } finally {
-                setPanelWs(previous);
-            }
+            assertThat(registry.ownerModuleOf("type-a")).isNull();
+            CompletableFuture<JsonElement> outcome = registry.dispatch("type-a", new JsonObject(), "r-1");
+            assertThat(outcome).isCompletedExceptionally();
+            assertThatThrownBy(outcome::get).hasCauseInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("No responder registered for 'type-a'");
         }
 
         @Test

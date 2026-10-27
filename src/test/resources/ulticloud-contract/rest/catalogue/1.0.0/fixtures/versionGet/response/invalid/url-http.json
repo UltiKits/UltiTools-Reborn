@@ -1,0 +1,19 @@
+{
+  "expect": "invalid",
+  "why": "download URLs accept https: only",
+  "body": {
+    "data": {
+      "version": "1.2.0",
+      "isLatest": true,
+      "publishedAt": "2026-10-01T12:00:00.000Z",
+      "sizeBytes": 48213,
+      "sha256": "4f6c1e9a0b7d3c2e8f5a6b1c9d0e7f3a2b4c5d6e7f8091a2b3c4d5e6f7089a1b",
+      "changelog": "Fixes kit cooldowns after a restart.",
+      "apiLevel": 631,
+      "download": {
+        "kind": "public",
+        "url": "http://api.ultikits.com/v1/catalogue/modules/ultikits.kits/versions/1.2.0/download"
+      }
+    }
+  }
+}

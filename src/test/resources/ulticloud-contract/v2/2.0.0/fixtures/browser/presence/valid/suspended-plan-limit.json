@@ -1,0 +1,8 @@
+{
+  "type": "presence",
+  "stream": "status",
+  "online": false,
+  "lastSeenAt": "2026-10-24T03:00:00.000Z",
+  "powerActionsEnabled": false,
+  "cloudState": "suspended_plan_limit"
+}

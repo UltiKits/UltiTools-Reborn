@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent-rest/deviceAuthorize.response.200.schema.json",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "deviceCode": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43,128}$"
+        },
+        "userCode": {
+          "type": "string",
+          "pattern": "^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$"
+        },
+        "verificationUri": {
+          "type": "string",
+          "pattern": "^https:\\/\\/[^ ]{1,500}$"
+        },
+        "verificationUriComplete": {
+          "type": "string",
+          "pattern": "^https:\\/\\/[^ ]{1,500}$"
+        },
+        "expiresIn": {
+          "type": "number",
+          "const": 600
+        },
+        "interval": {
+          "type": "number",
+          "const": 5
+        }
+      },
+      "required": [
+        "deviceCode",
+        "userCode",
+        "verificationUri",
+        "verificationUriComplete",
+        "expiresIn",
+        "interval"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "additionalProperties": false
+}

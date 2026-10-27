@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "异步编号字段叫 opId（requestId 是 HTTP 请求日志编号）",
+  "frame": {
+    "type": "op_result",
+    "stream": "commands",
+    "kind": "refresh",
+    "state": "succeeded",
+    "result": {
+      "sent": []
+    },
+    "error": null,
+    "finishedAt": "2026-10-24T03:00:00.000Z",
+    "requestId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW"
+  }
+}

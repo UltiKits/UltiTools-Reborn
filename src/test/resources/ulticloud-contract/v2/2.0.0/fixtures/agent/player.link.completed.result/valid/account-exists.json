@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "player.link.completed.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "error",
+    "code": "account_exists",
+    "message": "Steve already has a game account"
+  }
+}

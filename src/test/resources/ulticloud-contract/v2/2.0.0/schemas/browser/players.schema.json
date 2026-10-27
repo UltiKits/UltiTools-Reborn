@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/browser/players.schema.json",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "players"
+    },
+    "stream": {
+      "type": "string",
+      "const": "status"
+    },
+    "asOf": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "players": {
+      "maxItems": 1000,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+          },
+          "uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "isOp": {
+            "type": "boolean"
+          },
+          "world": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "health": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "maxHealth": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "gameMode": {
+            "type": "string",
+            "enum": [
+              "survival",
+              "creative",
+              "adventure",
+              "spectator"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "uuid",
+          "isOp",
+          "world",
+          "health",
+          "maxHealth",
+          "gameMode"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "type",
+    "stream",
+    "asOf",
+    "players"
+  ],
+  "additionalProperties": false
+}

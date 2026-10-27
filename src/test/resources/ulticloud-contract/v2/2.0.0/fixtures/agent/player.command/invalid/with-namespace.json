@@ -1,0 +1,13 @@
+{
+  "expect": "invalid_message",
+  "why": "命令名必须已去掉命名空间前缀",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.command",
+    "ts": 1761274800000,
+    "payload": {
+      "name": "ultilogin:login"
+    }
+  }
+}

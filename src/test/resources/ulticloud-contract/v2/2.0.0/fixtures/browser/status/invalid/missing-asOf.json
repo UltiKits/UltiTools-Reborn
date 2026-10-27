@@ -1,0 +1,20 @@
+{
+  "expect": "invalid_message",
+  "why": "ServerStatus 带 asOf",
+  "frame": {
+    "type": "status",
+    "stream": "status",
+    "status": {
+      "playerCount": 2,
+      "maxPlayers": 20,
+      "tps": 19.9,
+      "cpuPercent": 12.5,
+      "memUsedMb": 2048,
+      "memMaxMb": 8192,
+      "software": "Paper 1.21.4",
+      "ultitoolsVersion": "6.3.1",
+      "uptimeSeconds": 3600,
+      "worldCount": 3
+    }
+  }
+}

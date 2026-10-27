@@ -1,0 +1,23 @@
+{
+  "expect": "invalid_message",
+  "why": "插件对象没有 authors（无消费方）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "plugins.snapshot",
+    "ts": 1761274800000,
+    "payload": {
+      "plugins": [
+        {
+          "name": "UltiTools",
+          "version": "6.3.1",
+          "description": null,
+          "enabled": true,
+          "authors": [
+            "x"
+          ]
+        }
+      ]
+    }
+  }
+}

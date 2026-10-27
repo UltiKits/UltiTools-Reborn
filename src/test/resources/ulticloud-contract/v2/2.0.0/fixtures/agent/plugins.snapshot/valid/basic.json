@@ -1,0 +1,16 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "plugins.snapshot",
+  "ts": 1761274800000,
+  "payload": {
+    "plugins": [
+      {
+        "name": "UltiTools",
+        "version": "6.3.1",
+        "description": null,
+        "enabled": true
+      }
+    ]
+  }
+}

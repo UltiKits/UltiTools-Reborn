@@ -1,0 +1,14 @@
+{
+  "expect": "invalid_message",
+  "why": "error 只用通用错误码；file_changed 属于结果类型",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "error",
+    "ts": 1761274800000,
+    "payload": {
+      "code": "file_changed",
+      "message": "x"
+    }
+  }
+}

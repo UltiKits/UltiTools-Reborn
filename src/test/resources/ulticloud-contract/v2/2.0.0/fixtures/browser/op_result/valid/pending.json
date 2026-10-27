@@ -1,0 +1,10 @@
+{
+  "type": "op_result",
+  "stream": "commands",
+  "opId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "kind": "files.read",
+  "state": "pending",
+  "result": null,
+  "error": null,
+  "finishedAt": null
+}

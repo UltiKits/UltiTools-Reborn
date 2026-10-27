@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "每行都带 seq",
+  "frame": {
+    "type": "log",
+    "stream": "logs",
+    "seq": 41,
+    "lines": [
+      {
+        "at": "2026-10-24T03:00:00.000Z",
+        "level": "INFO",
+        "message": "x"
+      }
+    ]
+  }
+}

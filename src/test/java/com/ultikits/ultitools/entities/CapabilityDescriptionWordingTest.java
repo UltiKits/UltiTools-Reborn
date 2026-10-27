@@ -24,6 +24,21 @@ import org.junit.jupiter.api.Test;
 @DisplayName("#495：日志流描述不再声明控制能力，批量间隔注释不再声明只读一次")
 class CapabilityDescriptionWordingTest {
 
+    @Test
+    @DisplayName("两个远程动作开关的注释说明各自管什么：电源动作不经命令黑名单，玩家动作是踢人、改模式与传送")
+    void remoteActionSwitchCommentsStateWhatEachSwitchBounds() {
+        List<String> power = Capability.POWER_ACTIONS.getCommentLines();
+        assertThat(power).anySatisfy(line ->
+                assertThat(line).contains("does not pass through the command blocklist"));
+        assertThat(power).anySatisfy(line -> assertThat(line).contains("黑名单"));
+
+        List<String> player = Capability.PLAYER_ACTIONS.getCommentLines();
+        assertThat(player).anySatisfy(line -> assertThat(line)
+                .contains("kick").contains("game mode").contains("teleport"));
+        assertThat(player).anySatisfy(line -> assertThat(line)
+                .contains("踢出").contains("游戏模式").contains("传送"));
+    }
+
     /**
      * Reads {@code src/main/resources/config.yml} the same way the running framework would load it
      * from the packaged jar — off the classpath, since {@code src/main/resources} is on the test

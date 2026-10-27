@@ -1,0 +1,7 @@
+{
+  "clientKind": "server",
+  "framework": "6.3.1",
+  "protocol": 2,
+  "suggestedName": "Home Server",
+  "legacyServerUuid": "123e4567e89b12d3a456426614174000"
+}

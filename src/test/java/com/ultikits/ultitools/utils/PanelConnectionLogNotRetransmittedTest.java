@@ -23,7 +23,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.manager.UltiPanelLogTransmitter;
@@ -38,7 +37,8 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * times. Each {@code error} reply was logged as SEVERE through the shared plugin logger, the log
  * stream sent that line to the panel, the panel rejected it as over quota and replied with another
  * {@code error}. The SystemLogHandler's same-thread guard cannot stop this, because every reply is
- * a separate inbound message.
+ * a separate inbound message. Since 6.3.1 (plan 22-23) the protocol v1 inbound path is gone; the v2 connection logs
+ * through the same marked sink.
  * <p>
  * The plugin logger here is a real {@link Logger} carrying the same two handlers a server gives it:
  * a console stand-in and the stream's {@link SystemLogHandler}. Each case is paired with the
@@ -92,17 +92,6 @@ class PanelConnectionLogNotRetransmittedTest {
         instanceField.set(null, null);
     }
 
-    private static JsonObject message(String type, JsonObject data) {
-        JsonObject message = new JsonObject();
-        if (type != null) {
-            message.addProperty("type", type);
-        }
-        if (data != null) {
-            message.add("data", data);
-        }
-        return message;
-    }
-
     private void assertLoggedLocallyButNotStreamed(String fragment) {
         assertThat(console).as("the line is still written to the console")
                 .anySatisfy(line -> assertThat(line).contains(fragment));
@@ -118,59 +107,20 @@ class PanelConnectionLogNotRetransmittedTest {
                 any(), any());
     }
 
+    /**
+     * Plan 22-23 removed the protocol v1 inbound handlers whose log lines the five former cases drove (the panel's
+     * {@code error}, {@code notification} and refused {@code subscribe} replies, an unknown and a type-less message).
+     * On protocol v2 the connection, the protocol and its router log through one sink,
+     * {@code PanelConnectionLog::log} (the sink {@code CloudSession#startConnection} and {@code AgentProtocol} pass),
+     * so this case drives that sink with the line a gateway {@code error} frame produces.
+     */
     @Test
-    @DisplayName("the panel's error reply is logged locally and never streamed")
-    void panelErrorReplyIsNotStreamed() {
-        JsonObject data = new JsonObject();
-        data.addProperty("message", "Rate limit exceeded. Please slow down.");
-
-        PluginInitiationUtils.handleInboundMessage(message("error", data));
+    @DisplayName("a line of the v2 connection's log sink is logged locally and never streamed")
+    void v2ConnectionLogLineIsNotStreamed() {
+        com.ultikits.ultitools.websocket.PanelConnectionLog.log(Level.SEVERE,
+                "UltiCloud: the gateway answered error rate_limited: Rate limit exceeded. Please slow down.");
 
         assertLoggedLocallyButNotStreamed("Rate limit exceeded");
-    }
-
-    @Test
-    @DisplayName("a panel notification is logged locally and never streamed")
-    void panelNotificationIsNotStreamed() {
-        JsonObject data = new JsonObject();
-        data.addProperty("message", "notification-from-panel");
-        data.addProperty("clientId", "client-1");
-
-        PluginInitiationUtils.handleInboundMessage(message("notification", data));
-
-        assertLoggedLocallyButNotStreamed("notification-from-panel");
-    }
-
-    @Test
-    @DisplayName("a refused subscription reply is logged locally and never streamed")
-    void refusedSubscriptionIsNotStreamed() {
-        JsonObject data = new JsonObject();
-        data.addProperty("subscribed", false);
-        data.addProperty("serverId", "server-1");
-        data.addProperty("message", "subscription-refused-by-panel");
-
-        PluginInitiationUtils.handleInboundMessage(message("subscribe", data));
-
-        assertLoggedLocallyButNotStreamed("subscription-refused-by-panel");
-    }
-
-    @Test
-    @DisplayName("an unknown panel message type is logged locally and never streamed")
-    void unknownTypeIsNotStreamed() {
-        PluginInitiationUtils.handleInboundMessage(message("type-the-framework-does-not-know", null));
-
-        assertLoggedLocallyButNotStreamed("type-the-framework-does-not-know");
-    }
-
-    @Test
-    @DisplayName("a panel message without a type is logged locally and never streamed")
-    void malformedMessageIsNotStreamed() {
-        JsonObject data = new JsonObject();
-        data.addProperty("marker", "malformed-panel-message");
-
-        PluginInitiationUtils.handleInboundMessage(message(null, data));
-
-        assertLoggedLocallyButNotStreamed("malformed-panel-message");
     }
 
     @Test

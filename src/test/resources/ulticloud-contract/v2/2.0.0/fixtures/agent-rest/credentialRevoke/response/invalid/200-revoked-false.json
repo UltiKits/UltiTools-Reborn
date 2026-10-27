@@ -1,0 +1,9 @@
+{
+  "expect": "invalid",
+  "why": "成功即 revoked: true",
+  "body": {
+    "data": {
+      "revoked": false
+    }
+  }
+}

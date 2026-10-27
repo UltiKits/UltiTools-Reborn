@@ -1,0 +1,13 @@
+{
+  "expect": "invalid_message",
+  "why": "结构上的路径穿越被 schema 拒收",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "files.read",
+    "ts": 1761274800000,
+    "payload": {
+      "path": "../../server.properties"
+    }
+  }
+}

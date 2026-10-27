@@ -1,0 +1,15 @@
+{
+  "expect": "invalid",
+  "why": "every category has a slug",
+  "body": {
+    "data": {
+      "items": [
+        {
+          "id": 1,
+          "name": "Administration",
+          "sortOrder": 10
+        }
+      ]
+    }
+  }
+}

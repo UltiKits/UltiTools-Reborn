@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "浏览器帧没有 id",
+  "frame": {
+    "type": "subscribe",
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "streams": {
+      "status": {}
+    }
+  }
+}

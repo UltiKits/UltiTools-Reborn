@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "files.read.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "error",
+    "code": "file_not_editable",
+    "message": "binary or larger than 393216 bytes"
+  }
+}

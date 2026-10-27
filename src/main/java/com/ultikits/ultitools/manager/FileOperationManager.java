@@ -65,6 +65,7 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class FileOperationManager {
+    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelWebSocketClient webSocketClient;
     private final File serverRoot;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
@@ -113,6 +114,29 @@ public class FileOperationManager {
      * a sibling directory named {@code security-backup} must not be caught by it.
      */
     private static final Path SECURITY_DIR_RELATIVE = Paths.get("plugins", "UltiTools", "security");
+
+    /**
+     * The relative location of the framework's own state directory, {@code <server root>/.ultikits}
+     * (plan 22-07, T-22-28). It holds {@code credentials.json} -- the linked server's UltiCloud
+     * credential -- and {@code cloud-outbox.json}, the reliable-delivery state file, together with
+     * their write-time siblings ({@code cloud-outbox.json.<ULID>.tmp},
+     * {@code cloud-outbox.json.unreadable}).
+     * <p>
+     * A {@link #DENY_EXACT_BASENAMES} entry alone would not be enough: the credential basename is
+     * protected anywhere, but the state file's temporary and moved-aside siblings carry other names,
+     * and the directory itself would still be listable and deletable. This rule therefore protects
+     * the directory, by name element exactly like {@link #SECURITY_DIR_RELATIVE} -- a sibling
+     * directory named {@code .ultikits-backup} is not caught by it.
+     */
+    private static final Path STATE_DIR_RELATIVE = Paths.get(".ultikits");
+
+    /** The refusal for a path inside the remote action log's own directory (D-23/D-31). */
+    private static final String ACTION_LOG_DIR_REFUSAL =
+            "path is inside the remote action log's own directory";
+
+    /** The refusal for a path inside the framework's own state directory (T-22-28). */
+    private static final String STATE_DIR_REFUSAL = "path is inside the framework's own state directory "
+            + "(.ultikits), which holds the UltiCloud credential and the reliable-delivery state file";
 
     /**
      * The {@link RemoteActionLog.Entry#getAction()} literal prefix every entry this class records
@@ -164,8 +188,14 @@ public class FileOperationManager {
     /**
      * Sets the WebSocket client.
      * @param client the WebSocket client
+     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
+     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
+        V1CloudNotice.once(FileOperationManager.class, "setWebSocketClient");
         this.webSocketClient = client;
     }
 
@@ -301,6 +331,9 @@ public class FileOperationManager {
         if (isUnderSecurityDirectory(normalizedPath)) {
             return deniedAsActionLogDirectory();
         }
+        if (isUnderStateDirectory(normalizedPath)) {
+            return AccessDecision.deniedNonConfigurable(STATE_DIR_REFUSAL);
+        }
         return null;
     }
 
@@ -335,7 +368,7 @@ public class FileOperationManager {
     }
 
     private static AccessDecision deniedAsActionLogDirectory() {
-        return AccessDecision.deniedNonConfigurable("path is inside the remote action log's own directory");
+        return AccessDecision.deniedNonConfigurable(ACTION_LOG_DIR_REFUSAL);
     }
 
     /**
@@ -353,7 +386,7 @@ public class FileOperationManager {
      * @param protectedLocations the result of {@link #protectedRealLocations()}
      * @return a denied, non-configurable decision, or {@code null} if no rule refuses the entry
      */
-    private static AccessDecision deniedAtRealPath(Path realEntry, List<Path> protectedLocations) {
+    private static AccessDecision deniedAtRealPath(Path realEntry, List<ProtectedLocation> protectedLocations) {
         Path name = realEntry.getFileName();
         if (name != null) {
             AccessDecision byName = deniedByName(name.toString());
@@ -361,9 +394,9 @@ public class FileOperationManager {
                 return byName;
             }
         }
-        for (Path location : protectedLocations) {
-            if (realEntry.startsWith(location)) {
-                return deniedAsActionLogDirectory();
+        for (ProtectedLocation location : protectedLocations) {
+            if (realEntry.startsWith(location.location)) {
+                return AccessDecision.deniedNonConfigurable(location.refusal);
             }
         }
         return null;
@@ -379,20 +412,32 @@ public class FileOperationManager {
      * @return one or two absolute real paths; empty only if the server root itself cannot be
      *         resolved, in which case no request can be resolved either
      */
-    private List<Path> protectedRealLocations() {
-        List<Path> locations = new ArrayList<>();
-        Path security = serverRoot.toPath().toAbsolutePath().normalize().resolve(SECURITY_DIR_RELATIVE);
-        Path parentLocation = realLocationOf(security.getParent());
+    private List<ProtectedLocation> protectedRealLocations() {
+        List<ProtectedLocation> locations = new ArrayList<>();
+        addProtectedDirectory(locations, SECURITY_DIR_RELATIVE, ACTION_LOG_DIR_REFUSAL);
+        addProtectedDirectory(locations, STATE_DIR_RELATIVE, STATE_DIR_REFUSAL);
+        return locations;
+    }
+
+    /**
+     * Adds the real locations of one protected directory (see {@link #protectedRealLocations()}).
+     *
+     * @param locations   the list to append to
+     * @param relative    the directory's location relative to {@link #serverRoot}
+     * @param refusal     the reason a path inside it is refused
+     */
+    private void addProtectedDirectory(List<ProtectedLocation> locations, Path relative, String refusal) {
+        Path directory = serverRoot.toPath().toAbsolutePath().normalize().resolve(relative);
+        Path parentLocation = realLocationOf(directory.getParent());
         if (parentLocation == null) {
-            return locations;
+            return;
         }
-        Path entryLocation = parentLocation.resolve(security.getFileName().toString());
-        locations.add(entryLocation);
+        Path entryLocation = parentLocation.resolve(directory.getFileName().toString());
+        locations.add(new ProtectedLocation(entryLocation, refusal));
         Path target = realPathOrNull(entryLocation);
         if (target != null && !target.equals(entryLocation)) {
-            locations.add(target);
+            locations.add(new ProtectedLocation(target, refusal));
         }
-        return locations;
     }
 
     /**
@@ -450,6 +495,18 @@ public class FileOperationManager {
         return candidate.startsWith(SECURITY_DIR_RELATIVE);
     }
 
+    /**
+     * Lexical containment in {@link #STATE_DIR_RELATIVE}, by name element -- a sibling
+     * {@code .ultikits-backup} is not inside it.
+     *
+     * @param normalizedPath the path already stripped of a leading slash, forward-slash separated
+     * @return whether the path names the state directory or something under it
+     */
+    private static boolean isUnderStateDirectory(String normalizedPath) {
+        Path candidate = Paths.get(normalizedPath).normalize();
+        return candidate.startsWith(STATE_DIR_RELATIVE);
+    }
+
     private static String basenameOf(String normalizedPath) {
         int idx = normalizedPath.lastIndexOf('/');
         return idx >= 0 ? normalizedPath.substring(idx + 1) : normalizedPath;
@@ -490,7 +547,12 @@ public class FileOperationManager {
      * {@code operationData} afterward, following the immutable-string capture discipline
      * {@link TriggerContext} establishes — the mutable {@link JsonObject} itself is not safe to
      * re-read once handed to another thread.
+     * @deprecated There is no replacement for modules: the framework's own UltiCloud session (protocol
+     *     2.0.0) answers the panel's file requests; this v1 handler replies only over the client
+     *     handed to setWebSocketClient. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public void handleFileOperation(JsonObject operationData) {
         try {
             String operation = operationData.has("operation") && !operationData.get("operation").isJsonNull()
@@ -984,7 +1046,7 @@ public class FileOperationManager {
      *         #deniedUnconditionally} enforces is itself non-configurable
      */
     private AccessDecision deniedAsAncestorOfProtectedPath(String displayPath, Path dirReal,
-                                                           List<Path> protectedLocations) {
+                                                           List<ProtectedLocation> protectedLocations) {
         File[] children = dirReal.toFile().listFiles();
         // An unreadable directory is not walked here; deleteDirectory cannot list it either, so
         // allowing the gate removes nothing under it and its own removal reports the failure.
@@ -1394,6 +1456,17 @@ public class FileOperationManager {
         /** @return the operand's mapped server-root-relative path, or {@code null} when refused */
         String getMappedPath() {
             return mappedPath;
+        }
+    }
+
+    /** One protected directory's real location and the refusal a path inside it produces. */
+    private static final class ProtectedLocation {
+        private final Path location;
+        private final String refusal;
+
+        ProtectedLocation(Path location, String refusal) {
+            this.location = location;
+            this.refusal = refusal;
         }
     }
 

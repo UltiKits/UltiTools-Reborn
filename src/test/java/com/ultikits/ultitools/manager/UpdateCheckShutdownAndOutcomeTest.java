@@ -40,6 +40,7 @@ import org.mockito.MockedStatic;
 import com.sun.net.httpserver.HttpServer;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.stub.StubCatalogue;
 import com.ultikits.ultitools.utils.PluginInstallUtilsTestAccess;
 import com.ultikits.ultitools.utils.VersionUtils;
 
@@ -67,10 +68,9 @@ class UpdateCheckShutdownAndOutcomeTest {
     private final List<LogRecord> records = new CopyOnWriteArrayList<>();
 
     /** What the stub catalogue answers; a test changes these before running the check. */
-    private volatile Answer newest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"6.3.0\"}");
-    private volatile Answer pluginGet = new Answer(200,
-            "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"id\":7,\"identifyString\":\"demo\"}}");
-    private volatile Answer latest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"1.0\"}");
+    private volatile Answer newest = new Answer(200, StubCatalogue.frameworkSample("6.3.0"));
+    private volatile Answer pluginGet = new Answer(200, StubCatalogue.moduleCardSample("demo", "Demo"));
+    private volatile Answer latest = new Answer(200, versionsPage("1.0"));
     /** Runs inside the stub while it answers the framework lookup (before the answer is sent). */
     private volatile Runnable onNewest = () -> { };
     /** Runs inside the stub while it answers a module's plugin/get lookup (before the answer is sent). */
@@ -99,16 +99,16 @@ class UpdateCheckShutdownAndOutcomeTest {
             String path = exchange.getRequestURI().getRawPath();
             requests.add(path);
             Answer answer;
-            if ("/plugin/ultitools/newest".equals(path)) {
+            if ("/v1/catalogue/framework".equals(path)) {
                 onNewest.run();
                 answer = newest;
-            } else if ("/plugin/get".equals(path)) {
+            } else if ("/v1/catalogue/modules/demo".equals(path)) {
                 onPluginGet.run();
                 answer = pluginGet;
-            } else if ("/plugin/7/latest".equals(path)) {
+            } else if ("/v1/catalogue/modules/demo/versions".equals(path)) {
                 answer = latest;
             } else {
-                answer = new Answer(404, "{\"code\":\"404\",\"msg\":\"Not found\"}");
+                answer = new Answer(404, "{\"error\":{\"code\":\"not_found\"}}");
             }
             byte[] bytes = answer.body.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(answer.status, bytes.length);
@@ -150,6 +150,12 @@ class UpdateCheckShutdownAndOutcomeTest {
     void tearDown() {
         PluginInstallUtilsTestAccess.resetBaseUrl();
         server.stop(0);
+    }
+
+    /** The vendored versions page carrying one version of the module. */
+    private static String versionsPage(String version) {
+        return StubCatalogue.versionsPageOf(StubCatalogue.versionSample(version,
+                StubCatalogue.API_ORIGIN + "/v1/catalogue/modules/demo/versions/" + version + "/download"));
     }
 
     /** Runs the check against the stub with UltiTools 6.3.0 (API level 630) and the given modules. */
@@ -243,11 +249,11 @@ class UpdateCheckShutdownAndOutcomeTest {
         @DisplayName("disabling during the framework lookup: no module lookup follows, and nothing is logged at INFO or above afterwards")
         void stopDuringALookupEndsTheCheckSilently() {
             onNewest = updateManager::stop;
-            newest = new Answer(500, "{\"code\":\"500\",\"msg\":\"down\"}");
+            newest = new Answer(500, "{\"error\":{\"code\":\"down\"}}");
 
             check(Collections.singletonList(demo));
 
-            assertThat(requests).containsExactly("/plugin/ultitools/newest");
+            assertThat(requests).containsExactly("/v1/catalogue/framework");
             List<String> visible = messagesAtOrAbove(Level.INFO);
             assertThat(visible).hasSize(1);
             assertThat(visible.get(0)).contains("正在检查版本更新");
@@ -298,15 +304,15 @@ class UpdateCheckShutdownAndOutcomeTest {
 
             check(Collections.singletonList(demo));
 
-            assertThat(requests).containsExactly("/plugin/ultitools/newest", "/plugin/get");
+            assertThat(requests).containsExactly("/v1/catalogue/framework", "/v1/catalogue/modules/demo");
             assertThat(messagesAtOrAbove(Level.INFO)).hasSize(1);
         }
 
         @Test
         @DisplayName("disabling while the result lines print: no INFO line follows the one being written")
         void stopWhileResultsPrintSilencesTheRest() {
-            newest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"6.4.0\"}");
-            latest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"1.1\"}");
+            newest = new Answer(200, "{\"data\":{\"version\":\"6.4.0\"}}");
+            latest = new Answer(200, versionsPage("1.1"));
             onRecord = r -> {
                 if (r.getMessage().contains("UltiTools-API有新版本")) {
                     updateManager.stop();
@@ -347,7 +353,8 @@ class UpdateCheckShutdownAndOutcomeTest {
         void confirmedNoNewerIsUpToDate() {
             check(Collections.singletonList(demo));
 
-            assertThat(requests).containsExactly("/plugin/ultitools/newest", "/plugin/get", "/plugin/7/latest");
+            assertThat(requests).containsExactly("/v1/catalogue/framework", "/v1/catalogue/modules/demo",
+                    "/v1/catalogue/modules/demo/versions");
             assertThat(lastInfo()).isEqualTo("[UltiTools-API] " + UP_TO_DATE);
             assertThat(updateManager.getUnconfirmed()).isEmpty();
             assertThat(updateManager.isCheckComplete()).isTrue();
@@ -369,7 +376,7 @@ class UpdateCheckShutdownAndOutcomeTest {
         @Test
         @DisplayName("an error status (500) from the framework lookup: incomplete")
         void errorStatusIsIncomplete() {
-            newest = new Answer(500, "{\"code\":\"500\",\"msg\":\"Internal error\"}");
+            newest = new Answer(500, "{\"error\":{\"code\":\"internal_error\"}}");
 
             check(Collections.<UltiToolsPlugin>emptyList());
 
@@ -377,7 +384,7 @@ class UpdateCheckShutdownAndOutcomeTest {
         }
 
         @Test
-        @DisplayName("a malformed body (not JSON) from the module's latest lookup: incomplete, naming that module")
+        @DisplayName("a malformed body (not JSON) from the module's versions lookup: incomplete, naming that module")
         void malformedBodyIsIncomplete() {
             latest = new Answer(200, "<html>gateway</html>");
 
@@ -387,9 +394,9 @@ class UpdateCheckShutdownAndOutcomeTest {
         }
 
         @Test
-        @DisplayName("an error envelope (HTTP 200, code 500) from the module lookup: incomplete")
+        @DisplayName("a body without data (HTTP 200) from the module lookup: incomplete")
         void errorEnvelopeIsIncomplete() {
-            pluginGet = new Answer(200, "{\"code\":\"500\",\"msg\":\"Internal error\"}");
+            pluginGet = new Answer(200, "{\"error\":{\"code\":\"internal_error\"}}");
 
             check(Collections.singletonList(demo));
 
@@ -397,9 +404,9 @@ class UpdateCheckShutdownAndOutcomeTest {
         }
 
         @Test
-        @DisplayName("an envelope without data from the framework lookup: incomplete")
+        @DisplayName("a body without data from the framework lookup: incomplete")
         void missingDataIsIncomplete() {
-            newest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\"}");
+            newest = new Answer(200, "{\"error\":{\"code\":\"internal_error\"}}");
 
             check(Collections.<UltiToolsPlugin>emptyList());
 
@@ -407,9 +414,9 @@ class UpdateCheckShutdownAndOutcomeTest {
         }
 
         @Test
-        @DisplayName("a module the catalogue does not know (404 from plugin/get) is confirmed: nothing to offer, still up to date")
+        @DisplayName("a module the catalogue does not know (404 from the module route) is confirmed: nothing to offer, still up to date")
         void moduleNotInCatalogueIsConfirmed() {
-            pluginGet = new Answer(404, "{\"code\":\"404\",\"msg\":\"Plugin not found\"}");
+            pluginGet = new Answer(404, "{\"error\":{\"code\":\"not_found\"}}");
 
             check(Collections.singletonList(demo));
 
@@ -417,14 +424,14 @@ class UpdateCheckShutdownAndOutcomeTest {
         }
 
         @Test
-        @DisplayName("no compatible version (409) and no finalized version (404) from latest are confirmed answers: up to date")
+        @DisplayName("an empty level-filtered list and a 404 from the versions route are confirmed answers: up to date")
         void noOfferAnswersAreConfirmed() {
-            latest = new Answer(409, "{\"code\":\"409\",\"msg\":\"No version of this module is compatible\"}");
+            latest = new Answer(200, StubCatalogue.versionsPageOf());
             check(Collections.singletonList(demo));
             assertThat(lastInfo()).isEqualTo("[UltiTools-API] " + UP_TO_DATE);
 
             records.clear();
-            latest = new Answer(404, "{\"code\":\"404\",\"msg\":\"No versions found for this plugin\"}");
+            latest = new Answer(404, "{\"error\":{\"code\":\"not_found\"}}");
             updateManager = new UpdateManager(logger);
             check(Collections.singletonList(demo));
             assertThat(lastInfo()).isEqualTo("[UltiTools-API] " + UP_TO_DATE);
@@ -433,8 +440,8 @@ class UpdateCheckShutdownAndOutcomeTest {
         @Test
         @DisplayName("an update found for one module while another lookup failed: the update is listed, then incomplete, and no up-to-date line")
         void updateFoundAndAnotherFailed() {
-            latest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"1.1\"}");
-            newest = new Answer(503, "{\"code\":\"503\",\"msg\":\"Unavailable\"}");
+            latest = new Answer(200, versionsPage("1.1"));
+            newest = new Answer(503, "{\"error\":{\"code\":\"unavailable\"}}");
 
             check(Collections.singletonList(demo));
 
@@ -448,7 +455,7 @@ class UpdateCheckShutdownAndOutcomeTest {
         @Test
         @DisplayName("a failed lookup is not a WARNING per lookup: one INFO terminal line, the cause at FINE")
         void failedLookupDetailIsFine() {
-            newest = new Answer(500, "{\"code\":\"500\",\"msg\":\"Internal error\"}");
+            newest = new Answer(500, "{\"error\":{\"code\":\"internal_error\"}}");
 
             check(Collections.<UltiToolsPlugin>emptyList());
 

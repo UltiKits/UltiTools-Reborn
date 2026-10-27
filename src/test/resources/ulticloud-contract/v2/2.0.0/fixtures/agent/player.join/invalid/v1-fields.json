@@ -1,0 +1,15 @@
+{
+  "expect": "invalid_message",
+  "why": "v1 的 event_type/player_name 形状不再接受",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "player.join",
+    "ts": 1761274800000,
+    "payload": {
+      "event_type": "player_join",
+      "player_name": "Steve",
+      "player_uuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5"
+    }
+  }
+}

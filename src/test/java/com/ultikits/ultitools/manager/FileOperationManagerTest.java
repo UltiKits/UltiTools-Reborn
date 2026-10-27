@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -1264,6 +1265,95 @@ class FileOperationManagerTest {
     }
 
     @Nested
+    @DisplayName("框架自有状态目录 .ultikits/ 的拒绝层（plan 22-07）")
+    class FrameworkStateDirectoryTests {
+
+        private File stateDirectory;
+
+        /**
+         * Widens the editable roots to the whole server root — the operator grant the guard has to
+         * survive — and gives the state directory the two framework-owned files it protects plus an
+         * unreadable sibling and a temporary-write sibling.
+         */
+        @BeforeEach
+        void widenRootsAndCreateStateFiles() throws Exception {
+            setServerRootAndEditableRoots(tempDir, tempDir);
+            stateDirectory = new File(tempDir, ".ultikits");
+            assertThat(stateDirectory.mkdirs()).isTrue();
+            for (String name : Arrays.asList("credentials.json", "cloud-outbox.json",
+                    "cloud-outbox.json.unreadable", "cloud-outbox.json.01ARYZ6S41TSV4RRFFQ69G5FAV.tmp")) {
+                assertThat(new File(stateDirectory, name).createNewFile()).isTrue();
+            }
+        }
+
+        @Test
+        @DisplayName("widened roots 下读取 .ultikits 里的凭据、状态文件及其兄弟文件一律被拒绝，且不可配置")
+        void everyStateFileIsRefusedEvenWithWidenedRoots() {
+            for (String path : Arrays.asList(".ultikits/credentials.json", ".ultikits/cloud-outbox.json",
+                    ".ultikits/cloud-outbox.json.unreadable",
+                    ".ultikits/cloud-outbox.json.01ARYZ6S41TSV4RRFFQ69G5FAV.tmp")) {
+                FileOperationManager.ResolvedTarget target = resolveFollowing(path);
+                assertThat(target.getDecision().isAllowed()).as(path).isFalse();
+                assertThat(target.getDecision().isConfigurable()).as(path).isFalse();
+                assertThat(target.getOperand()).as(path).isNull();
+            }
+            // The credential basename keeps its own refusal; the state file's names, its temporary
+            // siblings and its moved-aside copy are the ones this plan's directory rule has to name.
+            for (String path : Arrays.asList(".ultikits/cloud-outbox.json", ".ultikits/cloud-outbox.json.unreadable",
+                    ".ultikits/cloud-outbox.json.01ARYZ6S41TSV4RRFFQ69G5FAV.tmp")) {
+                assertThat(resolveFollowing(path).getDecision().getReason()).as(path).contains(".ultikits");
+            }
+            assertThat(resolveFollowing(".ultikits/credentials.json").getDecision().getReason())
+                    .contains("protected credential");
+        }
+
+        @Test
+        @DisplayName("目录本身与它的列表请求同样被拒绝，删除模式也一样")
+        void theDirectoryItselfIsRefusedInBothModes() {
+            FileOperationManager.ResolvedTarget listed = resolveFollowing(".ultikits");
+            FileOperationManager.ResolvedTarget deleted =
+                    fileOperationManager.resolveTarget(".ultikits", FileOperationManager.ResolveMode.ENTRY);
+
+            assertThat(listed.getDecision().isAllowed()).isFalse();
+            assertThat(deleted.getDecision().isAllowed()).isFalse();
+            assertThat(deleted.getDecision().isConfigurable()).isFalse();
+            assertThat(deleted.getOperand()).isNull();
+        }
+
+        @Test
+        @DisplayName("同名前缀的兄弟目录 .ultikits-backup 不被捕获——按名字元素判断，不是字符串前缀")
+        void siblingDirectoryWithSamePrefixIsNotCaught() throws Exception {
+            File sibling = new File(tempDir, ".ultikits-backup");
+            assertThat(sibling.mkdirs()).isTrue();
+            assertThat(new File(sibling, "note.txt").createNewFile()).isTrue();
+
+            FileOperationManager.ResolvedTarget target = resolveFollowing(".ultikits-backup/note.txt");
+
+            assertThat(target.getDecision().isAllowed()).isTrue();
+            assertThat(target.getMappedPath()).isEqualTo(".ultikits-backup/note.txt");
+        }
+
+        @Test
+        @DisplayName("可编辑根内的符号链接指向 .ultikits 时，按真实路径同样被拒绝")
+        void aliasReachingTheStateDirectoryIsRefusedByRealPath() throws Exception {
+            File alias = new File(tempDir, "alias");
+            try {
+                Files.createSymbolicLink(alias.toPath(), stateDirectory.toPath());
+            } catch (UnsupportedOperationException | IOException e) {
+                Assumptions.assumeTrue(false, "symbolic links are not available here: "
+                        + e.getClass().getSimpleName());
+                return;
+            }
+
+            FileOperationManager.ResolvedTarget target = resolveFollowing("alias/cloud-outbox.json");
+
+            assertThat(target.getDecision().isAllowed()).isFalse();
+            assertThat(target.getDecision().isConfigurable()).isFalse();
+            assertThat(target.getOperand()).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("resolveTarget segment-aware containment (D-21, formerly getSecureFile)")
     class SegmentAwareContainmentTests {
 
@@ -1693,36 +1783,30 @@ class FileOperationManagerTest {
     }
 
     /**
-     * Plan 08-15 Task 2's fourth new test (the other three live in
-     * {@code ReasonCarryingRefusalTests}): mirrors {@link #shouldMarkInaccessibleEntriesInList()}
-     * but for the credential file's current (&gt;= 6.3.0) name and location,
-     * {@code .ultikits/credentials.json} -- confirming the re-decided guard marks it, rather than
-     * silently omitting it, exactly as it already does for the pre-6.3.0 name.
+     * Plan 08-15 Task 2's fourth new test, updated by plan 22-07 (T-22-28).
+     * <p>
+     * When it was written, {@code .ultikits} was an ordinary listable directory and the credential
+     * file inside it was marked per entry. Since plan 22-07 the whole directory holds the
+     * framework's own state ({@code credentials.json} and {@code cloud-outbox.json}) and is refused
+     * unconditionally, including the list request itself -- so there is no entry-by-entry reply to
+     * mark any more. The marking behaviour itself is unchanged and still pinned by
+     * {@link #shouldMarkInaccessibleEntriesInList()} for a directory the panel may list.
      */
     @Test
-    @DisplayName("新位置 .ultikits/credentials.json 在目录列表中被标记为不可访问，而不是被省略（D-18/Plan 08-15）")
-    void shouldMarkCredentialFileInaccessibleAtItsNewLocationInList() throws Exception {
+    @DisplayName("新位置 .ultikits 自 plan 22-07 起整个目录被拒绝——连列表请求也不放行")
+    void listingTheStateDirectoryItselfIsRefused() throws Exception {
         setServerRootAndEditableRoots(tempDir);
 
         File dir = new File(tempDir, ".ultikits");
         dir.mkdirs();
         new File(dir, "allowed.txt").createNewFile();
-        new File(dir, "credentials.json").createNewFile(); // unconditionally denied (D-16/plan 08-15)
+        new File(dir, "credentials.json").createNewFile();
 
-        com.google.gson.JsonArray files = invokeListAndCaptureFiles(".ultikits");
+        JsonObject data = invokeListAndCaptureData(".ultikits");
 
-        assertThat(files.size()).isEqualTo(2);
-
-        JsonObject allowed = findEntryByName(files, "allowed.txt");
-        assertThat(allowed.get("accessible").getAsBoolean()).isTrue();
-
-        JsonObject credential = findEntryByName(files, "credentials.json");
-        assertThat(credential.get("accessible").getAsBoolean()).isFalse();
-        assertThat(credential.get("reason").getAsString()).isEqualTo("PROTECTED_CREDENTIAL");
-        assertThat(credential.has("size")).isFalse();
-        assertThat(credential.has("lastModified")).isFalse();
-        assertThat(credential.has("readable")).isFalse();
-        assertThat(credential.has("writable")).isFalse();
+        assertThat(data.get("success").getAsBoolean()).isFalse();
+        assertThat(data.has("files")).as("a refused list carries no file array").isFalse();
+        assertThat(data.get("message").getAsString()).contains(".ultikits");
     }
 
     @Nested

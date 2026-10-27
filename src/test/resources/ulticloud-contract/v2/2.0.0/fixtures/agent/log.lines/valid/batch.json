@@ -1,0 +1,20 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "log.lines",
+  "ts": 1761274800000,
+  "payload": {
+    "lines": [
+      {
+        "ts": 1761274800000,
+        "level": "INFO",
+        "message": "Done (3.2s)! For help, type \"help\""
+      },
+      {
+        "ts": 1761274800000,
+        "level": "WARN",
+        "message": "Can't keep up!"
+      }
+    ]
+  }
+}

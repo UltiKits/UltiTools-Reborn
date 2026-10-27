@@ -27,6 +27,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.security.SecureRandom;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -88,6 +89,24 @@ public final class AtomicConfigWriter {
     static final FileOperations FILES_FOR_LOAD = FILES;
 
     private AtomicConfigWriter() {
+    }
+
+    /**
+     * Runs {@code section} while holding the lock every configuration load, last-moment check and replacement in
+     * this JVM holds. A writer outside this package that compares a file's bytes and then replaces them (the panel's
+     * {@code files.write}) runs both steps here, so a configuration commit can never land between its comparison and
+     * its replacement, and its replacement can never land between a configuration commit's re-read and its rename:
+     * one of the two sees the other's bytes and refuses. The section must not block on anything but the file system.
+     *
+     * @param section the compare-and-replace to run
+     * @param <T>     the section's result type
+     * @return what {@code section} returned
+     * @since 6.3.1
+     */
+    public static <T> T underWriteLock(Supplier<T> section) {
+        synchronized (WRITE_LOAD_LOCK) {
+            return section.get();
+        }
     }
 
     /**

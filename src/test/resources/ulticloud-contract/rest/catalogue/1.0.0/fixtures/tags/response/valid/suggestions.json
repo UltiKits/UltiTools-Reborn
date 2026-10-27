@@ -1,0 +1,14 @@
+{
+  "data": {
+    "items": [
+      {
+        "name": "chat",
+        "moduleCount": 3
+      },
+      {
+        "name": "channels",
+        "moduleCount": 1
+      }
+    ]
+  }
+}

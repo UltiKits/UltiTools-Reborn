@@ -1,0 +1,11 @@
+{
+  "expect": "invalid_message",
+  "why": "状态取 FE CommandEntry.status",
+  "frame": {
+    "type": "command_status",
+    "stream": "commands",
+    "commandId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "status": "running",
+    "at": "2026-10-24T03:00:00.000Z"
+  }
+}

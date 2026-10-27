@@ -4,10 +4,19 @@ package com.ultikits.ultitools.websocket;
  * Exponential backoff reconnection strategy.
  * Delays increase exponentially: 5s, 10s, 20s, 40s... up to max 5 minutes.
  *
+ * <p>
+ * As of 6.3.1 nothing in the framework uses it: it paced the protocol v1 reconnect loop, and the
+ * protocol 2.0.0 session schedules its own reconnects. It still computes delays as before.
+ *
  * @author wisdomme
  * @version 1.0.0
  * @since 6.2.0
+ * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+ *     paces its reconnects itself. Removed in 6.4.0.
+ * @removeIn 6.4.0
  */
+@Deprecated(since = "6.3.1", forRemoval = true)
+@SuppressWarnings("removal") // implements ReconnectStrategy, deprecated for removal with it in 6.4.0
 public class ExponentialBackoffStrategy implements ReconnectStrategy {
     
     /**
@@ -122,7 +131,11 @@ public class ExponentialBackoffStrategy implements ReconnectStrategy {
     
     /**
      * Builder for ExponentialBackoffStrategy.
+     *
+     * @deprecated There is no replacement, as for {@link ExponentialBackoffStrategy}. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.1", forRemoval = true)
     public static class Builder {
         private long initialDelay = DEFAULT_INITIAL_DELAY;
         private long maxDelay = DEFAULT_MAX_DELAY;

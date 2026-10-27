@@ -1,18 +1,19 @@
 package com.ultikits.ultitools.utils;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Logger;
 
-import com.google.gson.Gson;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.entities.TokenEntity;
-import com.ultikits.ultitools.entities.vo.ServerEntityVO;
-import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
 /**
- * Utility class for HTTP request operations.
- * Provides methods for communicating with the UltiPanel API server.
- * This class handles authentication, server registration, and server updates.
+ * The UltiCloud base URL, plus the three protected protocol v1 REST calls kept so 6.3.0 subclasses
+ * still link.
+ * <p>
+ * As of 6.3.1 the base URL ({@code env.yml} {@code api-url}) is read by the protocol 2.0.0 client,
+ * and the v1 calls ({@code /server/getByUUID}, {@code /editor/register}, {@code /editor/updateServer})
+ * send nothing: protocol 2.0.0 has no v1 REST cloud. Each returns a failure response with status
+ * {@code -1} (no HTTP exchange happened) and writes one INFO line per run; all three are deprecated
+ * for removal in 6.4.0.
  *
  * @author wisdomme
  * @since 6.0.0
@@ -68,99 +69,92 @@ public class HttpRequestUtils {
         customBaseUrl = null;
     }
 
+    /** Status of the failure response the removed v1 calls return: no HTTP exchange happened. */
+    private static final int NO_EXCHANGE = -1;
+
+    /** Body of that failure response. */
+    private static final String REFUSED_BODY = "UltiCloud protocol v1 was removed; no request was sent.";
+
+    private static final Logger NOTICE_LOGGER = Logger.getLogger(HttpRequestUtils.class.getName());
+
+    private static final AtomicBoolean GET_SERVER_NOTICE = new AtomicBoolean();
+    private static final AtomicBoolean REGISTER_NOTICE = new AtomicBoolean();
+    private static final AtomicBoolean UPDATE_NOTICE = new AtomicBoolean();
+
     /**
-     * Get server information by UUID from the API server.
+     * Looked up a server by its installation UUID in the protocol v1 cloud. Sends nothing as of 6.3.1.
      *
-     * @param uuid  the unique identifier of the server
-     * @param token the authentication token
-     * @return HttpResponse containing the server information
+     * @param uuid  ignored, nothing is sent
+     * @param token ignored, nothing is sent
+     * @return a failure response with status {@code -1} and a body naming the removal
+     * @deprecated There is no replacement: a protocol 2.0.0 server is linked with
+     *     {@code /ulticloud login} and identified by its server credential. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
-    protected static Response getServerByUUID(String uuid, TokenEntity token) {
-        String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Authorization", "Bearer " + token.getAccess_token());
-        headers.put("Content-Type", "application/json");
-        return SimpleHttpClient.get(cleanBaseUrl + "/server/getByUUID?uuid=" + uuid, headers);
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // the v1 signature names the deprecated TokenEntity and SimpleHttpClient
+    protected static SimpleHttpClient.Response getServerByUUID(String uuid,
+            com.ultikits.ultitools.entities.TokenEntity token) {
+        return refused(GET_SERVER_NOTICE, "getServerByUUID");
     }
 
     /**
-     * Register a new server with the API server.
+     * Registered a server with the protocol v1 cloud. Sends nothing as of 6.3.1.
      *
-     * @param uuid   the unique identifier for the server
-     * @param name   the display name for the server
-     * @param port   the port number of the server
-     * @param domain the domain name of the server
-     * @param ssl    whether SSL is enabled
-     * @param token  the authentication token
-     * @return HttpResponse containing the registration result
+     * @param uuid   ignored, nothing is sent
+     * @param name   ignored, nothing is sent
+     * @param port   ignored, nothing is sent
+     * @param domain ignored, nothing is sent
+     * @param ssl    ignored, nothing is sent
+     * @param token  ignored, nothing is sent
+     * @return a failure response with status {@code -1} and a body naming the removal
+     * @deprecated There is no replacement: {@code /ulticloud login} links a protocol 2.0.0 server
+     *     through the device authorization. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
-    // GATE-05 group two (08-21): deliberately left raw, not routed to the typed exception
-    // hierarchy. Both this method's caller (PluginInitiationUtils.loginWithToken) and its
-    // caller in turn (UltiTools.attemptCloudLogin / CloudAuthManager's login callback) catch
-    // generic Exception and log e.getMessage() -- neither distinguishes rate limiting from any
-    // other registration failure by type, and the failure is internal to this HTTP helper
-    // rather than part of the framework's public exception contract surface. See
-    // 08-GATE05-TRIAGE.md's rate-limit decision.
-    @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-    protected static Response registerServer(String uuid, String name, int port, String domain, boolean ssl, TokenEntity token) {
-        if (!ApiRateLimiter.isAllowed("registerServer", 60_000)) {
-            throw new RuntimeException("Rate limited: please wait before retrying server registration");
-        }
-        String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
-        ServerEntityVO serverEntityVO = ServerEntityVO.builder()
-                .uuid(uuid)
-                .name(name)
-                .port(port)
-                .ssl(ssl)
-                .domain(domain)
-                .build();
-        
-        // Send the request using FormData format
-        Map<String, Object> formMap = new HashMap<>();
-
-        formMap.put("id", token.getUserIdAsString());  // Use the user ID from the token (as a string to avoid float precision issues)
-        formMap.put("serverData", new Gson().toJson(serverEntityVO));  // Use JSON serialization to ensure correct formatting
-        
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Authorization", "Bearer " + token.getAccess_token());
-        
-        return SimpleHttpClient.post(cleanBaseUrl + "/editor/register", headers, formMap);
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // the v1 signature names the deprecated TokenEntity and SimpleHttpClient
+    protected static SimpleHttpClient.Response registerServer(String uuid, String name, int port, String domain,
+            boolean ssl, com.ultikits.ultitools.entities.TokenEntity token) {
+        return refused(REGISTER_NOTICE, "registerServer");
     }
 
     /**
-     * Update an existing server on the API server.
+     * Updated a server's address in the protocol v1 cloud. Sends nothing as of 6.3.1.
      *
-     * @param uuid   the unique identifier of the server
-     * @param port   the new port number
-     * @param domain the new domain name
-     * @param ssl    whether SSL is enabled
-     * @param token  the authentication token
-     * @return HttpResponse containing the update result
+     * @param uuid   ignored, nothing is sent
+     * @param port   ignored, nothing is sent
+     * @param domain ignored, nothing is sent
+     * @param ssl    ignored, nothing is sent
+     * @param token  ignored, nothing is sent
+     * @return a failure response with status {@code -1} and a body naming the removal
+     * @deprecated There is no replacement: a protocol 2.0.0 server reports its own state over its
+     *     connection. Removed in 6.4.0.
+     * @removeIn 6.4.0
      */
-    // GATE-05 group two (08-21): deliberately left raw -- same reasoning as registerServer's
-    // identical suppression above. See 08-GATE05-TRIAGE.md's rate-limit decision.
-    @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-    protected static Response updateServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
-        if (!ApiRateLimiter.isAllowed("updateServer", 60_000)) {
-            throw new RuntimeException("Rate limited: please wait before retrying server update");
+    @Deprecated(since = "6.3.1", forRemoval = true)
+    @SuppressWarnings("removal") // the v1 signature names the deprecated TokenEntity and SimpleHttpClient
+    protected static SimpleHttpClient.Response updateServer(String uuid, int port, String domain, boolean ssl,
+            com.ultikits.ultitools.entities.TokenEntity token) {
+        return refused(UPDATE_NOTICE, "updateServer");
+    }
+
+    /** The removed calls' failure response; the first call of each method in a run logs one INFO line. */
+    @SuppressWarnings("removal") // builds the deprecated SimpleHttpClient.Response the v1 signatures return
+    private static SimpleHttpClient.Response refused(AtomicBoolean notice, String method) {
+        if (notice.compareAndSet(false, true)) {
+            NOTICE_LOGGER.info("UltiCloud: HttpRequestUtils#" + method + " called the protocol v1 REST cloud, "
+                    + "which UltiCloud no longer serves, so no request was sent and a failure response was "
+                    + "returned; it is deprecated and removed in 6.4.0.");
         }
-        String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
-        ServerEntityVO serverEntityVO = ServerEntityVO.builder()
-                .uuid(uuid)
-                .port(port)
-                .ssl(ssl)
-                .domain(domain)
-                .build();
-        
-        // Send the request using FormData format
-        Map<String, Object> formMap = new HashMap<>();
-        formMap.put("id", token.getUserIdAsString());  // Use the user ID from the token (as a string to avoid float precision issues)
-        formMap.put("serverData", new Gson().toJson(serverEntityVO));  // Use JSON serialization to ensure correct formatting
-        
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Authorization", "Bearer " + token.getAccess_token());
-        
-        return SimpleHttpClient.post(cleanBaseUrl + "/editor/updateServer", headers, formMap);
+        return new SimpleHttpClient.Response(NO_EXCHANGE, REFUSED_BODY);
+    }
+
+    /** Test-only: forgets that this run already logged each removed call's INFO line. */
+    static void resetV1NoticeForTesting() {
+        GET_SERVER_NOTICE.set(false);
+        REGISTER_NOTICE.set(false);
+        UPDATE_NOTICE.set(false);
     }
 
 }

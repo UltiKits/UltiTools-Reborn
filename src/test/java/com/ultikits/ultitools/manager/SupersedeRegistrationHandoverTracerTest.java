@@ -154,7 +154,7 @@ class SupersedeRegistrationHandoverTracerTest {
     }
 
     private String answer() throws Exception {
-        return responders.dispatch(TYPE, new JsonObject(), "r").get(5, TimeUnit.SECONDS).get("copy").getAsString();
+        return responders.dispatch(TYPE, new JsonObject(), "r").get(5, TimeUnit.SECONDS).getAsJsonObject().get("copy").getAsString();
     }
 
     private String completion() {

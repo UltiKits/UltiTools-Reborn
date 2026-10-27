@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "slow_down",
+    "message": "request refused",
+    "requestId": "req_01"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/browser/presence.schema.json",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "presence"
+    },
+    "stream": {
+      "type": "string",
+      "const": "status"
+    },
+    "online": {
+      "type": "boolean"
+    },
+    "lastSeenAt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "powerActionsEnabled": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "cloudState": {
+      "type": "string",
+      "enum": [
+        "active",
+        "needs_reconnect",
+        "suspended_plan_limit"
+      ]
+    }
+  },
+  "required": [
+    "type",
+    "stream",
+    "online",
+    "lastSeenAt",
+    "powerActionsEnabled",
+    "cloudState"
+  ],
+  "additionalProperties": false
+}

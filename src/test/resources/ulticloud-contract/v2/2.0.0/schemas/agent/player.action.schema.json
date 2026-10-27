@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.0.0/agent/player.action.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "player.action"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "kick"
+            },
+            "player": {
+              "type": "string",
+              "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "action",
+            "player"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "gamemode"
+            },
+            "player": {
+              "type": "string",
+              "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "survival",
+                "creative",
+                "adventure",
+                "spectator"
+              ]
+            }
+          },
+          "required": [
+            "action",
+            "player",
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "teleport"
+            },
+            "player": {
+              "type": "string",
+              "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "player"
+                    },
+                    "player": {
+                      "type": "string",
+                      "pattern": "^[^\\u0000- \\u007F]{1,32}$"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "player"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "coords"
+                    },
+                    "world": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "x": {
+                      "type": "number",
+                      "minimum": -30000000,
+                      "maximum": 30000000
+                    },
+                    "y": {
+                      "type": "number",
+                      "minimum": -2048,
+                      "maximum": 4096
+                    },
+                    "z": {
+                      "type": "number",
+                      "minimum": -30000000,
+                      "maximum": 30000000
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "world",
+                    "x",
+                    "y",
+                    "z"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "action",
+            "player",
+            "target"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "payload"
+  ],
+  "additionalProperties": false
+}

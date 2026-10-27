@@ -1,0 +1,37 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "properties.get.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "ok",
+    "data": {
+      "values": {
+        "motd": "A Minecraft Server",
+        "max-players": 20,
+        "difficulty": "normal",
+        "gamemode": "survival",
+        "pvp": true,
+        "view-distance": 10,
+        "online-mode": true,
+        "white-list": false
+      },
+      "writable": [
+        "motd",
+        "max-players",
+        "difficulty",
+        "gamemode",
+        "spawn-protection",
+        "view-distance",
+        "simulation-distance",
+        "pvp",
+        "allow-flight",
+        "spawn-monsters",
+        "allow-nether",
+        "enable-command-block"
+      ],
+      "version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

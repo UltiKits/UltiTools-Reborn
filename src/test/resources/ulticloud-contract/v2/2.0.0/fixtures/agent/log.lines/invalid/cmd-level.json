@@ -1,0 +1,19 @@
+{
+  "expect": "invalid_message",
+  "why": "CMD 级别由网关生成，插件不发",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "log.lines",
+    "ts": 1761274800000,
+    "payload": {
+      "lines": [
+        {
+          "ts": 1761274800000,
+          "level": "CMD",
+          "message": "x"
+        }
+      ]
+    }
+  }
+}

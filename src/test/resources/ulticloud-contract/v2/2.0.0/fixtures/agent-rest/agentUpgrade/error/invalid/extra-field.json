@@ -1,0 +1,12 @@
+{
+  "expect": "invalid",
+  "why": "响应体是 strict 的",
+  "body": {
+    "error": {
+      "code": "rate_limited",
+      "message": "request refused",
+      "requestId": "req_01"
+    },
+    "hint": "x"
+  }
+}

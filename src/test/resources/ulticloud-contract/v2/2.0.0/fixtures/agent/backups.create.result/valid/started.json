@@ -1,0 +1,21 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "backups.create.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "ok",
+    "data": {
+      "backup": {
+        "id": "2026-10-24_03-00",
+        "fileName": "backup-2026-10-24_03-00.zip",
+        "createdAt": 1761274800000,
+        "sizeBytes": null,
+        "status": "in_progress",
+        "progressPercent": 0,
+        "error": null
+      }
+    }
+  }
+}

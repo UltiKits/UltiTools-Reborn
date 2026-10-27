@@ -1,0 +1,9 @@
+{
+  "contractVersion": "2.0.0",
+  "manifestSha256": "2063115144f7dde40244fab73608430612c37b899c84d1374db4569b672168c0",
+  "sourceRepository": "UltiKits/ulticloud",
+  "sourceRef": "main",
+  "sourceCommit": "aabd6d2614420211a5eb1a59a9c00e7f123012b8",
+  "frozen": true,
+  "provenance": "Frozen release 2.0.0, extracted with git archive and never edited."
+}

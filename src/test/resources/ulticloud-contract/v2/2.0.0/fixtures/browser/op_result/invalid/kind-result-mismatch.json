@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "files.read 的结果形状不是配置树",
+  "frame": {
+    "type": "op_result",
+    "stream": "commands",
+    "opId": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "kind": "files.read",
+    "state": "succeeded",
+    "result": {
+      "plugins": []
+    },
+    "error": null,
+    "finishedAt": "2026-10-24T03:00:00.000Z"
+  }
+}

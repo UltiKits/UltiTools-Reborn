@@ -1,0 +1,48 @@
+{
+  "data": {
+    "items": [
+      {
+        "version": "1.2.0",
+        "isLatest": true,
+        "publishedAt": "2026-10-01T12:00:00.000Z",
+        "sizeBytes": 48213,
+        "sha256": "4f6c1e9a0b7d3c2e8f5a6b1c9d0e7f3a2b4c5d6e7f8091a2b3c4d5e6f7089a1b",
+        "changelog": "Fixes kit cooldowns after a restart.",
+        "apiLevel": 631,
+        "download": {
+          "kind": "public",
+          "url": "https://api.ultikits.com/v1/catalogue/modules/ultikits.kits/versions/1.2.0/download"
+        }
+      },
+      {
+        "version": "1.1.0",
+        "isLatest": false,
+        "publishedAt": "2026-08-14T09:30:00.000Z",
+        "sizeBytes": 47102,
+        "sha256": "0d1c2b3a49586776a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0a9b8",
+        "changelog": null,
+        "apiLevel": 630,
+        "download": {
+          "kind": "public",
+          "url": "https://api.ultikits.com/v1/catalogue/modules/ultikits.kits/versions/1.1.0/download"
+        }
+      },
+      {
+        "version": "1.0.0",
+        "isLatest": false,
+        "publishedAt": "2026-06-02T08:00:00.000Z",
+        "sizeBytes": 45001,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "changelog": null,
+        "apiLevel": null,
+        "download": {
+          "kind": "withdrawn",
+          "withdrawnAt": "2026-07-01T10:15:00.000Z"
+        }
+      }
+    ],
+    "total": 3,
+    "page": 1,
+    "pageSize": 20
+  }
+}

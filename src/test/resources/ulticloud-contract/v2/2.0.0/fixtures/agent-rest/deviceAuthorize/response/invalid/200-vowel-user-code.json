@@ -1,0 +1,14 @@
+{
+  "expect": "invalid",
+  "why": "用户码字母表不含元音（RFC 8628 §6.1）",
+  "body": {
+    "data": {
+      "deviceCode": "dc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "userCode": "ABCD-EFGH",
+      "verificationUri": "https://panel.ultikits.com/device",
+      "verificationUriComplete": "https://panel.ultikits.com/device?code=ABCD-EFGH",
+      "expiresIn": 600,
+      "interval": 5
+    }
+  }
+}

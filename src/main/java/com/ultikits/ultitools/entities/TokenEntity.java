@@ -11,6 +11,12 @@ import com.google.gson.JsonParser;
 
 import lombok.Data;
 
+/**
+ * Legacy user OAuth token, no longer issued or stored by UltiCloud protocol v2.
+ * @deprecated Use CloudAuthManager.login(DeviceLoginListener) for server linking; removed in 6.4.0.
+ * @removeIn 6.4.0
+ */
+@Deprecated(since = "6.3.1", forRemoval = true)
 @Data
 public class TokenEntity {
     // OAuth2 response fields

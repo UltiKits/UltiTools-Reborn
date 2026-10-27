@@ -1,0 +1,14 @@
+{
+  "expect": "invalid_message",
+  "why": "浏览器通道是平铺帧，没有 payload 包装",
+  "frame": {
+    "type": "subscribe",
+    "payload": {
+      "streams": {
+        "logs": {
+          "after": null
+        }
+      }
+    }
+  }
+}

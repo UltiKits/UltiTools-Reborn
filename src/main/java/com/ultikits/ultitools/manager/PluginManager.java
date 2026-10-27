@@ -74,6 +74,7 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionContext;
 import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
+import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -824,6 +825,9 @@ public class PluginManager {
         // is gone.
         runUnregisterStep(plugin, "unregister panel message responders",
                 () -> releasePanelResponders(plugin, nameStillInUse));
+        // Plan 22-21 (S-60, UltiLogin R4): the module's player-link handler goes with it, so no link completion
+        // reaches code whose class loader is gone. Removed by instance only; another module's handler stays.
+        runUnregisterStep(plugin, "release player-link handler", () -> releasePlayerLinkHandler(plugin));
         // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392,
         // D-01). The record holds Class<?> references and would otherwise pin the module's
         // ClassLoader after unload, exactly like the TabCompletionManager / EventBus /
@@ -920,6 +924,21 @@ public class PluginManager {
         panelResponderRegistry.unregisterByOwnerInstance(plugin);
         if (!nameStillInUse) {
             panelResponderRegistry.unregisterAll(plugin.getPluginName());
+        }
+    }
+
+    /**
+     * Removes the player-link handler {@code plugin} set, if it is the owner (plan 22-21). Null-safe while the
+     * framework has no instance or no player-link API yet (an enable that failed before creating it).
+     */
+    private static void releasePlayerLinkHandler(UltiToolsPlugin plugin) {
+        UltiTools framework = UltiTools.getInstance();
+        if (framework == null) {
+            return;
+        }
+        CloudPlayerLinks links = framework.getCloudPlayerLinks();
+        if (links != null) {
+            links.removeHandler(plugin);
         }
     }
 
@@ -2570,6 +2589,8 @@ public class PluginManager {
                 () -> releaseEventHandlers(incoming, true));
         runUnregisterStep(incoming, "release the failed copy's panel message responders",
                 () -> releasePanelResponders(incoming, true));
+        runUnregisterStep(incoming, "release the failed copy's player-link handler",
+                () -> releasePlayerLinkHandler(incoming));
         List<Runnable> restores = supersedeHandovers.remove(incoming);
         if (restores == null) {
             return;

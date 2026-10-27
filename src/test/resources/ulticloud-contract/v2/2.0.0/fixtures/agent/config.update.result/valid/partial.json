@@ -1,0 +1,25 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "config.update.result",
+  "ts": 1761274800000,
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVX",
+  "payload": {
+    "status": "partial",
+    "data": {
+      "keys": [
+        {
+          "key": "chat.prefix",
+          "ok": true,
+          "message": null
+        },
+        {
+          "key": "chat.cooldown",
+          "ok": false,
+          "message": "must be between 0 and 60"
+        }
+      ],
+      "version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

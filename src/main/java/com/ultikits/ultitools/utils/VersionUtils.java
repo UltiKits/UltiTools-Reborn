@@ -1,9 +1,5 @@
 package com.ultikits.ultitools.utils;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -19,10 +15,11 @@ public class VersionUtils {
     /**
      * Get the newest version of UltiTools from the remote API.
      *
-     * <p>Returns {@code null} when the catalogue answers with an error status, an error envelope, no
-     * {@code data}, or a body that cannot be read, and when it cannot be reached; this contract is
-     * unchanged as of 6.3.0. The start-up update check uses {@link #lookUpUltiToolsNewestVersion()}
-     * instead, which tells those failures apart from a version.
+     * <p>Returns {@code null} when the catalogue answers with an error status, a body without a
+     * {@code data.version}, or a body that cannot be read, and when it cannot be reached; this
+     * contract is unchanged as of 6.3.0. The start-up update check uses
+     * {@link #lookUpUltiToolsNewestVersion()} instead, which tells those failures apart from a
+     * version.
      *
      * @return the newest UltiTools version string, or {@code null}
      */
@@ -45,32 +42,6 @@ public class VersionUtils {
      */
     @ApiStatus.Internal
     public static VersionLookup lookUpUltiToolsNewestVersion() {
-        try (Response httpResponse = SimpleHttpClient.get(PluginInstallUtils.getBaseUrl() + "/plugin/ultitools/newest")) {
-            if (!httpResponse.isOk()) {
-                return VersionLookup.failed(VersionLookup.describe(httpResponse.getStatus(), httpResponse.body()));
-            }
-            String version = readNewestVersion(httpResponse.body());
-            return version == null ? VersionLookup.failed(VersionLookup.UNREADABLE) : VersionLookup.found(version);
-        }
-    }
-
-    private static String readNewestVersion(String body) {
-        try {
-            JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
-            String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
-            if (!"200".equals(code)) {
-                return null;
-            }
-            JsonElement data = wrapper.get("data");
-            if (data == null || data.isJsonNull()) {
-                return null;
-            }
-            if (data.isJsonPrimitive()) {
-                return data.getAsString();
-            }
-            return data.toString();
-        } catch (Exception e) {
-            return null;
-        }
+        return CatalogueClient.frameworkNewest();
     }
 }

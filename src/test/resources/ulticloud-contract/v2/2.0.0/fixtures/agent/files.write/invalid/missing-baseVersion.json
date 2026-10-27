@@ -1,0 +1,14 @@
+{
+  "expect": "invalid_message",
+  "why": "只改已存在的文件，baseVersion 必填（乐观并发）",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "files.write",
+    "ts": 1761274800000,
+    "payload": {
+      "path": "plugins/UltiChat/config.yml",
+      "content": "x"
+    }
+  }
+}

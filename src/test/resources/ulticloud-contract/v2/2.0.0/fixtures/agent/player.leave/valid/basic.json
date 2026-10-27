@@ -1,0 +1,10 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "type": "player.leave",
+  "ts": 1761274800000,
+  "payload": {
+    "playerUuid": "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+    "playerName": "Steve"
+  }
+}
