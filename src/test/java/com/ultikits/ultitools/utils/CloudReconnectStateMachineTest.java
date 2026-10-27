@@ -470,6 +470,37 @@ class CloudReconnectStateMachineTest {
         }
 
         @Test
+        @DisplayName("a 4401 after a persisted rotation deletes the rotated credential from disk")
+        void credentialRejectedAfterRotationDeletesTheRotatedCredential() throws Exception {
+            startAgent();
+            CloudSession session = CloudSession.current();
+            AgentConnection.Listener listener = listenerOf(session);
+            assertThat(session.rotateCredential(ROTATED_SECRET, ROTATED_ID)).isTrue();
+            assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo(ROTATED_ID);
+
+            listener.onCredentialRejected(4401, null);
+
+            assertThat(ServerCredentialStore.load()).as("the rotated credential the gateway rejected").isNull();
+            assertThat(session.getCredential()).isNull();
+        }
+
+        @Test
+        @DisplayName("a 4401 after a rotation still keeps a credential another writer saved meanwhile")
+        void credentialRejectedAfterRotationKeepsACredentialWrittenMeanwhile() throws Exception {
+            startAgent();
+            CloudSession session = CloudSession.current();
+            AgentConnection.Listener listener = listenerOf(session);
+            assertThat(session.rotateCredential(ROTATED_SECRET, ROTATED_ID)).isTrue();
+            ServerCredentialStore.save(credential("NEW"));
+
+            listener.onCredentialRejected(4401, null);
+
+            assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo("cred-NEW");
+            assertThat(loggedAt(Level.WARNING)).noneSatisfy(line ->
+                    assertThat(line).contains("The saved credential was deleted"));
+        }
+
+        @Test
         void callbackAlsoChecksCurrentIdentityBeforeInvalidationFlagChanges() throws Exception {
             startAgent();
             CloudSession old = CloudSession.current();
@@ -924,6 +955,10 @@ class CloudReconnectStateMachineTest {
             }
         }
     }
+
+    /** The secret and id of a rotated credential (the shape of the contract's {@code credential.rotate}). */
+    private static final String ROTATED_SECRET = "ucs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    private static final String ROTATED_ID = "01JB2Z8Y3K4M5N6P7Q8R9S0CRD";
 
     private void startAgent() throws Exception {
         CloudSession.current().commitCredential(credential("OLD"));

@@ -455,6 +455,52 @@ class PlayerLinkRedeliveryTest {
     }
 
     @Test
+    @DisplayName("a created answer processed between the send and the return of create() still completes the create")
+    void createdAnsweredBeforeCreateReturnsCompletesTheCreate() throws Exception {
+        // The agent thread handles the reply the moment the frame leaves: this channel dispatches the gateway's
+        // created answer from inside the send, before create() regains control.
+        CloudChannel answering = new AnsweringChannel(recording, id -> dispatch(PlayerLinkEndToEndTest.Frames
+                .fixture("fixtures/agent/player.link.created/valid/url.json", id)));
+        channel = new PlayerLinkChannel(() -> answering, ledger, () -> false, () -> 0L, timers.service(), Runnable::run);
+        links = new CloudPlayerLinks(channel);
+        router = new AgentMessageRouter(capability -> true, capability -> "not available");
+        channel.register(router);
+
+        CompletableFuture<LinkCreation> future = startCreate();
+        timers.runAll(PlayerLinkChannel.REQUEST_DEADLINE_MS);
+
+        assertThat(future.isDone()).isTrue();
+        assertThat(future.get().failure()).as("the link was created, not timed out").isNull();
+        assertThat(future.get().url()).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("a create whose frame is not handed off rolls its pending registration back")
+    void createNotHandedOffRollsTheRegistrationBack() throws Exception {
+        java.util.List<String> registeredIds = new CopyOnWriteArrayList<>();
+        CloudChannel refusing = new AnsweringChannel(recording, registeredIds::add) {
+            @Override
+            public String sendTracked(String type, JsonObject payload, java.util.function.Consumer<String> hook) {
+                hook.accept("01JB2Z8Y3K4M5N6P7Q8R9S0RB1");
+                return null;
+            }
+        };
+        channel = new PlayerLinkChannel(() -> refusing, ledger, () -> false, () -> 0L, timers.service(), Runnable::run);
+        links = new CloudPlayerLinks(channel);
+        router = new AgentMessageRouter(capability -> true, capability -> "not available");
+        channel.register(router);
+
+        CompletableFuture<LinkCreation> future = startCreate();
+
+        assertThat(future.get(1, TimeUnit.SECONDS).failure()).isEqualTo(Failure.NOT_CONNECTED);
+        assertThat(timers.pending()).as("no deadline for a frame that never left").isZero();
+        // A stray created answer for the rolled-back id finds nothing to complete and changes nothing.
+        dispatch(PlayerLinkEndToEndTest.Frames.fixture("fixtures/agent/player.link.created/valid/url.json",
+                "01JB2Z8Y3K4M5N6P7Q8R9S0RB1"));
+        assertThat(future.get().failure()).isEqualTo(Failure.NOT_CONNECTED);
+    }
+
+    @Test
     @DisplayName("create failures map rate_limited, link_not_permitted, an error reply and a deadline")
     void createFailuresMapToFailures() throws Exception {
         assertThat(failureOf("fixtures/agent/player.link.created/valid/not-permitted.json"))
@@ -581,6 +627,51 @@ class PlayerLinkRedeliveryTest {
         payload.addProperty("message", "slow down");
         dispatch(frame);
         return future.get(1, TimeUnit.SECONDS).failure();
+    }
+
+    /**
+     * Delegates to a recording channel and, right after a {@code player.link.create} frame is handed off, runs
+     * {@code afterHandOff} with its id on the sending thread: the reply that races the pending registration.
+     */
+    private static class AnsweringChannel implements CloudChannel {
+        private final RecordingChannel delegate;
+        private final java.util.function.Consumer<String> afterHandOff;
+
+        AnsweringChannel(RecordingChannel delegate, java.util.function.Consumer<String> afterHandOff) {
+            this.delegate = delegate;
+            this.afterHandOff = afterHandOff;
+        }
+
+        private String answered(String type, String id) {
+            if (id != null && "player.link.create".equals(type)) {
+                afterHandOff.accept(id);
+            }
+            return id;
+        }
+
+        @Override public boolean isOpen() { return delegate.isOpen(); }
+        @Override public com.ultikits.ultitools.websocket.CloudLimits limits() { return delegate.limits(); }
+        @Override public boolean send(String type, JsonObject payload) { return delegate.send(type, payload); }
+        @Override public String sendTracked(String type, JsonObject payload) {
+            return answered(type, delegate.sendTracked(type, payload));
+        }
+        @Override public String sendTracked(String type, JsonObject payload, java.util.function.Consumer<String> hook) {
+            return answered(type, delegate.sendTracked(type, payload, hook));
+        }
+        @Override public boolean reply(String replyTo, String type, JsonObject payload) {
+            return delegate.reply(replyTo, type, payload);
+        }
+        @Override public boolean replyOk(String replyTo, String type, com.google.gson.JsonElement data) {
+            return delegate.replyOk(replyTo, type, data);
+        }
+        @Override public boolean replyPartial(String replyTo, String type, com.google.gson.JsonElement data,
+                                              String code, String message) {
+            return delegate.replyPartial(replyTo, type, data, code, message);
+        }
+        @Override public boolean replyError(String replyTo, String type, String code, String message,
+                                            JsonObject details) {
+            return delegate.replyError(replyTo, type, code, message, details);
+        }
     }
 
     /** A handler that must be overridden on both methods by its subclass. */

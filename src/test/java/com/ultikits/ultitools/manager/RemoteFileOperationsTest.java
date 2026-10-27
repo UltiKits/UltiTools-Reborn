@@ -35,6 +35,9 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.config.document.ConfigDocument;
+import com.ultikits.ultitools.config.document.OperatorFileWriter;
+import com.ultikits.ultitools.config.document.OwnedPaths;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.contract.RecordingChannel;
@@ -354,6 +357,74 @@ class RemoteFileOperationsTest {
         assertThat(loserCode).isEqualTo("file_changed");
         String winner = new String(Files.readAllBytes(config), StandardCharsets.UTF_8);
         assertThat(winner).isIn("winner: one\n", "winner: two\n");
+    }
+
+    @Test
+    @DisplayName("a files.write that passed its version check never overwrites a config.update committed meanwhile")
+    void fileWriteDoesNotOverwriteAConfigUpdateCommittedAfterItsVersionCheck() throws Exception {
+        Path config = write("plugins/UltiTools/config.yml", "enabled: true\n");
+        String baseVersion = RemoteFilesEndToEndTest.sha256(Files.readAllBytes(config));
+        // config.update loads the file and checks its own baseVersion before it reaches the writer.
+        String configBase = ConfigDocument.load(config).fingerprint();
+
+        CountDownLatch checked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        handler.setWriteGate(() -> {
+            checked.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        RecordingChannel panelWrite = new RecordingChannel();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicReference<OperatorFileWriter.Result> configResult = new AtomicReference<>();
+        CountDownLatch configDone = new CountDownLatch(1);
+        Thread fileWriter = new Thread(() -> dispatchQuietly(
+                writeRequest("plugins/UltiTools/config.yml", "enabled: true\nfrom: files\n", baseVersion),
+                panelWrite, failure));
+        Thread configWriter = new Thread(() -> {
+            try {
+                configResult.set(OperatorFileWriter.write(config,
+                        OwnedPaths.builder().value(Collections.singletonList("enabled")).build(), configBase,
+                        document -> document.set(Collections.singletonList("enabled"), false)));
+            } catch (IOException | RuntimeException broken) {
+                failure.compareAndSet(null, broken);
+            } finally {
+                configDone.countDown();
+            }
+        });
+
+        fileWriter.start();
+        assertThat(checked.await(10, TimeUnit.SECONDS)).isTrue();
+        configWriter.start();
+        // Either the config commit finishes (the two paths do not exclude each other) or it parks on the
+        // monitor the files.write holds; both are observed without a timed sleep.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (configDone.getCount() > 0 && configWriter.getState() != Thread.State.BLOCKED
+                && System.nanoTime() < deadline) {
+            Thread.yield();
+        }
+        release.countDown();
+        fileWriter.join(TimeUnit.SECONDS.toMillis(20));
+        configWriter.join(TimeUnit.SECONDS.toMillis(20));
+
+        assertThat(failure.get()).isNull();
+        String onDisk = new String(Files.readAllBytes(config), StandardCharsets.UTF_8);
+        boolean fileWriteWon = "ok".equals(statusOf(panelWrite));
+        boolean configWon = configResult.get().applied();
+        assertThat(fileWriteWon && configWon)
+                .as("both writers reported success, yet the file holds only one of them: %s", onDisk)
+                .isFalse();
+        if (configWon) {
+            assertThat(onDisk).contains("enabled: false");
+        }
+        if (fileWriteWon) {
+            assertThat(onDisk).isEqualTo("enabled: true\nfrom: files\n");
+            assertThat(configResult.get().outcome()).isEqualTo(OperatorFileWriter.Outcome.FILE_CHANGED);
+        }
     }
 
     // --------------------------------------------------------------------------------------

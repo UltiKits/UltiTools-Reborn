@@ -216,6 +216,8 @@ final class CloudSession {
     private volatile boolean stateFlushFailureLogged;
 
     private AgentConnection agentConnection;
+    /** The listener of {@link #agentConnection}, so a rotation can re-point the credential its 4401 deletes. */
+    private SessionAgentListener agentListener;
     /**
      * The protocol layer of the current connection's open attempt (plan 22-20), or {@code null}
      * between attempts. One per upgraded socket: created when the upgrade is accepted, closed when
@@ -453,6 +455,7 @@ final class CloudSession {
                 CloudAuthManager.runningFrameworkVersion(), agentExecutor, listener,
                 sockets, policy, agentClock, timing, PanelConnectionLog::log);
         listener.connection = agentConnection;
+        agentListener = listener;
         agentExecutor.execute(listener.connection::start);
         // The state cadence lives on the connection's own scheduler (D-15), so it exists exactly
         // as long as this session owns a connection and is cancelled with it.
@@ -464,6 +467,7 @@ final class CloudSession {
         cancelStateFlushTask();
         AgentConnection previous = agentConnection;
         agentConnection = null;
+        agentListener = null;
         AgentProtocol protocol = agentProtocol;
         agentProtocol = null;
         if (protocol != null) {
@@ -881,6 +885,24 @@ final class CloudSession {
         }
 
         /**
+         * Re-points the credential a rejection of this connection deletes once a {@code credential.rotate} it
+         * carried is durable (called under this session's monitor by {@link #rotateCredential}). The gateway
+         * now knows this server by the rotated credential, so a later 4401 on this attempt rejects that one:
+         * deleting only the handshake-time id would find the rotated id on disk, skip the delete and leave a
+         * revoked credential that keeps {@code status()} linked and blocks {@code /ulticloud login}. An attempt
+         * id that is not the retired one (a newer credential saved meanwhile) is left as it is, so the
+         * compare-and-delete still never removes a credential this attempt did not hold.
+         *
+         * @param retiredId the id the rotation replaced
+         * @param rotatedId the id now on disk and in {@link #credential}
+         */
+        private void adoptRotation(String retiredId, String rotatedId) {
+            if (retiredId != null && retiredId.equals(attemptCredentialId)) {
+                attemptCredentialId = rotatedId;
+            }
+        }
+
+        /**
          * The bearer of the next attempt: the session's own {@link #credential}, the one owner of the current
          * credential (plan 22-21 fix), so an attempt after a rotation authenticates with the rotated secret and
          * {@link #attemptCredentialId} names the credential this attempt really used.
@@ -922,11 +944,18 @@ final class CloudSession {
                 }
                 rejectionReported = true;
                 try {
-                    ServerCredentialStore.deleteIfMatches(attemptCredentialId);
-                    PanelConnectionLog.log(Level.WARNING,
-                            "UltiCloud rejected this server's credential (it was revoked or is no longer valid). "
-                            + "The saved credential was deleted. Run /ulticloud login to link this server again."
-                            + requestSuffix(requestId));
+                    if (ServerCredentialStore.deleteIfMatches(attemptCredentialId)) {
+                        PanelConnectionLog.log(Level.WARNING,
+                                "UltiCloud rejected this server's credential (it was revoked or is no longer valid). "
+                                + "The saved credential was deleted. Run /ulticloud login to link this server again."
+                                + requestSuffix(requestId));
+                    } else {
+                        PanelConnectionLog.log(Level.WARNING,
+                                "UltiCloud rejected the credential this connection used (it was revoked or is no "
+                                + "longer valid). credentials.json now holds a different credential, so it was kept. "
+                                + "Cloud features are stopped; run /ulticloud reconnect to connect with it."
+                                + requestSuffix(requestId));
+                    }
                 } catch (DataAccessException failure) {
                     PanelConnectionLog.log(Level.WARNING,
                             "UltiCloud rejected this server's credential, but the saved credential could not be deleted. "
@@ -1096,6 +1125,10 @@ final class CloudSession {
             return false;
         }
         credential = held.rotated(secret, credentialId);
+        SessionAgentListener listener = agentListener;
+        if (listener != null) {
+            listener.adoptRotation(held.getCredentialId(), credentialId);
+        }
         return true;
     }
 

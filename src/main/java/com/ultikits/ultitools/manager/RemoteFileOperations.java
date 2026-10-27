@@ -26,6 +26,7 @@ import java.util.regex.Pattern;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.config.document.AtomicConfigWriter;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.ContractPrimitives;
 import com.ultikits.ultitools.utils.PayloadReader;
@@ -71,7 +72,12 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  *
  * <p><b>Why this path cannot overwrite operator content.</b> {@code files.write} replaces a file
  * only while the {@code baseVersion} the panel sent still equals the SHA-256 of the bytes on disk,
- * and that comparison and the replacement happen under one JVM-wide lock. A version that matches
+ * and that comparison and the replacement happen under the one JVM-wide lock every configuration
+ * load and commit also holds ({@link AtomicConfigWriter#underWriteLock}): a {@code config.update} or
+ * a module's {@code save()} of the same file can therefore never commit between this comparison and
+ * this replacement, and this replacement never lands between their own last-moment re-read and
+ * their rename; one of the two sees the other's bytes and refuses. A {@code files.delete} removes
+ * its entry under the same lock. A version that matches
  * means the panel is writing back exactly the bytes it read, so the operator's content is changed
  * only by an explicit panel edit of that content. Disabling the write path leaves every file
  * untouched. A writer outside this framework that changes the file in the window between the
@@ -81,14 +87,6 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  */
 final class RemoteFileOperations implements CloudRequestHandler {
     private static final Logger LOGGER = Logger.getLogger(RemoteFileOperations.class.getName());
-
-    /**
-     * Serializes the version comparison and the replacement of every remote write in this JVM.
-     * One lock for the whole surface, so two writes of the same file — from this connection or any
-     * other — cannot both pass the comparison: the second one reads the winner's bytes and
-     * answers {@code file_changed}.
-     */
-    private static final Object WRITE_LOCK = new Object();
 
     private static final String FILES_LIST = "files.list";
     private static final String FILES_LIST_RESULT = "files.list.result";
@@ -164,8 +162,9 @@ final class RemoteFileOperations implements CloudRequestHandler {
     }
 
     /**
-     * Installs a hook that runs inside the write lock immediately before the version comparison.
-     * It exists so a test can hold one writer inside the critical section while a second writer
+     * Installs a hook that runs inside the write lock after the version comparison passed and
+     * immediately before the replacement. It exists so a test can hold one writer between its check
+     * and its write while a second writer (another {@code files.write} or a configuration commit)
      * waits for the lock; production leaves it null, which costs one null check per write.
      *
      * @param gate the hook to run, or null to remove it
@@ -425,8 +424,10 @@ final class RemoteFileOperations implements CloudRequestHandler {
      * Answers {@code files.write}: replaces an existing file's content when, and only when, the
      * panel's {@code baseVersion} still equals the SHA-256 of the bytes on disk.
      *
-     * <p>The comparison and the atomic replacement happen under one JVM-wide lock, so concurrent
-     * writers cannot both succeed. The replacement goes through
+     * <p>The comparison and the atomic replacement happen under the JVM-wide configuration write
+     * lock ({@link AtomicConfigWriter#underWriteLock}), so concurrent writers cannot both succeed —
+     * neither two {@code files.write} requests nor a {@code files.write} and a configuration commit
+     * ({@code config.update}, a module's {@code save()}) of the same file. The replacement goes through
      * {@link PosixAttributePreserver#replaceInPlace}, which keeps the file's POSIX permissions,
      * owner and group and refuses to write through a symbolic link or over an operator-pinned
      * read-only file ({@code write_denied}). The write never creates a file.</p>
@@ -473,7 +474,8 @@ final class RemoteFileOperations implements CloudRequestHandler {
 
     /**
      * The critical section of {@code files.write}: compare the version against the bytes on disk
-     * and replace the file, both under {@link #WRITE_LOCK}.
+     * and replace the file, both under {@link AtomicConfigWriter#underWriteLock}, the lock every
+     * configuration load, last-moment check and commit of this JVM also holds.
      *
      * <p>A current file above the connection's {@code fileMaxBytes} is answered {@code file_changed}
      * without being read: the panel can never have received such a file's content, so no
@@ -487,43 +489,45 @@ final class RemoteFileOperations implements CloudRequestHandler {
      * @return an empty outcome when the file now holds {@code content}, otherwise the refusal
      */
     private WriteOutcome writeLocked(File file, byte[] content, String baseVersion, int maxBytes) {
-        synchronized (WRITE_LOCK) {
-            Runnable gate = writeGate;
-            if (gate != null) {
-                gate.run();
-            }
-            if (!file.exists()) {
-                return new WriteOutcome("not_found", "The requested file does not exist.");
-            }
-            if (file.isDirectory()) {
-                return new WriteOutcome("is_directory", "The requested path is a directory.");
-            }
-            if (!file.isFile()) {
-                return new WriteOutcome("file_not_editable", "The requested path is not a regular file.");
-            }
-            byte[] current;
-            try {
-                if (Files.size(file.toPath()) > maxBytes) {
-                    return new WriteOutcome("file_changed", CHANGED_MESSAGE);
-                }
-                current = readAtMost(file, maxBytes);
-            } catch (IOException unreadable) {
-                LOGGER.log(Level.WARNING, "UltiCloud: a write target could not be read ("
-                        + unreadable.getClass().getSimpleName() + ").");
-                return new WriteOutcome("internal_error", "The requested file could not be read.");
-            }
-            if (current.length > maxBytes) {
-                return new WriteOutcome("file_changed", CHANGED_MESSAGE);
-            }
-            if (!sha256Hex(current).equals(baseVersion)) {
-                return new WriteOutcome("file_changed", CHANGED_MESSAGE);
-            }
-            WriteDenial denial = new WriteDenial();
-            if (!PosixAttributePreserver.replaceInPlace(file, content, denial)) {
-                return new WriteOutcome("write_denied", denial.reason());
-            }
-            return new WriteOutcome(null, null);
+        return AtomicConfigWriter.underWriteLock(() -> compareAndReplace(file, content, baseVersion, maxBytes));
+    }
+
+    private WriteOutcome compareAndReplace(File file, byte[] content, String baseVersion, int maxBytes) {
+        if (!file.exists()) {
+            return new WriteOutcome("not_found", "The requested file does not exist.");
         }
+        if (file.isDirectory()) {
+            return new WriteOutcome("is_directory", "The requested path is a directory.");
+        }
+        if (!file.isFile()) {
+            return new WriteOutcome("file_not_editable", "The requested path is not a regular file.");
+        }
+        byte[] current;
+        try {
+            if (Files.size(file.toPath()) > maxBytes) {
+                return new WriteOutcome("file_changed", CHANGED_MESSAGE);
+            }
+            current = readAtMost(file, maxBytes);
+        } catch (IOException unreadable) {
+            LOGGER.log(Level.WARNING, "UltiCloud: a write target could not be read ("
+                    + unreadable.getClass().getSimpleName() + ").");
+            return new WriteOutcome("internal_error", "The requested file could not be read.");
+        }
+        if (current.length > maxBytes) {
+            return new WriteOutcome("file_changed", CHANGED_MESSAGE);
+        }
+        if (!sha256Hex(current).equals(baseVersion)) {
+            return new WriteOutcome("file_changed", CHANGED_MESSAGE);
+        }
+        Runnable gate = writeGate;
+        if (gate != null) {
+            gate.run();
+        }
+        WriteDenial denial = new WriteDenial();
+        if (!PosixAttributePreserver.replaceInPlace(file, content, denial)) {
+            return new WriteOutcome("write_denied", denial.reason());
+        }
+        return new WriteOutcome(null, null);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -558,9 +562,15 @@ final class RemoteFileOperations implements CloudRequestHandler {
                     "The requested path is a directory; directories are never deleted remotely.");
             return;
         }
-        try {
-            Files.delete(entry);
-        } catch (IOException notDeleted) {
+        IOException notDeleted = AtomicConfigWriter.underWriteLock(() -> {
+            try {
+                Files.delete(entry);
+                return null;
+            } catch (IOException failure) {
+                return failure;
+            }
+        });
+        if (notDeleted != null) {
             LOGGER.log(Level.WARNING, "UltiCloud: a requested file could not be deleted ("
                     + notDeleted.getClass().getSimpleName() + ").");
             refuseDelete(channel, request.id(), path, "write_denied",

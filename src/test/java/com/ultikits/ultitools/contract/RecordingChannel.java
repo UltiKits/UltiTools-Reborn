@@ -8,6 +8,7 @@ import com.ultikits.ultitools.websocket.CloudLimits;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Consumer;
 
 public final class RecordingChannel implements CloudChannel {
     private final List<JsonObject> frames = new ArrayList<>();
@@ -36,8 +37,11 @@ public final class RecordingChannel implements CloudChannel {
     }
 
     @Override public boolean send(String type, JsonObject payload) { return sendTracked(type, payload) != null; }
-    @Override public String sendTracked(String type, JsonObject payload) { return recordTracked(null, type, payload); }
-    @Override public boolean reply(String replyTo, String type, JsonObject payload) { return recordTracked(replyTo, type, payload) != null; }
+    @Override public String sendTracked(String type, JsonObject payload) { return recordTracked(null, type, payload, null); }
+    @Override public String sendTracked(String type, JsonObject payload, Consumer<String> beforeHandOff) {
+        return recordTracked(null, type, payload, beforeHandOff);
+    }
+    @Override public boolean reply(String replyTo, String type, JsonObject payload) { return recordTracked(replyTo, type, payload, null) != null; }
 
     @Override
     public boolean replyOk(String replyTo, String type, JsonElement data) {
@@ -68,7 +72,8 @@ public final class RecordingChannel implements CloudChannel {
         return reply(replyTo, type, payload);
     }
 
-    private synchronized String recordTracked(String replyTo, String type, JsonObject payload) {
+    private synchronized String recordTracked(String replyTo, String type, JsonObject payload,
+            Consumer<String> beforeHandOff) {
         if (!open) { return null; }
         String id = String.format(Locale.ROOT, "%026d", ++sequence);
         JsonObject frame = new JsonObject();
@@ -77,6 +82,7 @@ public final class RecordingChannel implements CloudChannel {
         frame.addProperty("type", type); frame.addProperty("ts", 1000);
         if (replyTo != null) { frame.addProperty("replyTo", replyTo); }
         frame.add("payload", payload);
+        if (beforeHandOff != null) { beforeHandOff.accept(id); }
         return accept(frame.toString()) ? id : null;
     }
 }

@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
@@ -166,13 +167,31 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
             return notConnected();
         }
         JsonObject payload = createPayload(playerUuid, playerName, gameAuth, offeredProofs);
-        String id = connection.sendTracked("player.link.create", payload);
+        // The pending entry exists before the frame leaves: the answer is handled on the agent thread and may be
+        // processed before sendTracked returns here, and an answer without its entry would be dropped and the
+        // issued link reported as TIMED_OUT.
+        final Pending pending = new Pending();
+        final AtomicReference<String> registered = new AtomicReference<>();
+        String id = connection.sendTracked("player.link.create", payload, new Consumer<String>() {
+            @Override
+            public void accept(String envelopeId) {
+                registered.set(envelopeId);
+                pendingCreates.put(envelopeId, pending);
+            }
+        });
         if (id == null) {
+            String rolledBack = registered.get();
+            if (rolledBack != null) {
+                pendingCreates.remove(rolledBack, pending);
+            }
             return notConnected();
         }
-        Pending pending = new Pending();
-        pendingCreates.put(id, pending);
-        pending.deadline = timers.schedule(deadlineOfCreate(id), REQUEST_DEADLINE_MS, TimeUnit.MILLISECONDS);
+        ScheduledFuture<?> deadline = timers.schedule(deadlineOfCreate(id), REQUEST_DEADLINE_MS, TimeUnit.MILLISECONDS);
+        pending.deadline = deadline;
+        if (pendingCreates.get(id) != pending) {
+            // Answered (or closed) while the deadline was being scheduled: the deadline has nothing left to time.
+            deadline.cancel(false);
+        }
         return pending.future;
     }
 

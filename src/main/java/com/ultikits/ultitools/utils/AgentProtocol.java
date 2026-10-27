@@ -697,6 +697,11 @@ final class AgentProtocol {
         }
 
         @Override
+        public String sendTracked(String type, JsonObject payload, Consumer<String> beforeHandOff) {
+            return blocked(type) ? null : framed.sendTracked(type, payload, beforeHandOff);
+        }
+
+        @Override
         public boolean reply(String replyTo, String type, JsonObject payload) {
             return framed.reply(replyTo, type, payload);
         }

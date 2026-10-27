@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.nio.charset.StandardCharsets;
 import java.util.logging.Logger;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -48,11 +49,16 @@ final class FramedChannel implements CloudChannel {
 
     @Override
     public String sendTracked(String type, JsonObject payload) {
-        return frameTracked(null, type, payload);
+        return frameTracked(null, type, payload, null);
+    }
+
+    @Override
+    public String sendTracked(String type, JsonObject payload, Consumer<String> beforeHandOff) {
+        return frameTracked(null, type, payload, Objects.requireNonNull(beforeHandOff, "beforeHandOff"));
     }
 
     @Override public boolean reply(String replyTo, String type, JsonObject payload) {
-        return frameTracked(Objects.requireNonNull(replyTo, "replyTo"), type, payload) != null;
+        return frameTracked(Objects.requireNonNull(replyTo, "replyTo"), type, payload, null) != null;
     }
 
     @Override
@@ -89,7 +95,7 @@ final class FramedChannel implements CloudChannel {
         return reply(replyTo, type, payload);
     }
 
-    private String frameTracked(String replyTo, String type, JsonObject payload) {
+    private String frameTracked(String replyTo, String type, JsonObject payload, Consumer<String> beforeHandOff) {
         AgentMessageTypes.Spec spec = AgentMessageTypes.spec(type);
         if (spec == null || (spec.replyTo() == AgentMessageTypes.ReplyTo.REQUIRED && replyTo == null)
                 || (spec.replyTo() == AgentMessageTypes.ReplyTo.FORBIDDEN && replyTo != null)
@@ -115,6 +121,7 @@ final class FramedChannel implements CloudChannel {
             }
             return null;
         }
+        if (beforeHandOff != null) { beforeHandOff.accept(id); }
         if (!isOpen() || !socketSend.test(text)) { return null; }
         return id;
     }
