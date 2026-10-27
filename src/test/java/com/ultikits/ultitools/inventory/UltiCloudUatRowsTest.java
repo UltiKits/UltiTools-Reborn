@@ -211,6 +211,22 @@ class UltiCloudUatRowsTest {
     }
 
     @Test
+    void panelAuthenticationRowSeparatesDirectFramesFromIndirectOutputAndAvoidsAVacuousLoginCheck()
+            throws IOException {
+        List<Row> found = rows(CHECKLIST).get("ultitools.cloud.command.neg-cloud-auth");
+        assertThat(found).hasSize(1);
+        List<String> cells = found.get(0).cells;
+        assertThat(cells.get(1)).contains("linked", "connected");
+        assertThat(cells.get(2)).contains("ultitools:ulticloud login", "execute run ulticloud logout");
+        assertThat(cells.get(3)).contains("command_blocked", "normal command output",
+                "linked login", "frame is the discriminating evidence");
+        assertThat(cells.get(3)).doesNotContain("starts a new login");
+        String feature = rows(FEATURES).get("ultitools.cloud.command").get(0).cells.get(1);
+        assertThat(feature).contains("direct", "indirect", "command output");
+        assertThat(feature).doesNotContain("always refused with `command_blocked`");
+    }
+
+    @Test
     void preconditionsCiteOnlyEarlierRows() throws IOException {
         Map<String, List<Row>> checklist = rows(CHECKLIST);
         Set<String> sections = checklist.keySet().stream().map(UltiCloudUatRowsTest::section)

@@ -42,6 +42,9 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class CommandExecutionManager {
+    /** Panel origin exists only inside synchronous main-thread dispatch, including nested commands. */
+    private static final ThreadLocal<Boolean> PANEL_DISPATCH = new ThreadLocal<>();
+
     @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
     private UltiPanelWebSocketClient webSocketClient;
     private final ConcurrentHashMap<String, CompletableFuture<CommandResult>> pendingCommands;
@@ -260,35 +263,29 @@ public class CommandExecutionManager {
      * {@code plugins/UltiTools/config.yml} — so both the bare command and its namespaced form are
      * blocked; the stripping order is what makes that true. The blocklist is editable in both
      * directions — an operator may remove any of the ten shipped defaults, add to them, or clear
-     * the list entirely. Separately, UltiCloud's own {@code login} and {@code logout} subcommands
-     * are always refused remotely: they must be run from the server console, regardless of the
-     * configured blocklist. Command names come from {@link CloudLoginCommand}'s {@link CmdExecutor}
-     * aliases, the same metadata used for registration. This fixed rule does not refuse the root
-     * command, {@code status}, {@code reconnect} or {@code help}.
+     * the list entirely. Separately, direct forms of UltiCloud's own {@code login} and {@code logout}
+     * subcommands are refused with {@code command_blocked}, regardless of the configured blocklist.
+     * Command names come from {@link CloudLoginCommand}'s {@link CmdExecutor} aliases, the same
+     * metadata used for registration. Indirect synchronous forms (an alias or a command that
+     * dispatches another command) are refused by the authentication handler while
+     * {@link #isPanelDispatch()} is true; that refusal is normal command output, not a
+     * {@code command_blocked} result. The fixed rule does not refuse the root command,
+     * {@code status}, {@code reconnect} or {@code help}.
      *
      * @param command The command to check (with or without leading slash)
      * @return an {@link AccessDecision} naming why a refused command was refused
      */
     public AccessDecision isCommandAllowed(String command) {
-        if (command == null || command.trim().isEmpty()) {
+        return canonicalCommandDecision(canonicalCommandLine(command));
+    }
+
+    /** Checks text already normalized at the request boundary; dispatch receives that same text. */
+    private AccessDecision canonicalCommandDecision(String command) {
+        if (command.isEmpty()) {
             return AccessDecision.deniedNonConfigurable("command is empty");
         }
-
-        String trimmed = command.trim();
-        // Strip leading slash
-        if (trimmed.startsWith("/")) {
-            trimmed = trimmed.substring(1);
-        }
-
-        // Extract command tokens before normalizing the base name.
-        String[] tokens = trimmed.split("\\s+");
-        String baseCommand = tokens[0].toLowerCase(Locale.ROOT);
-
-        // Strip namespace prefix (e.g., "bukkit:op" -> "op", "minecraft:stop" -> "stop")
-        int colonIndex = baseCommand.indexOf(':');
-        if (colonIndex >= 0) {
-            baseCommand = baseCommand.substring(colonIndex + 1);
-        }
+        String[] tokens = command.split(" ");
+        String baseCommand = baseCommandName(command);
 
         if (tokens.length > 1 && ("login".equalsIgnoreCase(tokens[1]) || "logout".equalsIgnoreCase(tokens[1]))) {
             for (String alias : CloudLoginCommand.class.getAnnotation(CmdExecutor.class).alias()) {
@@ -370,17 +367,18 @@ public class CommandExecutionManager {
      * @since 6.3.1
      */
     public void execute(String commandLine, String actor, Executor mainThread, CommandResultSink sink) {
-        if (commandLine == null || commandLine.trim().isEmpty()) {
+        String command = canonicalCommandLine(commandLine);
+        if (command.isEmpty()) {
             sink.failed("Command cannot be empty");
             return;
         }
-        AccessDecision decision = isCommandAllowed(commandLine);
+        AccessDecision decision = canonicalCommandDecision(command);
         if (!decision.isAllowed()) {
             // Keep this WARNING line — the same control the v1 path carries.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                     FrameworkText.format("[远程命令] 已拦截: %s", commandLine));
             recordCommandDecision(commandLine, actor, decision.getMessage());
-            sink.blocked(baseCommandName(commandLine), resultMessage(decision.getMessage()));
+            sink.blocked(baseCommandName(command), resultMessage(decision.getMessage()));
             return;
         }
         // Defensive: the router gates the capability before this handler runs. A wiring mistake
@@ -394,20 +392,72 @@ public class CommandExecutionManager {
         UltiTools.getInstance().getLogger().log(Level.INFO,
                 FrameworkText.format("[远程命令] > %s", commandLine));
         recordCommandDecision(commandLine, actor, null);
-        mainThread.execute(() -> executeCaptured(commandLine, sink));
+        mainThread.execute(() -> executeCaptured(command, sink));
     }
 
     /**
-     * The blocklist key from a command line: first word, leading slash and namespace prefix
-     * stripped, lower-cased — the same normalization {@link #isCommandAllowed(String)} applies.
+     * Normalizes a panel request once, before both policy and dispatch. Retains the framework's
+     * optional leading-slash removal and Paper's trim semantics. Paper 1.21.11 uses
+     * {@code StringUtils.normalizeSpace}: {@link Character#isWhitespace(char)} plus U+00A0,
+     * not all {@code isSpaceChar} characters. Collapse their combined runs to make the result
+     * stable when Paper normalizes it again (adjacent NBSPs otherwise become adjacent spaces).
      */
-    private static String baseCommandName(String commandLine) {
-        String name = commandLine.trim();
-        if (name.startsWith("/")) {
-            name = name.substring(1);
+    private static String canonicalCommandLine(String raw) {
+        if (raw == null) {
+            return "";
         }
-        name = name.split("\\s+")[0].toLowerCase(Locale.ROOT);
+        String text = raw.trim();
+        if (text.startsWith("/")) {
+            text = text.substring(1).trim();
+        }
+        StringBuilder normalized = new StringBuilder(text.length());
+        boolean separator = false;
+        for (int index = 0; index < text.length(); index++) {
+            char value = text.charAt(index);
+            if (Character.isWhitespace(value) || value == ' ') {
+                separator = normalized.length() > 0;
+            } else {
+                if (separator) {
+                    normalized.append(' ');
+                    separator = false;
+                }
+                normalized.append(value);
+            }
+        }
+        return normalized.toString();
+    }
+
+    /** Extracts a lower-case, namespace-free name from an already canonical command line. */
+    private static String baseCommandName(String commandLine) {
+        int separator = commandLine.indexOf(' ');
+        String name = (separator < 0 ? commandLine : commandLine.substring(0, separator)).toLowerCase(Locale.ROOT);
         return name.substring(name.indexOf(':') + 1);
+    }
+
+    /**
+     * Whether a synchronous command is running inside a panel dispatch on this thread.
+     * Authentication handlers use this at execution, so nested aliases cannot bypass the direct
+     * text refusal. Their refusal reaches the panel as normal command output.
+     *
+     * @return true only during a panel dispatch, including synchronous nested dispatches
+     */
+    public static boolean isPanelDispatch() {
+        return Boolean.TRUE.equals(PANEL_DISPATCH.get());
+    }
+
+    /** Restores the caller's origin even when a nested dispatch throws. Both panel paths use this. */
+    private static boolean dispatchPanelCommand(CommandSender sender, String command) {
+        Boolean previous = PANEL_DISPATCH.get();
+        PANEL_DISPATCH.set(Boolean.TRUE);
+        try {
+            return Bukkit.dispatchCommand(sender, command);
+        } finally {
+            if (previous == null) {
+                PANEL_DISPATCH.remove();
+            } else {
+                PANEL_DISPATCH.set(previous);
+            }
+        }
     }
 
     /**
@@ -443,14 +493,10 @@ public class CommandExecutionManager {
         CapturedFeedback feedback = new CapturedFeedback(baseCommandName(commandLine),
                 LATE_OUTPUT_WINDOW_NANOS, System::nanoTime, CommandExecutionManager::writeToConsole);
         CommandSender sender = Bukkit.getServer().createCommandSender(feedback);
-        String command = commandLine.trim();
-        if (command.startsWith("/")) {
-            command = command.substring(1);
-        }
         long started = System.nanoTime();
         boolean accepted;
         try {
-            accepted = Bukkit.dispatchCommand(sender, command);
+            accepted = dispatchPanelCommand(sender, commandLine);
         } catch (Exception ex) {
             feedback.take();
             // The panel receives the message only, so the stack trace lives here or nowhere. The
@@ -637,13 +683,14 @@ public class CommandExecutionManager {
             String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull()
                 ? commandData.get("commandId").getAsString() : null;
 
-            if (command == null || command.trim().isEmpty()) {
+            String canonical = canonicalCommandLine(command);
+            if (canonical.isEmpty()) {
                 sendCommandResult(commandId, false, "Command cannot be empty", 0);
                 return;
             }
 
             // Security check: verify command is not blocked
-            AccessDecision decision = isCommandAllowed(command);
+            AccessDecision decision = canonicalCommandDecision(canonical);
             if (!decision.isAllowed()) {
                 // Keep this WARNING line — it is the control that proves the interception path
                 // was already observable before D-05/D-22. The panel-facing message no longer
@@ -681,7 +728,7 @@ public class CommandExecutionManager {
             // hand-off is dropped with one FINE line instead (#621).
             PluginInitiationUtils.scheduleUnlessDisabling("remote command",
                 () -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
-                    executeCommandInternal(command, executor, commandId, startTime);
+                    executeCommandInternal(canonical, executor, commandId, startTime);
                 }));
 
         } catch (Exception e) {
@@ -710,7 +757,7 @@ public class CommandExecutionManager {
             // Dispatched as the console sender itself, exactly as if typed into the console. Paper
             // replaces any ConsoleCommandSender with the real console source before running the
             // command, so no wrapper could read the replies; they appear in the log stream.
-            boolean success = Bukkit.dispatchCommand(sender, command);
+            boolean success = dispatchPanelCommand(sender, command);
 
             // Calculate execution time
             long executionTime = System.currentTimeMillis() - startTime;

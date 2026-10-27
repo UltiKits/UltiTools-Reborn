@@ -14,6 +14,7 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.utils.CloudAuthManager;
 
 /**
@@ -65,11 +66,17 @@ public class CloudLoginCommand extends BaseCommandExecutor {
      */
     @CmdMapping(format = "login")
     public void login(@CmdSender CommandSender sender) {
+        if (refusePanelAuthentication(sender)) {
+            return;
+        }
         CloudAuthManager.login(new LoginOutput(sender));
     }
 
     @CmdMapping(format = "logout")
     public void logout(@CmdSender CommandSender sender) {
+        if (refusePanelAuthentication(sender)) {
+            return;
+        }
         say(sender, ChatColor.AQUA, UNLINKING_KEY);
         CloudAuthManager.logoutReporting(outcome -> {
             switch (outcome) {
@@ -91,6 +98,19 @@ public class CloudLoginCommand extends BaseCommandExecutor {
                     say(sender, ChatColor.GRAY, STOPPED_KEY);
             }
         });
+    }
+
+    /**
+     * Backstop for synchronous aliases and nested panel commands. The dispatcher refuses direct
+     * forms with command_blocked; here the console-only refusal is normal command output. Player
+     * eligibility remains the existing command validator's responsibility.
+     */
+    private static boolean refusePanelAuthentication(CommandSender sender) {
+        if (sender instanceof Player || !CommandExecutionManager.isPanelDispatch()) {
+            return false;
+        }
+        say(sender, ChatColor.RED, "UltiCloud login/logout must be run from the server console, not the panel.");
+        return true;
     }
 
     @CmdMapping(format = "status")

@@ -8,7 +8,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -22,6 +24,7 @@ import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
 import org.java_websocket.client.WebSocketClient;
@@ -257,8 +260,38 @@ class UltiCloudStubSelfTest {
         AgentClient live = connectAndHello(login, "events:players");
         assertThat(admin("/_stub/unreachable", "{\"on\":true}").status).isEqualTo(200);
         assertThat(live.awaitClose(5000)).isNotEqualTo(1000);
-        assertThatThrownBy(() -> new Socket(InetAddress.getLoopbackAddress(), stub.httpPort()).close())
-                .isInstanceOf(java.net.ConnectException.class);
+        assertThat(stub.frontDoor().unreachable()).isTrue();
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Authorization", "Bearer " + login.credential);
+        headers.put("X-UltiCloud-Protocol", "2");
+        headers.put("X-UltiCloud-Framework", FRAMEWORK);
+        URI endpoint = URI.create("ws://127.0.0.1:" + stub.httpPort() + "/v1/agent");
+        AgentClient unavailable = new AgentClient(endpoint, headers);
+        clients.add(unavailable);
+        assertThat(unavailable.connectBlocking(5, TimeUnit.SECONDS))
+                .as("unreachable refuses a valid new agent upgrade").isFalse();
+        // The public port is released, so another listener may legitimately own it. A TCP
+        // connection to that listener is not an accepted agent connection to this stub.
+        try (ServerSocket reused = new ServerSocket()) {
+            reused.setReuseAddress(true);
+            reused.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), stub.httpPort()));
+            reused.setSoTimeout(5000);
+            FutureTask<Void> refuseUpgrade = new FutureTask<>(() -> {
+                try (Socket attempted = reused.accept()) {
+                    assertThat(attempted.isConnected()).isTrue();
+                    // Simulate an unrelated listener: close without accepting a WebSocket upgrade.
+                }
+                return null;
+            });
+            Thread responder = new Thread(refuseUpgrade, "reused-port-upgrade-responder");
+            responder.setDaemon(true);
+            responder.start();
+            AgentClient rebound = new AgentClient(endpoint, headers);
+            clients.add(rebound);
+            assertThat(rebound.connectBlocking(5, TimeUnit.SECONDS))
+                    .as("port reuse does not make the stub accept an agent upgrade").isFalse();
+            refuseUpgrade.get(5, TimeUnit.SECONDS);
+        }
         assertThat(admin("/_stub/unreachable", "{\"on\":false}").status).isEqualTo(200);
         connectAndHello(login, "events:players");
     }

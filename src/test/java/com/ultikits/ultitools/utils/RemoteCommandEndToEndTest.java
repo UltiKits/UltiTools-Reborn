@@ -2,6 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.contract.ContractFixtures;
@@ -18,6 +19,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
+
+import java.nio.file.Path;
+import java.nio.file.Files;
+import java.util.concurrent.Executor;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -43,7 +50,11 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
@@ -51,6 +62,9 @@ import static org.mockito.Mockito.when;
 @Timeout(30)
 class RemoteCommandEndToEndTest {
     private ServerMock server;
+    @TempDir
+    Path credentials;
+    private boolean isolatedCloudState;
 
     @BeforeEach
     void setUp() {
@@ -65,6 +79,12 @@ class RemoteCommandEndToEndTest {
         doAnswer(invocation -> {
             Consumer<? super Component> feedback = invocation.getArgument(0);
             CommandSender sender = mock(CommandSender.class);
+            when(sender.isOp()).thenReturn(true);
+            when(sender.getName()).thenReturn("Panel");
+            doAnswer(message -> {
+                feedback.accept(Component.text(message.getArgument(0, String.class)));
+                return null;
+            }).when(sender).sendMessage(anyString());
             doAnswer(message -> {
                 feedback.accept(message.getArgument(0));
                 return null;
@@ -75,6 +95,10 @@ class RemoteCommandEndToEndTest {
 
     @AfterEach
     void tearDown() {
+        if (isolatedCloudState) {
+            server.getScheduler().waitAsyncTasksFinished();
+            CloudTestAccess.reset();
+        }
         MockBukkitHelper.safeUnmock();
     }
 
@@ -175,6 +199,12 @@ class RemoteCommandEndToEndTest {
             for (String subcommand : Arrays.asList("login", "logout")) {
                 addCloudCommandForms(cases, alias, subcommand, true);
                 addCloudCommandCase(cases, alias, subcommand, true, "tab separator", alias + "\t" + subcommand);
+                addCloudCommandCase(cases, alias, subcommand, true, "space after slash", "/ " + alias + " " + subcommand);
+                addCloudCommandCase(cases, alias, subcommand, true, "spaces after slash", "/  " + alias + " " + subcommand);
+                addCloudCommandCase(cases, alias, subcommand, true, "NBSP separator", alias + " " + subcommand);
+                addCloudCommandCase(cases, alias, subcommand, true, "em-space separator", alias + " " + subcommand);
+                addCloudCommandCase(cases, alias, subcommand, true, "repeated NBSP separator",
+                        alias + "  " + subcommand);
                 addCloudCommandCase(cases, alias, subcommand, true, "trailing argument",
                         alias + " " + subcommand + " foo");
                 addCloudCommandCase(cases, alias, subcommand, true, "combined variants",
@@ -208,6 +238,227 @@ class RemoteCommandEndToEndTest {
         String description = (blocked ? "refused " : "allowed ") + alias + " "
                 + (subcommand.isEmpty() ? "root" : subcommand) + " (" + variant + ")";
         cases.add(Arguments.of(description, commandLine, alias.toLowerCase(Locale.ROOT), blocked));
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"/ stop", " stop"})
+    void canonicalBlocklistRefusalNamesTheMatchedCommand(String commandLine) throws Exception {
+        AtomicInteger executions = new AtomicInteger();
+        server.getCommandMap().register("tracer", new Command("stop") {
+            @Override public boolean execute(CommandSender sender, String label, String[] args) {
+                executions.incrementAndGet();
+                return true;
+            }
+        });
+        Queue<Runnable> scheduled = new ArrayDeque<>();
+        List<JsonObject> sent = receivePanel(commandLine, new CommandExecutionManager(), scheduled::add);
+        while (!scheduled.isEmpty()) {
+            scheduled.remove().run();
+        }
+        assertThat(executions.get()).isZero();
+        JsonObject result = sent.get(1).getAsJsonObject("payload");
+        assertThat(result.get("code").getAsString()).isEqualTo("command_blocked");
+        assertThat(result.getAsJsonObject("details").get("matched").getAsString()).isEqualTo("stop");
+    }
+
+    @Test
+    void allowedDispatchReceivesTheSameStableCanonicalTextAsThePolicyCheck() throws Exception {
+        AtomicInteger executions = new AtomicInteger();
+        registerCloudTracingCommand(executions);
+        List<String> dispatched = new ArrayList<>();
+        doAnswer(invocation -> {
+            dispatched.add(invocation.getArgument(1));
+            return invocation.callRealMethod();
+        }).when(server).dispatchCommand(any(CommandSender.class), anyString());
+        CommandExecutionManager manager = new CommandExecutionManager();
+        manager.setBlockedCommands(Collections.emptySet());
+        List<JsonObject> sent = receivePanel("\t /  ulticloud   status \t", manager,
+                task -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), task));
+        assertThat(sent).hasSize(1);
+        server.getScheduler().performOneTick();
+        assertThat(dispatched).containsExactly("ulticloud status");
+        assertThat(executions.get()).isEqualTo(1);
+        assertThat(sent.get(1).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"login", "logout"})
+    void nestedPanelAuthenticationReachesTheRealCommandButCannotChangeItsCredential(String subcommand)
+            throws Exception {
+        prepareLinkedCloud();
+        registerRealCloudCommand();
+        registerNestedCommand("cloud-alias", "ulticloud " + subcommand);
+        byte[] before = Files.readAllBytes(credentials.resolve("credentials.json"));
+        CommandExecutionManager manager = new CommandExecutionManager();
+        manager.setBlockedCommands(Collections.emptySet());
+        try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class, CALLS_REAL_METHODS)) {
+            List<JsonObject> sent = receivePanel("cloud-alias", manager,
+                    task -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), task));
+            assertThat(sent).hasSize(1);
+            server.getScheduler().performOneTick();
+            auth.verify(() -> CloudAuthManager.login(any(CloudAuthManager.DeviceLoginListener.class)), never());
+            auth.verify(() -> CloudAuthManager.logoutReporting(any()), never());
+            JsonObject result = sent.get(1).getAsJsonObject("payload");
+            assertThat(result.get("status").getAsString()).isEqualTo("ok");
+            assertThat(result.getAsJsonObject("data").getAsJsonArray("output").toString())
+                    .contains("must be run from the server console");
+            assertThat(CloudAuthManager.status().isLinked()).isTrue();
+            assertThat(ServerCredentialStore.load().getServerId()).isEqualTo("01JTESTSERVERID0000000000");
+            assertThat(Files.readAllBytes(credentials.resolve("credentials.json"))).containsExactly(before);
+            assertThat(Bukkit.dispatchCommand(server.getConsoleSender(), "cloud-alias")).isTrue();
+            if ("login".equals(subcommand)) {
+                auth.verify(() -> CloudAuthManager.login(any(CloudAuthManager.DeviceLoginListener.class)));
+            } else {
+                auth.verify(() -> CloudAuthManager.logoutReporting(any()));
+                server.getScheduler().waitAsyncTasksFinished();
+                assertThat(CloudAuthManager.status().isLinked()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void aDispatchExceptionDoesNotLeakThePanelOriginIntoTheNextConsoleCommand() throws Exception {
+        prepareLinkedCloud();
+        registerRealCloudCommand();
+        registerNestedCommand("cloud-alias", "ulticloud logout");
+        server.getCommandMap().register("tracer", new Command("explode") {
+            @Override public boolean execute(CommandSender sender, String label, String[] args) {
+                throw new IllegalStateException("dispatch failed deliberately");
+            }
+        });
+        List<JsonObject> sent = receivePanel("explode", new CommandExecutionManager(),
+                task -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), task));
+        server.getScheduler().performOneTick();
+        assertThat(sent.get(1).getAsJsonObject("payload").get("code").getAsString()).isEqualTo("command_failed");
+        try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class, CALLS_REAL_METHODS)) {
+            assertThat(Bukkit.dispatchCommand(server.getConsoleSender(), "cloud-alias")).isTrue();
+            auth.verify(() -> CloudAuthManager.logoutReporting(any()));
+        }
+        server.getScheduler().waitAsyncTasksFinished();
+        assertThat(CloudAuthManager.status().isLinked()).isFalse();
+    }
+
+    @Test
+    void nestedPanelDispatchRestoresTheOuterOriginAfterAnInnerFailure() throws Exception {
+        prepareLinkedCloud();
+        registerRealCloudCommand();
+        CommandExecutionManager manager = new CommandExecutionManager();
+        server.getCommandMap().register("tracer", new Command("inner-failure") {
+            @Override public boolean execute(CommandSender sender, String label, String[] args) {
+                assertThat(CommandExecutionManager.isPanelDispatch()).isTrue();
+                throw new IllegalStateException("inner dispatch failed deliberately");
+            }
+        });
+        CommandExecutionManager.CommandResultSink innerSink = mock(CommandExecutionManager.CommandResultSink.class);
+        server.getCommandMap().register("tracer", new Command("outer-alias") {
+            @Override public boolean execute(CommandSender sender, String label, String[] args) {
+                manager.execute("inner-failure", "panel", Runnable::run, innerSink);
+                assertThat(CommandExecutionManager.isPanelDispatch()).as("outer panel origin restored").isTrue();
+                return Bukkit.dispatchCommand(sender, "ulticloud logout");
+            }
+        });
+        try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class, CALLS_REAL_METHODS)) {
+            List<JsonObject> sent = receivePanel("outer-alias", manager,
+                    task -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), task));
+            server.getScheduler().performOneTick();
+            org.mockito.Mockito.verify(innerSink).failed("inner dispatch failed deliberately");
+            auth.verify(() -> CloudAuthManager.logoutReporting(any()), never());
+            assertThat(sent.get(1).getAsJsonObject("payload").getAsJsonObject("data")
+                    .getAsJsonArray("output").toString()).contains("must be run from the server console");
+            assertThat(CloudAuthManager.status().isLinked()).isTrue();
+            assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+        }
+    }
+
+    @Test
+    @SuppressWarnings({"removal", "deprecation"}) // Exercises the retained v1 panel entry point.
+    void legacyPanelDispatchUsesCanonicalTextAndTheSameAuthenticationBackstop() throws Exception {
+        prepareLinkedCloud();
+        registerRealCloudCommand();
+        registerNestedCommand("cloud-alias", "ulticloud logout");
+        CommandExecutionManager manager = new CommandExecutionManager();
+        com.ultikits.ultitools.websocket.UltiPanelWebSocketClient client =
+                mock(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient.class);
+        when(client.getServerId()).thenReturn("test-server");
+        manager.setWebSocketClient(client);
+        List<String> dispatched = new ArrayList<>();
+        doAnswer(invocation -> {
+            dispatched.add(invocation.getArgument(1));
+            return invocation.callRealMethod();
+        }).when(server).dispatchCommand(any(CommandSender.class), anyString());
+        JsonObject request = new JsonObject();
+        request.addProperty("command", "/  cloud-alias  ");
+        request.addProperty("executor", "console");
+        request.addProperty("commandId", "legacy-panel-auth");
+        try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class, CALLS_REAL_METHODS)) {
+            manager.executeCommand(request);
+            assertThat(dispatched).isEmpty();
+            server.getScheduler().performOneTick();
+            assertThat(dispatched).containsExactly("cloud-alias", "ulticloud logout");
+            auth.verify(() -> CloudAuthManager.logoutReporting(any()), never());
+            assertThat(CloudAuthManager.status().isLinked()).isTrue();
+            assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+            org.mockito.Mockito.verify(client).sendMessage(any(JsonObject.class));
+            assertThat(Bukkit.dispatchCommand(server.getConsoleSender(), "cloud-alias")).isTrue();
+            auth.verify(() -> CloudAuthManager.logoutReporting(any()));
+        }
+        server.getScheduler().waitAsyncTasksFinished();
+        assertThat(CloudAuthManager.status().isLinked()).isFalse();
+    }
+
+    private void prepareLinkedCloud() {
+        isolatedCloudState = true;
+        CloudTestAccess.useTemporaryCredentials(credentials);
+        CloudTestAccess.setBaseUrl("");
+        CloudTestAccess.storeLinkedCredential("Survival", "01JTESTSERVERID0000000000");
+    }
+
+    private void registerRealCloudCommand() {
+        CloudLoginCommand cloud = new CloudLoginCommand();
+        server.getCommandMap().register("ultitools", new Command("ulticloud") {
+            @Override public boolean execute(CommandSender sender, String label, String[] args) {
+                assertThat(Bukkit.isPrimaryThread()).isTrue();
+                return cloud.onCommand(sender, this, label, args);
+            }
+        });
+    }
+
+    private void registerNestedCommand(String name, String target) {
+        server.getCommandMap().register("tracer", new Command(name) {
+            @Override public boolean execute(CommandSender sender, String label, String[] args) {
+                return Bukkit.dispatchCommand(sender, target);
+            }
+        });
+    }
+
+    private List<JsonObject> receivePanel(String commandLine, CommandExecutionManager manager, Executor mainThread)
+            throws Exception {
+        JsonObject request = JsonParser.parseString(ContractFixtures.text(
+                "fixtures/agent/command.execute/valid/say.json")).getAsJsonObject();
+        request.addProperty("id", Ulid.next());
+        request.getAsJsonObject("payload").addProperty("command", commandLine);
+        List<JsonObject> sent = new ArrayList<>();
+        FramedChannel channel = new FramedChannel(frame -> {
+            JsonObject json = JsonParser.parseString(frame).getAsJsonObject();
+            ContractSchemas.assertFrameValid(json);
+            assertThat(json.get("replyTo")).isEqualTo(request.get("id"));
+            sent.add(json);
+            return true;
+        }, () -> true, CloudLimits::defaults, Ulid::next, () -> 1000L);
+        DedupeLedger ledger = mock(DedupeLedger.class);
+        when(ledger.firstSeen(anyString())).thenReturn(true);
+        AgentMessageRouter router = new AgentMessageRouter(capability -> Capability.COMMANDS.isEnabled(),
+                capability -> Capability.COMMANDS.refusalMessage());
+        router.register("command.execute", new RemoteCommandHandler(manager, ledger, mainThread, () -> false));
+        FutureTask<Void> inbound = new FutureTask<>(() -> {
+            router.dispatch(request.toString(), channel);
+            return null;
+        });
+        new Thread(inbound, "panel-auth-test-receiver").start();
+        inbound.get(5, TimeUnit.SECONDS);
+        assertThat(sent).isNotEmpty();
+        assertThat(sent.get(0).get("type").getAsString()).isEqualTo("command.ack");
+        return sent;
     }
 
     @Test
