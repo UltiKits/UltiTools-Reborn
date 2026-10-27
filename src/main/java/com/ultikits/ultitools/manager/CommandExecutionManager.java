@@ -27,6 +27,8 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.FrameworkText;
@@ -258,10 +260,11 @@ public class CommandExecutionManager {
      * {@code plugins/UltiTools/config.yml} — so both the bare command and its namespaced form are
      * blocked; the stripping order is what makes that true. The blocklist is editable in both
      * directions — an operator may remove any of the ten shipped defaults, add to them, or clear
-     * the list entirely — and there is deliberately no unoverridable floor beneath it (D-04): a
-     * floor would constrain the operator without constraining an attacker who already holds the
-     * operator's identity, since the same outcomes remain reachable through other commands or a
-     * third-party plugin's own admin commands.
+     * the list entirely. Separately, UltiCloud's own {@code login} and {@code logout} subcommands
+     * are always refused remotely: they must be run from the server console, regardless of the
+     * configured blocklist. Command names come from {@link CloudLoginCommand}'s {@link CmdExecutor}
+     * aliases, the same metadata used for registration. This fixed rule does not refuse the root
+     * command, {@code status}, {@code reconnect} or {@code help}.
      *
      * @param command The command to check (with or without leading slash)
      * @return an {@link AccessDecision} naming why a refused command was refused
@@ -277,13 +280,23 @@ public class CommandExecutionManager {
             trimmed = trimmed.substring(1);
         }
 
-        // Extract base command (first word before space)
-        String baseCommand = trimmed.split("\\s+")[0].toLowerCase(Locale.ROOT);
+        // Extract command tokens before normalizing the base name.
+        String[] tokens = trimmed.split("\\s+");
+        String baseCommand = tokens[0].toLowerCase(Locale.ROOT);
 
         // Strip namespace prefix (e.g., "bukkit:op" -> "op", "minecraft:stop" -> "stop")
         int colonIndex = baseCommand.indexOf(':');
         if (colonIndex >= 0) {
             baseCommand = baseCommand.substring(colonIndex + 1);
+        }
+
+        if (tokens.length > 1 && ("login".equalsIgnoreCase(tokens[1]) || "logout".equalsIgnoreCase(tokens[1]))) {
+            for (String alias : CloudLoginCommand.class.getAnnotation(CmdExecutor.class).alias()) {
+                if (alias.equalsIgnoreCase(baseCommand)) {
+                    return AccessDecision.deniedNonConfigurable(
+                            "UltiCloud login/logout must be run from the server console");
+                }
+            }
         }
 
         if (blockedCommands.contains(baseCommand)) {

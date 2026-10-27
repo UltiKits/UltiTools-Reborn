@@ -77,6 +77,7 @@ class UltiCloudUatRowsTest {
             "ultitools.cloud.command.ack-result-output",
             "ultitools.cloud.command.dedupe-replay",
             "ultitools.cloud.command.neg-blocked",
+            "ultitools.cloud.command.neg-cloud-auth",
             "ultitools.cloud.command.late-output",
             "ultitools.cloud.command.neg-unknown",
             "ultitools.cloud.command.neg-console-only",
