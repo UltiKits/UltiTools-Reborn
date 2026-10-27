@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.MockedStatic;
 
@@ -445,6 +446,97 @@ class CatalogueContractConformanceTest {
         VerifiedDownload.Result missing = VerifiedDownload.fetch(url, stub.servedSha256(), stub.jar().length,
                 temp.resolve("missing.part"));
         assertThat(missing.kind()).isEqualTo(VerifiedDownload.Kind.NOT_AVAILABLE);
+    }
+
+    static Stream<Arguments> nonStringModuleFields() {
+        return Stream.of("identifier", "name", "description", "shortDescription", "iconUrl", "publishedAt", "updatedAt")
+                .flatMap(field -> Stream.of("43", "true").map(json -> Arguments.of(field, json)));
+    }
+
+    @ParameterizedTest(name = "module text {0} refuses primitive {1}")
+    @MethodSource("nonStringModuleFields")
+    void moduleTextFieldsDoNotCoercePrimitives(String field, String json) {
+        JsonObject body = ContractFixtures.catalogueBody("fixtures/moduleGet/response/valid/anonymous.json");
+        body.getAsJsonObject("data").add(field, JsonParser.parseString(json));
+        assertThat(schemaAccepts("schemas/moduleGet.response.200.schema.json", body)).isFalse();
+        stub.serveVendored(MODULE_ROUTE, 200, body.toString());
+
+        PluginEntity detail = CatalogueClient.module(MODULE);
+
+        assertThat(detail).isNotNull();
+        assertThat(moduleField(detail, field)).as("detail field " + field).isNull();
+        if ("identifier".equals(field)) {
+            assertThat(CatalogueClient.moduleKnown(MODULE).getVersion())
+                    .as("the existing known-module fallback uses the requested ref, never a coerced id").isEqualTo(MODULE);
+        }
+        JsonObject page = ContractFixtures.catalogueBody("fixtures/modulesList/response/valid/page.json");
+        page.getAsJsonObject("data").getAsJsonArray("items").get(0).getAsJsonObject()
+                .add(field, JsonParser.parseString(json));
+        stub.serveVendored("/v1/catalogue/modules", 200, page.toString());
+        List<PluginEntity> listed = CatalogueClient.list(1, 20);
+        assertThat(listed).isNotEmpty();
+        // description/publishedAt are normally absent from cards, but the shared mapper probes them.
+        assertThat(moduleField(listed.get(0), field)).as("list field " + field).isNull();
+    }
+
+    private static Object moduleField(PluginEntity entity, String field) {
+        switch (field) {
+            case "identifier": return entity.getIdentifyString();
+            case "name": return entity.getName();
+            case "description": return entity.getDescription();
+            case "shortDescription": return entity.getShortDescription();
+            case "iconUrl": return entity.getIcon();
+            case "publishedAt": return entity.getDate();
+            case "updatedAt": return entity.getModifiedTime();
+            default: throw new AssertionError("unknown module field " + field);
+        }
+    }
+
+    static Stream<Arguments> nonStringVersionFields() {
+        return Stream.of("version", "sha256", "download.kind", "download.url").flatMap(field -> {
+            // A 64-digit JSON number would pass the SHA pattern after primitive-to-string coercion.
+            String number = "sha256".equals(field)
+                    ? "1111111111111111111111111111111111111111111111111111111111111111" : "43";
+            return Stream.of(Arguments.of(field, number), Arguments.of(field, "true"));
+        });
+    }
+
+    @ParameterizedTest(name = "version text {0} refuses primitive {1}")
+    @MethodSource("nonStringVersionFields")
+    void versionTextFieldsDoNotCoercePrimitives(String field, String json) {
+        JsonObject body = ContractFixtures.catalogueBody("fixtures/versionGet/response/valid/public-download.json");
+        JsonObject version = body.getAsJsonObject("data");
+        if (field.startsWith("download.")) {
+            version.getAsJsonObject("download").add(field.substring("download.".length()), JsonParser.parseString(json));
+        } else {
+            version.add(field, JsonParser.parseString(json));
+        }
+        assertThat(schemaAccepts("schemas/versionGet.response.200.schema.json", body)).isFalse();
+        stub.serveVendored(VERSION_ROUTE, 200, body.toString());
+        assertThat(CatalogueClient.version(MODULE, VERSION)).isNull();
+
+        JsonObject page = ContractFixtures.catalogueBody("fixtures/versionsList/response/valid/page.json");
+        page.getAsJsonObject("data").getAsJsonArray("items").set(0, version.deepCopy());
+        stub.serveVendored(VERSIONS_ROUTE, 200, page.toString());
+        assertThat(CatalogueClient.versions(MODULE, LEVEL)).isNull();
+        assertThat(CatalogueClient.latestVersion(MODULE, LEVEL).isFailed()).isTrue();
+    }
+
+    @Test
+    void nullableModuleDescriptionAndIconRemainLegal() {
+        JsonObject body = ContractFixtures.catalogueBody("fixtures/moduleGet/response/valid/anonymous.json");
+        body.getAsJsonObject("data").add("description", com.google.gson.JsonNull.INSTANCE);
+        body.getAsJsonObject("data").add("iconUrl", com.google.gson.JsonNull.INSTANCE);
+        assertThat(schemaAccepts("schemas/moduleGet.response.200.schema.json", body)).isTrue();
+        stub.serveVendored(MODULE_ROUTE, 200, body.toString());
+
+        PluginEntity entity = CatalogueClient.module(MODULE);
+
+        assertThat(entity).isNotNull();
+        assertThat(entity.getDescription()).isNull();
+        assertThat(entity.getIcon()).isNull();
+        assertThat(entity.getIdentifyString()).isEqualTo(MODULE);
+        assertThat(entity.getName()).isEqualTo(body.getAsJsonObject("data").get("name").getAsString());
     }
 
     // ------------------------------------------------------------------ the stub's own answers

@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.utils;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -29,7 +30,7 @@ final class ServerCredential {
     private final String credential;
     private final String credentialId;
     private final String serverId;
-    private final String userId;
+    private final Long userId;
     private final String serverName;
     private final long linkedAt;
 
@@ -41,7 +42,7 @@ final class ServerCredential {
      * @param serverName   the name the owner chose on the confirmation page, or {@code null}
      * @param linkedAt     when the link was made, epoch milliseconds
      */
-    ServerCredential(String credential, String credentialId, String serverId, String userId,
+    ServerCredential(String credential, String credentialId, String serverId, Long userId,
             String serverName, long linkedAt) {
         this.credential = Objects.requireNonNull(credential, "credential");
         this.credentialId = credentialId;
@@ -80,11 +81,39 @@ final class ServerCredential {
         Object linkedAt = map.get(FIELD_LINKED_AT);
         long linkedAtMillis = linkedAt instanceof Number ? ((Number) linkedAt).longValue() : 0L;
         return new ServerCredential(secret, text(map.get(FIELD_CREDENTIAL_ID)), serverId,
-                text(map.get(FIELD_USER_ID)), text(map.get(FIELD_SERVER_NAME)), linkedAtMillis);
+                storedUserId(map.get(FIELD_USER_ID)), text(map.get(FIELD_SERVER_NAME)), linkedAtMillis);
     }
 
     private static String text(Object value) {
         return value instanceof String ? (String) value : null;
+    }
+
+    /** Reads legacy decimal text only at the persistence boundary, never on the REST wire. */
+    private static Long storedUserId(Object value) {
+        if (value instanceof Number) {
+            return parseUserId((Number) value);
+        }
+        if (value instanceof String && ((String) value).matches("[0-9]+")) {
+            return parseUserId(new BigDecimal((String) value));
+        }
+        return null;
+    }
+
+    /** @return the exact contract integer in [1, 2^53 - 1], or null; never truncates or wraps */
+    static Long parseUserId(Number value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            BigDecimal number = new BigDecimal(value.toString());
+            if (number.compareTo(BigDecimal.ONE) < 0
+                    || number.compareTo(BigDecimal.valueOf(9007199254740991L)) > 0) {
+                return null;
+            }
+            return number.longValueExact();
+        } catch (ArithmeticException | NumberFormatException invalid) {
+            return null;
+        }
     }
 
     /** @return the document entry {@link ServerCredentialStore} writes under {@code cloud_credential} */
@@ -127,7 +156,7 @@ final class ServerCredential {
     }
 
     /** @return the linking owner's id, or {@code null} */
-    String getUserId() {
+    Long getUserId() {
         return userId;
     }
 

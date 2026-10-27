@@ -154,7 +154,9 @@ class CredentialRotationOwnerTest {
         assertThat(held.bearerValue()).isEqualTo(ROTATED);
         assertThat(held.getServerId()).isEqualTo(SERVER_ID);
         assertThat(held.getServerName()).isEqualTo("Survival");
+        assertThat(held.getUserId()).isEqualTo(43L);
         assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo(ROTATED_ID);
+        assertThat(ServerCredentialStore.load().getUserId()).isEqualTo(43L);
 
         int upgradesBefore = stub.accessLog().count("-> 101");
         stub.closeLive(1001, "going away");

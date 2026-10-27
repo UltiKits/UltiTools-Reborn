@@ -259,6 +259,34 @@ class UpgradeRejectionTest {
         assertThat(UpgradeRejection.parse(429, Collections.emptyMap(), null).retryAfterSeconds()).isEqualTo(-1);
     }
 
+    @ParameterizedTest(name = "JSON protocol {0} -> {1}")
+    @CsvSource({"1, 1", "99, 99", "2.0, 2", "2e0, 2"})
+    void jsonProtocolsAcceptEveryIntegerSpellingInRange(String json, int expected) {
+        assertThat(UpgradeRejection.parse(426, null, protocolsBody(json)).supportedProtocols())
+                .containsExactly(expected);
+    }
+
+    @ParameterizedTest(name = "out-of-contract JSON protocol #{index} is dropped")
+    @ValueSource(strings = {"0", "-1", "100", "1000", "2.5", "2.0000000000000001", "\"2\"", "true",
+            "null", "{}", "[]", "4294967298", "1e100", "1e-100", "1e9999999999"})
+    void jsonProtocolsDoNotCoerceTruncateOrOverflow(String json) {
+        assertThat(UpgradeRejection.parse(426, null, protocolsBody(json)).supportedProtocols()).isEmpty();
+    }
+
+    @Test
+    void protocolHeaderKeepsItsSeparateDigitOnlyDiagnosticPolicy() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("x-ulticloud-protocol-supported", "2, 1000, 2.0, 2e0, 1001, -1, invalid");
+
+        assertThat(UpgradeRejection.parse(426, headers, null).supportedProtocols()).containsExactly(2, 1000);
+        assertThat(UpgradeRejection.parse(426, headers, protocolsBody("2.0")).supportedProtocols())
+                .as("a valid JSON body still wins over the header").containsExactly(2);
+    }
+
+    private static String protocolsBody(String items) {
+        return "{\"error\":{\"code\":\"upgrade_required\",\"details\":{\"supportedProtocols\":[" + items + "]}}}";
+    }
+
     @Test
     @DisplayName("minFramework falls back to the sanitised header; the body wins when present")
     void minFrameworkSources() {

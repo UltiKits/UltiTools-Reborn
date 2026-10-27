@@ -335,11 +335,11 @@ final class CatalogueClient {
         if (data == null) {
             return VersionLookup.failed(VersionLookup.UNREADABLE);
         }
-        JsonElement version = data.get("version");
-        if (version == null || version.isJsonNull() || !version.isJsonPrimitive()) {
+        String version = string(data, "version");
+        if (version == null) {
             return VersionLookup.failed(VersionLookup.UNREADABLE);
         }
-        String text = version.getAsString().trim();
+        String text = version.trim();
         return text.isEmpty() ? VersionLookup.failed(VersionLookup.UNREADABLE) : VersionLookup.found(text);
     }
 
@@ -515,7 +515,8 @@ final class CatalogueClient {
 
     private static String string(JsonObject object, String name) {
         JsonElement value = object.get(name);
-        return value == null || value.isJsonNull() || !value.isJsonPrimitive() ? null : value.getAsString();
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+                ? value.getAsString() : null;
     }
 
     private static Date instant(String text) {

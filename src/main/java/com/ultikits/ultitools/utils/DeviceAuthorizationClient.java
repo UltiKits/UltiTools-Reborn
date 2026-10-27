@@ -33,7 +33,7 @@ class DeviceAuthorizationClient {
     private static final int STATUS_TOO_MANY_REQUESTS = 429;
     private static final int STATUS_SERVER_ERROR = 500;
     /** The longest {@code error.details.retryAfterSeconds} taken from a 429 body. */
-    private static final long MAX_RETRY_AFTER_SECONDS = 3600L;
+    private static final long MAX_RETRY_AFTER_SECONDS = 86400L;
 
     /**
      * Requests a device code.
@@ -91,8 +91,10 @@ class DeviceAuthorizationClient {
             return AuthorizeResult.failed("UltiCloud sent an incomplete device-code response", -1);
         }
         String complete = string(data, "verificationUriComplete");
-        long expiresIn = positiveLong(data, "expiresIn", DEFAULT_EXPIRES_IN_SECONDS);
-        long interval = positiveLong(data, "interval", DEFAULT_INTERVAL_SECONDS);
+        // The contract fixes expiresIn/interval at 600/5. Unreadable or out-of-contract timing
+        // uses those same defaults, so no numeric conversion (and no truncation) is needed.
+        long expiresIn = DEFAULT_EXPIRES_IN_SECONDS;
+        long interval = DEFAULT_INTERVAL_SECONDS;
         // The three presentable values go to the console verbatim; strip control characters so a
         // response cannot rewrite the operator's terminal.
         String uri = sanitise(verificationUri);
@@ -152,7 +154,7 @@ class DeviceAuthorizationClient {
 
     /**
      * @param body a 429 body, or {@code null}
-     * @return {@code error.details.retryAfterSeconds} when it is a whole number of at most an hour, or -1
+     * @return {@code error.details.retryAfterSeconds} when it is an integer in [1, 86400], or -1
      */
     private static long detailsRetryAfter(String body) {
         JsonObject error = errorObject(body);
@@ -164,8 +166,8 @@ class DeviceAuthorizationClient {
         }
         try {
             long seconds = value.getAsBigDecimal().longValueExact();
-            return seconds >= 0 && seconds <= MAX_RETRY_AFTER_SECONDS ? seconds : -1;
-        } catch (ArithmeticException e) {
+            return seconds >= 1 && seconds <= MAX_RETRY_AFTER_SECONDS ? seconds : -1;
+        } catch (ArithmeticException | NumberFormatException e) {
             return -1;
         }
     }
@@ -187,9 +189,15 @@ class DeviceAuthorizationClient {
             warnUnusableGrant("the serverId field is missing");
             return PollResult.transientFailure(-1);
         }
+        JsonElement owner = data.get(ServerCredential.FIELD_USER_ID);
+        Long userId = owner != null && owner.isJsonPrimitive() && owner.getAsJsonPrimitive().isNumber()
+                ? ServerCredential.parseUserId(owner.getAsNumber()) : null;
+        if (userId == null) {
+            warnUnusableGrant("the userId field is missing or is not a valid positive safe integer");
+            return PollResult.transientFailure(-1);
+        }
         return PollResult.granted(new ServerCredential(secret, string(data, ServerCredential.FIELD_CREDENTIAL_ID),
-            serverId, string(data, ServerCredential.FIELD_USER_ID), string(data, ServerCredential.FIELD_SERVER_NAME),
-            System.currentTimeMillis()));
+            serverId, userId, string(data, ServerCredential.FIELD_SERVER_NAME), System.currentTimeMillis()));
     }
 
     /** Names the defect only -- never a value from the response, which may hold the secret. */
@@ -275,15 +283,6 @@ class DeviceAuthorizationClient {
             return null;
         }
         return value.getAsString();
-    }
-
-    private static long positiveLong(JsonObject object, String member, long fallback) {
-        JsonElement value = object.get(member);
-        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
-            return fallback;
-        }
-        long number = value.getAsLong();
-        return number > 0 ? number : fallback;
     }
 
     private static boolean isBlank(String value) {

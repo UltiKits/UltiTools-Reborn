@@ -44,7 +44,7 @@ public final class CloudTestAccess {
      * @param serverId   the linked server's id
      */
     public static void storeLinkedCredential(String serverName, String serverId) {
-        ServerCredentialStore.save(new ServerCredential("ucs_TESTSECRET", "cred-1", serverId, "u-1", serverName,
+        ServerCredentialStore.save(new ServerCredential("ucs_TESTSECRET", "cred-1", serverId, 43L, serverName,
                 1_700_000_000_000L));
     }
 }

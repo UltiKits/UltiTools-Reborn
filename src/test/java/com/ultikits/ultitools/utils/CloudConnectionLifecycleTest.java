@@ -467,7 +467,7 @@ class CloudConnectionLifecycleTest {
 
     private static ServerCredential credential(String suffix) {
         return new ServerCredential("ucs_" + suffix, "cred-" + suffix,
-                HandshakeEndToEndTest.SERVER_ID, "test-user", "Survival", 1L);
+                HandshakeEndToEndTest.SERVER_ID, 43L, "Survival", 1L);
     }
 
     private void openGateway() throws Exception {

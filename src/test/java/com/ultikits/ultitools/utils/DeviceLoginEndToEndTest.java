@@ -150,14 +150,14 @@ class DeviceLoginEndToEndTest {
             if ("/v1/device/authorize".equals(path)) {
                 send(exchange, 200, "{\"data\":{\"deviceCode\":\"" + DEVICE_CODE + "\",\"userCode\":\"" + USER_CODE
                         + "\",\"verificationUri\":\"" + VERIFICATION_URI + "\",\"verificationUriComplete\":\""
-                        + COMPLETE_URI + "\",\"expiresIn\":600,\"interval\":1}}");
+                        + COMPLETE_URI + "\",\"expiresIn\":600,\"interval\":5}}");
             } else if ("/v1/device/token".equals(path)) {
                 if (tokenPolls.incrementAndGet() == 1) {
                     send(exchange, 400, "{\"error\":{\"code\":\"authorization_pending\","
                             + "\"message\":\"The owner has not confirmed yet\",\"requestId\":\"r\"}}");
                 } else {
                     send(exchange, 200, "{\"data\":{\"credential\":\"" + SECRET + "\",\"credentialId\":\"cred-1\","
-                            + "\"serverId\":\"01JTESTSERVERID0000000000\",\"userId\":\"u-1\",\"serverName\":\"Survival\"}}");
+                            + "\"serverId\":\"01JTESTSERVERID0000000000\",\"userId\":43,\"serverName\":\"Survival\"}}");
                 }
             } else {
                 send(exchange, 404, "{\"error\":{\"code\":\"not_found\",\"message\":\"no route\",\"requestId\":\"r\"}}");
@@ -236,7 +236,7 @@ class DeviceLoginEndToEndTest {
         assertThat(authorize.get("legacyServerUuid").getAsString()).isEqualTo(STORED_UUID);
         assertThat(authorize.has("attachToServerId")).isFalse();
 
-        assertThat(await(this::credentialWritten, 10_000))
+        assertThat(await(this::credentialWritten, 15_000))
                 .as("the granted credential must reach credentials.json; requests seen: %s", requestLines())
                 .isTrue();
 
@@ -254,9 +254,15 @@ class DeviceLoginEndToEndTest {
         assertThat(entry).containsEntry("credential", SECRET)
                 .containsEntry("credentialId", "cred-1")
                 .containsEntry("serverId", "01JTESTSERVERID0000000000")
-                .containsEntry("userId", "u-1")
                 .containsEntry("serverName", "Survival")
-                .containsKey("linkedAt");
+                .containsOnlyKeys("credential", "credentialId", "serverId", "userId", "serverName", "linkedAt");
+        JsonObject stored = JsonParser.parseString(new String(Files.readAllBytes(credentialFile),
+                StandardCharsets.UTF_8)).getAsJsonObject().getAsJsonObject("cloud_credential");
+        assertThat(stored.keySet()).containsExactlyInAnyOrder(
+                "credential", "credentialId", "serverId", "userId", "serverName", "linkedAt");
+        assertThat(stored.get("userId").getAsJsonPrimitive().isNumber()).isTrue();
+        assertThat(stored.get("userId").getAsBigDecimal().longValueExact()).isEqualTo(43L);
+        assertThat(ServerCredentialStore.load().getUserId()).isEqualTo(43L);
 
         assertThat(await(() -> CloudAuthManager.status().isLinked(), 5000)).isTrue();
         assertThat(CloudAuthManager.status().getServerName()).isEqualTo("Survival");

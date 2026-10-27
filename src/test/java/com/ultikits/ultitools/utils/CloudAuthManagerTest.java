@@ -713,7 +713,7 @@ class CloudAuthManagerTest {
 
         private ServerCredential credentialWithId(String credentialId) {
             return new ServerCredential("ucs_" + credentialId.toUpperCase(java.util.Locale.ROOT), credentialId,
-                    "01JTESTSERVERID0000000000", "u-1", "Survival", 1_700_000_000_000L);
+                    "01JTESTSERVERID0000000000", 43L, "Survival", 1_700_000_000_000L);
         }
 
         @Test
@@ -1010,7 +1010,7 @@ class CloudAuthManagerTest {
             // Plan 22-20: connected means welcomed, and the welcome must name the linked server id
             // (a real ULID), so this test links one.
             CloudSession.current().commitCredential(new ServerCredential("ucs_TESTSECRET", "cred-1",
-                    HandshakeEndToEndTest.SERVER_ID, "u-1", "Survival", 1_700_000_000_000L));
+                    HandshakeEndToEndTest.SERVER_ID, 43L, "Survival", 1_700_000_000_000L));
             CloudSession.current().startConnection();
             runtime.runDue();
             runtime.last().accept();

@@ -211,9 +211,13 @@ final class UpgradeRejection {
                 break;
             }
             if (item.isJsonPrimitive() && item.getAsJsonPrimitive().isNumber()) {
-                Integer value = protocolValue(item.getAsJsonPrimitive().getAsString());
-                if (value != null) {
-                    out.add(value);
+                try {
+                    int value = item.getAsBigDecimal().intValueExact();
+                    if (value >= 1 && value <= 99) {
+                        out.add(value);
+                    }
+                } catch (ArithmeticException | NumberFormatException invalid) {
+                    // JSON integers are mathematical integers, not digit-only lexical forms.
                 }
             }
         }

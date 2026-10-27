@@ -16,6 +16,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.sun.net.httpserver.HttpServer;
 import com.ultikits.ultitools.stub.StubCatalogue;
@@ -102,6 +104,25 @@ class VersionLookupContractTest {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
         }
+    }
+
+    @ParameterizedTest(name = "framework version #{index} is not a usable string")
+    @ValueSource(strings = {"43", "true", "null", "{}", "[]", "\" \""})
+    void frameworkVersionNeverCoercesOtherJsonTypes(String json) {
+        frameworkBody = data("{\"version\":" + json + "}");
+
+        assertThat(VersionUtils.getUltiToolsNewestVersion()).isNull();
+        VersionLookup lookup = VersionUtils.lookUpUltiToolsNewestVersion();
+        assertThat(lookup.getOutcome()).isEqualTo(VersionLookup.Outcome.FAILED);
+        assertThat(lookup.getFailure()).isEqualTo(VersionLookup.UNREADABLE);
+        assertThat(lookup.getVersion()).isNull();
+    }
+
+    @Test
+    void frameworkVersionStillTrimsARealJsonString() {
+        frameworkBody = data("{\"version\":\" 6.3.1 \"}");
+
+        assertThat(VersionUtils.getUltiToolsNewestVersion()).isEqualTo("6.3.1");
     }
 
     @Nested

@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -56,6 +57,7 @@ class DeviceAuthorizationClientTest {
     private final List<Recorded> otherRequests = new CopyOnWriteArrayList<>();
     private final AtomicReference<Responder> responder = new AtomicReference<>();
     private final List<String> logLines = new CopyOnWriteArrayList<>();
+    private final List<LogRecord> logRecords = new CopyOnWriteArrayList<>();
     private final DeviceAuthorizationClient client = new DeviceAuthorizationClient();
 
     /** One request as the stub saw it on the wire. */
@@ -148,6 +150,7 @@ class DeviceAuthorizationClientTest {
             @Override
             public void publish(LogRecord record) {
                 logLines.add(record.getLevel() + " " + record.getMessage());
+                logRecords.add(record);
             }
 
             @Override
@@ -268,7 +271,7 @@ class DeviceAuthorizationClientTest {
     @DisplayName("a 200 whose credential lacks ucs_ is TRANSIENT and the WARNING names the field, not the value")
     void malformedCredentialIsTransientAndNotLogged() {
         responder.set(answer(200, "{\"data\":{\"credential\":\"not-a-server-secret-77\",\"credentialId\":\"c\","
-                + "\"serverId\":\"01JTEST\",\"userId\":\"u\",\"serverName\":\"S\"}}"));
+                + "\"serverId\":\"01JTEST\",\"userId\":43,\"serverName\":\"S\"}}"));
 
         DeviceAuthorizationClient.PollResult result = client.pollToken("dc-1");
 
@@ -291,7 +294,7 @@ class DeviceAuthorizationClientTest {
     @DisplayName("a valid 200 is GRANTED and its toString carries no secret")
     void validGrantIsGranted() {
         responder.set(answer(200, "{\"data\":{\"credential\":\"" + SECRET + "\",\"credentialId\":\"cred-1\","
-                + "\"serverId\":\"01JTEST\",\"userId\":\"u-1\",\"serverName\":\"Survival\"}}"));
+                + "\"serverId\":\"01JTEST\",\"userId\":43,\"serverName\":\"Survival\"}}"));
 
         DeviceAuthorizationClient.PollResult result = client.pollToken("dc-1");
 
@@ -300,6 +303,56 @@ class DeviceAuthorizationClientTest {
         assertThat(result.credential().getServerName()).isEqualTo("Survival");
         assertThat(result.toString()).doesNotContain(SECRET);
         assertThat(result.credential().toString()).doesNotContain(SECRET);
+        org.junit.jupiter.api.Assertions.assertAll(
+                () -> assertThat((Object) result.credential().getUserId()).isEqualTo(43L),
+                () -> assertThat(result.credential().toDocument().get("userId")).isEqualTo(43L),
+                () -> assertThat(result.credential().toDocument()).containsOnlyKeys(
+                        "credential", "credentialId", "serverId", "userId", "serverName", "linkedAt"),
+                () -> assertThat(JsonParser.parseString(new com.google.gson.Gson()
+                        .toJson(result.credential().toDocument())).getAsJsonObject().keySet())
+                        .containsExactlyInAnyOrder("credential", "credentialId", "serverId", "userId",
+                                "serverName", "linkedAt"));
+    }
+
+    private static String grantWithUserId(String json) {
+        String owner = "missing".equals(json) ? "" : ",\"userId\":" + json;
+        return "{\"data\":{\"credential\":\"" + SECRET + "\",\"credentialId\":\"cred-1\","
+                + "\"serverId\":\"01JTEST\",\"serverName\":\"Survival\"" + owner + "}}";
+    }
+
+    @ParameterizedTest(name = "userId {0} is an exact safe-positive integer")
+    @ValueSource(strings = {"1", "43", "9007199254740991", "43.0", "4.3e1"})
+    void numericUserIdIsPreserved(String json) {
+        responder.set(answer(200, grantWithUserId(json)));
+
+        DeviceAuthorizationClient.PollResult result = client.pollToken("dc-1");
+
+        long expected = JsonParser.parseString(json).getAsBigDecimal().longValueExact();
+        assertThat(result.kind()).isEqualTo(DeviceAuthorizationClient.PollResult.Kind.GRANTED);
+        assertThat(result.credential().getUserId()).isEqualTo(expected);
+        assertThat(result.credential().toDocument()).containsEntry("userId", expected);
+        assertThat(logLines).isEmpty();
+    }
+
+    @ParameterizedTest(name = "invalid userId #{index} is transient without logging its value")
+    @ValueSource(strings = {"missing", "null", "\"43\"", "\"user-value-sentinel\"", "true", "{}",
+            "{\"owner\":\"user-value-sentinel\"}", "[43]", "43.5", "4.3000000000000001e1", "0", "-1",
+            "9007199254740992", "9007199254740991.1", "18446744073709551659", "1e100", "-1e100",
+            "1e-100", "1e9999999999"})
+    void invalidUserIdIsTransientAndOnlyItsDefectIsLogged(String json) {
+        responder.set(answer(200, grantWithUserId(json)));
+
+        DeviceAuthorizationClient.PollResult result = client.pollToken("device-code-sentinel");
+
+        assertThat(result.kind()).isEqualTo(DeviceAuthorizationClient.PollResult.Kind.TRANSIENT);
+        assertThat(result.credential()).isNull();
+        assertThat(result.retryAfterSeconds()).isEqualTo(-1);
+        assertThat(logLines).containsExactly("WARNING UltiCloud: ignored an unusable device-login grant "
+                + "(the userId field is missing or is not a valid positive safe integer); polling continues.");
+        assertThat(logRecords).singleElement().satisfies(record -> {
+            assertThat(record.getThrown()).isNull();
+            assertThat(record.getParameters()).isNull();
+        });
     }
 
     @Test
@@ -382,6 +435,60 @@ class DeviceAuthorizationClientTest {
         assertThat(result.failureReason())
                 .isEqualTo("UltiCloud is limiting device-code requests; try again in 30 seconds");
         assertThat(result.retryAfterSeconds()).isEqualTo(30);
+    }
+
+    @ParameterizedTest(name = "JSON retryAfterSeconds {0} -> {1}")
+    @CsvSource({"1, 1", "3600, 3600", "3601, 3601", "86400, 86400", "1.0, 1", "8.64e4, 86400",
+            "0, -1", "-1, -1", "86401, -1", "1.5, -1", "\"43\", -1", "true, -1", "null, -1",
+            "{}, -1", "[], -1", "1e100, -1", "1e9999999999, -1", "18446744073709551617, -1"})
+    void authorizeJsonRetryAfterUsesExactContractRange(String json, long expected) {
+        responder.set(answer(429, "{\"error\":{\"code\":\"rate_limited\",\"message\":\"slow\","
+                + "\"details\":{\"retryAfterSeconds\":" + json + "}}}"));
+
+        DeviceAuthorizationClient.AuthorizeResult result = client.authorize("6.3.1", null, null);
+
+        assertThat(result.isGranted()).isFalse();
+        assertThat(result.retryAfterSeconds()).isEqualTo(expected);
+        assertThat(result.failureReason()).isEqualTo(expected < 0
+                ? "UltiCloud is limiting device-code requests; try again later"
+                : "UltiCloud is limiting device-code requests; try again in " + expected + " seconds");
+    }
+
+    @Test
+    void authorizeRetryAfterHeaderStillTakesPrecedenceAndKeepsItsOwnRange() {
+        responder.set(answerWithRetryAfter(429, "99999", "{\"error\":{\"details\":{\"retryAfterSeconds\":86400}}}"));
+
+        assertThat(client.authorize("6.3.1", null, null).retryAfterSeconds()).isEqualTo(3600);
+    }
+
+    @ParameterizedTest(name = "authorize timing {0}/{1} uses constants or their identical fallback")
+    @CsvSource({"600, 5", "600.0, 5e0", "6e2, 5.0", "601.9, 6.9", "600.9, 5.9", "1, 1",
+            "18446744073709552217, 18446744073709551622", "1e100, 1e100", "1e9999999999, 1e9999999999",
+            "\"601\", \"6\"", "null, null", "{}, []", "true, false", "0, -1"})
+    void authorizeTimingNeverTruncatesOrWraps(String expires, String interval) {
+        responder.set(answer(200, authorizationBody(",\"expiresIn\":" + expires + ",\"interval\":" + interval)));
+
+        DeviceAuthorizationClient.AuthorizeResult result = client.authorize("6.3.1", null, null);
+
+        assertThat(result.isGranted()).isTrue();
+        assertThat(result.grant().expiresInSeconds()).isEqualTo(600L);
+        assertThat(result.grant().intervalSeconds()).isEqualTo(5L);
+    }
+
+    @Test
+    void absentAuthorizeTimingKeepsTheExistingDefaults() {
+        responder.set(answer(200, authorizationBody("")));
+
+        DeviceAuthorizationClient.AuthorizeResult result = client.authorize("6.3.1", null, null);
+
+        assertThat(result.isGranted()).isTrue();
+        assertThat(result.grant().expiresInSeconds()).isEqualTo(600L);
+        assertThat(result.grant().intervalSeconds()).isEqualTo(5L);
+    }
+
+    private static String authorizationBody(String timing) {
+        return "{\"data\":{\"deviceCode\":\"dc-1\",\"userCode\":\"BCDF-GHJK\","
+                + "\"verificationUri\":\"https://panel.ultikits.com/device\"" + timing + "}}";
     }
 
     @Test

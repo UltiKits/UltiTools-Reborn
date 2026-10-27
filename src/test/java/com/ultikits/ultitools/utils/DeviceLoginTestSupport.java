@@ -29,7 +29,7 @@ final class DeviceLoginTestSupport {
 
     /** A synthetic, well-formed server credential. */
     static ServerCredential credential(String serverName) {
-        return new ServerCredential("ucs_TESTSECRET", "cred-1", "01JTESTSERVERID0000000000", "u-1", serverName,
+        return new ServerCredential("ucs_TESTSECRET", "cred-1", "01JTESTSERVERID0000000000", 43L, serverName,
                 1_700_000_000_000L);
     }
 
