@@ -384,6 +384,10 @@ take.
   command sender, which has console permissions but is not the console sender, so that the panel receives the
   command's real output. A plugin command that accepts only the console sender refuses it. Run such commands in
   the server console. There is no automatic console retry.
+- **A panel command's immediate reply is no longer echoed to the console (6.3.1).** It is captured in
+  `command.result` `data.output`, not in the server console, its log files or the panel's log stream. The
+  console records the `[UltiTools] [Remote command] > <command>` audit line and any late output, not a copy
+  of the immediate reply (`CommandExecutionManager#executeCaptured`).
 - **A panel command's late output is not in its result.** `command.result` is sent when the command's dispatch
   returns, so it holds only the lines printed until then. Lines printed later (an asynchronous command body, a
   scheduled reply) are written to the server console unchanged, so they appear in the console, the log files
@@ -2667,9 +2671,10 @@ recorded reason: it came from sharing one `BukkitRunnable` with `@RunAsync` in 6
 
 **Why.** Paper 1.21.11 records a command block's output only while its dispatch is open, and RCON
 reads its output as soon as the dispatch returns, so a deferred body's replies to those senders were
-lost. (The panel's remote command runs as the server console, whose replies no sender can read; they
-reach the panel through the log stream instead — see "The panel's log stream mirrors the server
-console" below.) The deferral also let two dispatches in one tick both pass
+lost. (In 6.3.0 protocol v1, the panel's remote command ran as the server console and its replies
+reached the panel through the log stream instead. As of 6.3.1 protocol v2, Paper's capturing sender
+puts immediate replies in `command.result` `data.output`, without echoing them to the console;
+only late output is forwarded to the console — see the UltiCloud protocol 2.0.0 section above.) The deferral also let two dispatches in one tick both pass
 `@CmdCD`, because the cooldown was recorded when the deferred body finished; the cooldown is now
 recorded before the first dispatch returns.
 
@@ -2888,8 +2893,11 @@ its meaning.
   原本要交给服务器调度器的每个任务，都只记一条 `FINE` 日志后丢弃，而不是为已禁用的插件调度会被拒绝的任务（6.3.0 之前：停服日志中
   一条带 `IllegalPluginAccessException` 堆栈的 WARNING，且部分请求仍会得到回复）。因此服务器停止期间发出的面板操作得不到回复，
   以面板自身的超时为准。恰在停服开始那一刻到达的远程命令，可能已在控制台和远程操作日志中记为允许，却不会执行，也没有结果回复。
-- **The panel's remote command result no longer claims to carry the command's output.** A panel
-  command is typed into the server console: it runs as the server's own console sender, unchanged for
+- **In 6.3.0 protocol v1, the panel's remote command result stopped claiming to carry the command's output.**
+  This historical behaviour is superseded in 6.3.1 protocol v2: immediate replies are captured in
+  `command.result` `data.output` and are not echoed to the console or log stream; only late output is
+  forwarded there (see the UltiCloud protocol 2.0.0 section above). In 6.3.0 a panel
+  command was typed into the server console: it ran as the server's own console sender, unchanged for
   modules. Paper 1.21.11 replaces any console sender with the real console before running a command,
   so the framework's output capture never received a reply, and every accepted command's `command_result`
   read the invented `Command executed successfully` (a refused one read `Command execution failed`). The result now reads `Command dispatched to the server
