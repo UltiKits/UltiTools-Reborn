@@ -117,9 +117,7 @@ class ShutdownWindowTest {
         List<LogRecord> loud = session.pluginLog().stream()
                 .filter(r -> r.getLevel().intValue() >= Level.WARNING.intValue())
                 .collect(Collectors.toList());
-        // ConsoleMirror's once-per-JVM "log forwarder not found" WARNING is a MockBukkit artefact, unrelated here.
-        assertThat(loud).extracting(LogRecord::getMessage)
-                .filteredOn(message -> message == null || !message.contains("log forwarder")).isEmpty();
+        assertThat(loud).extracting(LogRecord::getMessage).isEmpty();
     }
 
     @Test

@@ -245,9 +245,7 @@ class ShutdownPanelMessageTracerTest {
                     server.getScheduler().enabledCalls.size())).as("nothing scheduled at all").isEmpty();
             assertThat(session.stub().gateway().received("status")).as("no welcome status while disabling")
                     .hasSize(statuses);
-            // ConsoleMirror's once-per-JVM "log forwarder not found" WARNING is a MockBukkit artefact.
-            assertThat(at(Level.WARNING)).extracting(LogRecord::getMessage)
-                    .filteredOn(message -> message == null || !message.contains("log forwarder")).isEmpty();
+            assertThat(at(Level.WARNING)).extracting(LogRecord::getMessage).isEmpty();
             assertThat(at(Level.SEVERE)).isEmpty();
         }
 

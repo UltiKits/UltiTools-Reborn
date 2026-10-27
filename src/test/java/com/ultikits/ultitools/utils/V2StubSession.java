@@ -56,6 +56,15 @@ public final class V2StubSession implements AutoCloseable {
     public static final String SERVER_ID = "01JTESTSERVER0000000000000";
     private static final String CREDENTIAL = "ucs_TESTSECRET";
     private static final long WAIT_MS = 30_000L;
+    /**
+     * The start of {@code handler.ConsoleMirror}'s WARNING that Paper's log forwarder is missing. MockBukkit has no
+     * {@code org.bukkit.craftbukkit.util.ForwardLogHandler}, so the first mirror install in a JVM always logs it, and
+     * only once per JVM (its once-per-run flag), so which test sees it depends on test order (CI run 40419620913:
+     * #677's first test after {@code ConsoleMirrorForwarderMissingTest} reset the flag). It says nothing about the
+     * framework's cloud path; {@code ConsoleMirrorForwarderMissingTest} pins the warning itself.
+     */
+    static final String FORWARDER_MISSING_WARNING =
+            "[UltiPanel] Paper's log forwarder (org.bukkit.craftbukkit.util.ForwardLogHandler) was not found";
 
     private final Path temp;
     private final ServerMock server;
@@ -118,7 +127,11 @@ public final class V2StubSession implements AutoCloseable {
         logger.setUseParentHandlers(false);
         logger.setLevel(Level.ALL);
         logger.addHandler(new Handler() {
-            @Override public void publish(LogRecord record) { pluginLog.add(record); }
+            @Override public void publish(LogRecord record) {
+                if (!isForwarderMissingWarning(record)) {
+                    pluginLog.add(record);
+                }
+            }
             @Override public void flush() { }
             @Override public void close() { }
         });
@@ -212,9 +225,18 @@ public final class V2StubSession implements AutoCloseable {
         return actions;
     }
 
-    /** @return every record the framework logged through its plugin logger */
+    /**
+     * @return every record the framework logged through its plugin logger, except the MockBukkit-only
+     *         {@link #FORWARDER_MISSING_WARNING}, whose presence depends on test order
+     */
     public List<LogRecord> pluginLog() {
         return pluginLog;
+    }
+
+    private static boolean isForwarderMissingWarning(LogRecord record) {
+        String message = record.getMessage();
+        return Level.WARNING.equals(record.getLevel()) && message != null
+                && message.startsWith(FORWARDER_MISSING_WARNING);
     }
 
     /**
