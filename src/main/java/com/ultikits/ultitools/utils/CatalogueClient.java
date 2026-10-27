@@ -188,14 +188,47 @@ final class CatalogueClient {
      *
      * @param identifyString the module's identify-string
      * @param level          this framework's API level
-     * @return the versions, or {@code null} when the module is unknown or the answer is unusable
+     * @return the versions, empty when the module is unknown, or {@code null} when the answer is unusable
      */
     static List<Version> versions(String identifyString, int level) {
         String ref = moduleRef(identifyString);
         if (ref == null) {
             return null;
         }
-        return versionsOf(ref, level);
+        List<Version> versions = new ArrayList<>();
+        return lookUpVersions(ref, level, versions).isFailed() ? null : versions;
+    }
+
+    /**
+     * Reads a version list without folding an unknown module into a successful empty list.
+     *
+     * @param identifyString the module's identify-string
+     * @param level this framework's API level
+     * @param versions collects the versions on success, including a successful empty list
+     * @return {@code FOUND} with the module identifier on success, {@code NONE} only for an unknown
+     *         module, or {@code FAILED} when the answer is unusable
+     */
+    static VersionLookup lookUpVersions(String identifyString, int level, List<Version> versions) {
+        String ref = moduleRef(identifyString);
+        if (ref == null) {
+            return VersionLookup.failed("invalid module identifier");
+        }
+        CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref + "/versions" + levelQuery(level));
+        if (answer.kind() != CatalogueHttp.Kind.OK) {
+            return VersionLookup.failed("not reached");
+        }
+        if (answer.status() == 404) {
+            return VersionLookup.none();
+        }
+        if (answer.status() < 200 || answer.status() > 299) {
+            return VersionLookup.failed(VersionLookup.describe(answer.status(), answer.body()));
+        }
+        List<Version> parsed = parseVersions(answer);
+        if (parsed == null) {
+            return VersionLookup.failed(VersionLookup.UNREADABLE);
+        }
+        versions.addAll(parsed);
+        return VersionLookup.found(ref);
     }
 
     /**
@@ -354,20 +387,6 @@ final class CatalogueClient {
     }
 
     // ------------------------------------------------------------------ parsing
-
-    private static List<Version> versionsOf(String ref, int level) {
-        CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref + "/versions" + levelQuery(level));
-        if (answer.kind() != CatalogueHttp.Kind.OK) {
-            return null;
-        }
-        if (answer.status() == 404) {
-            return new ArrayList<>();
-        }
-        if (answer.status() < 200 || answer.status() > 299) {
-            return null;
-        }
-        return parseVersions(answer);
-    }
 
     /**
      * @return the versions an answer carries, or {@code null} when it carries no usable list: one

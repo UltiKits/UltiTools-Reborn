@@ -36,6 +36,7 @@ import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
+import com.ultikits.ultitools.utils.VersionLookup;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -123,6 +124,15 @@ class PluginInstallCommandsEnhancedTest {
                     .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1", "1.1.0"));
+            mockedUtils.when(() -> PluginInstallUtils.lookUpPluginVersions(anyString(), anyList()))
+                    .thenAnswer(invocation -> {
+                        List<String> versions = PluginInstallUtils.getPluginVersions(invocation.getArgument(0));
+                        if (versions == null) {
+                            return VersionLookup.failed("test failure");
+                        }
+                        invocation.<List<String>>getArgument(1).addAll(versions);
+                        return VersionLookup.found(invocation.getArgument(0));
+                    });
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
                     .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             

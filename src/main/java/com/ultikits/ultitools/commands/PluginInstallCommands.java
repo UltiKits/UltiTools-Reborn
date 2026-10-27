@@ -31,6 +31,7 @@ import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
+import com.ultikits.ultitools.utils.VersionLookup;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
@@ -198,8 +199,15 @@ public class PluginInstallCommands extends BaseCommandExecutor {
 
     @CmdMapping(format = "versions <plugin>")
     public void listVersions(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
-        List<String> pluginVersions = PluginInstallUtils.getPluginVersions(plugin);
-        if (pluginVersions == null) {
+        List<String> pluginVersions = new ArrayList<>();
+        VersionLookup lookup =
+                PluginInstallUtils.lookUpPluginVersions(plugin, pluginVersions);
+        if (lookup.getOutcome() == VersionLookup.Outcome.NONE) {
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                    "UltiCloud 上没有找到模块 %s。"), plugin));
+            return;
+        }
+        if (lookup.isFailed()) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("获取版本列表失败！"));
             return;
         }

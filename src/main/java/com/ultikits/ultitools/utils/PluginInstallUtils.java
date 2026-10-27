@@ -188,6 +188,26 @@ public class PluginInstallUtils {
     }
 
     /**
+     * Internal command lookup that distinguishes an unknown module from a successful empty list.
+     * This bridge is not part of the supported plugin API; {@link #getPluginVersions(String)} keeps
+     * its existing empty-list/null contract.
+     *
+     * @param idString the plugin ID
+     * @param names collects version names on success
+     * @return {@code FOUND} with the module identifier on success, {@code NONE} when the versions
+     *         endpoint answers 404, or {@code FAILED} when the lookup establishes nothing
+     */
+    @ApiStatus.Internal
+    public static VersionLookup lookUpPluginVersions(String idString, List<String> names) {
+        List<CatalogueClient.Version> versions = new ArrayList<>();
+        VersionLookup lookup = CatalogueClient.lookUpVersions(idString, ModuleApiLevels.frameworkLevel(), versions);
+        for (CatalogueClient.Version version : versions) {
+            names.add(version.version());
+        }
+        return lookup;
+    }
+
+    /**
      * Get plugin latest version.
      *
      * <p>Returns {@code null} for a blank id, a module the catalogue does not know, no version this

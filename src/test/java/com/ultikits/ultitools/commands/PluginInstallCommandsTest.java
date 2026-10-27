@@ -37,6 +37,7 @@ import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
+import com.ultikits.ultitools.utils.VersionLookup;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -97,6 +98,15 @@ class PluginInstallCommandsTest {
                     .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1"));
+            mockedUtils.when(() -> PluginInstallUtils.lookUpPluginVersions(anyString(), anyList()))
+                    .thenAnswer(invocation -> {
+                        List<String> versions = PluginInstallUtils.getPluginVersions(invocation.getArgument(0));
+                        if (versions == null) {
+                            return VersionLookup.failed("test failure");
+                        }
+                        invocation.<List<String>>getArgument(1).addAll(versions);
+                        return VersionLookup.found(invocation.getArgument(0));
+                    });
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
                     .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             
@@ -1419,6 +1429,69 @@ class PluginInstallCommandsTest {
                     "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
                     "demo", 630, 630, 630));
             assertThat(player.nextMessage()).isNull();
+        }
+
+        @Test
+        @DisplayName("a real versions HTTP 404 produces exactly one red module-not-found line")
+        void versionsHttp404_namesTheMissingModule() throws IOException {
+            withVersionsResponse(404, "{\"error\":{\"code\":\"not_found\"}}", () -> {
+                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(org.bukkit.ChatColor.RED
+                        + "Module does-not-exist-on-ulticloud was not found on UltiCloud.");
+                assertThat(player.nextMessage()).isNull();
+                assertThat(PluginInstallUtils.getPluginVersions("does-not-exist-on-ulticloud")).isEmpty();
+            });
+        }
+
+        @Test
+        @DisplayName("a real successful empty versions response keeps the no-compatible-version line")
+        void versionsHttp200Empty_keepsTheRange() throws IOException {
+            withVersionsResponse(200, "{\"data\":{\"items\":[]}}", () -> {
+                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(org.bukkit.ChatColor.RED
+                        + englishOf("%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
+                                "does-not-exist-on-ulticloud", 631, 630, 631));
+                assertThat(player.nextMessage()).isNull();
+                assertThat(PluginInstallUtils.getPluginVersions("does-not-exist-on-ulticloud")).isEmpty();
+            });
+        }
+
+        @Test
+        @DisplayName("a real versions HTTP failure keeps the fetch-failure line and the public null result")
+        void versionsHttp500_keepsTheFailure() throws IOException {
+            withVersionsResponse(500, "{\"error\":{\"code\":\"internal_error\"}}", () -> {
+                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(org.bukkit.ChatColor.RED
+                        + "Could not fetch the version list!");
+                assertThat(player.nextMessage()).isNull();
+                assertThat(PluginInstallUtils.getPluginVersions("does-not-exist-on-ulticloud")).isNull();
+            });
+        }
+
+        private void withVersionsResponse(int status, String body, Runnable assertions) throws IOException {
+            mockedUtils.close();
+            mockedUtils = null;
+            mockedUltiTools.when(UltiTools::getPluginVersion).thenReturn(631);
+            com.sun.net.httpserver.HttpServer catalogue = com.sun.net.httpserver.HttpServer.create(
+                    new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+            List<String> requests = Collections.synchronizedList(new ArrayList<>());
+            catalogue.createContext("/v1/catalogue/modules/does-not-exist-on-ulticloud/versions", exchange -> {
+                requests.add(exchange.getRequestURI().toString());
+                byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(status, bytes.length);
+                try (java.io.OutputStream output = exchange.getResponseBody()) {
+                    output.write(bytes);
+                }
+            });
+            catalogue.start();
+            com.ultikits.ultitools.utils.PluginInstallUtilsTestAccess.setBaseUrl(
+                    "http://127.0.0.1:" + catalogue.getAddress().getPort());
+            try {
+                assertions.run();
+                assertThat(requests).containsExactly(
+                        "/v1/catalogue/modules/does-not-exist-on-ulticloud/versions?apiLevel=631&minApiLevel=630",
+                        "/v1/catalogue/modules/does-not-exist-on-ulticloud/versions?apiLevel=631&minApiLevel=630");
+            } finally {
+                com.ultikits.ultitools.utils.PluginInstallUtilsTestAccess.resetBaseUrl();
+                catalogue.stop(0);
+            }
         }
 
         @Test

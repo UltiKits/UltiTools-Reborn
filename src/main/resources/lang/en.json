@@ -136,6 +136,7 @@
   "正在上传本地配置...": "Uploading local configuration...",
   "获取服务器UUID失败！": "Could not obtain the server UUID!",
   "获取版本列表失败！": "Could not fetch the version list!",
+  "UltiCloud 上没有找到模块 %s。": "Module %s was not found on UltiCloud.",
   "配置编辑Websocket服务初始化失败！": "Config-editor WebSocket service failed to initialise!",
   "Module '%s' reloaded.": "Module '%s' reloaded.",
   "Language file '%s' of module '%s' differed from the version bundled with this release and was restored to it: official language files belong to UltiTools and are restored at every start. The previous file was kept as '%s'. To customise messages, copy the official file under a new name that starts with its language code and a hyphen, keeping the extension (for example zh-myserver), edit the copy, and set language: zh-myserver in plugins/UltiTools/config.yml.": "Language file '%s' of module '%s' differed from the version bundled with this release and was restored to it: official language files belong to UltiTools and are restored at every start. The previous file was kept as '%s'. To customise messages, copy the official file under a new name that starts with its language code and a hyphen, keeping the extension (for example zh-myserver), edit the copy, and set language: zh-myserver in plugins/UltiTools/config.yml.",
