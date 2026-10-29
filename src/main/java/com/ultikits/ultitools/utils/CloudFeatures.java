@@ -141,7 +141,8 @@ public final class CloudFeatures {
         // Never resolved here: UltiTools#onEnable starts the features before it creates the monitor (22-22 fix).
         this.outbound = new AgentOutboundFeeds(bindings.monitor, () -> capabilities.enabled(TELEMETRY),
                 () -> capabilities.enabled("logs"), () -> capabilities.enabled("errors"),
-                bindings.errors == null ? () -> null : bindings.errors, bindings.clock, bindings.mainThread);
+                bindings.errors == null ? () -> null : bindings.errors, bindings.clock, bindings.mainThread,
+                this::recordSnapshotRead);
     }
 
     /**
@@ -572,6 +573,17 @@ public final class CloudFeatures {
             }
         }
         return request.type();
+    }
+
+    /**
+     * Records a served snapshot read while read auditing is open; during disable the production
+     * main-thread hand-off drops new snapshot requests unanswered before this callback is reached.
+     */
+    private void recordSnapshotRead(List<String> targets) {
+        if (bindings.disabling == null || !bindings.disabling.getAsBoolean()) {
+            recordAction(RemoteActionLog.Entry.allowed(Capability.MONITORING, AgentOutboundFeeds.SNAPSHOT_REQUEST,
+                    String.join(",", targets), PANEL_ACTOR));
+        }
     }
 
     /** One action-log entry; a failing log never reaches the handler, so the request still gets its reply. */

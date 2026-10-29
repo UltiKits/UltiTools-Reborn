@@ -16,8 +16,10 @@ import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -111,6 +113,7 @@ final class AgentTelemetry implements CloudRequestHandler {
     private final BooleanSupplier telemetryEnabled;
     private final LongSupplier clock;
     private final Executor mainThread;
+    private final Consumer<List<String>> snapshotRead;
 
     private final Tracked statusTrack = new Tracked();
     private final Tracked playerTrack = new Tracked();
@@ -118,20 +121,21 @@ final class AgentTelemetry implements CloudRequestHandler {
     private final Tracked worldTrack = new Tracked();
 
     /**
-     * Creates the encoder over the monitor's main-thread sample.
+     * Creates the encoder with the served-read audit callback used by the connection wiring.
      *
      * @param monitor supplies the sampled server state, TPS and CPU load
-     * @param telemetryEnabled the {@code telemetry} capability switch; false silences every frame
-     * @param clock supplies epoch milliseconds for the cadence, never the wall clock directly
-     * @param mainThread runs the sampling and the reply of a {@code snapshot.request}: Bukkit state
-     *                   may only be read there, while the router dispatches on its own threads
+     * @param telemetryEnabled the telemetry capability switch
+     * @param clock supplies epoch milliseconds for the cadence
+     * @param mainThread runs Bukkit sampling and request replies
+     * @param snapshotRead records one served request's targets, unless reads are no longer audited
      */
     AgentTelemetry(ServerMonitorManager monitor, BooleanSupplier telemetryEnabled, LongSupplier clock,
-            Executor mainThread) {
+            Executor mainThread, Consumer<List<String>> snapshotRead) {
         this.monitor = monitor;
         this.telemetryEnabled = telemetryEnabled;
         this.clock = clock;
         this.mainThread = mainThread;
+        this.snapshotRead = Objects.requireNonNull(snapshotRead, "snapshotRead");
     }
 
     /**
@@ -226,7 +230,8 @@ final class AgentTelemetry implements CloudRequestHandler {
      * <p>The target list is validated here, on the dispatching thread, so a payload the schema
      * rejects fails exactly like any other invalid message. The push itself, including the fresh
      * sample it takes before encoding, runs on the injected main-thread executor, because
-     * sampling reads Bukkit state.</p>
+     * sampling reads Bukkit state. A served request is audited once as an allowed panel read with
+     * its requested targets, unless the server is disabling; unsolicited telemetry is not audited.</p>
      *
      * @param request the parsed request
      * @param channel the reply channel
@@ -275,6 +280,8 @@ final class AgentTelemetry implements CloudRequestHandler {
      * which may be up to one sampling period old, so without this a refresh would resend stale
      * values. A sample that fails (off the main thread, or a sampling error) leaves the last
      * published state in place and the request is still answered.</p>
+     * <p>Once the read is served, its audit callback records {@code ALLOWED} even if the connection has
+     * since closed, just as {@code files.read} does.</p>
      */
     private void sendRequested(String replyTo, List<String> targets, CloudChannel channel) {
         monitor.sampleAndPublishState();
@@ -288,6 +295,7 @@ final class AgentTelemetry implements CloudRequestHandler {
         }
         JsonObject data = new JsonObject();
         data.add("sent", sent);
+        snapshotRead.accept(targets);
         channel.replyOk(replyTo, SNAPSHOT_REQUEST_RESULT, data);
     }
 
