@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Executor;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -111,6 +112,7 @@ final class AgentTelemetry implements CloudRequestHandler {
     private final BooleanSupplier telemetryEnabled;
     private final LongSupplier clock;
     private final Executor mainThread;
+    private final Consumer<List<String>> snapshotRead;
 
     private final Tracked statusTrack = new Tracked();
     private final Tracked playerTrack = new Tracked();
@@ -128,10 +130,25 @@ final class AgentTelemetry implements CloudRequestHandler {
      */
     AgentTelemetry(ServerMonitorManager monitor, BooleanSupplier telemetryEnabled, LongSupplier clock,
             Executor mainThread) {
+        this(monitor, telemetryEnabled, clock, mainThread, targets -> { });
+    }
+
+    /**
+     * Creates the encoder with the served-read audit callback used by the connection wiring.
+     *
+     * @param monitor supplies the sampled server state, TPS and CPU load
+     * @param telemetryEnabled the telemetry capability switch
+     * @param clock supplies epoch milliseconds for the cadence
+     * @param mainThread runs Bukkit sampling and request replies
+     * @param snapshotRead records one served request's targets, unless reads are no longer audited
+     */
+    AgentTelemetry(ServerMonitorManager monitor, BooleanSupplier telemetryEnabled, LongSupplier clock,
+            Executor mainThread, Consumer<List<String>> snapshotRead) {
         this.monitor = monitor;
         this.telemetryEnabled = telemetryEnabled;
         this.clock = clock;
         this.mainThread = mainThread;
+        this.snapshotRead = snapshotRead;
     }
 
     /**
@@ -226,7 +243,8 @@ final class AgentTelemetry implements CloudRequestHandler {
      * <p>The target list is validated here, on the dispatching thread, so a payload the schema
      * rejects fails exactly like any other invalid message. The push itself, including the fresh
      * sample it takes before encoding, runs on the injected main-thread executor, because
-     * sampling reads Bukkit state.</p>
+     * sampling reads Bukkit state. A served request is audited once as an allowed panel read with
+     * its requested targets, unless the server is disabling; unsolicited telemetry is not audited.</p>
      *
      * @param request the parsed request
      * @param channel the reply channel
@@ -288,6 +306,7 @@ final class AgentTelemetry implements CloudRequestHandler {
         }
         JsonObject data = new JsonObject();
         data.add("sent", sent);
+        snapshotRead.accept(targets);
         channel.replyOk(replyTo, SNAPSHOT_REQUEST_RESULT, data);
     }
 

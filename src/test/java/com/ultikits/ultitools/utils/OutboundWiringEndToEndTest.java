@@ -13,6 +13,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
@@ -44,6 +45,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.OutboundTestAccess;
+import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.stub.UltiCloudStub;
@@ -79,6 +81,7 @@ class OutboundWiringEndToEndTest {
     private long lastTimerRun;
     /** What the framework logged through its own logger (PanelConnectionLog lines included). */
     private final List<LogRecord> pluginLog = new CopyOnWriteArrayList<>();
+    private final List<RemoteActionLog.Entry> audit = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -130,6 +133,7 @@ class OutboundWiringEndToEndTest {
         CloudFeatures.Bindings bindings = CloudFeatures.Bindings.forTesting();
         bindings.mainThread = mainQueue::add;
         bindings.disabling = () -> false;
+        bindings.actionLog = audit::add;
         bindings.monitor = OutboundTestAccess::newMonitor;
         bindings.mainTimer = task -> {
             mainTimers.add(task);
@@ -556,6 +560,70 @@ class OutboundWiringEndToEndTest {
             }
         }
         assertThat(order.lastIndexOf("worlds.snapshot")).isLessThan(order.indexOf("snapshot.request.result"));
+        assertThat(audit).singleElement().satisfies(entry -> {
+            assertThat(entry.getCapability()).isEqualTo("MONITORING");
+            assertThat(entry.getAction()).isEqualTo("snapshot.request");
+            assertThat(entry.getTarget()).isEqualTo("status,plugins,worlds");
+            assertThat(entry.getActor()).isEqualTo("panel");
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+            assertThat(entry.getReason()).isNull();
+        });
+    }
+
+    @Test
+    @DisplayName("a served single-target snapshot request records only the requested target")
+    void singleTargetSnapshotRequestIsAudited() throws Exception {
+        connect(bindings());
+        await(() -> !stub.gateway().received("worlds.snapshot").isEmpty(), "the opening snapshots");
+        assertThat(audit).as("unsolicited telemetry is not a panel read").isEmpty();
+        stub.gateway().send("snapshot.request", "worlds", null, null, null);
+        await(() -> !stub.gateway().received("snapshot.request.result").isEmpty(), "snapshot.request.result");
+
+        assertThat(audit).singleElement().satisfies(entry -> {
+            assertThat(entry.getAction()).isEqualTo("snapshot.request");
+            assertThat(entry.getTarget()).isEqualTo("worlds");
+            assertThat(entry.getActor()).isEqualTo("panel");
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        });
+    }
+
+    @Test
+    @DisplayName("a snapshot read served while disabling is answered without an action-log entry")
+    void snapshotReadWhileDisablingIsNotAudited() throws Exception {
+        AtomicBoolean disabling = new AtomicBoolean();
+        CloudFeatures.Bindings bindings = bindings();
+        bindings.disabling = disabling::get;
+        connect(bindings);
+        await(() -> !stub.gateway().received("worlds.snapshot").isEmpty(), "the opening snapshots");
+        disabling.set(true);
+        stub.gateway().send("snapshot.request", "worlds", null, null, null);
+        await(() -> !stub.gateway().received("snapshot.request.result").isEmpty(), "snapshot.request.result");
+
+        assertThat(stub.gateway().received("snapshot.request.result").get(0).getAsJsonObject("payload")
+                .get("status").getAsString()).isEqualTo("ok");
+        assertThat(audit).as("reads are not recorded once disabling starts").isEmpty();
+    }
+
+    @Test
+    @DisplayName("a switched-off snapshot request keeps exactly one DENIED switch-gate entry")
+    void refusedSnapshotRequestKeepsOneDeniedEntry() throws Exception {
+        connect(bindings());
+        await(() -> !stub.gateway().received("worlds.snapshot").isEmpty(), "the opening snapshots");
+        config.set(Capability.MONITORING.getConfigPath(), false);
+        stub.gateway().send("snapshot.request", "worlds", null, null, null);
+        await(() -> !stub.gateway().received("error").isEmpty(), "snapshot refusal");
+
+        JsonObject refusal = stub.gateway().received("error").get(0).getAsJsonObject("payload");
+        assertThat(refusal.get("code").getAsString()).isEqualTo("capability_not_accepted");
+        assertThat(stub.gateway().received("snapshot.request.result")).isEmpty();
+        assertThat(audit).singleElement().satisfies(entry -> {
+            assertThat(entry.getCapability()).isEqualTo("MONITORING");
+            assertThat(entry.getAction()).isEqualTo("snapshot.request");
+            assertThat(entry.getTarget()).isEqualTo("snapshot.request");
+            assertThat(entry.getActor()).isEqualTo("panel");
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(entry.getReason()).isEqualTo(refusal.get("message").getAsString());
+        });
     }
 
     @Test

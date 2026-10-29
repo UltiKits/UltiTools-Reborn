@@ -321,10 +321,11 @@ then fails for an ordinary reason (a missing file, a directory where a file was 
 matches) is now `DENIED` with the reply's message as `reason`; 6.3.0 recorded it `ALLOWED`. `ALLOWED` now means the
 request was carried out: the file read, the directory listed, the change made, at least one configuration key
 written. A request refused because its `ultipanel.capabilities.*` switch is off is one `DENIED` line from the switch
-gate, as in 6.3.0. A malformed request, `config.tree`, `config.entries`, telemetry and module requests write no
-line, and from the first step of the disable a read (`files.read`, `files.list`, `properties.get`) is still answered
-but writes no line either (see the shutdown window below). No line ever holds file content or a configuration
-value.
+gate, as in 6.3.0. A served `snapshot.request` is one `ALLOWED` line with capability `MONITORING`, actor `panel`
+and the requested target names joined by commas in request order as its target. A malformed request,
+`config.tree`, `config.entries`, unsolicited telemetry and module requests write no line, and from the first step
+of the disable a read (`files.read`, `files.list`, `properties.get`, `snapshot.request`) is still answered but writes
+no line either (see the shutdown window below). No line ever holds file content or a configuration value.
 
 ### Shutdown window
 

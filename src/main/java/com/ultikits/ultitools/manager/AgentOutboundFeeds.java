@@ -1,10 +1,12 @@
 package com.ultikits.ultitools.manager;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -68,6 +70,7 @@ public final class AgentOutboundFeeds {
     private final BooleanSupplier telemetryEnabled;
     private final LongSupplier clock;
     private final Executor mainThread;
+    private final Consumer<List<String>> snapshotRead;
     private final Object telemetryLock = new Object();
     /** The first monitor the supplier yielded, or {@code null} before. Written under {@code telemetryLock}. */
     private volatile ServerMonitorManager monitor;
@@ -106,6 +109,26 @@ public final class AgentOutboundFeeds {
     public AgentOutboundFeeds(Supplier<ServerMonitorManager> monitor, BooleanSupplier telemetryEnabled,
                               BooleanSupplier logsEnabled, BooleanSupplier errorsEnabled,
                               Supplier<ErrorReportCollector> errors, LongSupplier clock, Executor mainThread) {
+        this(monitor, telemetryEnabled, logsEnabled, errorsEnabled, errors, clock, mainThread, targets -> { });
+    }
+
+    /**
+     * Builds the feeds with auditing for served snapshot requests.
+     *
+     * @param monitor supplies the server sampler, resolved at first use
+     * @param telemetryEnabled the telemetry switch
+     * @param logsEnabled the logs switch
+     * @param errorsEnabled the errors switch
+     * @param errors supplies the error-report collector
+     * @param clock epoch milliseconds for the cadence and rate bucket
+     * @param mainThread runs Bukkit work on the main thread
+     * @param snapshotRead records the targets of each served snapshot request
+     */
+    public AgentOutboundFeeds(Supplier<ServerMonitorManager> monitor, BooleanSupplier telemetryEnabled,
+                              BooleanSupplier logsEnabled, BooleanSupplier errorsEnabled,
+                              Supplier<ErrorReportCollector> errors, LongSupplier clock, Executor mainThread,
+                              Consumer<List<String>> snapshotRead) {
+        this.snapshotRead = snapshotRead;
         this.monitorSource = monitor;
         this.telemetryEnabled = telemetryEnabled;
         this.clock = clock;
@@ -158,7 +181,7 @@ public final class AgentOutboundFeeds {
                 }
                 if (found != null) {
                     monitor = found;
-                    telemetry = new AgentTelemetry(found, telemetryEnabled, clock, mainThread);
+                    telemetry = new AgentTelemetry(found, telemetryEnabled, clock, mainThread, snapshotRead);
                 }
             }
             return telemetry;
