@@ -387,7 +387,8 @@ take.
 - **A panel command's immediate reply is no longer echoed to the console (6.3.1).** It is captured in
   `command.result` `data.output`, not in the server console, its log files or the panel's log stream. The
   console records the `[UltiTools] [Remote command] > <command>` audit line and any late output, not a copy
-  of the immediate reply (`CommandExecutionManager#executeCaptured`).
+  of the immediate reply (`CommandExecutionManager#execute` writes the audit line;
+  `CommandExecutionManager#executeCaptured` captures the reply and forwards late output).
 - **A panel command's late output is not in its result.** `command.result` is sent when the command's dispatch
   returns, so it holds only the lines printed until then. Lines printed later (an asynchronous command body, a
   scheduled reply) are written to the server console unchanged, so they appear in the console, the log files
@@ -2900,12 +2901,12 @@ its meaning.
   command was typed into the server console: it ran as the server's own console sender, unchanged for
   modules. Paper 1.21.11 replaces any console sender with the real console before running a command,
   so the framework's output capture never received a reply, and every accepted command's `command_result`
-  read the invented `Command executed successfully` (a refused one read `Command execution failed`). The result now reads `Command dispatched to the server
+  read the invented `Command executed successfully` (a refused one read `Command execution failed`). The 6.3.0 result was changed to read `Command dispatched to the server
   console. Its output appears in the server log stream.`, or `The server console did not accept the
   command. Any message it printed appears in the server log stream.` when the dispatch returned
-  false; blocklist refusals, an empty command and dispatch errors are unchanged. The replies themselves
-  appear in the log stream (the item above). A panel or tool that showed `output` as the command's
-  reply now shows this sentence.
+  false; blocklist refusals, an empty command and dispatch errors were unchanged. The replies themselves
+  appeared in the log stream (the item above). A panel or tool that showed `output` as the command's
+  reply then showed this sentence.
 - **A panel write to a `server.properties` key the file does not hold is refused** with `This key is not
   in this server's server.properties` (#473). 6.2.x wrote such a key into the file; earlier 6.3.0 snapshots refused
   it as `This server version has no such key`. Nothing tells a key the running version lacks from one the file
