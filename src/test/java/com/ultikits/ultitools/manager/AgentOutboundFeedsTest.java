@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.lenient;
 
 import java.lang.reflect.Field;
@@ -51,7 +52,16 @@ class AgentOutboundFeedsTest {
 
     private static AgentOutboundFeeds feeds(final ServerMonitorManager monitor) {
         return new AgentOutboundFeeds(() -> monitor, () -> true, () -> false, () -> false, () -> null,
-                System::currentTimeMillis, Runnable::run);
+                System::currentTimeMillis, Runnable::run, targets -> { });
+    }
+
+    @Test
+    @DisplayName("construction rejects a null snapshot audit callback")
+    void rejectsNullSnapshotReadAtConstruction() {
+        assertThatThrownBy(() -> new AgentOutboundFeeds(() -> null, () -> true, () -> false, () -> false,
+                () -> null, System::currentTimeMillis, Runnable::run, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("snapshotRead");
     }
 
     @Test
@@ -86,7 +96,7 @@ class AgentOutboundFeedsTest {
         final List<Runnable> agentTasks = new ArrayList<>();
         final AtomicBoolean logs = new AtomicBoolean(false); // off while established: no root-logger handler
         AgentOutboundFeeds feeds = new AgentOutboundFeeds(() -> null, () -> false, logs::get, () -> false,
-                () -> null, System::currentTimeMillis, null);
+                () -> null, System::currentTimeMillis, null, targets -> { });
         feeds.established(channel, agentTasks::add, true);
         logs.set(true);
         for (int i = 0; i < 150; i++) {
@@ -115,7 +125,7 @@ class AgentOutboundFeedsTest {
         // The switch is off while established only so this unit test attaches no handler; it is on for every line.
         final AtomicBoolean logs = new AtomicBoolean(false);
         AgentOutboundFeeds feeds = new AgentOutboundFeeds(() -> null, () -> false, logs::get, () -> false,
-                () -> null, System::currentTimeMillis, null);
+                () -> null, System::currentTimeMillis, null, targets -> { });
         feeds.established(channel, agentTasks::add, false);
         logs.set(true);
         for (int i = 0; i < 2000; i++) {

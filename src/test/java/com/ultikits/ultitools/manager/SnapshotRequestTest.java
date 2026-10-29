@@ -46,7 +46,7 @@ class SnapshotRequestTest {
         when(monitor.sampledCpuPercent()).thenReturn(5.0);
         publish("world");
         Executor direct = Runnable::run;
-        telemetry = new AgentTelemetry(monitor, () -> true, clock::get, direct);
+        telemetry = new AgentTelemetry(monitor, () -> true, clock::get, direct, targets -> { });
         router = new AgentMessageRouter(capability -> true, capability -> "disabled", () -> 0L);
         router.register("snapshot.request", telemetry);
         channel = new RecordingChannel();
@@ -84,7 +84,7 @@ class SnapshotRequestTest {
     @DisplayName("a request is deferred to the main-thread executor, which sends the snapshots and the result")
     void requestWaitsForTheMainThreadExecutor() {
         TestMainThread mainThread = new TestMainThread();
-        AgentTelemetry deferred = new AgentTelemetry(monitor, () -> true, clock::get, mainThread);
+        AgentTelemetry deferred = new AgentTelemetry(monitor, () -> true, clock::get, mainThread, targets -> { });
         AgentMessageRouter deferredRouter = new AgentMessageRouter(capability -> true, capability -> "disabled",
                 () -> 0L);
         deferredRouter.register("snapshot.request", deferred);
