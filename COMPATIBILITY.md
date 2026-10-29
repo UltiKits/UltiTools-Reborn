@@ -2900,8 +2900,8 @@ its meaning.
   forwarded there (see the UltiCloud protocol 2.0.0 section above). In 6.3.0 a panel
   command was typed into the server console: it ran as the server's own console sender, unchanged for
   modules. Paper 1.21.11 replaces any console sender with the real console before running a command,
-  so the framework's output capture never received a reply, and every accepted command's `command_result`
-  read the invented `Command executed successfully` (a refused one read `Command execution failed`). The 6.3.0 result was changed to read `Command dispatched to the server
+  so the framework's output capture never received a reply. Before the 6.3.0 result-text change, every accepted command's `command_result`
+  read the invented `Command executed successfully` (a refused one read `Command execution failed`). That change in 6.3.0 replaced it with `Command dispatched to the server
   console. Its output appears in the server log stream.`, or `The server console did not accept the
   command. Any message it printed appears in the server log stream.` when the dispatch returned
   false; blocklist refusals, an empty command and dispatch errors were unchanged. The replies themselves
