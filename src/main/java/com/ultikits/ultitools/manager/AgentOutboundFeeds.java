@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -97,22 +98,6 @@ public final class AgentOutboundFeeds {
     private boolean tpsClockPrimed;
 
     /**
-     * @param monitor          supplies the server sampler, read at first use and then kept; {@code null}, or a
-     *                         supplier of {@code null}, means no telemetry (yet)
-     * @param telemetryEnabled the {@code telemetry} switch, read for every frame
-     * @param logsEnabled      the {@code logs} switch, read for every line
-     * @param errorsEnabled    the {@code errors} switch, read every second
-     * @param errors           the error-report collector, or a supplier of {@code null} for no error reports
-     * @param clock            epoch milliseconds for the cadence and the log rate bucket
-     * @param mainThread       runs Bukkit work on the main thread, in order; {@code null} for no telemetry
-     */
-    public AgentOutboundFeeds(Supplier<ServerMonitorManager> monitor, BooleanSupplier telemetryEnabled,
-                              BooleanSupplier logsEnabled, BooleanSupplier errorsEnabled,
-                              Supplier<ErrorReportCollector> errors, LongSupplier clock, Executor mainThread) {
-        this(monitor, telemetryEnabled, logsEnabled, errorsEnabled, errors, clock, mainThread, targets -> { });
-    }
-
-    /**
      * Builds the feeds with auditing for served snapshot requests.
      *
      * @param monitor supplies the server sampler, resolved at first use
@@ -128,7 +113,7 @@ public final class AgentOutboundFeeds {
                               BooleanSupplier logsEnabled, BooleanSupplier errorsEnabled,
                               Supplier<ErrorReportCollector> errors, LongSupplier clock, Executor mainThread,
                               Consumer<List<String>> snapshotRead) {
-        this.snapshotRead = snapshotRead;
+        this.snapshotRead = Objects.requireNonNull(snapshotRead, "snapshotRead");
         this.monitorSource = monitor;
         this.telemetryEnabled = telemetryEnabled;
         this.clock = clock;

@@ -23,6 +23,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -52,6 +53,14 @@ class AgentTelemetryTest {
     @AfterEach
     void tearDown() {
         MockBukkitHelper.safeUnmock();
+    }
+
+    @Test
+    @DisplayName("construction rejects a null snapshot audit callback")
+    void rejectsNullSnapshotReadAtConstruction() {
+        assertThatThrownBy(() -> new AgentTelemetry(monitor, () -> true, clock::get, Runnable::run, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("snapshotRead");
     }
 
     @Test
@@ -170,7 +179,7 @@ class AgentTelemetryTest {
     @DisplayName("welcome and close hop to the main-thread executor even when called from the socket thread")
     void welcomeAndCloseHopToTheMainThread() throws Exception {
         TestMainThread mainThread = new TestMainThread();
-        AgentTelemetry telemetry = new AgentTelemetry(monitor, () -> true, clock::get, mainThread);
+        AgentTelemetry telemetry = new AgentTelemetry(monitor, () -> true, clock::get, mainThread, targets -> { });
         RecordingChannel channel = new RecordingChannel();
 
         TestMainThread.runOffTheMainThread(() -> telemetry.onWelcome(channel));
@@ -269,7 +278,7 @@ class AgentTelemetryTest {
     }
 
     private AgentTelemetry telemetry() {
-        return new AgentTelemetry(monitor, () -> true, clock::get, Runnable::run);
+        return new AgentTelemetry(monitor, () -> true, clock::get, Runnable::run, targets -> { });
     }
 
     private void publish(JsonArray players, JsonArray plugins, JsonArray worlds) {

@@ -324,8 +324,9 @@ written. A request refused because its `ultipanel.capabilities.*` switch is off 
 gate, as in 6.3.0. A served `snapshot.request` is one `ALLOWED` line with capability `MONITORING`, actor `panel`
 and the requested target names joined by commas in request order as its target. A malformed request,
 `config.tree`, `config.entries`, unsolicited telemetry and module requests write no line, and from the first step
-of the disable a read (`files.read`, `files.list`, `properties.get`, `snapshot.request`) is still answered but writes
-no line either (see the shutdown window below). No line ever holds file content or a configuration value.
+of the disable a read (`files.read`, `files.list`, `properties.get`) is still answered but writes no line either;
+a `snapshot.request` needs the server thread and is dropped unanswered, writing no line (see the shutdown window
+below). No line ever holds file content or a configuration value.
 
 ### Shutdown window
 
@@ -335,7 +336,9 @@ then fail, so a redelivery after the restart is acknowledged and never run; `fil
 `properties.update`, `config.update`, `player.action` and `module.request` fail with `internal_error`;
 `credential.rotate` gets a generic error, and the gateway sends it again after the next `welcome`. A
 `player.link.completed` is left unanswered and delivered again after the restart. Read-only requests keep
-working until the connection closes. The disable waits, at most 5 seconds, for changes already under way,
+working until the connection closes, except `snapshot.request`: its server-thread hand-off is dropped, so it
+sends neither snapshots nor a result and writes no action-log entry. The disable waits, at most 5 seconds, for
+changes already under way,
 including work handed to a module responder or the player-link handler, so no change happens after the remote
 action log closes.
 

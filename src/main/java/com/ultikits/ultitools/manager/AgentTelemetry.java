@@ -16,6 +16,7 @@ import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -120,20 +121,6 @@ final class AgentTelemetry implements CloudRequestHandler {
     private final Tracked worldTrack = new Tracked();
 
     /**
-     * Creates the encoder over the monitor's main-thread sample.
-     *
-     * @param monitor supplies the sampled server state, TPS and CPU load
-     * @param telemetryEnabled the {@code telemetry} capability switch; false silences every frame
-     * @param clock supplies epoch milliseconds for the cadence, never the wall clock directly
-     * @param mainThread runs the sampling and the reply of a {@code snapshot.request}: Bukkit state
-     *                   may only be read there, while the router dispatches on its own threads
-     */
-    AgentTelemetry(ServerMonitorManager monitor, BooleanSupplier telemetryEnabled, LongSupplier clock,
-            Executor mainThread) {
-        this(monitor, telemetryEnabled, clock, mainThread, targets -> { });
-    }
-
-    /**
      * Creates the encoder with the served-read audit callback used by the connection wiring.
      *
      * @param monitor supplies the sampled server state, TPS and CPU load
@@ -148,7 +135,7 @@ final class AgentTelemetry implements CloudRequestHandler {
         this.telemetryEnabled = telemetryEnabled;
         this.clock = clock;
         this.mainThread = mainThread;
-        this.snapshotRead = snapshotRead;
+        this.snapshotRead = Objects.requireNonNull(snapshotRead, "snapshotRead");
     }
 
     /**
@@ -293,6 +280,8 @@ final class AgentTelemetry implements CloudRequestHandler {
      * which may be up to one sampling period old, so without this a refresh would resend stale
      * values. A sample that fails (off the main thread, or a sampling error) leaves the last
      * published state in place and the request is still answered.</p>
+     * <p>Once the read is served, its audit callback records {@code ALLOWED} even if the connection has
+     * since closed, just as {@code files.read} does.</p>
      */
     private void sendRequested(String replyTo, List<String> targets, CloudChannel channel) {
         monitor.sampleAndPublishState();

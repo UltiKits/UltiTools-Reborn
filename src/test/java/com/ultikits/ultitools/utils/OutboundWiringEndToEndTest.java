@@ -588,20 +588,32 @@ class OutboundWiringEndToEndTest {
     }
 
     @Test
-    @DisplayName("a snapshot read served while disabling is answered without an action-log entry")
+    @DisplayName("a snapshot request while disabling is dropped without a reply or an action-log entry")
     void snapshotReadWhileDisablingIsNotAudited() throws Exception {
         AtomicBoolean disabling = new AtomicBoolean();
+        AtomicBoolean handOffRefused = new AtomicBoolean();
         CloudFeatures.Bindings bindings = bindings();
         bindings.disabling = disabling::get;
+        // Production's scheduleUnlessDisabling refuses the hand-off before any server-thread task is queued.
+        bindings.mainThread = task -> {
+            if (disabling.get()) {
+                handOffRefused.set(true);
+            } else {
+                mainQueue.add(task);
+            }
+        };
         connect(bindings);
         await(() -> !stub.gateway().received("worlds.snapshot").isEmpty(), "the opening snapshots");
+        drainMain();
+        int worldsBefore = stub.gateway().received("worlds.snapshot").size();
         disabling.set(true);
         stub.gateway().send("snapshot.request", "worlds", null, null, null);
-        await(() -> !stub.gateway().received("snapshot.request.result").isEmpty(), "snapshot.request.result");
+        await(handOffRefused::get, "the snapshot request's refused server-thread hand-off");
 
-        assertThat(stub.gateway().received("snapshot.request.result").get(0).getAsJsonObject("payload")
-                .get("status").getAsString()).isEqualTo("ok");
-        assertThat(audit).as("reads are not recorded once disabling starts").isEmpty();
+        assertThat(mainQueue).as("no snapshot task queued once disabling starts").isEmpty();
+        assertThat(stub.gateway().received("snapshot.request.result")).as("the request is left unanswered").isEmpty();
+        assertThat(stub.gateway().received("worlds.snapshot")).hasSize(worldsBefore);
+        assertThat(audit).as("no read was served or audited once disabling starts").isEmpty();
     }
 
     @Test

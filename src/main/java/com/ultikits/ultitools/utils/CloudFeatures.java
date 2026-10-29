@@ -575,7 +575,10 @@ public final class CloudFeatures {
         return request.type();
     }
 
-    /** Records a served snapshot read, like other reads, unless the disable has closed read auditing. */
+    /**
+     * Records a served snapshot read while read auditing is open; during disable the production
+     * main-thread hand-off drops new snapshot requests unanswered before this callback is reached.
+     */
     private void recordSnapshotRead(List<String> targets) {
         if (bindings.disabling == null || !bindings.disabling.getAsBoolean()) {
             recordAction(RemoteActionLog.Entry.allowed(Capability.MONITORING, AgentOutboundFeeds.SNAPSHOT_REQUEST,
