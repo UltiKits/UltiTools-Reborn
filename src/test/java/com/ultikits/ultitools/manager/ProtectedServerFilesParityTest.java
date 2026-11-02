@@ -4,15 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
-import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.Arrays;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -47,6 +43,7 @@ class ProtectedServerFilesParityTest {
     Path tmp;
 
     private FileOperationManager files;
+    private String originalUserDir = System.getProperty("user.dir");
     private AgentMessageRouter router;
     private RecordingChannel channel;
 
@@ -59,12 +56,18 @@ class ProtectedServerFilesParityTest {
         Logger logger = mock(Logger.class);
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             lenient().when(ultiTools.getLogger()).thenReturn(logger);
-            lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            // Editable roots: the server root itself and plugins/, resolved against user.dir below.
+            YamlConfiguration config = new YamlConfiguration();
+            config.set("ultipanel.files.editable-roots", Arrays.asList("", "plugins"));
+            lenient().when(ultiTools.getConfig()).thenReturn(config);
         });
 
         Files.createDirectories(tmp.resolve("plugins"));
+        // The manager takes its server root from user.dir at construction, so no field access is needed.
+        originalUserDir = System.getProperty("user.dir");
+        System.setProperty("user.dir", tmp.toString());
         files = new FileOperationManager();
-        pointManagerAt(files, tmp, tmp, tmp.resolve("plugins"));
+        System.setProperty("user.dir", originalUserDir);
         RemoteFileOperations handler = new RemoteFileOperations(files, tmp.toFile(), entry -> { }, () -> true);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
         router.register("files.read", handler);
@@ -74,6 +77,7 @@ class ProtectedServerFilesParityTest {
 
     @AfterEach
     void tearDown() {
+        System.setProperty("user.dir", originalUserDir);
         MockBukkitHelper.safeUnmock();
     }
 
@@ -173,20 +177,5 @@ class ProtectedServerFilesParityTest {
         Files.createDirectories(target.getParent());
         Files.write(target, content.getBytes(StandardCharsets.UTF_8));
         return target;
-    }
-
-    private static void pointManagerAt(FileOperationManager manager, Path serverRoot, Path... editableRoots)
-            throws IllegalAccessException, NoSuchFieldException {
-        Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-        serverRootField.setAccessible(true);
-        serverRootField.set(manager, serverRoot.toFile());
-
-        List<File> roots = new ArrayList<>();
-        for (Path editableRoot : editableRoots) {
-            roots.add(editableRoot.toFile());
-        }
-        Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
-        editableRootsField.setAccessible(true);
-        editableRootsField.set(manager, Collections.unmodifiableList(roots));
     }
 }
