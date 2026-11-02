@@ -24,6 +24,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
@@ -123,6 +124,12 @@ class TransactionFailurePathsTest {
         volatile int failIdAssignment;
         final AtomicInteger idAssignments = new AtomicInteger();
         final List<String> events = new CopyOnWriteArrayList<>();
+        /**
+         * One permit per physical {@code close()} that has returned. HikariCP closes an evicted
+         * connection on its own connection-closer thread, so a test waits on this before it counts
+         * rows (see {@link TransactionFailurePathsTest#awaitEvictedConnectionClosed(Backend)}).
+         */
+        final Semaphore closesCompleted = new Semaphore(0);
 
         /** The calls recorded after the first injected failure. */
         List<String> afterFirstFailure() {
@@ -182,6 +189,9 @@ class TransactionFailurePathsTest {
                     faults.events.add("abort");
                 }
                 Object result = invoke(connection, method, args);
+                if ("close".equals(name)) {
+                    faults.closesCompleted.release();
+                }
                 if ("prepareStatement".equals(name) && result instanceof PreparedStatement
                         && String.valueOf(args[0]).contains("SET `id` = ?")) {
                     return failingIdAssignment((PreparedStatement) result);
@@ -351,6 +361,19 @@ class TransactionFailurePathsTest {
         return backends;
     }
 
+    /**
+     * Waits until the physical connection the pool evicted has been closed. HikariCP's
+     * {@code evictConnection} only hands the physical {@code close()} to its connection-closer
+     * thread, and H2 rolls the open transaction back inside that close. While the rollback runs,
+     * {@code SELECT COUNT(*)} on another session can still include the row being rolled back
+     * (H2 2.5.252: observed in 63 of 3000 races, never committed), so counting before the close
+     * returns made these tests flaky. The wait also asserts that eviction closed the connection.
+     */
+    static void awaitEvictedConnectionClosed(Backend backend) throws InterruptedException {
+        assertThat(backend.faulty.faults.closesCompleted.tryAcquire(10, TimeUnit.SECONDS))
+                .as("%s: the evicted connection was closed", backend.label).isTrue();
+    }
+
     private static void assertNoImplicitCommit(Backend backend) {
         List<String> after = backend.faulty.faults.afterFirstFailure();
         assertThat(after).as("%s: calls after the injected failure", backend.label)
@@ -396,6 +419,7 @@ class TransactionFailurePathsTest {
                 // No event assertion here: HikariCP's own close() rolls the connection back and then
                 // resets its auto-commit, and its housekeeping opens connections in the background;
                 // what counts is that nothing was stored.
+                awaitEvictedConnectionClosed(backend);
                 assertThat(backend.rows()).as("%s: rows stored", backend.label).isZero();
                 assertThat(backend.pool.getHikariPoolMXBean().getActiveConnections())
                         .as("%s: active connections", backend.label).isZero();
@@ -448,6 +472,7 @@ class TransactionFailurePathsTest {
                 }));
 
                 assertThat(thrown).as(backend.label).isInstanceOf(IllegalStateException.class);
+                awaitEvictedConnectionClosed(backend);
                 assertThat(backend.rows()).as("%s: rows stored", backend.label).isZero();
                 assertThat(backend.pool.getHikariPoolMXBean().getActiveConnections())
                         .as("%s: active connections", backend.label).isZero();
@@ -468,6 +493,7 @@ class TransactionFailurePathsTest {
             }));
 
             assertThat(thrown).isInstanceOf(IllegalStateException.class);
+            awaitEvictedConnectionClosed(backend);
             assertThat(backend.rows()).as("rows stored").isZero();
             assertNextBorrowerIsClean(backend);
         }
