@@ -70,15 +70,27 @@ public class FileOperationManager {
     private final File serverRoot;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
+    /**
+     * Protected server-core files, matched by exact basename. Kept equal to the panel's protected
+     * list ({@code PROTECTED_SERVER_FILES.names} in UltiCloud's
+     * {@code packages/contracts/src/rest/server-files.ts}): the panel refuses these first, and this
+     * set refuses them again as defence in depth. Add an entry on both sides together.
+     */
     private static final Set<String> BLOCKED_FILES = new HashSet<String>(Arrays.asList(
         "server.properties", "ops.json", "whitelist.json",
         "banned-ips.json", "banned-players.json", "eula.txt",
         "usercache.json", "bukkit.yml", "spigot.yml",
-        "paper.yml", "paper-global.yml", "paper-world-defaults.yml"
+        "paper.yml", "paper-global.yml", "paper-world-defaults.yml",
+        "commands.yml", "permissions.yml", "paper-world.yml",
+        "purpur.yml", "help.yml"
     ));
 
+    /**
+     * Protected extensions, kept equal to the panel's {@code PROTECTED_SERVER_FILES.extensions}
+     * (see {@link #BLOCKED_FILES}).
+     */
     private static final Set<String> BLOCKED_EXTENSIONS = new HashSet<String>(Arrays.asList(
-        ".jar", ".sh", ".bat", ".exe", ".class"
+        ".jar", ".sh", ".bat", ".cmd", ".ps1", ".exe", ".class", ".command"
     ));
 
     /**
@@ -348,7 +360,9 @@ public class FileOperationManager {
      * @return a denied, non-configurable decision, or {@code null} if no name rule matches
      */
     private static AccessDecision deniedByName(String fileName) {
-        String fileNameLower = fileName.toLowerCase(Locale.ROOT);
+        // Trailing dots and spaces are dropped before matching, as the panel's list does: on
+        // Windows "server.properties." opens server.properties, so the suffix must not hide a name.
+        String fileNameLower = stripTrailingDotsAndSpaces(fileName).toLowerCase(Locale.ROOT);
 
         if (BLOCKED_FILES.contains(fileNameLower)) {
             return AccessDecision.deniedNonConfigurable("'" + fileName + "' is a protected server file");
@@ -505,6 +519,14 @@ public class FileOperationManager {
     private static boolean isUnderStateDirectory(String normalizedPath) {
         Path candidate = Paths.get(normalizedPath).normalize();
         return candidate.startsWith(STATE_DIR_RELATIVE);
+    }
+
+    private static String stripTrailingDotsAndSpaces(String name) {
+        int end = name.length();
+        while (end > 0 && (name.charAt(end - 1) == '.' || name.charAt(end - 1) == ' ')) {
+            end--;
+        }
+        return name.substring(0, end);
     }
 
     private static String basenameOf(String normalizedPath) {
