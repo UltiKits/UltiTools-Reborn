@@ -33,7 +33,7 @@ import com.sun.net.httpserver.HttpServer;
  * plan 22-19.
  *
  * <p>It answers the {@code /v1/catalogue/*} routes with bodies built from the frozen catalogue REST
- * contract 1.0.0 vendored in {@code src/test/resources/ulticloud-contract/rest/catalogue/1.0.0/}
+ * contract 1.1.0 vendored in {@code src/test/resources/ulticloud-contract/rest/catalogue/1.1.0/}
  * (plan 22-26): every body is a vendored valid fixture with only the scenario's values put in --
  * the module {@link #MODULE}, its versions {@link #VERSION} and {@link #LICENSED_VERSION}, their
  * API levels, the real {@code sizeBytes} and {@code sha256} of the JAR it serves, and download
@@ -101,7 +101,7 @@ public final class StubCatalogue implements AutoCloseable {
     /** A download URL at {@link #API_ORIGIN} inside a JSON string; icons and other hosts never match. */
     private static final Pattern VENDORED_DOWNLOAD = Pattern.compile(
             Pattern.quote(API_ORIGIN) + "(/v1/catalogue/modules/[^\"?#]*/download)\"");
-    private static final String CONTRACT = "ulticloud-contract/rest/catalogue/1.0.0/";
+    private static final String CONTRACT = com.ultikits.ultitools.contract.ContractFixtures.CATALOGUE_ROOT + "/";
     private static final String PUBLIC_VERSION_FIXTURE = "fixtures/versionGet/response/valid/public-download.json";
     private static final String LICENSED_VERSION_FIXTURE = "fixtures/versionGet/response/valid/license-required.json";
     private static final String MODULE_FIXTURE = "fixtures/moduleGet/response/valid/anonymous.json";

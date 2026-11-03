@@ -669,8 +669,9 @@ class CatalogueContractConformanceTest {
         }
         assertThat(schemaAccepts(file, body)).as("networknt accepts 1000 categories").isTrue();
         items.add(category.deepCopy());
-        assertThat(schema(file).validate(node(body.toString()))).as("1001 is refused with the portable bound")
-                .anySatisfy(error -> assertThat(error.toString()).contains("1000"));
+        assertThat(schema(file).validate(node(body.toString()))).as("1001 categories are refused").isNotEmpty();
+        assertThat(node(ContractFixtures.catalogueText(file)).at("/properties/data/properties/items/maxItems")
+                .intValue()).as("portable maxItems").isEqualTo(1000);
     }
 
     static Stream<String> refusedVersions() {
