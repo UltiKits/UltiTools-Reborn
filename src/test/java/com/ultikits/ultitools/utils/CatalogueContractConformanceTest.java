@@ -47,9 +47,9 @@ import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
- * {@link CatalogueClient} against the frozen catalogue REST contract 1.0.0 (plan 22-26, S-49, D-27,
- * D-28): UltiKits/ulticloud {@code main} commit {@code 682735c9}, vendored byte for byte under
- * {@code ulticloud-contract/rest/catalogue/1.0.0/} and checked by {@code ContractSyncTest}.
+ * {@link CatalogueClient} against the frozen catalogue REST contract 1.1.0 (plan 22-26, S-49, D-27,
+ * D-28): UltiKits/ulticloud {@code main} commit {@code 73f651e7}, vendored byte for byte under
+ * {@code ulticloud-contract/rest/catalogue/1.1.0/} and checked by {@code ContractSyncTest}.
  *
  * <p>Every fixture of an operation the framework reads ({@code modulesList}, {@code moduleGet},
  * {@code versionsList}, {@code versionGet}, {@code versionDownload}, {@code framework}) is served by
@@ -66,7 +66,7 @@ import com.ultikits.ultitools.stub.StubCatalogue;
  * ({@link #everyInvalidFixtureOfAReadOperationIsClassified}); the vendored schemas refuse each of them
  * with format assertions off, so the fixtures and the validator agree.
  */
-@DisplayName("CatalogueClient against the frozen catalogue REST contract 1.0.0")
+@DisplayName("CatalogueClient against the frozen catalogue REST contract 1.1.0")
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class CatalogueContractConformanceTest {
 
@@ -111,9 +111,6 @@ class CatalogueContractConformanceTest {
 
     private static final Map<String, Handling> INVALID = new LinkedHashMap<>();
 
-    /** The one valid fixture the Java validator refuses, for a reason in the validator (see its test). */
-    private static final String VALIDATOR_DIVERGENCE = "fixtures/categories/response/valid/collection.json";
-
     static {
         String v = "fixtures/versionGet/response/invalid/";
         INVALID.put(v + "api-level-zero.json", Handling.VERSION_REFUSED);
@@ -150,6 +147,10 @@ class CatalogueContractConformanceTest {
         INVALID.put(q + "versionsList/query/invalid/api-level-zero.json", Handling.QUERY_NEVER_SENT);
         INVALID.put(q + "versionsList/query/invalid/include-withdrawn-yes.json", Handling.QUERY_NEVER_SENT);
         INVALID.put(q + "versionsList/query/invalid/page-size-101.json", Handling.QUERY_NEVER_SENT);
+        INVALID.put(q + "versionsList/query/invalid/page-1000001.json", Handling.QUERY_NEVER_SENT);
+        INVALID.put(q + "versionsList/query/invalid/page-10000000000000000.json", Handling.QUERY_NEVER_SENT);
+        // Pagination uses the requested page number, never the response's page field.
+        INVALID.put(q + "versionsList/response/invalid/page-over-max.json", Handling.TOLERATED_NOT_READ);
         INVALID.put(q + "versionsList/query/invalid/undeclared-key.json", Handling.QUERY_NEVER_SENT);
     }
 
@@ -612,7 +613,7 @@ class CatalogueContractConformanceTest {
     @Test
     @DisplayName("the hand-made samples and their marker annotation are gone (S-49)")
     void noPlaceholderRemains() {
-        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/rest/catalogue/1.0.0"))
+        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/rest/catalogue/1.1.0"))
                 .as("control").isDirectory();
         assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/pending")).doesNotExist();
         // The name is split so the plan's own search for any use of the marker stays at zero.
@@ -637,7 +638,7 @@ class CatalogueContractConformanceTest {
             }
         }
         assertThat(invalid).containsExactlyInAnyOrderElementsOf(INVALID.keySet());
-        assertThat(INVALID).hasSize(28);
+        assertThat(INVALID).hasSize(31);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -647,14 +648,6 @@ class CatalogueContractConformanceTest {
         List<String> schemas = schemasFor(fixture);
         assertThat(schemas).as("a schema exists for " + fixture).isNotEmpty();
         JsonObject body = ContractFixtures.catalogueBody(fixture);
-        if (VALIDATOR_DIVERGENCE.equals(fixture)) {
-            // networknt 2.0.8 reads maxItems as a 32-bit int: the schema's 9007199254740991 (2^53 - 1)
-            // becomes -1, so this valid page is refused. The framework never requests categories;
-            // the divergence is pinned so a validator or contract change is noticed (reported to the backend).
-            assertThat(schema(schemas.get(0)).validate(node(body.toString())).toString())
-                    .contains("must have at most -1 items");
-            return;
-        }
         if (fixture.contains("/valid/")) {
             assertThat(schemas.stream().anyMatch(schema -> schemaAccepts(schema, body)))
                     .as(fixture + " " + schema(schemas.get(0)).validate(node(body.toString()))).isTrue();
@@ -663,6 +656,21 @@ class CatalogueContractConformanceTest {
                 assertThat(schemaAccepts(schema, body)).as(fixture + " against " + schema).isFalse();
             }
         }
+    }
+
+    @Test
+    void categoriesBoundIsPortableAndEnforcedAt1000() {
+        String file = "schemas/categories.response.200.schema.json";
+        JsonObject body = ContractFixtures.catalogueBody("fixtures/categories/response/valid/collection.json");
+        JsonArray items = body.getAsJsonObject("data").getAsJsonArray("items");
+        JsonObject category = items.get(0).getAsJsonObject().deepCopy();
+        while (items.size() < 1000) {
+            items.add(category.deepCopy());
+        }
+        assertThat(schemaAccepts(file, body)).as("networknt accepts 1000 categories").isTrue();
+        items.add(category.deepCopy());
+        assertThat(schema(file).validate(node(body.toString()))).as("1001 is refused with the portable bound")
+                .anySatisfy(error -> assertThat(error.toString()).contains("1000"));
     }
 
     static Stream<String> refusedVersions() {

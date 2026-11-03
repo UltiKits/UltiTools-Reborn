@@ -1,0 +1,13 @@
+{
+  "expect": "invalid_message",
+  "why": "A backup id must contain at least one non-dot character; '..' is not a backup.",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "type": "backups.delete",
+    "ts": 1761274800000,
+    "payload": {
+      "backupId": ".."
+    }
+  }
+}

@@ -27,13 +27,23 @@ class ContractSyncTest {
     private static final Path LOCK = ROOT.getParent().resolve("contract.lock.json");
     private static final Path CATALOGUE_ROOT = Paths.get("src/test/resources", ContractFixtures.CATALOGUE_ROOT);
     private static final Path CATALOGUE_LOCK = CATALOGUE_ROOT.getParent().resolve("contract.lock.json");
-    /** The frozen catalogue release's MANIFEST hash, as the backend's RELEASES.json records it (commit 682735c9). */
+    /** Both frozen exports come from the merge that includes protocol 2.1.0 and catalogue 1.1.0. */
+    private static final String SOURCE_COMMIT = "73f651e70a235b7418cee7f9c5a62d8fcfe3cab8";
+    private static final String PROTOCOL_MANIFEST_SHA256 =
+            "8555f80b793d8b057ed2d93b9a6d9e1faf75e03dd4970cf91e8d5020b0a2d187";
     private static final String CATALOGUE_MANIFEST_SHA256 =
-            "673feab2e47d38d79bfa3e57e3bf525749389d6cbebb49944e1b15cb31f9abd2";
+            "66ff7bef1410e6a523d9a9ef3891b7f38f8eed848a5a25e3e84f4cc30fc0089a";
 
     @Test
     void frozenTreeMatchesLockAndJavaVersion() throws Exception {
-        verify(ROOT, lock(), javaVersion());
+        JsonObject lock = lock();
+        assertThat(lock.get("contractVersion").getAsString()).isEqualTo("2.1.0");
+        assertThat(lock.get("manifestSha256").getAsString()).isEqualTo(PROTOCOL_MANIFEST_SHA256);
+        assertThat(lock.get("sourceCommit").getAsString()).isEqualTo(SOURCE_COMMIT);
+        assertThat(lock.get("sourceRef").getAsString()).isEqualTo("main");
+        assertThat(lock.get("sourcePath").getAsString())
+                .isEqualTo("packages/contracts/generated/protocol/v2/2.1.0");
+        verify(ROOT, lock, javaVersion());
         assertThat(ContractFixtures.legacyUuidCases()).hasSize(26);
     }
 
@@ -76,12 +86,15 @@ class ContractSyncTest {
         verify(CATALOGUE_ROOT, lock, catalogueVersion());
         assertThat(lock.get("manifestSha256").getAsString()).as("pinned frozen MANIFEST hash")
                 .isEqualTo(CATALOGUE_MANIFEST_SHA256);
-        assertThat(lock.get("sourceCommit").getAsString()).isEqualTo("682735c9a240bce44e90a3622d23b4adda9e9c2c");
+        assertThat(lock.get("contractVersion").getAsString()).isEqualTo("1.1.0");
+        assertThat(lock.get("sourceCommit").getAsString()).isEqualTo(SOURCE_COMMIT);
+        assertThat(lock.get("sourcePath").getAsString())
+                .isEqualTo("packages/contracts/generated/rest-v1/catalogue/1.1.0");
         assertThat(lock.get("sourceRef").getAsString()).isEqualTo("main");
         assertThat(ContractFixtures.cataloguePaths()).as("schemas").filteredOn(p -> p.startsWith("schemas/"))
                 .hasSize(21);
         assertThat(ContractFixtures.cataloguePaths()).as("fixtures").filteredOn(p -> p.startsWith("fixtures/"))
-                .hasSize(57);
+                .hasSize(64);
     }
 
     @Test

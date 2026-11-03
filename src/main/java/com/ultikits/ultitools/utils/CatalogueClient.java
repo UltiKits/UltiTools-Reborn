@@ -21,7 +21,7 @@ import com.ultikits.ultitools.manager.ModuleApiLevels;
  *
  * <p>The routes, the response envelope {@code {data: ...}} and the version object follow the frozen
  * catalogue REST contract {@value #CONTRACT_VERSION} of UltiCloud (UltiKits/ulticloud {@code main}
- * commit {@code 682735c9}, {@code packages/contracts/generated/rest-v1/catalogue/1.0.0/}), whose
+ * commit {@code 73f651e7}, {@code packages/contracts/generated/rest-v1/catalogue/1.1.0/}), whose
  * schemas and fixtures the tests read byte for byte. A module is addressed by its identifier; a
  * version names its {@code sizeBytes}, its lower-case {@code sha256}, its {@code apiLevel} (an
  * integer, or {@code null} when unknown) and a {@code download} whose {@code kind} is {@code
@@ -49,7 +49,7 @@ final class CatalogueClient {
     /** The route naming the newest UltiTools version. */
     static final String FRAMEWORK = "/v1/catalogue/framework";
     /** The catalogue REST contract version this client implements; the vendored lock must name the same. */
-    static final String CONTRACT_VERSION = "1.0.0";
+    static final String CONTRACT_VERSION = "1.1.0";
 
     /** The contract's {@code sha256}: 64 lower-case hex characters. */
     private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
