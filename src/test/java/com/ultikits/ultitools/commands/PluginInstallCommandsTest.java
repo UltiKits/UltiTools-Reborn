@@ -1445,7 +1445,7 @@ class PluginInstallCommandsTest {
         @Test
         @DisplayName("a real successful empty versions response keeps the no-compatible-version line")
         void versionsHttp200Empty_keepsTheRange() throws IOException {
-            withVersionsResponse(200, "{\"data\":{\"items\":[]}}", () -> {
+            withVersionsResponse(200, "{\"data\":{\"items\":[],\"total\":0,\"page\":1,\"pageSize\":5}}", () -> {
                 assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(org.bukkit.ChatColor.RED
                         + englishOf("%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
                                 "does-not-exist-on-ulticloud", 631, 630, 631));
@@ -1486,8 +1486,8 @@ class PluginInstallCommandsTest {
             try {
                 assertions.run();
                 assertThat(requests).containsExactly(
-                        "/v1/catalogue/modules/does-not-exist-on-ulticloud/versions?apiLevel=631&minApiLevel=630",
-                        "/v1/catalogue/modules/does-not-exist-on-ulticloud/versions?apiLevel=631&minApiLevel=630");
+                        "/v1/catalogue/modules/does-not-exist-on-ulticloud/versions?apiLevel=631&minApiLevel=630&page=1&pageSize=5",
+                        "/v1/catalogue/modules/does-not-exist-on-ulticloud/versions?apiLevel=631&minApiLevel=630&page=1&pageSize=5");
             } finally {
                 com.ultikits.ultitools.utils.PluginInstallUtilsTestAccess.resetBaseUrl();
                 catalogue.stop(0);

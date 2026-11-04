@@ -3,7 +3,7 @@
 This document explains what the version numbers of `com.ultikits:UltiTools-API` mean, how
 deprecation and removal work, and which removals each release makes (for 6.3.0, see
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
-changes for UltiCloud is in [UltiCloud protocol 2.0.0 (as of 6.3.1)](#ulticloud-protocol-200-as-of-631).
+changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
 ## Upgrade checklist: moving a module from 6.2.5 to 6.3.0
 
@@ -63,10 +63,12 @@ See the [XSeries 14.0.0 release notes](https://github.com/CryptoMorin/XSeries/re
 and the published [13.7.1](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/13.7.1/XSeries-13.7.1-sources.jar)
 and [14.0.0 sources](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/14.0.0/XSeries-14.0.0-sources.jar).
 
-## UltiCloud protocol 2.0.0 (as of 6.3.1)
+## UltiCloud protocol 2.1.0 (as of 6.3.1)
 
-6.3.1 replaces the framework's whole UltiCloud client with one that speaks UltiCloud protocol 2.0.0
-(the frozen contract `UltiKits/ulticloud` `aabd6d2`, vendored under `src/test/resources/ulticloud-contract/`).
+6.3.1 replaces the framework's whole UltiCloud client with one that speaks UltiCloud protocol 2.1.0
+and catalogue REST contract 1.1.0 (the frozen exports at `UltiKits/ulticloud` `73f651e7`, vendored under
+`src/test/resources/ulticloud-contract/`). These replace the client's 2.0.0 / 1.0.0 copies, not a
+second supported contract pair; the protocol 2.0.0 migration descriptions below remain applicable to v2.
 It is a PATCH release, so no public API is removed: every 6.3.0 public or protected member that only served
 the old cloud is deprecated for removal in 6.4.0 and either refuses explicitly or keeps doing what it says.
 The runtime behaviour of the cloud features changes without a migration period, because the old cloud
@@ -227,6 +229,16 @@ catalogue's `framework.downloadUrl` (Maven Central) is never downloaded by the f
 read for the newest-version check. `/upm update` stages a module against the version it read through the
 catalogue route, whatever shape the download URL has.
 
+Version lists explicitly request `page=N&pageSize=5` and keep the `apiLevel` and `minApiLevel`
+filters on every page. `PluginInstallUtils.getPluginVersions` and `/upm versions` return all pages in
+catalogue order, not just the first five entries. The newest-version lookup uses the first `isLatest`
+marker, or the greatest version across the filtered list when no marker remains after filtering.
+Reading stops at the first page's `total`, a page with fewer than five items, or page 1,000,000.
+A missing or invalid `total`, or any requested page that fails, makes the whole lookup fail without
+exposing a partial list; only a first-page 404 means the module is unknown. Each JSON response still
+has a 4,194,304-byte limit, which fits five worst-case 64,000-character changelogs without retaining
+the changelogs across pages. JAR size and hash verification are unchanged.
+
 ### Deprecations: the protocol v1 surface, removed in 6.4.0
 
 Every entry below is `@Deprecated(since = "6.3.1", forRemoval = true)` with a `@deprecated` paragraph and
@@ -365,6 +377,11 @@ take.
   resolve its state directory, ids and results are not kept at all.
 - **Module JARs are hash-checked, not signed.** The catalogue's `sha256` and `sizeBytes` protect against a
   corrupted or substituted download, not against a compromised catalogue.
+- **Version pagination is not a catalogue snapshot.** If a version is published while a multi-page
+  lookup is in progress, publication ordering can shift an entry between pages, so that lookup may
+  omit or repeat an entry. Retry `/upm versions` after publication has finished; do not treat a list
+  read during publication as a stable snapshot. The client does not add snapshot or concurrency
+  machinery for this combination.
 - **The state directory guard assumes the default layout.** The remote file guard finds `.ultikits/` through the
   server's working directory, while the credential store finds it from the plugin data folder
   (`<plugins dir>/../.ultikits`). With a relocated plugins folder and editable roots widened to reach it,

@@ -169,10 +169,10 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Get plugin versions.
+     * Gets all versions this framework can install, across every page of the catalogue.
      *
      * @param idString the plugin ID
-     * @return the plugin version list
+     * @return the complete plugin version list, newest first as the catalogue lists them
      */
     public static List<String> getPluginVersions(String idString) {
         List<CatalogueClient.Version> versions = CatalogueClient.versions(idString,
