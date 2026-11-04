@@ -62,7 +62,7 @@ public class CommandExecutionManager {
     private static final String ACTION_EXECUTE_COMMAND = "execute_command";
 
     /**
-     * {@code command.result.data.output} maxItems in the frozen 2.0.0 contract.
+     * {@code command.result.data.output} maxItems in the frozen 2.1.0 contract.
      */
     private static final int MAX_OUTPUT_LINES = 1000;
 
@@ -308,7 +308,7 @@ public class CommandExecutionManager {
      * Sets the WebSocket client.
      * @param client the WebSocket client
      * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     *     (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.1", forRemoval = true)
@@ -668,7 +668,7 @@ public class CommandExecutionManager {
 
     /**
      * Executes a command received from the panel.
-     * @deprecated Use execute(String, String, Executor, CommandResultSink), which the protocol 2.0.0
+     * @deprecated Use execute(String, String, Executor, CommandResultSink), which the protocol 2.1.0
      *     session calls for a panel command; this v1 handler replies only over the client handed to
      *     setWebSocketClient. Removed in 6.4.0.
      * @removeIn 6.4.0
@@ -817,7 +817,7 @@ public class CommandExecutionManager {
     
     /**
      * Command result data class.
-     * @deprecated There is no replacement: the protocol 2.0.0 command path reports through
+     * @deprecated There is no replacement: the protocol 2.1.0 command path reports through
      *     CommandResultSink. Removed in 6.4.0.
      * @removeIn 6.4.0
      */

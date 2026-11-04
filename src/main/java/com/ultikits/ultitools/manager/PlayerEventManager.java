@@ -72,7 +72,7 @@ public class PlayerEventManager implements Listener {
      *
      * @param client the WebSocket client
      * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.0.0) reports player events itself. Removed in 6.4.0.
+     *     (protocol 2.1.0) reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.1", forRemoval = true)
@@ -127,7 +127,7 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-join event.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -163,7 +163,7 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-quit event.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -203,7 +203,7 @@ public class PlayerEventManager implements Listener {
      * The message is passed through {@link SensitiveCommandRegistry#redactText} before it is sent,
      * both in the event and in the debug log line, since a player may paste a command into chat.
      * The chat itself, as other players and the local console see it, is not changed.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -246,7 +246,7 @@ public class PlayerEventManager implements Listener {
      * {@code @EventListener} but was never registered, so this handler and the three below had
      * never fired. Registering that class alongside this one was not an option: both emitted the
      * same {@code player_event} message type, so join/quit/chat would have been sent twice.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -277,7 +277,7 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-kick event.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -310,7 +310,7 @@ public class PlayerEventManager implements Listener {
      * The event carries only the command's normalised name ({@link SensitiveCommandRegistry#commandName}:
      * first token, leading {@code /} and namespace stripped, lower-cased), never its arguments, for
      * every command whether or not it is registered as sensitive.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -339,7 +339,7 @@ public class PlayerEventManager implements Listener {
 
     /**
      * Handles the player-world-change event.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */

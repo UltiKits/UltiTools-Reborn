@@ -261,7 +261,7 @@ public class ServerMonitorManager {
      * Set the WebSocket client.
      * @param client the WebSocket client
      * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     *     (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.1", forRemoval = true)
@@ -273,9 +273,9 @@ public class ServerMonitorManager {
 
     /**
      * Start monitoring server status: the protocol v1 {@code batch_update} sender, its log drain and
-     * the two sampling tasks it owns. As of 6.3.1 the framework never calls it; the protocol 2.0.0
+     * the two sampling tasks it owns. As of 6.3.1 the framework never calls it; the protocol 2.1.0
      * session samples through its own telemetry instead.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends
      *     the server's status and telemetry itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -374,7 +374,7 @@ public class ServerMonitorManager {
      * on the send thread, so shutting down sending removed it too. After the move, not
      * cancelling turns "stop monitoring" into "stop sending, but still iterate every world and
      * chunk every 5 seconds" -- and now on the main thread. See the PR #265 review.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends
      *     the server's status and telemetry itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -408,7 +408,7 @@ public class ServerMonitorManager {
 
     /**
      * Send server status information.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends
      *     the server's status and telemetry itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -508,7 +508,7 @@ public class ServerMonitorManager {
 
     /**
      * Send server status information with a request ID (in response to a backend request).
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends
      *     the server's status and telemetry itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -1193,7 +1193,7 @@ public class ServerMonitorManager {
 
     /**
      * Sends performance metrics data (standalone message, for on-demand requests).
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends
      *     the server's status and telemetry itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -1217,7 +1217,7 @@ public class ServerMonitorManager {
 
     /**
      * Sends performance metrics data with a request ID (in response to a backend request).
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends
      *     the server's status and telemetry itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -1335,7 +1335,7 @@ public class ServerMonitorManager {
 
     /**
      * Sends a player event.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     reports player events itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -1387,7 +1387,7 @@ public class ServerMonitorManager {
     /**
      * Whether the protocol v1 monitor that startMonitoring() starts is running.
      *
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends
      *     the server's status and telemetry itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */

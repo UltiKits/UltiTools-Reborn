@@ -35,7 +35,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
- * End-to-end reproduction of one panel file read over UltiCloud protocol 2.0.0: the frozen
+ * End-to-end reproduction of one panel file read over UltiCloud protocol 2.1.0: the frozen
  * fixture frame goes through {@link AgentMessageRouter} to {@link RemoteFileOperations}, which
  * resolves the path through {@link FileOperationManager#resolveTarget} exactly as the v1 handlers
  * do, and answers with {@code files.read.result}. Every reply is schema-checked by

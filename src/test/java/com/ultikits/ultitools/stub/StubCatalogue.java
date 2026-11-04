@@ -33,7 +33,7 @@ import com.sun.net.httpserver.HttpServer;
  * plan 22-19.
  *
  * <p>It answers the {@code /v1/catalogue/*} routes with bodies built from the frozen catalogue REST
- * contract 1.0.0 vendored in {@code src/test/resources/ulticloud-contract/rest/catalogue/1.0.0/}
+ * contract 1.1.0 vendored in {@code src/test/resources/ulticloud-contract/rest/catalogue/1.1.0/}
  * (plan 22-26): every body is a vendored valid fixture with only the scenario's values put in --
  * the module {@link #MODULE}, its versions {@link #VERSION} and {@link #LICENSED_VERSION}, their
  * API levels, the real {@code sizeBytes} and {@code sha256} of the JAR it serves, and download
@@ -101,7 +101,7 @@ public final class StubCatalogue implements AutoCloseable {
     /** A download URL at {@link #API_ORIGIN} inside a JSON string; icons and other hosts never match. */
     private static final Pattern VENDORED_DOWNLOAD = Pattern.compile(
             Pattern.quote(API_ORIGIN) + "(/v1/catalogue/modules/[^\"?#]*/download)\"");
-    private static final String CONTRACT = "ulticloud-contract/rest/catalogue/1.0.0/";
+    private static final String CONTRACT = com.ultikits.ultitools.contract.ContractFixtures.CATALOGUE_ROOT + "/";
     private static final String PUBLIC_VERSION_FIXTURE = "fixtures/versionGet/response/valid/public-download.json";
     private static final String LICENSED_VERSION_FIXTURE = "fixtures/versionGet/response/valid/license-required.json";
     private static final String MODULE_FIXTURE = "fixtures/moduleGet/response/valid/anonymous.json";
@@ -606,6 +606,10 @@ public final class StubCatalogue implements AutoCloseable {
     private String versionsPage(String query) {
         JsonObject root = JsonParser.parseString(fixture(VERSIONS_PAGE_FIXTURE)).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
+        Integer page = integerParameter(query, "page");
+        Integer pageSize = integerParameter(query, "pageSize");
+        data.addProperty("page", page == null ? 1 : page);
+        data.addProperty("pageSize", pageSize == null ? 20 : pageSize);
         JsonArray items = new JsonArray();
         if (mode == Mode.NO_COMPATIBLE_VERSION) {
             data.add("items", items);
@@ -614,7 +618,13 @@ public final class StubCatalogue implements AutoCloseable {
         }
         if (versionCount > 0) {
             JsonArray longPage = longVersionsPageItems();
-            data.add("items", longPage);
+            JsonArray slice = new JsonArray();
+            int size = pageSize == null ? 20 : pageSize;
+            int start = ((page == null ? 1 : page) - 1) * size;
+            for (int i = start; i < Math.min(start + size, longPage.size()); i++) {
+                slice.add(longPage.get(i));
+            }
+            data.add("items", slice);
             data.addProperty("total", longPage.size());
             return root.toString();
         }
@@ -756,6 +766,8 @@ public final class StubCatalogue implements AutoCloseable {
     public static String versionsPageOf(String... versions) {
         JsonObject root = JsonParser.parseString(fixture(VERSIONS_PAGE_FIXTURE)).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
+        data.addProperty("page", 1);
+        data.addProperty("pageSize", 5);
         JsonArray items = new JsonArray();
         for (String version : versions) {
             items.add(JsonParser.parseString(version).getAsJsonObject());

@@ -5,7 +5,10 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
 import com.google.gson.JsonArray;
@@ -21,7 +24,7 @@ import com.ultikits.ultitools.manager.ModuleApiLevels;
  *
  * <p>The routes, the response envelope {@code {data: ...}} and the version object follow the frozen
  * catalogue REST contract {@value #CONTRACT_VERSION} of UltiCloud (UltiKits/ulticloud {@code main}
- * commit {@code 682735c9}, {@code packages/contracts/generated/rest-v1/catalogue/1.0.0/}), whose
+ * commit {@code 73f651e7}, {@code packages/contracts/generated/rest-v1/catalogue/1.1.0/}), whose
  * schemas and fixtures the tests read byte for byte. A module is addressed by its identifier; a
  * version names its {@code sizeBytes}, its lower-case {@code sha256}, its {@code apiLevel} (an
  * integer, or {@code null} when unknown) and a {@code download} whose {@code kind} is {@code
@@ -49,7 +52,7 @@ final class CatalogueClient {
     /** The route naming the newest UltiTools version. */
     static final String FRAMEWORK = "/v1/catalogue/framework";
     /** The catalogue REST contract version this client implements; the vendored lock must name the same. */
-    static final String CONTRACT_VERSION = "1.0.0";
+    static final String CONTRACT_VERSION = "1.1.0";
 
     /** The contract's {@code sha256}: 64 lower-case hex characters. */
     private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
@@ -63,6 +66,10 @@ final class CatalogueClient {
     /** The contract's {@code apiLevel} range. */
     private static final int MIN_API_LEVEL = 1;
     private static final int MAX_API_LEVEL = 99999;
+    /** Five worst-case changelogs fit within the HTTP reader's unchanged 4 MiB limit. */
+    private static final int VERSION_PAGE_SIZE = 5;
+    /** The catalogue contract's maximum page number. */
+    private static final int MAX_VERSION_PAGE = 1_000_000;
 
     private CatalogueClient() {
     }
@@ -185,6 +192,7 @@ final class CatalogueClient {
 
     /**
      * Reads the versions one framework can install, newest first as the catalogue lists them.
+     * Reads every page before returning the list.
      *
      * @param identifyString the module's identify-string
      * @param level          this framework's API level
@@ -201,6 +209,7 @@ final class CatalogueClient {
 
     /**
      * Reads a version list without folding an unknown module into a successful empty list.
+     * Reads every page, newest first as the catalogue lists them; a failure never exposes a partial list.
      *
      * @param identifyString the module's identify-string
      * @param level this framework's API level
@@ -213,22 +222,7 @@ final class CatalogueClient {
         if (ref == null) {
             return VersionLookup.failed("invalid module identifier");
         }
-        CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref + "/versions" + levelQuery(level));
-        if (answer.kind() != CatalogueHttp.Kind.OK) {
-            return VersionLookup.failed("not reached");
-        }
-        if (answer.status() == 404) {
-            return VersionLookup.none();
-        }
-        if (answer.status() < 200 || answer.status() > 299) {
-            return VersionLookup.failed(VersionLookup.describe(answer.status(), answer.body()));
-        }
-        List<Version> parsed = parseVersions(answer);
-        if (parsed == null) {
-            return VersionLookup.failed(VersionLookup.UNREADABLE);
-        }
-        versions.addAll(parsed);
-        return VersionLookup.found(ref);
+        return readVersionPages(ref, level, versions, false, () -> false);
     }
 
     /**
@@ -290,26 +284,19 @@ final class CatalogueClient {
      *         all) is offered, {@code FAILED} when the lookup established nothing
      */
     static VersionLookup latestVersion(String identifyString, int level) {
+        return latestVersion(identifyString, level, () -> false);
+    }
+
+    /** Looks up the latest version, checking cancellation before every version-page request. */
+    static VersionLookup latestVersion(String identifyString, int level, BooleanSupplier stopped) {
         String ref = moduleRef(identifyString);
         if (ref == null) {
             return VersionLookup.none();
         }
-        CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref + "/versions" + levelQuery(level));
-        if (answer.kind() == CatalogueHttp.Kind.OVERSIZE) {
-            return VersionLookup.failed(VersionLookup.TOO_LARGE);
-        }
-        if (answer.kind() != CatalogueHttp.Kind.OK) {
-            return VersionLookup.failed("not reached");
-        }
-        if (answer.status() == 404) {
-            return VersionLookup.none();
-        }
-        if (answer.status() < 200 || answer.status() > 299) {
-            return VersionLookup.failed(VersionLookup.describe(answer.status(), answer.body()));
-        }
-        List<Version> versions = parseVersions(answer);
-        if (versions == null) {
-            return VersionLookup.failed(VersionLookup.UNREADABLE);
+        List<Version> versions = new ArrayList<>();
+        VersionLookup lookup = readVersionPages(ref, level, versions, true, stopped);
+        if (lookup.getOutcome() != VersionLookup.Outcome.FOUND) {
+            return lookup;
         }
         Version newest = newest(versions);
         return newest == null ? VersionLookup.none() : VersionLookup.found(newest.version());
@@ -386,6 +373,115 @@ final class CatalogueClient {
         return newest;
     }
 
+    /**
+     * Collects pages privately until successful termination, so no caller observes a partial lookup.
+     * Only the first total controls termination, but every page must carry a non-negative integer total.
+     * Latest-only lookups may stop at the first marked version, just as {@link #newest} does.
+     */
+    private static VersionLookup readVersionPages(String ref, int level, List<Version> versions,
+                                                 boolean stopAtLatest, BooleanSupplier stopped) {
+        List<Version> collected = new ArrayList<>();
+        Set<String> seenVersions = new HashSet<>();
+        BigDecimal firstTotal = null;
+        for (int page = 1; ; page++) {
+            if (stopped.getAsBoolean()) {
+                return VersionLookup.failed("stopped");
+            }
+            CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref + "/versions" + levelQuery(level)
+                    + "&page=" + page + "&pageSize=" + VERSION_PAGE_SIZE);
+            VersionLookup failure = versionPageFailure(answer, page);
+            if (failure != null) {
+                return failure;
+            }
+            JsonObject data = dataObject(answer);
+            BigDecimal total = versionPageTotal(data, page);
+            if (total == null) {
+                return VersionLookup.failed(VersionLookup.UNREADABLE);
+            }
+            List<Version> parsed = versionPageItems(data);
+            if (parsed == null) {
+                return VersionLookup.failed(VersionLookup.UNREADABLE);
+            }
+            if (page == 1) {
+                firstTotal = total;
+            }
+            if (!appendVersionPage(collected, seenVersions, parsed, firstTotal, total)) {
+                return VersionLookup.failed(VersionLookup.UNREADABLE);
+            }
+            if (finishedVersionPages(stopAtLatest, parsed, page, collected.size(), firstTotal)) {
+                versions.addAll(collected);
+                return VersionLookup.found(ref);
+            }
+        }
+    }
+
+    /** Refuses transport errors before interpreting any pagination fields. */
+    private static VersionLookup versionPageFailure(CatalogueHttp.Json answer, int page) {
+        if (answer.kind() == CatalogueHttp.Kind.OVERSIZE) {
+            return VersionLookup.failed(VersionLookup.TOO_LARGE);
+        }
+        if (answer.kind() != CatalogueHttp.Kind.OK) {
+            return VersionLookup.failed("not reached");
+        }
+        if (page == 1 && answer.status() == 404) {
+            return VersionLookup.none();
+        }
+        if (answer.status() < 200 || answer.status() > 299) {
+            return VersionLookup.failed(VersionLookup.describe(answer.status(), answer.body()));
+        }
+        return null;
+    }
+
+    /** Returns the non-negative total only when the response echoes the requested page and size. */
+    private static BigDecimal versionPageTotal(JsonObject data, int page) {
+        if (data == null) {
+            return null;
+        }
+        BigDecimal total = integer(data.get("total"));
+        BigDecimal responsePage = integer(data.get("page"));
+        BigDecimal responseSize = integer(data.get("pageSize"));
+        if (total == null || total.signum() < 0 || responsePage == null || responseSize == null
+                || responsePage.compareTo(BigDecimal.valueOf(page)) != 0
+                || responseSize.compareTo(BigDecimal.valueOf(VERSION_PAGE_SIZE)) != 0) {
+            return null;
+        }
+        return total;
+    }
+
+    private static List<Version> versionPageItems(JsonObject data) {
+        List<Version> parsed = parseVersions(data);
+        return parsed == null || parsed.size() > VERSION_PAGE_SIZE ? null : parsed;
+    }
+
+    /** Validates page length and uniqueness before exposing its versions to the private collector. */
+    private static boolean appendVersionPage(List<Version> collected, Set<String> seenVersions,
+                                             List<Version> parsed, BigDecimal firstTotal, BigDecimal total) {
+        BigDecimal readItems = BigDecimal.valueOf((long) collected.size() + parsed.size());
+        if (parsed.size() < VERSION_PAGE_SIZE
+                && (readItems.compareTo(firstTotal) < 0 || readItems.compareTo(total) < 0)) {
+            return false;
+        }
+        for (Version version : parsed) {
+            if (!seenVersions.add(version.version())) {
+                return false;
+            }
+        }
+        collected.addAll(parsed);
+        return true;
+    }
+
+    private static boolean finishedVersionPages(boolean stopAtLatest, List<Version> parsed, int page,
+                                                int readItems, BigDecimal firstTotal) {
+        return (stopAtLatest && parsed.stream().anyMatch(Version::latest))
+                || lastVersionPage(page, parsed.size(), readItems, firstTotal);
+    }
+
+    /** The bounded page-number protocol has no cursor and needs no extra request after a full last page. */
+    private static boolean lastVersionPage(int page, int pageItems, int readItems, BigDecimal total) {
+        return page >= MAX_VERSION_PAGE || pageItems < VERSION_PAGE_SIZE
+                || BigDecimal.valueOf(readItems).compareTo(total) >= 0;
+    }
+
     // ------------------------------------------------------------------ parsing
 
     /**
@@ -393,11 +489,12 @@ final class CatalogueClient {
      *         version that breaks the contract makes the whole answer unusable, so the newest version
      *         is never chosen from a list the catalogue got wrong
      */
-    private static List<Version> parseVersions(CatalogueHttp.Json answer) {
-        JsonArray items = itemsOf(answer);
-        if (items == null) {
+    private static List<Version> parseVersions(JsonObject data) {
+        JsonElement value = data.get("items");
+        if (value == null || !value.isJsonArray()) {
             return null;
         }
+        JsonArray items = value.getAsJsonArray();
         List<Version> versions = new ArrayList<>();
         for (JsonElement item : items) {
             Version version = item.isJsonObject() ? toVersion(item.getAsJsonObject()) : null;
@@ -448,18 +545,14 @@ final class CatalogueClient {
         JsonElement latest = object.get("isLatest");
         String sha256 = string(object, "sha256");
         BigDecimal sizeBytes = integer(object.get("sizeBytes"));
-        if (version == null || version.trim().isEmpty() || latest == null || !latest.isJsonPrimitive()
-                || !latest.getAsJsonPrimitive().isBoolean() || sha256 == null || !SHA256.matcher(sha256).matches()
-                || sizeBytes == null || sizeBytes.signum() <= 0
-                || sizeBytes.compareTo(BigDecimal.valueOf(MAX_SIZE_BYTES)) > 0 || !object.has("apiLevel")) {
+        if (!hasVersionMetadata(version, latest, sha256, sizeBytes, object)) {
             return null;
         }
         JsonElement apiLevelValue = object.get("apiLevel");
         Integer apiLevel = null;
         if (!apiLevelValue.isJsonNull()) {
             BigDecimal level = integer(apiLevelValue);
-            if (level == null || level.compareTo(BigDecimal.valueOf(MIN_API_LEVEL)) < 0
-                    || level.compareTo(BigDecimal.valueOf(MAX_API_LEVEL)) > 0) {
+            if (!validApiLevel(level)) {
                 return null;
             }
             apiLevel = level.intValue();
@@ -476,6 +569,19 @@ final class CatalogueClient {
         }
         return new Version(version, latest.getAsBoolean(), sha256, sizeBytes.longValue(), apiLevel, kind,
                 "public".equals(kind) ? url : null);
+    }
+
+    private static boolean validApiLevel(BigDecimal level) {
+        return level != null && level.compareTo(BigDecimal.valueOf(MIN_API_LEVEL)) >= 0
+                && level.compareTo(BigDecimal.valueOf(MAX_API_LEVEL)) <= 0;
+    }
+
+    private static boolean hasVersionMetadata(String version, JsonElement latest, String sha256,
+                                               BigDecimal sizeBytes, JsonObject object) {
+        return version != null && !version.trim().isEmpty() && latest != null && latest.isJsonPrimitive()
+                && latest.getAsJsonPrimitive().isBoolean() && sha256 != null && SHA256.matcher(sha256).matches()
+                && sizeBytes != null && sizeBytes.signum() > 0
+                && sizeBytes.compareTo(BigDecimal.valueOf(MAX_SIZE_BYTES)) <= 0 && object.has("apiLevel");
     }
 
     /** @return the JSON number as an integer, or {@code null} when it is absent, not a number or not whole */

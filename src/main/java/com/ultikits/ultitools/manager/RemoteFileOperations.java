@@ -37,7 +37,7 @@ import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
 
 /**
- * Answers the UltiCloud protocol 2.0.0 {@code files.*} requests for one connection; internal, not
+ * Answers the UltiCloud protocol 2.1.0 {@code files.*} requests for one connection; internal, not
  * for module use.
  *
  * <p>Every request resolves its path through {@link FileOperationManager#resolveTarget} unchanged,

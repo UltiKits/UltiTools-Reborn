@@ -221,7 +221,7 @@ public class UltiPanelLogTransmitter {
      * @param webSocketClient the WebSocket client
      * @param serverId the server ID
      * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.0.0) streams the console through a transmitter it builds itself. Removed in
+     *     (protocol 2.1.0) streams the console through a transmitter it builds itself. Removed in
      *     6.4.0.
      * @removeIn 6.4.0
      */

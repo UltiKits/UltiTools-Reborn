@@ -169,10 +169,10 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Get plugin versions.
+     * Gets all versions this framework can install, across every page of the catalogue.
      *
      * @param idString the plugin ID
-     * @return the plugin version list
+     * @return the complete plugin version list, newest first as the catalogue lists them
      */
     public static List<String> getPluginVersions(String idString) {
         List<CatalogueClient.Version> versions = CatalogueClient.versions(idString,
@@ -246,27 +246,27 @@ public class PluginInstallUtils {
     }
 
     /**
-     * {@link #lookUpPluginLatestVersion(String)}, with a stop signal read between its two requests
-     * (Phase 19, D19-032): when {@code stopped} is true once the module is found, the
-     * {@code latest} request is not sent and the lookup is {@link VersionLookup.Outcome#FAILED}
-     * with the failure {@code "stopped"}. The start-up update check passes its own stop flag, so a
-     * check stopped by the plugin's disable sends no further request.
+     * {@link #lookUpPluginLatestVersion(String)}, with a stop signal read before each request,
+     * including every version page (Phase 19, D19-032). When {@code stopped} is true, the lookup is
+     * {@link VersionLookup.Outcome#FAILED} with the failure {@code "stopped"}. The start-up update
+     * check passes its own stop flag, so a check stopped by the plugin's disable sends no further
+     * request.
      *
      * @param idString the module's identify string
-     * @param stopped  read once, after the first request answers
+     * @param stopped  read before the module request and every version-page request
      * @return the lookup's outcome, never {@code null}
      * @since 6.3.0
      */
     @ApiStatus.Internal
     public static VersionLookup lookUpPluginLatestVersion(String idString, java.util.function.BooleanSupplier stopped) {
+        if (stopped.getAsBoolean()) {
+            return VersionLookup.failed("stopped");
+        }
         VersionLookup module = CatalogueClient.moduleKnown(idString);
         if (module.getOutcome() != VersionLookup.Outcome.FOUND) {
             return module;
         }
-        if (stopped.getAsBoolean()) {
-            return VersionLookup.failed("stopped");
-        }
-        return CatalogueClient.latestVersion(idString, ModuleApiLevels.frameworkLevel());
+        return CatalogueClient.latestVersion(idString, ModuleApiLevels.frameworkLevel(), stopped);
     }
 
     /**

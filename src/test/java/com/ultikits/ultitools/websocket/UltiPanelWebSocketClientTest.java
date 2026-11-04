@@ -643,7 +643,7 @@ class UltiPanelWebSocketClientTest {
     }
 
     /**
-     * 6.3.1 (plan 22-25): protocol 2.0.0 has no v1 gateway, so a v1 client never opens a socket. A
+     * 6.3.1 (plan 22-25): protocol 2.1.0 has no v1 gateway, so a v1 client never opens a socket. A
      * local listening socket stands in for the gateway, so "no socket" is observed on the wire.
      */
     @Nested

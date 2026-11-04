@@ -9,9 +9,9 @@ import com.ultikits.ultitools.UltiTools;
  * The UltiCloud base URL, plus the three protected protocol v1 REST calls kept so 6.3.0 subclasses
  * still link.
  * <p>
- * As of 6.3.1 the base URL ({@code env.yml} {@code api-url}) is read by the protocol 2.0.0 client,
+ * As of 6.3.1 the base URL ({@code env.yml} {@code api-url}) is read by the protocol 2.1.0 client,
  * and the v1 calls ({@code /server/getByUUID}, {@code /editor/register}, {@code /editor/updateServer})
- * send nothing: protocol 2.0.0 has no v1 REST cloud. Each returns a failure response with status
+ * send nothing: protocol 2.1.0 has no v1 REST cloud. Each returns a failure response with status
  * {@code -1} (no HTTP exchange happened) and writes one INFO line per run; all three are deprecated
  * for removal in 6.4.0.
  *
@@ -87,7 +87,7 @@ public class HttpRequestUtils {
      * @param uuid  ignored, nothing is sent
      * @param token ignored, nothing is sent
      * @return a failure response with status {@code -1} and a body naming the removal
-     * @deprecated There is no replacement: a protocol 2.0.0 server is linked with
+     * @deprecated There is no replacement: a protocol 2.1.0 server is linked with
      *     {@code /ulticloud login} and identified by its server credential. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -108,7 +108,7 @@ public class HttpRequestUtils {
      * @param ssl    ignored, nothing is sent
      * @param token  ignored, nothing is sent
      * @return a failure response with status {@code -1} and a body naming the removal
-     * @deprecated There is no replacement: {@code /ulticloud login} links a protocol 2.0.0 server
+     * @deprecated There is no replacement: {@code /ulticloud login} links a protocol 2.1.0 server
      *     through the device authorization. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -128,7 +128,7 @@ public class HttpRequestUtils {
      * @param ssl    ignored, nothing is sent
      * @param token  ignored, nothing is sent
      * @return a failure response with status {@code -1} and a body naming the removal
-     * @deprecated There is no replacement: a protocol 2.0.0 server reports its own state over its
+     * @deprecated There is no replacement: a protocol 2.1.0 server reports its own state over its
      *     connection. Removed in 6.4.0.
      * @removeIn 6.4.0
      */

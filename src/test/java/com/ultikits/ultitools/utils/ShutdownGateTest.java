@@ -25,7 +25,7 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
 
 /**
  * 22-23 shutdown-window round (maintainer decision of 2026-10-26): the router's shutdown gate, swept over every
- * gateway-to-agent type of the frozen 2.0.0 table. While the server is shutting down a state-changing request never
+ * gateway-to-agent type of the frozen 2.1.0 table. While the server is shutting down a state-changing request never
  * reaches its handler and gets its shutting-down failure in a schema-valid shape; every other type still reaches its
  * handler. The gate is ahead of the switch gate and holds its permit for the whole handler call.
  */

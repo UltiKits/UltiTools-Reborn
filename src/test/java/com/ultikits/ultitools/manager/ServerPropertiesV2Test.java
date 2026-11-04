@@ -3,6 +3,11 @@ package com.ultikits.ultitools.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -36,7 +41,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
- * The protocol 2.0.0 {@code properties.get} / {@code properties.update} surface over the existing
+ * The protocol 2.1.0 {@code properties.get} / {@code properties.update} surface over the existing
  * line-preserving {@link ServerPropertiesManager} rewrite.
  *
  * <p>Two things are pinned here beyond the happy path. The optimistically concurrent write: an
@@ -89,7 +94,7 @@ class ServerPropertiesV2Test {
 
         propsFile = tmp.resolve("server.properties");
         Files.write(propsFile, SAMPLE.getBytes(StandardCharsets.UTF_8));
-        properties = new ServerPropertiesManager(tmp.toFile());
+        properties = spy(new ServerPropertiesManager(tmp.toFile()));
         audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
         handler = new RemotePropertiesHandler(properties, audit::add, () -> !disabling);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
@@ -241,6 +246,23 @@ class ServerPropertiesV2Test {
                     .as(fixture.path()).isEqualTo("invalid_message");
         }
         assertThat(Files.readAllBytes(propsFile)).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("empty changes with the real baseVersion replies to the request without entering the writer")
+    void emptyChangesWithMatchingVersionNeverReachTheFile() throws IOException {
+        byte[] before = Files.readAllBytes(propsFile);
+        java.nio.file.attribute.FileTime modified = Files.getLastModifiedTime(propsFile);
+        JsonObject request = updateRequest(RemoteFilesEndToEndTest.sha256(before), new JsonObject());
+        router.dispatch(request.toString(), channel);
+
+        JsonObject reply = only(channel);
+        assertThat(reply.get("replyTo").getAsString()).isEqualTo(request.get("id").getAsString());
+        assertThat(reply.get("type").getAsString()).isEqualTo("error");
+        assertThat(reply.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+        verify(properties, never()).updateWithBaseVersion(anyString(), anyMap());
+        assertThat(Files.readAllBytes(propsFile)).isEqualTo(before);
+        assertThat(Files.getLastModifiedTime(propsFile)).isEqualTo(modified);
     }
 
     @Test

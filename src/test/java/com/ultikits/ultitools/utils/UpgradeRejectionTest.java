@@ -20,7 +20,7 @@ import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.contract.ContractFixtures.Fixture;
 
 /**
- * The refused-upgrade parser against the vendored contract 2.0.0 fixtures
+ * The refused-upgrade parser against the vendored contract 2.1.0 fixtures
  * {@code fixtures/agent-rest/agentUpgrade/error/} (plan 22-20, S-44 narrowed by S-63). As PROTOCOL.md
  * section 2 states, each valid file name starts with the HTTP status it answers; an invalid file
  * without a status prefix must be refused by every status's schema, so it is parsed under all four.
@@ -66,7 +66,7 @@ class UpgradeRejectionTest {
     void fixtureDirectoriesAreComplete() {
         assertThat(validSamples()).extracting(UpgradeRejectionTest::statusOf).containsExactlyInAnyOrder(401, 402, 426, 429);
         assertThat(invalidSamples()).hasSize(6);
-        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/v2/2.0.0")).as("control").isDirectory();
+        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/v2/2.1.0")).as("control").isDirectory();
         assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/provisional"))
                 .as("the Wave A stand-in samples are gone").doesNotExist();
     }

@@ -143,7 +143,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: this parsed the protocol v1 Worker envelope {@code {code, msg, data}}, which UltiCloud no longer serves. The protocol 2.0.0 catalogue answers {@code {data: ...}} and the framework parses it itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: this parsed the protocol v1 Worker envelope {@code {code, msg, data}}, which UltiCloud no longer serves. The protocol 2.1.0 catalogue answers {@code {data: ...}} and the framework parses it itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -163,7 +163,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: {@code /ulticloud login} links a protocol 2.0.0 server. Removed in 6.4.0.",
+    "replacement": "There is no replacement: {@code /ulticloud login} links a protocol 2.1.0 server. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -547,7 +547,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Use execute(String, String, Executor, CommandResultSink), which the protocol 2.0.0 session calls for a panel command; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
+    "replacement": "Use execute(String, String, Executor, CommandResultSink), which the protocol 2.1.0 session calls for a panel command; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -558,7 +558,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -568,7 +568,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the protocol 2.0.0 command path reports through CommandResultSink. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the protocol 2.1.0 command path reports through CommandResultSink. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -647,7 +647,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement for modules: the framework's own UltiCloud session (protocol 2.0.0) answers the panel's file requests; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
+    "replacement": "There is no replacement for modules: the framework's own UltiCloud session (protocol 2.1.0) answers the panel's file requests; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -658,7 +658,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -693,7 +693,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -704,7 +704,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -715,7 +715,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -726,7 +726,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -737,7 +737,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -748,7 +748,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -759,7 +759,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -770,7 +770,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -781,7 +781,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) streams the console itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) streams the console itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -792,7 +792,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -803,7 +803,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -814,7 +814,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -825,7 +825,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -836,7 +836,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -847,7 +847,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -858,7 +858,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -869,7 +869,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -915,7 +915,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -926,7 +926,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -937,7 +937,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -948,7 +948,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) reports player events itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) reports player events itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -959,7 +959,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -970,7 +970,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -981,7 +981,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -992,7 +992,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1003,7 +1003,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) sends the server's status and telemetry itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1014,7 +1014,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Use readVersioned(int) and updateWithBaseVersion(String, Map), which the protocol 2.0.0 session calls; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
+    "replacement": "Use readVersioned(int) and updateWithBaseVersion(String, Map), which the protocol 2.1.0 session calls; this v1 handler replies only over the client handed to setWebSocketClient. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1025,7 +1025,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1036,7 +1036,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.0.0) streams the console through a transmitter it builds itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework never calls it, and its own UltiCloud session (protocol 2.1.0) streams the console through a transmitter it builds itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1139,7 +1139,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: a protocol 2.0.0 server is linked with {@code /ulticloud login} and identified by its server credential. Removed in 6.4.0.",
+    "replacement": "There is no replacement: a protocol 2.1.0 server is linked with {@code /ulticloud login} and identified by its server credential. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1150,7 +1150,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: {@code /ulticloud login} links a protocol 2.0.0 server through the device authorization. Removed in 6.4.0.",
+    "replacement": "There is no replacement: {@code /ulticloud login} links a protocol 2.1.0 server through the device authorization. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1161,7 +1161,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: a protocol 2.0.0 server reports its own state over its connection. Removed in 6.4.0.",
+    "replacement": "There is no replacement: a protocol 2.1.0 server reports its own state over its connection. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1254,7 +1254,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Use CloudPlayerLinks to link a player; protocol 2.0.0 has no v1 REST cloud, so every call of this class is refused. Removed in 6.4.0.",
+    "replacement": "Use CloudPlayerLinks to link a player; protocol 2.1.0 has no v1 REST cloud, so every call of this class is refused. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1265,7 +1265,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0.",
+    "replacement": "Use CloudPlayerLinks#create to link a player; protocol 2.1.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1276,7 +1276,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Use CloudPlayerLinks#create to link a player; protocol 2.0.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0.",
+    "replacement": "Use CloudPlayerLinks#create to link a player; protocol 2.1.0 has no v1 REST cloud, so this call is always refused. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1306,7 +1306,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) paces its reconnects itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) paces its reconnects itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1326,7 +1326,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) paces its reconnects itself. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) paces its reconnects itself. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -1336,7 +1336,7 @@
     "since": "6.3.1",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.0.0) carries every panel request, and modules answer panel requests through PanelResponderRegistry. Removed in 6.4.0.",
+    "replacement": "There is no replacement: the framework's own UltiCloud session (protocol 2.1.0) carries every panel request, and modules answer panel requests through PanelResponderRegistry. Removed in 6.4.0.",
     "status": "ANNOUNCED"
   }
 ]

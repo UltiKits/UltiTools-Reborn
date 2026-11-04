@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -163,7 +164,11 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * @param message the message to send
      */
     static void sendStringMessage(CommandSender sender, String message) {
-        sender.sendMessage(message);
+        if (Bukkit.isPrimaryThread()) {
+            sender.sendMessage(message);
+        } else {
+            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> sender.sendMessage(message));
+        }
     }
 
     @CmdMapping(format = "list")
@@ -173,11 +178,13 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     }
 
     @CmdMapping(format = "install <plugin> <version>")
+    @RunAsync
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin, @CmdParam("version") String version) {
         sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, version));
     }
 
     @CmdMapping(format = "install <plugin>")
+    @RunAsync
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, null));
     }
@@ -188,34 +195,35 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      */
     private static void sendInstallResult(CommandSender sender, PluginInstallUtils.InstallResult result) {
         if (result.isInstalled()) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
+            sendStringMessage(sender, ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
         } else if (result.getReasonKey() != null) {
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(result.getReasonKey()),
+            sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(result.getReasonKey()),
                     result.getReasonArgs()));
         } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
+            sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
         }
     }
 
     @CmdMapping(format = "versions <plugin>")
+    @RunAsync
     public void listVersions(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         List<String> pluginVersions = new ArrayList<>();
         VersionLookup lookup =
                 PluginInstallUtils.lookUpPluginVersions(plugin, pluginVersions);
         if (lookup.getOutcome() == VersionLookup.Outcome.NONE) {
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+            sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(
                     "UltiCloud 上没有找到模块 %s。"), plugin));
             return;
         }
         if (lookup.isFailed()) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("获取版本列表失败！"));
+            sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("获取版本列表失败！"));
             return;
         }
         if (pluginVersions.isEmpty()) {
             // The catalogue lists only the versions this framework installs (plan 18-40): an empty
             // list means none, which an empty table would not say.
             int level = ModuleApiLevels.frameworkLevel();
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+            sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(
                     "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。"),
                     plugin, level, ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, level));
             return;
@@ -237,7 +245,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             }
             i1++;
         }
-        sender.sendMessage(stringBuilder.toString());
+        sendStringMessage(sender, stringBuilder.toString());
     }
 
     // Deliberately not @RunAsync, though it opens one archive per entry of the modules folder:
@@ -568,7 +576,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         if (names.isEmpty()) {
             return false;
         }
-        sender.sendMessage(ChatColor.YELLOW + String.format(
+        sendStringMessage(sender, ChatColor.YELLOW + String.format(
             UltiTools.getInstance().i18n("更新检查未完成：无法确认 %s 的最新版本。"), String.join(", ", names)));
         return true;
     }
@@ -589,7 +597,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
         if (updateManager == null) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+            sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
             return;
         }
         UpdateInfo info = updateManager.getModuleUpdates().get(pluginName);
@@ -597,11 +605,11 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             if (updateManager.getUnconfirmed().contains(pluginName)) {
                 sendIncompleteIfAny(sender, Collections.singletonList(pluginName));
             } else {
-                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
+                sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
             }
             return;
         }
-        sender.sendMessage(ChatColor.YELLOW + String.format(
+        sendStringMessage(sender, ChatColor.YELLOW + String.format(
             UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
         sendStageResult(sender, pluginName, PluginInstallUtils.stageUpdate(info.getIdentifyString()));
     }
@@ -621,27 +629,27 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         if (result.getPreviousFailure() != null) {
             // A start could not apply the previous update of this module; the operator hears about
             // it here as well as in that start's log, before anything else.
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+            sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(
                     "上一次 %s 的更新没有应用：%s"), pluginName, result.getPreviousFailure()));
         }
         switch (result.getOutcome()) {
             case STAGED:
-                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n(
+                sendStringMessage(sender, ChatColor.GREEN + String.format(UltiTools.getInstance().i18n(
                         "已暂存 %s 的更新（%s → %s）。更新将在下次启动时生效：只有新版本确实加载后才会保留，否则恢复为 %s。"),
                         pluginName, result.getOldVersion(), result.getNewVersion(), result.getOldVersion()));
                 return true;
             case ALREADY_STAGED:
-                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                sendStringMessage(sender, ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
                         "%s 已有一个暂存的更新（版本 %s），将在下次启动时生效；没有做任何改动。"),
                         pluginName, result.getNewVersion()));
                 return false;
             case BUSY:
                 if (result.getNewVersion() == null) {
                     // Another /upm command is downloading an update of this module right now.
-                    sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                    sendStringMessage(sender, ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
                             "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。"), pluginName));
                 } else {
-                    sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                    sendStringMessage(sender, ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
                             "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。"),
                             pluginName, result.getNewVersion()));
                 }
@@ -650,7 +658,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 break;
         }
         String reason = String.format(UltiTools.getInstance().i18n(result.getReasonKey()), result.getReasonArgs());
-        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+        sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(
                 "%s 的更新未能暂存：%s。没有做任何改动。"), pluginName, reason));
         return false;
     }
@@ -659,14 +667,14 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
         if (updateManager == null || updateManager.getModuleUpdates().isEmpty()) {
             if (!sendIncompleteIfAny(sender, unconfirmedModules(updateManager))) {
-                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+                sendStringMessage(sender, ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
             }
             return;
         }
         int staged = 0;
         int notStaged = 0;
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
-            sender.sendMessage(ChatColor.YELLOW + String.format(
+            sendStringMessage(sender, ChatColor.YELLOW + String.format(
                 UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
             if (sendStageResult(sender, info.getPluginName(), PluginInstallUtils.stageUpdate(info.getIdentifyString()))) {
                 staged++;
@@ -674,7 +682,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 notStaged++;
             }
         }
-        sender.sendMessage(ChatColor.GREEN + String.format(
+        sendStringMessage(sender, ChatColor.GREEN + String.format(
             UltiTools.getInstance().i18n("全部处理完成：%d 个已暂存，%d 个未能暂存。已暂存的更新将在下次启动时生效。"),
             staged, notStaged));
         sendIncompleteIfAny(sender, unconfirmedModules(updateManager));

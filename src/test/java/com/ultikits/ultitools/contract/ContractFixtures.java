@@ -13,9 +13,9 @@ import java.util.List;
 import java.util.Map;
 
 public final class ContractFixtures {
-    public static final String ROOT = "ulticloud-contract/v2/2.0.0";
-    /** The frozen catalogue REST contract 1.0.0 (UltiKits/ulticloud main 682735c9), vendored byte for byte. */
-    public static final String CATALOGUE_ROOT = "ulticloud-contract/rest/catalogue/1.0.0";
+    public static final String ROOT = "ulticloud-contract/v2/2.1.0";
+    /** The frozen catalogue REST contract 1.1.0 (UltiKits/ulticloud main 73f651e7), vendored byte for byte. */
+    public static final String CATALOGUE_ROOT = "ulticloud-contract/rest/catalogue/1.1.0";
 
     private ContractFixtures() { }
 

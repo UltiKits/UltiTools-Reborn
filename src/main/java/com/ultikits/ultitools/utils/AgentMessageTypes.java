@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Set;
 
 final class AgentMessageTypes {
-    static final String CONTRACT_VERSION = "2.0.0";
+    static final String CONTRACT_VERSION = "2.1.0";
     enum Direction { UP, DOWN, BOTH }
     enum ReplyTo { REQUIRED, FORBIDDEN, OPTIONAL }
 

@@ -37,16 +37,17 @@ final class CatalogueHttp {
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final int READ_TIMEOUT_MS = 15_000;
     /**
-     * The most bytes of a JSON answer that is read, derived from the catalogue contract rather than
-     * picked: the largest answer this client asks for is one page of versions. The contract caps a
-     * page at 100 entries ({@code pageSize} 1..100, default 20) and a version's {@code changelog} at
-     * 5,000 characters, so one page carries at most 500,000 characters of changelog. UTF-8 spends up
-     * to four bytes on one character, and a JSON serializer up to six (a four-hex-digit escape), so
-     * that page is at most 3,000,000 bytes; the envelope and the hundred versions' other fields stay
-     * well inside the remaining megabyte. A module's own answer is smaller: its {@code description}
-     * is capped at 50,000 characters and its {@code latest} version's changelog at 5,000. The bound
-     * is rounded up to 4 MiB. An answer beyond it is refused as too large, never cut and read as
-     * malformed.
+     * The JSON reader keeps its 4 MiB (4,194,304-byte) limit under catalogue contract 1.1.0. Every
+     * version-list request explicitly asks for five versions, not the default twenty: a changelog
+     * allows 64,000 characters and JSON can spend six bytes per character on a Unicode escape.
+     * Five worst-case changelogs take 5 * 64,000 * 6 = 1,920,000 bytes, leaving about 2.2 MB for the
+     * envelope and other fields. Twenty would need 7,680,000 bytes. The limit is not enlarged to
+     * the 38,400,000 bytes needed for one hundred versions: this plugin shares a Minecraft server's
+     * process. A module detail needs at most 50,000 * 6 = 300,000 description bytes plus 384,000
+     * bytes for its latest version's changelog; one version needs at most 384,000 changelog bytes.
+     * Across pages the client retains only the fields its Version uses, never the changelogs, so
+     * their large bodies do not accumulate. An answer beyond the limit is refused as too large,
+     * never truncated and treated as malformed.
      */
     private static final int MAX_JSON_BYTES = 4 * 1024 * 1024;
     private static final int CHUNK = 8192;
