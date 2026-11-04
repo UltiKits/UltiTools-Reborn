@@ -378,10 +378,12 @@ take.
 - **Module JARs are hash-checked, not signed.** The catalogue's `sha256` and `sizeBytes` protect against a
   corrupted or substituted download, not against a compromised catalogue.
 - **Version pagination is not a catalogue snapshot.** If a version is published while a multi-page
-  lookup is in progress, publication ordering can shift an entry between pages, so that lookup may
-  omit or repeat an entry. Retry `/upm versions` after publication has finished; do not treat a list
-  read during publication as a stable snapshot. The client does not add snapshot or concurrency
-  machinery for this combination.
+  lookup is in progress, publication ordering can shift an entry between pages. The client rejects the
+  whole lookup as an unreadable response when a version appears on more than one page, or when a page
+  reports a `page` or `pageSize` other than the one requested; it never shows a list with a repeated
+  entry. A version published onto a page that was already read can still be missing from a lookup that
+  succeeds. Retry `/upm versions` after publication has finished. The client adds no snapshot or
+  concurrency machinery for this combination.
 - **The state directory guard assumes the default layout.** The remote file guard finds `.ultikits/` through the
   server's working directory, while the credential store finds it from the plugin data folder
   (`<plugins dir>/../.ultikits`). With a relocated plugins folder and editable roots widened to reach it,
