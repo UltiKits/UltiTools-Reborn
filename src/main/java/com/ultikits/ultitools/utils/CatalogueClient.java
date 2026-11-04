@@ -389,51 +389,91 @@ final class CatalogueClient {
             }
             CatalogueHttp.Json answer = CatalogueHttp.getJson(MODULES + "/" + ref + "/versions" + levelQuery(level)
                     + "&page=" + page + "&pageSize=" + VERSION_PAGE_SIZE);
-            if (answer.kind() == CatalogueHttp.Kind.OVERSIZE) {
-                return VersionLookup.failed(VersionLookup.TOO_LARGE);
-            }
-            if (answer.kind() != CatalogueHttp.Kind.OK) {
-                return VersionLookup.failed("not reached");
-            }
-            if (page == 1 && answer.status() == 404) {
-                return VersionLookup.none();
-            }
-            if (answer.status() < 200 || answer.status() > 299) {
-                return VersionLookup.failed(VersionLookup.describe(answer.status(), answer.body()));
+            VersionLookup failure = versionPageFailure(answer, page);
+            if (failure != null) {
+                return failure;
             }
             JsonObject data = dataObject(answer);
-            BigDecimal total = data == null ? null : integer(data.get("total"));
-            BigDecimal responsePage = data == null ? null : integer(data.get("page"));
-            BigDecimal responseSize = data == null ? null : integer(data.get("pageSize"));
-            if (total == null || total.signum() < 0 || responsePage == null || responseSize == null
-                    || responsePage.compareTo(BigDecimal.valueOf(page)) != 0
-                    || responseSize.compareTo(BigDecimal.valueOf(VERSION_PAGE_SIZE)) != 0) {
+            BigDecimal total = versionPageTotal(data, page);
+            if (total == null) {
                 return VersionLookup.failed(VersionLookup.UNREADABLE);
             }
-            List<Version> parsed = parseVersions(data);
-            if (parsed == null || parsed.size() > VERSION_PAGE_SIZE) {
+            List<Version> parsed = versionPageItems(data);
+            if (parsed == null) {
                 return VersionLookup.failed(VersionLookup.UNREADABLE);
             }
             if (page == 1) {
                 firstTotal = total;
             }
-            BigDecimal readItems = BigDecimal.valueOf((long) collected.size() + parsed.size());
-            if (parsed.size() < VERSION_PAGE_SIZE
-                    && (readItems.compareTo(firstTotal) < 0 || readItems.compareTo(total) < 0)) {
+            if (!appendVersionPage(collected, seenVersions, parsed, firstTotal, total)) {
                 return VersionLookup.failed(VersionLookup.UNREADABLE);
             }
-            for (Version version : parsed) {
-                if (!seenVersions.add(version.version())) {
-                    return VersionLookup.failed(VersionLookup.UNREADABLE);
-                }
-            }
-            collected.addAll(parsed);
-            if ((stopAtLatest && parsed.stream().anyMatch(Version::latest))
-                    || lastVersionPage(page, parsed.size(), collected.size(), firstTotal)) {
+            if (finishedVersionPages(stopAtLatest, parsed, page, collected.size(), firstTotal)) {
                 versions.addAll(collected);
                 return VersionLookup.found(ref);
             }
         }
+    }
+
+    /** Refuses transport errors before interpreting any pagination fields. */
+    private static VersionLookup versionPageFailure(CatalogueHttp.Json answer, int page) {
+        if (answer.kind() == CatalogueHttp.Kind.OVERSIZE) {
+            return VersionLookup.failed(VersionLookup.TOO_LARGE);
+        }
+        if (answer.kind() != CatalogueHttp.Kind.OK) {
+            return VersionLookup.failed("not reached");
+        }
+        if (page == 1 && answer.status() == 404) {
+            return VersionLookup.none();
+        }
+        if (answer.status() < 200 || answer.status() > 299) {
+            return VersionLookup.failed(VersionLookup.describe(answer.status(), answer.body()));
+        }
+        return null;
+    }
+
+    /** Returns the non-negative total only when the response echoes the requested page and size. */
+    private static BigDecimal versionPageTotal(JsonObject data, int page) {
+        if (data == null) {
+            return null;
+        }
+        BigDecimal total = integer(data.get("total"));
+        BigDecimal responsePage = integer(data.get("page"));
+        BigDecimal responseSize = integer(data.get("pageSize"));
+        if (total == null || total.signum() < 0 || responsePage == null || responseSize == null
+                || responsePage.compareTo(BigDecimal.valueOf(page)) != 0
+                || responseSize.compareTo(BigDecimal.valueOf(VERSION_PAGE_SIZE)) != 0) {
+            return null;
+        }
+        return total;
+    }
+
+    private static List<Version> versionPageItems(JsonObject data) {
+        List<Version> parsed = parseVersions(data);
+        return parsed == null || parsed.size() > VERSION_PAGE_SIZE ? null : parsed;
+    }
+
+    /** Validates page length and uniqueness before exposing its versions to the private collector. */
+    private static boolean appendVersionPage(List<Version> collected, Set<String> seenVersions,
+                                             List<Version> parsed, BigDecimal firstTotal, BigDecimal total) {
+        BigDecimal readItems = BigDecimal.valueOf((long) collected.size() + parsed.size());
+        if (parsed.size() < VERSION_PAGE_SIZE
+                && (readItems.compareTo(firstTotal) < 0 || readItems.compareTo(total) < 0)) {
+            return false;
+        }
+        for (Version version : parsed) {
+            if (!seenVersions.add(version.version())) {
+                return false;
+            }
+        }
+        collected.addAll(parsed);
+        return true;
+    }
+
+    private static boolean finishedVersionPages(boolean stopAtLatest, List<Version> parsed, int page,
+                                                int readItems, BigDecimal firstTotal) {
+        return (stopAtLatest && parsed.stream().anyMatch(Version::latest))
+                || lastVersionPage(page, parsed.size(), readItems, firstTotal);
     }
 
     /** The bounded page-number protocol has no cursor and needs no extra request after a full last page. */
@@ -505,18 +545,14 @@ final class CatalogueClient {
         JsonElement latest = object.get("isLatest");
         String sha256 = string(object, "sha256");
         BigDecimal sizeBytes = integer(object.get("sizeBytes"));
-        if (version == null || version.trim().isEmpty() || latest == null || !latest.isJsonPrimitive()
-                || !latest.getAsJsonPrimitive().isBoolean() || sha256 == null || !SHA256.matcher(sha256).matches()
-                || sizeBytes == null || sizeBytes.signum() <= 0
-                || sizeBytes.compareTo(BigDecimal.valueOf(MAX_SIZE_BYTES)) > 0 || !object.has("apiLevel")) {
+        if (!hasVersionMetadata(version, latest, sha256, sizeBytes, object)) {
             return null;
         }
         JsonElement apiLevelValue = object.get("apiLevel");
         Integer apiLevel = null;
         if (!apiLevelValue.isJsonNull()) {
             BigDecimal level = integer(apiLevelValue);
-            if (level == null || level.compareTo(BigDecimal.valueOf(MIN_API_LEVEL)) < 0
-                    || level.compareTo(BigDecimal.valueOf(MAX_API_LEVEL)) > 0) {
+            if (!validApiLevel(level)) {
                 return null;
             }
             apiLevel = level.intValue();
@@ -533,6 +569,19 @@ final class CatalogueClient {
         }
         return new Version(version, latest.getAsBoolean(), sha256, sizeBytes.longValue(), apiLevel, kind,
                 "public".equals(kind) ? url : null);
+    }
+
+    private static boolean validApiLevel(BigDecimal level) {
+        return level != null && level.compareTo(BigDecimal.valueOf(MIN_API_LEVEL)) >= 0
+                && level.compareTo(BigDecimal.valueOf(MAX_API_LEVEL)) <= 0;
+    }
+
+    private static boolean hasVersionMetadata(String version, JsonElement latest, String sha256,
+                                               BigDecimal sizeBytes, JsonObject object) {
+        return version != null && !version.trim().isEmpty() && latest != null && latest.isJsonPrimitive()
+                && latest.getAsJsonPrimitive().isBoolean() && sha256 != null && SHA256.matcher(sha256).matches()
+                && sizeBytes != null && sizeBytes.signum() > 0
+                && sizeBytes.compareTo(BigDecimal.valueOf(MAX_SIZE_BYTES)) <= 0 && object.has("apiLevel");
     }
 
     /** @return the JSON number as an integer, or {@code null} when it is absent, not a number or not whole */

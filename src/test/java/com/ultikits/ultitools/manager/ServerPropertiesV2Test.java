@@ -257,14 +257,12 @@ class ServerPropertiesV2Test {
         router.dispatch(request.toString(), channel);
 
         JsonObject reply = only(channel);
-        org.junit.jupiter.api.Assertions.assertAll(
-                () -> assertThat(reply.get("replyTo").getAsString()).isEqualTo(request.get("id").getAsString()),
-                () -> assertThat(reply.get("type").getAsString()).isEqualTo("error"),
-                () -> assertThat(reply.getAsJsonObject("payload").get("code").getAsString())
-                        .isEqualTo("invalid_message"),
-                () -> verify(properties, never()).updateWithBaseVersion(anyString(), anyMap()),
-                () -> assertThat(Files.readAllBytes(propsFile)).isEqualTo(before),
-                () -> assertThat(Files.getLastModifiedTime(propsFile)).isEqualTo(modified));
+        assertThat(reply.get("replyTo").getAsString()).isEqualTo(request.get("id").getAsString());
+        assertThat(reply.get("type").getAsString()).isEqualTo("error");
+        assertThat(reply.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+        verify(properties, never()).updateWithBaseVersion(anyString(), anyMap());
+        assertThat(Files.readAllBytes(propsFile)).isEqualTo(before);
+        assertThat(Files.getLastModifiedTime(propsFile)).isEqualTo(modified);
     }
 
     @Test

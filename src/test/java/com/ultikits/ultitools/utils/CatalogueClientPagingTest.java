@@ -150,7 +150,6 @@ class CatalogueClientPagingTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"versions", "install-latest", "install-version", "update", "update-all"})
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     void catalogueCommandsReadOnARealWorkerAndDeliverOutputOnTheCallingThread(String action) throws Exception {
         Thread callingThread = Thread.currentThread();
         List<Thread> networkThreads = Collections.synchronizedList(new ArrayList<>());
@@ -182,6 +181,30 @@ class CatalogueClientPagingTest {
         when(updates.getUnconfirmed()).thenReturn(Collections.emptyList());
         when(instance.getUpdateManager()).thenReturn(updates);
         PluginInstallCommands command = mock(PluginInstallCommands.class, CALLS_REAL_METHODS);
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
+             MockedStatic<CatalogueHttp> http = recordingHttp(networkThreads);
+             MockedStatic<PluginInstallUtils> utils = stagingThroughRealCatalogue()) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            dispatchCatalogueCommand(action, sender, command);
+            assertThat(networkThreads).as("dispatch must not perform catalogue I/O").isEmpty();
+            assertThat(asyncTasks).hasSize(1);
+            Thread worker = runCatalogueWorker(asyncTasks, scheduler, networkThreads);
+            assertThat(networkThreads).isNotEmpty().allSatisfy(thread -> {
+                assertThat(thread).isSameAs(worker).isNotSameAs(callingThread);
+            });
+            assertThat(messages).as("no sender API calls on the worker").isEmpty();
+            assertThat(mainTasks).isNotEmpty();
+            mainTasks.forEach(Runnable::run);
+            assertThat(messageThreads).isNotEmpty().allSatisfy(thread -> assertThat(thread).isSameAs(callingThread));
+            assertCommandOutput(action, messages);
+            assertQueries("install-version".equals(action) ? 0 : 3);
+        }
+    }
+
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private static void dispatchCatalogueCommand(String action, CommandSender sender,
+                                                  PluginInstallCommands command) throws Exception {
         boolean versioned = "install-version".equals(action);
         String methodName = "versions".equals(action) ? "listVersions"
                 : action.startsWith("install") ? "installPlugin" : "updatePlugin";
@@ -193,50 +216,42 @@ class CatalogueClientPagingTest {
         Method dispatch = BaseCommandExecutor.class.getDeclaredMethod("executeCommand", CommandContext.class,
                 Method.class, Object[].class, ValidatorChain.ChainValidationResult.class);
         dispatch.setAccessible(true);
-        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
-             MockedStatic<CatalogueHttp> http = recordingHttp(networkThreads);
-             MockedStatic<PluginInstallUtils> utils = stagingThroughRealCatalogue()) {
-            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
-            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-            dispatch.invoke(command, CommandContext.builder().sender(sender).build(), method, params, null);
-            assertThat(networkThreads).as("dispatch must not perform catalogue I/O").isEmpty();
-            assertThat(asyncTasks).hasSize(1);
-            FutureTask<Void> work = new FutureTask<>(() -> {
-                try (MockedStatic<UltiTools> workerTools = mockStatic(UltiTools.class);
-                     MockedStatic<Bukkit> workerBukkit = mockStatic(Bukkit.class);
-                     MockedStatic<CatalogueHttp> workerHttp = recordingHttp(networkThreads);
-                     MockedStatic<PluginInstallUtils> workerUtils = stagingThroughRealCatalogue()) {
-                    workerTools.when(UltiTools::getInstance).thenReturn(instance);
-                    workerTools.when(UltiTools::getPluginVersion).thenReturn(LEVEL);
-                    workerBukkit.when(Bukkit::isPrimaryThread).thenReturn(false);
-                    workerBukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-                    asyncTasks.get(0).run();
-                }
-                return null;
-            });
-            Thread worker = new Thread(work, "catalogue-command-test");
-            worker.start();
-            try {
-                work.get(20, TimeUnit.SECONDS);
-            } finally {
-                worker.join(20_000);
+        dispatch.invoke(command, CommandContext.builder().sender(sender).build(), method, params, null);
+    }
+
+    private Thread runCatalogueWorker(List<Runnable> asyncTasks, BukkitScheduler scheduler,
+                                       List<Thread> networkThreads) throws Exception {
+        FutureTask<Void> work = new FutureTask<>(() -> {
+            try (MockedStatic<UltiTools> workerTools = mockStatic(UltiTools.class);
+                 MockedStatic<Bukkit> workerBukkit = mockStatic(Bukkit.class);
+                 MockedStatic<CatalogueHttp> workerHttp = recordingHttp(networkThreads);
+                 MockedStatic<PluginInstallUtils> workerUtils = stagingThroughRealCatalogue()) {
+                workerTools.when(UltiTools::getInstance).thenReturn(instance);
+                workerTools.when(UltiTools::getPluginVersion).thenReturn(LEVEL);
+                workerBukkit.when(Bukkit::isPrimaryThread).thenReturn(false);
+                workerBukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                asyncTasks.get(0).run();
             }
-            assertThat(worker.isAlive()).isFalse();
-            assertThat(networkThreads).isNotEmpty().allSatisfy(thread -> {
-                assertThat(thread).isSameAs(worker).isNotSameAs(callingThread);
-            });
-            assertThat(messages).as("no sender API calls on the worker").isEmpty();
-            assertThat(mainTasks).isNotEmpty();
-            mainTasks.forEach(Runnable::run);
-            assertThat(messageThreads).isNotEmpty().allSatisfy(thread -> assertThat(thread).isSameAs(callingThread));
-            assertThat(messages).anySatisfy(message -> assertThat(message).contains(
-                    "versions".equals(action) ? "版本列表" : action.startsWith("install") ? "安装成功" : "未能暂存"));
-            if ("versions".equals(action)) {
-                for (String version : names()) {
-                    assertThat(String.join("\n", messages)).contains(version);
-                }
+            return null;
+        });
+        Thread worker = new Thread(work, "catalogue-command-test");
+        worker.start();
+        try {
+            work.get(20, TimeUnit.SECONDS);
+        } finally {
+            worker.join(20_000);
+        }
+        assertThat(worker.isAlive()).isFalse();
+        return worker;
+    }
+
+    private void assertCommandOutput(String action, List<String> messages) {
+        assertThat(messages).anySatisfy(message -> assertThat(message).contains(
+                "versions".equals(action) ? "版本列表" : action.startsWith("install") ? "安装成功" : "未能暂存"));
+        if ("versions".equals(action)) {
+            for (String version : names()) {
+                assertThat(String.join("\n", messages)).contains(version);
             }
-            assertQueries(versioned ? 0 : 3);
         }
     }
 
@@ -281,7 +296,9 @@ class CatalogueClientPagingTest {
         PluginInstallUtils.InstallResult installed = PluginInstallUtils.installReporting(MODULE, null);
         assertThat(installed.isInstalled()).isTrue();
         assertThat(installed.getFileName()).isEqualTo("demo-" + selected + ".jar");
-        assertThat(Files.readAllBytes(new File(modules, installed.getFileName()).toPath())).isEqualTo(jar);
+        java.nio.file.Path installedPath = modules.toPath().resolve(
+                markedLatest ? "demo-1.0.11.jar" : "demo-9.0.0.jar");
+        assertThat(Files.readAllBytes(installedPath)).isEqualTo(jar);
         assertThat(downloads.get()).isEqualTo(1);
         assertQueries(3);
     }
