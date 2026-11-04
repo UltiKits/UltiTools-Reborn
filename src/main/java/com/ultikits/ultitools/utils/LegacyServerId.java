@@ -13,7 +13,7 @@ package com.ultikits.ultitools.utils;
  * The decision text lists "remove hyphens" before "the first 36 characters form a hyphenated UUID",
  * which cannot both hold; this class applies the only order that makes sense -- cut a longer value to
  * its leading 36-character UUID first, then remove the hyphens (Phase 22 decision S-41). The
- * backend's golden fixture {@code legacy-uuid-canonicalization.json} (contract 2.0.0) confirms that
+ * backend's golden fixture {@code legacy-uuid-canonicalization.json} (contract 2.1.0) confirms that
  * order, and {@code LegacyServerIdTest} runs every one of its cases.
  *
  * @since 6.3.1

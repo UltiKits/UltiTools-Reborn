@@ -10,7 +10,7 @@ import java.util.logging.Logger;
  * <p>
  * As of 6.3.1 the framework never calls these entry points (the {@code setWebSocketClient} setters,
  * the {@code initialize} methods that take a v1 client, the v1 transmitter constructor): its own
- * UltiCloud session speaks protocol 2.0.0. They still accept the client a caller hands in, because
+ * UltiCloud session speaks protocol 2.1.0. They still accept the client a caller hands in, because
  * the v1 senders behind them stay until 6.4.0 (S-67); the line makes that state explicit instead of
  * letting the call look as if it connected anything. Each line goes to the owning class's logger.
  */
@@ -35,7 +35,7 @@ final class V1CloudNotice {
             Logger.getLogger(owner.getName()).info("UltiCloud: " + name + " belongs to the protocol v1 "
                     + "cloud, which UltiCloud no longer serves; the framework never calls it and a v1 client "
                     + "opens no connection, so it only feeds the kept v1 senders. It is deprecated and removed "
-                    + "in 6.4.0; the framework's own UltiCloud session (protocol 2.0.0) carries the panel.");
+                    + "in 6.4.0; the framework's own UltiCloud session (protocol 2.1.0) carries the panel.");
         }
     }
 

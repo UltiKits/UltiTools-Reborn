@@ -376,7 +376,7 @@ class AgentConnectionLoopbackTest {
             + "\"requestId\":\"req-426\",\"details\":{\"supportedProtocols\":[2],\"minFramework\":\"6.3.1\"}}}";
     static final String BODY_401 = "{\"error\":{\"code\":\"invalid_credential\",\"message\":\"m\","
             + "\"requestId\":\"req-401\"}}";
-    /** The contract 2.0.0 shape: the plan-limit fields live in {@code error.details}. */
+    /** The contract 2.1.0 shape: the plan-limit fields live in {@code error.details}. */
     static final String BODY_402 = "{\"error\":{\"code\":\"plan_limit\",\"message\":\"m\","
             + "\"requestId\":\"req-402\",\"details\":{\"reason\":\"pro_expired_over_limit\","
             + "\"graceEndedAt\":\"2026-10-20T00:00:00.000Z\",\"manageUrl\":\"https://panel.ultikits.com/billing\"}}}";

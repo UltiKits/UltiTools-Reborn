@@ -61,7 +61,7 @@ class UltiCloudDocSnippetsTest {
 
     private static final Path COMPATIBILITY = Paths.get("COMPATIBILITY.md");
     private static final Path LEDGER = Paths.get("compatibility/deprecations.json");
-    private static final String COMPATIBILITY_HEADING = "## UltiCloud protocol 2.0.0 (as of 6.3.1)";
+    private static final String COMPATIBILITY_HEADING = "## UltiCloud protocol 2.1.0 (as of 6.3.1)";
 
     private static final String PANEL_EN = "docs/src/guide/advanced/panel-integration.md";
     private static final String PANEL_ZH = "docs/src/zh/guide/advanced/panel-integration.md";
@@ -339,7 +339,7 @@ class UltiCloudDocSnippetsTest {
         assertThat(read(COMPATIBILITY)).as("COMPATIBILITY.md holds a carriage return").doesNotContain("\r");
     }
 
-    /** The {@code ## UltiCloud protocol 2.0.0 (as of 6.3.1)} section of COMPATIBILITY.md, up to the next heading of its level. */
+    /** The {@code ## UltiCloud protocol 2.1.0 (as of 6.3.1)} section of COMPATIBILITY.md, up to the next heading of its level. */
     static String compatibilitySection() throws IOException {
         List<String> lines = lines(read(COMPATIBILITY));
         int begin = indexOf(lines, COMPATIBILITY_HEADING, 0);

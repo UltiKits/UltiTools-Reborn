@@ -21,7 +21,7 @@ import com.ultikits.ultitools.contract.ContractFixtures;
  * {@link LegacyServerId#canonical(String)} must equal the backend's {@code canonicalLegacyUuid}
  * (backend schema decision 22) case for case.
  * <p>
- * The cases are the backend's own golden table, the vendored contract 2.0.0
+ * The cases are the backend's own golden table, the vendored contract 2.1.0
  * {@code fixtures/legacy-uuid-canonicalization.json} ({@code {rule, cases: [{name, input, expected}]}},
  * frozen and hash-checked by {@code ContractSyncTest}; plan 22-20, S-64).
  */

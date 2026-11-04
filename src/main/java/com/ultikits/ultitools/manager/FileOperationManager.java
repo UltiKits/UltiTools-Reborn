@@ -201,7 +201,7 @@ public class FileOperationManager {
      * Sets the WebSocket client.
      * @param client the WebSocket client
      * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     *     (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.1", forRemoval = true)
@@ -570,7 +570,7 @@ public class FileOperationManager {
      * {@link TriggerContext} establishes — the mutable {@link JsonObject} itself is not safe to
      * re-read once handed to another thread.
      * @deprecated There is no replacement for modules: the framework's own UltiCloud session (protocol
-     *     2.0.0) answers the panel's file requests; this v1 handler replies only over the client
+     *     2.1.0) answers the panel's file requests; this v1 handler replies only over the client
      *     handed to setWebSocketClient. Removed in 6.4.0.
      * @removeIn 6.4.0
      */

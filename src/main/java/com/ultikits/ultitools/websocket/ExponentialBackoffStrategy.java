@@ -6,12 +6,12 @@ package com.ultikits.ultitools.websocket;
  *
  * <p>
  * As of 6.3.1 nothing in the framework uses it: it paced the protocol v1 reconnect loop, and the
- * protocol 2.0.0 session schedules its own reconnects. It still computes delays as before.
+ * protocol 2.1.0 session schedules its own reconnects. It still computes delays as before.
  *
  * @author wisdomme
  * @version 1.0.0
  * @since 6.2.0
- * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+ * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
  *     paces its reconnects itself. Removed in 6.4.0.
  * @removeIn 6.4.0
  */

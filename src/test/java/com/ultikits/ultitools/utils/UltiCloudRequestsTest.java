@@ -40,7 +40,7 @@ import com.sun.net.httpserver.HttpServer;
 import com.ultikits.ultitools.entities.TokenEntity;
 
 /**
- * Tests for {@link UltiCloudRequests} after protocol 2.0.0 removed the v1 magic-link exchange: every
+ * Tests for {@link UltiCloudRequests} under protocol 2.1.0, which has no v1 magic-link exchange: every
  * call is refused without a request, the refusal is announced once per run, and no public member can
  * carry the server credential.
  * <p>

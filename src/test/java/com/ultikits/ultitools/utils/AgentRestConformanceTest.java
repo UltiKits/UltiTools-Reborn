@@ -41,7 +41,7 @@ import com.ultikits.ultitools.contract.ContractFixtures.Fixture;
 import com.ultikits.ultitools.contract.ContractSchemas;
 
 /**
- * Wave A's REST traffic against the vendored contract 2.0.0 (plan 22-20, D-36 as corrected, S-64,
+ * Wave A's REST traffic against the vendored contract 2.1.0 (plan 22-20, D-36 as corrected, S-64,
  * contract answers 13, 14, 23): the device-authorize and device-token request bodies the client
  * builds validate against their frozen schemas, the legacy server id travels as
  * {@code legacyServerUuid}, and every valid response and error fixture of {@code deviceAuthorize},

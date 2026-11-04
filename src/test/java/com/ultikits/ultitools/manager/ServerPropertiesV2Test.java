@@ -36,7 +36,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
- * The protocol 2.0.0 {@code properties.get} / {@code properties.update} surface over the existing
+ * The protocol 2.1.0 {@code properties.get} / {@code properties.update} surface over the existing
  * line-preserving {@link ServerPropertiesManager} rewrite.
  *
  * <p>Two things are pinned here beyond the happy path. The optimistically concurrent write: an

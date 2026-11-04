@@ -315,7 +315,7 @@ public class PluginInitiationUtils {
      * {@code PanelResponderRegistry.registerResponder} consults before letting a module claim a message type
      * (D-26, WIRE-16, Plan 06-08 Task 1).
      * <p>
-     * As of 6.3.1 the answer comes from the UltiCloud protocol v2 message registry (the frozen 2.0.0 contract's
+     * As of 6.3.1 the answer comes from the UltiCloud protocol v2 message registry (the frozen 2.1.0 contract's
      * message table, for example {@code command.execute}, {@code files.read} or {@code module.request}); a
      * module's responder key ({@code <module>.<action>}, for example {@code ultimail.inbox.list}) is not one of
      * them, and neither is a removed protocol v1 type name. Exact {@code String} membership: no case folding,

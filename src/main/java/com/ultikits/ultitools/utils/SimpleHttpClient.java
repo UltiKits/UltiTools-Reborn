@@ -17,7 +17,7 @@ import java.util.Map;
  * Replaces Hutool-http to reduce dependency size.
  * <p>
  * As of 6.3.1 nothing in the framework uses it: it carried the protocol v1 REST calls, and the
- * protocol 2.0.0 client has its own transport. It still sends the requests it is given, as before.
+ * protocol 2.1.0 client has its own transport. It still sends the requests it is given, as before.
  *
  * @author wisdomme
  * @since 6.2.0

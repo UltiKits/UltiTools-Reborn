@@ -74,7 +74,7 @@ public class LogStreamManager implements Listener {
     /**
      * Initializes the log stream manager.
      * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.0.0) streams the console itself. Removed in 6.4.0.
+     *     (protocol 2.1.0) streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.1", forRemoval = true)
@@ -265,7 +265,7 @@ public class LogStreamManager implements Listener {
 
     /**
      * Handles a log stream message.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -747,7 +747,7 @@ public class LogStreamManager implements Listener {
      * in the {@link SystemLogHandler}'s level state (a null or blank level counts as
      * {@code "info"}, matched case-insensitively; the level text sent is left as given). The
      * panel's {@code excluded-loggers} do not apply, because a direct entry has no logger name.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -784,7 +784,7 @@ public class LogStreamManager implements Listener {
      * <p>
      * The panel's {@code levels} apply, as for {@link #sendCustomLog}; the panel's
      * {@code excluded-loggers} do not, because a direct entry has no logger name.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -800,7 +800,7 @@ public class LogStreamManager implements Listener {
      * <p>
      * The panel's {@code levels} apply, as for {@link #sendCustomLog}; the panel's
      * {@code excluded-loggers} do not, because a direct entry has no logger name.
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -816,7 +816,7 @@ public class LogStreamManager implements Listener {
     /**
      * Sends a protocol v1 join line; does nothing without a v1 transmitter.
      *
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -830,7 +830,7 @@ public class LogStreamManager implements Listener {
     /**
      * Sends a protocol v1 quit line; does nothing without a v1 transmitter.
      *
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -844,7 +844,7 @@ public class LogStreamManager implements Listener {
     /**
      * Sends a protocol v1 "server loaded" line; does nothing without a v1 transmitter.
      *
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -870,7 +870,7 @@ public class LogStreamManager implements Listener {
      * {@code null} before that (always, as of 6.3.1, unless a caller hands in a v1 client).
      *
      * @return the v1 transmitter, possibly {@code null}
-     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+     * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
      *     streams the console itself. Removed in 6.4.0.
      * @removeIn 6.4.0
      */

@@ -23,7 +23,7 @@ import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
 
 /**
- * Answers the UltiCloud protocol 2.0.0 {@code properties.get} and {@code properties.update}
+ * Answers the UltiCloud protocol 2.1.0 {@code properties.get} and {@code properties.update}
  * requests for one connection; internal, not for module use.
  *
  * <p>This class carries the contract's type knowledge — which of the fourteen readable keys is a

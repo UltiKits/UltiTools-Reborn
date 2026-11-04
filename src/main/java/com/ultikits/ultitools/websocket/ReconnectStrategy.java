@@ -9,7 +9,7 @@ package com.ultikits.ultitools.websocket;
  * @author wisdomme
  * @version 1.0.0
  * @since 6.2.0
- * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.0.0)
+ * @deprecated There is no replacement: the framework's own UltiCloud session (protocol 2.1.0)
  *     paces its reconnects itself. Removed in 6.4.0.
  * @removeIn 6.4.0
  */

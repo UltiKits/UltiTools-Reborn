@@ -30,7 +30,7 @@ import com.ultikits.ultitools.entities.Capability;
  * 22-23 shutdown-window round (maintainer decision of 2026-10-26), on the v2 stub with the production bindings and the
  * production server-thread hop: from the moment {@code UltiTools#onDisable} starts, every state-changing request is
  * answered with a failure saying the server is shutting down, in a shape the stub validates against the vendored
- * 2.0.0 schemas (a frame that does not validate is never recorded as received), and nothing changes: no file, no
+ * 2.1.0 schemas (a frame that does not validate is never recorded as received), and nothing changes: no file, no
  * {@code server.properties}, no player, no command, no responder, no credential, and no action-log entry. Read-only
  * requests served off the server thread keep working.
  */

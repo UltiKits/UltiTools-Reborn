@@ -11,7 +11,7 @@ import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 /**
  * The removed UltiCloud v1 request helper; every call is answered {@link Outcome#PATH_NOT_ALLOWED}.
  *
- * <p>Protocol 2.0.0 has no v1 REST cloud, so the two magic-link requests this class used to make
+ * <p>Protocol 2.1.0 has no v1 REST cloud, so the two magic-link requests this class used to make
  * ({@code POST /auth/magic-link} and {@code GET /auth/magic-link/poll}) no longer reach anything and
  * are refused without opening a connection. The first such call in a run writes one INFO line that
  * names the replacement.</p>
@@ -32,7 +32,7 @@ import com.ultikits.ultitools.websocket.CloudPlayerLinks;
  * already hop to an asynchronous task keep working unchanged.</p>
  *
  * @since 6.3.0
- * @deprecated Use {@link CloudPlayerLinks} to link a player; protocol 2.0.0 has no v1 REST cloud, so
+ * @deprecated Use {@link CloudPlayerLinks} to link a player; protocol 2.1.0 has no v1 REST cloud, so
  *     every call of this class is refused. Removed in 6.4.0.
  * @removeIn 6.4.0
  */
@@ -58,7 +58,7 @@ public final class UltiCloudRequests {
      * @param jsonBody the JSON request body, ignored because nothing is sent
      * @return {@link Outcome#PATH_NOT_ALLOWED} with no status code and no body
      * @throws IllegalStateException if called on the server's primary thread
-     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.0.0 has no v1
+     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.1.0 has no v1
      *     REST cloud, so this call is always refused. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -76,7 +76,7 @@ public final class UltiCloudRequests {
      * @param query query parameters, ignored because nothing is sent
      * @return {@link Outcome#PATH_NOT_ALLOWED} with no status code and no body
      * @throws IllegalStateException if called on the server's primary thread
-     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.0.0 has no v1
+     * @deprecated Use {@link CloudPlayerLinks#create} to link a player; protocol 2.1.0 has no v1
      *     REST cloud, so this call is always refused. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
@@ -98,7 +98,7 @@ public final class UltiCloudRequests {
 
     private static void announceOnce(boolean removedCall) {
         if (removedCall && ANNOUNCED.compareAndSet(false, true)) {
-            LOGGER.info("UltiCloud: protocol 2.0.0 removed the v1 magic-link endpoint, so this call "
+            LOGGER.info("UltiCloud: protocol 2.1.0 has no v1 magic-link endpoint, so this call "
                     + "cannot reach UltiCloud and returns PATH_NOT_ALLOWED; UltiLogin 2.1.0 uses "
                     + "CloudPlayerLinks instead.");
         }

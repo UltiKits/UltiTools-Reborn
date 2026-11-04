@@ -47,7 +47,7 @@ import com.ultikits.ultitools.contract.ContractFixtures;
  * credential revoke, the {@code /v1/agent} gateway and {@code /v1/catalogue/*}, all on one loopback
  * port, with every v1 path answered 410 and logged.
  *
- * <p>Its behaviour comes from the frozen protocol contract 2.0.0 vendored by plan 22-08 (fixtures,
+ * <p>Its behaviour comes from the frozen protocol contract 2.1.0 vendored by plan 22-08 (fixtures,
  * JSON Schemas and the message, close-code and timing tables of {@code PROTOCOL.md}), read through
  * {@link Contract}; it imports no framework protocol class, so it cannot inherit a framework defect.
  * Local Codex starts it for the stub-environment UAT rows, and the full-session tests start it
@@ -158,7 +158,7 @@ public final class UltiCloudStub {
     /** @return the {@code --help} text: usage, options, the start command and the admin endpoints */
     static String usage() {
         StringBuilder text = new StringBuilder()
-                .append("UltiCloudStub - a local UltiCloud (protocol v2, contract 2.0.0) for UAT and tests\n\n")
+                .append("UltiCloudStub - a local UltiCloud (protocol v2, contract 2.1.0) for UAT and tests\n\n")
                 .append("From the framework checkout's root, build the classpath once:\n  ")
                 .append(CLASSPATH_COMMAND).append("\n")
                 .append("then start the stub:\n  ").append(START_COMMAND).append("\n\n")

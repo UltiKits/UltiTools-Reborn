@@ -71,7 +71,7 @@ public class ServerPropertiesManager {
     ));
 
     /**
-     * The keys the frozen protocol 2.0.0 contract lets a panel read, in contract order.
+     * The keys the frozen protocol 2.1.0 contract lets a panel read, in contract order.
      * {@link #SAFE_KEYS} stays its own set: this list decides what {@link #readVersioned(int)}
      * reports, not what the v1 write path accepts.
      */
@@ -101,7 +101,7 @@ public class ServerPropertiesManager {
      * Sets the protocol v1 client the v1 senders of this manager reply over.
      *
      * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.0.0) carries the panel requests. Removed in 6.4.0.
+     *     (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.1", forRemoval = true)
@@ -151,7 +151,7 @@ public class ServerPropertiesManager {
     }
 
     /**
-     * Reads {@code server.properties} for the protocol 2.0.0 panel: the fourteen readable keys
+     * Reads {@code server.properties} for the protocol 2.1.0 panel: the fourteen readable keys
      * that are present and parse to their contract type, the writable key set, and the version a
      * later update must send back as its {@code baseVersion}.
      *
@@ -199,7 +199,7 @@ public class ServerPropertiesManager {
     }
 
     /**
-     * Applies a protocol 2.0.0 properties update: for each requested key, replaces the value text
+     * Applies a protocol 2.1.0 properties update: for each requested key, replaces the value text
      * of the physical line that defines it and nothing else, and only while {@code server.properties}
      * still hashes to {@code baseVersion}.
      *
@@ -373,7 +373,7 @@ public class ServerPropertiesManager {
     }
 
     /**
-     * One typed read of {@code server.properties} for the protocol 2.0.0 panel, as returned by
+     * One typed read of {@code server.properties} for the protocol 2.1.0 panel, as returned by
      * {@link #readVersioned(int)}.
      */
     @ApiStatus.Internal
@@ -517,7 +517,7 @@ public class ServerPropertiesManager {
     }
 
     /**
-     * What happened to one key of a protocol 2.0.0 properties update.
+     * What happened to one key of a protocol 2.1.0 properties update.
      */
     @ApiStatus.Internal
     public static final class PropertyKeyResult {
@@ -1195,7 +1195,7 @@ public class ServerPropertiesManager {
      *
      * @param data the message data
      * @deprecated Use readVersioned(int) and updateWithBaseVersion(String, Map), which the protocol
-     *     2.0.0 session calls; this v1 handler replies only over the client handed to
+     *     2.1.0 session calls; this v1 handler replies only over the client handed to
      *     setWebSocketClient. Removed in 6.4.0.
      * @removeIn 6.4.0
      */
