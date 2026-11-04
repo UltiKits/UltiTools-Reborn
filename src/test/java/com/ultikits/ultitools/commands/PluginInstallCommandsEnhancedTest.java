@@ -58,6 +58,7 @@ class PluginInstallCommandsEnhancedTest {
     private MockedStatic<PluginInstallUtils> mockedUtils;
     private MockedStatic<MessageUtils> mockedMessageUtils;
     private MockedStatic<UltiTools> mockedUltiTools;
+    private MockedStatic<org.bukkit.Bukkit> mockedBukkit;
     private boolean mockingAvailable = false;
 
     @BeforeEach
@@ -141,10 +142,23 @@ class PluginInstallCommandsEnhancedTest {
             mockingAvailable = false;
             executor = null;
         }
+        // Output-only tests keep thread-local static stubs on this thread. Real worker execution
+        // and main-thread delivery are covered by CatalogueClientPagingTest.
+        org.bukkit.scheduler.BukkitScheduler scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class,
+                org.mockito.AdditionalAnswers.delegatesTo(server.getScheduler()));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            invocation.<Runnable>getArgument(1).run();
+            return mock(org.bukkit.scheduler.BukkitTask.class);
+        }).when(scheduler).runTaskAsynchronously(any(org.bukkit.plugin.Plugin.class), any(Runnable.class));
+        mockedBukkit = mockStatic(org.bukkit.Bukkit.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+        mockedBukkit.when(org.bukkit.Bukkit::getScheduler).thenReturn(scheduler);
     }
 
     @AfterEach
     void tearDown() {
+        if (mockedBukkit != null) {
+            mockedBukkit.close();
+        }
         if (mockedUtils != null) {
             try {
                 mockedUtils.close();

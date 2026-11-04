@@ -3,6 +3,11 @@ package com.ultikits.ultitools.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -89,7 +94,7 @@ class ServerPropertiesV2Test {
 
         propsFile = tmp.resolve("server.properties");
         Files.write(propsFile, SAMPLE.getBytes(StandardCharsets.UTF_8));
-        properties = new ServerPropertiesManager(tmp.toFile());
+        properties = spy(new ServerPropertiesManager(tmp.toFile()));
         audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
         handler = new RemotePropertiesHandler(properties, audit::add, () -> !disabling);
         router = new AgentMessageRouter(capability -> true, capability -> "disabled");
@@ -241,6 +246,25 @@ class ServerPropertiesV2Test {
                     .as(fixture.path()).isEqualTo("invalid_message");
         }
         assertThat(Files.readAllBytes(propsFile)).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("empty changes with the real baseVersion replies to the request without entering the writer")
+    void emptyChangesWithMatchingVersionNeverReachTheFile() throws IOException {
+        byte[] before = Files.readAllBytes(propsFile);
+        java.nio.file.attribute.FileTime modified = Files.getLastModifiedTime(propsFile);
+        JsonObject request = updateRequest(RemoteFilesEndToEndTest.sha256(before), new JsonObject());
+        router.dispatch(request.toString(), channel);
+
+        JsonObject reply = only(channel);
+        org.junit.jupiter.api.Assertions.assertAll(
+                () -> assertThat(reply.get("replyTo").getAsString()).isEqualTo(request.get("id").getAsString()),
+                () -> assertThat(reply.get("type").getAsString()).isEqualTo("error"),
+                () -> assertThat(reply.getAsJsonObject("payload").get("code").getAsString())
+                        .isEqualTo("invalid_message"),
+                () -> verify(properties, never()).updateWithBaseVersion(anyString(), anyMap()),
+                () -> assertThat(Files.readAllBytes(propsFile)).isEqualTo(before),
+                () -> assertThat(Files.getLastModifiedTime(propsFile)).isEqualTo(modified));
     }
 
     @Test

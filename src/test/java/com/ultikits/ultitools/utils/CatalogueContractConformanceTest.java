@@ -93,6 +93,8 @@ class CatalogueContractConformanceTest {
     private enum Handling {
         /** The version object is unusable: the lookup answers nothing, the install sends no download. */
         VERSION_REFUSED,
+        /** Pagination metadata does not match the request, so the whole lookup is unusable. */
+        PAGE_REFUSED,
         /** The version parses, but its download URL is refused before any request. */
         URL_REFUSED,
         /** The version parses but is not downloadable; the install sends no download. */
@@ -149,8 +151,8 @@ class CatalogueContractConformanceTest {
         INVALID.put(q + "versionsList/query/invalid/page-size-101.json", Handling.QUERY_NEVER_SENT);
         INVALID.put(q + "versionsList/query/invalid/page-1000001.json", Handling.QUERY_NEVER_SENT);
         INVALID.put(q + "versionsList/query/invalid/page-10000000000000000.json", Handling.QUERY_NEVER_SENT);
-        // Pagination uses the requested page number, never the response's page field.
-        INVALID.put(q + "versionsList/response/invalid/page-over-max.json", Handling.TOLERATED_NOT_READ);
+        // Every response must echo the requested page number and page size.
+        INVALID.put(q + "versionsList/response/invalid/page-over-max.json", Handling.PAGE_REFUSED);
         INVALID.put(q + "versionsList/query/invalid/undeclared-key.json", Handling.QUERY_NEVER_SENT);
     }
 
@@ -190,6 +192,13 @@ class CatalogueContractConformanceTest {
     /** Serves a fixture: a valid one as its vendored text, an invalid one as its {@code body}. */
     private void serve(String route, int status, String fixturePath) {
         stub.serveVendored(route, status, vendored(fixturePath));
+    }
+
+    /** Uses the fixture's version data with the five-item page size the client requests. */
+    private void serveRequestedVersionPage(String fixturePath) {
+        JsonObject body = ContractFixtures.catalogueBody(fixturePath);
+        body.getAsJsonObject("data").addProperty("pageSize", 5);
+        stub.serveVendored(VERSIONS_ROUTE, 200, body.toString());
     }
 
     private static String vendored(String fixturePath) {
@@ -362,7 +371,7 @@ class CatalogueContractConformanceTest {
     void validVersionsListFixtures() {
         for (String fixture : new String[]{"fixtures/versionsList/response/valid/page.json",
                 "fixtures/versionsList/response/valid/with-withdrawn.json"}) {
-            serve(VERSIONS_ROUTE, 200, fixture);
+            serveRequestedVersionPage(fixture);
             JsonArray items = data(fixture).getAsJsonArray("items");
             List<CatalogueClient.Version> versions = CatalogueClient.versions(MODULE, LEVEL);
             assertThat(versions).as(fixture).hasSize(items.size());
@@ -732,11 +741,18 @@ class CatalogueContractConformanceTest {
     @Test
     @DisplayName("a withdrawn version listed with a URL is still not downloadable")
     void withdrawnWithUrlIsNotDownloadable() {
-        serve(VERSIONS_ROUTE, 200, "fixtures/versionsList/response/invalid/withdrawn-with-url.json");
+        serveRequestedVersionPage("fixtures/versionsList/response/invalid/withdrawn-with-url.json");
         List<CatalogueClient.Version> versions = CatalogueClient.versions(MODULE, LEVEL);
         assertThat(versions).hasSize(1);
         assertThat(versions.get(0).downloadKind()).isEqualTo("withdrawn");
         assertThat(versions.get(0).downloadable()).isFalse();
+    }
+
+    @Test
+    void aPageOutsideTheContractRangeIsRefused() {
+        serveRequestedVersionPage("fixtures/versionsList/response/invalid/page-over-max.json");
+        assertThat(CatalogueClient.versions(MODULE, LEVEL)).isNull();
+        assertThat(CatalogueClient.latestVersion(MODULE, LEVEL).getFailure()).isEqualTo(VersionLookup.UNREADABLE);
     }
 
     @Test

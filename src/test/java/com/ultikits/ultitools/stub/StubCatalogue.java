@@ -606,6 +606,10 @@ public final class StubCatalogue implements AutoCloseable {
     private String versionsPage(String query) {
         JsonObject root = JsonParser.parseString(fixture(VERSIONS_PAGE_FIXTURE)).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
+        Integer page = integerParameter(query, "page");
+        Integer pageSize = integerParameter(query, "pageSize");
+        data.addProperty("page", page == null ? 1 : page);
+        data.addProperty("pageSize", pageSize == null ? 20 : pageSize);
         JsonArray items = new JsonArray();
         if (mode == Mode.NO_COMPATIBLE_VERSION) {
             data.add("items", items);
@@ -614,7 +618,13 @@ public final class StubCatalogue implements AutoCloseable {
         }
         if (versionCount > 0) {
             JsonArray longPage = longVersionsPageItems();
-            data.add("items", longPage);
+            JsonArray slice = new JsonArray();
+            int size = pageSize == null ? 20 : pageSize;
+            int start = ((page == null ? 1 : page) - 1) * size;
+            for (int i = start; i < Math.min(start + size, longPage.size()); i++) {
+                slice.add(longPage.get(i));
+            }
+            data.add("items", slice);
             data.addProperty("total", longPage.size());
             return root.toString();
         }
@@ -756,6 +766,8 @@ public final class StubCatalogue implements AutoCloseable {
     public static String versionsPageOf(String... versions) {
         JsonObject root = JsonParser.parseString(fixture(VERSIONS_PAGE_FIXTURE)).getAsJsonObject();
         JsonObject data = root.getAsJsonObject("data");
+        data.addProperty("page", 1);
+        data.addProperty("pageSize", 5);
         JsonArray items = new JsonArray();
         for (String version : versions) {
             items.add(JsonParser.parseString(version).getAsJsonObject());

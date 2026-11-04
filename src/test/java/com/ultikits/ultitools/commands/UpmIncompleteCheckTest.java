@@ -43,12 +43,15 @@ class UpmIncompleteCheckTest {
     private static final String INCOMPLETE = "更新检查未完成：无法确认 %s 的最新版本。";
 
     private MockedStatic<UltiTools> ultiMock;
+    private MockedStatic<org.bukkit.Bukkit> bukkitMock;
     private UpdateManager updateManager;
     private CommandSender sender;
     private final List<String> said = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
+        bukkitMock = mockStatic(org.bukkit.Bukkit.class);
+        bukkitMock.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(true);
         ultiMock = mockStatic(UltiTools.class);
         UltiTools instance = mock(UltiTools.class);
         when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
@@ -63,6 +66,7 @@ class UpmIncompleteCheckTest {
     @AfterEach
     void tearDown() {
         ultiMock.close();
+        bukkitMock.close();
     }
 
     private String all() {
