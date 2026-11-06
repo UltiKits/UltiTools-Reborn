@@ -3785,6 +3785,59 @@ descriptor change can no longer pass CI unnoticed.
 | Modules | Each of the fifteen UltiKits modules built for 6.3.0 states only the UltiTools-API version it supports: 6.3.0 or later (`api-version: 630`). The server rows of this table are the framework's own requirements |
 | Known gap on Paper 1.19.2 to 1.20.4 | The panel's console mirror is not installed, and one WARNING at start-up says the panel will not mirror the server console; the log stream carries plugin lines only. Those builds relocate CraftBukkit's log forwarder (`ForwardLogHandler`), so the mirror cannot find it. This is measured, existing behaviour, documented here and not changed |
 
+### Supporting servers below 1.21 (as of v6.4.0)
+
+The 6.4.0-line UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade target the same
+**Paper 1.19.2 build 163+** floor as the framework. Below Minecraft 1.21 these modules require
+**UltiTools 6.4.0+**; an older framework must be upgraded rather than used without adaptation.
+On Minecraft 1.21+ they retain compatibility with UltiTools 6.3.x. This is a conditional runtime
+requirement, not an instruction to raise every module's `api-version` unconditionally.
+
+**Binary shape, not missing capabilities.** At module-class load time the framework uses one generic
+invoke-kind alignment rule against the running server's API, not a per-type compatibility list.
+In particular, `InventoryView` is an abstract class on Paper 1.19.2–1.20.6 and an interface from
+1.21: the loader aligns virtual/interface calls and method-handle references without changing the
+receiver, member name or descriptor. No operator switch is needed or provided. A missing method
+remains missing; an incompatible superclass/interface declaration or affected special invocation is
+refused rather than partially rewritten. This adaptation applies to framework-loaded module classes,
+not to standalone Bukkit plugins loaded by Paper. See [the invoke-kind change](https://github.com/UltiKits/UltiTools-Reborn/pull/809).
+
+**Warnings do not mean recovery.** At startup the linkage audit emits **one WARNING per unresolved
+reference** not covered by a rewrite rule and continues loading the module; it does not reject the
+module merely because the audit found a reference. If the container actually skips a bean because it
+references an absent server class, a separate warning names the module, bean, missing class and all
+lost event handlers, including inherited handlers. Those handlers remain unregistered. The framework
+neither substitutes missing capabilities nor renames events, and it does not isolate individual
+handlers inside one class. See [the audit and skipped-bean diagnostics](https://github.com/UltiKits/UltiTools-Reborn/pull/810).
+
+**Module-author pattern for optional events.** Keep required handlers in a class whose signatures do
+not refer to optional server types. Put optional handlers in separate classes outside **every**
+`@UltiToolsModule.scanBasePackages` **string prefix**, not merely outside its Java subpackages:
+for a scan root `com.ultikits.plugins.login`, `com.ultikits.plugins.logincompat` is unsafe, while
+`com.ultikits.plugins.compat.login` is outside that prefix. Check all declared roots. Probe the optional
+event with `Class.forName` before loading/constructing and explicitly registering its listener; do not
+make it an automatically scanned IoC component. Unregister manually registered listeners on module
+unload. One absent parameter type can prevent reflection of the entire class, so a probe does not
+protect required handlers left in that same class. UltiLogin's [equipment-swap isolation](https://github.com/UltiKits/UltiLogin/pull/84)
+and [older-event selection](https://github.com/UltiKits/UltiLogin/pull/85) demonstrate this layout.
+
+The modules, not the framework, choose and document these remaining differences:
+
+- **UltiTrade:** on Paper 1.19.2–1.19.3 an already-open trade window's title does not refresh until
+  reopened; its contents still redraw. When an offline partner has no usable last location, their
+  cancelled stake goes to the original trade initiator, immediately if online or stored for the
+  initiator's next login otherwise — never to a synthetic world-spawn location. See
+  [the module's return policy and title limitation](https://github.com/UltiKits/UltiTrade/pull/92).
+- **UltiLogin:** the module selects the modern Bukkit mount event when available, otherwise the legacy
+  Spigot event, never both. Paper 1.20.4 builds before 386 need the legacy event; from build 386 the
+  server fires the modern event even though both classes exist. Pick-item and sign-editor-open hooks
+  are probed independently; where no complete equivalent event exists, only that protection is
+  unavailable and a named warning is emitted. The dedicated equipment-slot-swap hook is absent on
+  measured Paper 1.21.1–1.21.4 too; off-hand swaps are not an equivalent, and ordinary right-click
+  equipping remains guarded by the core interaction listener. Separate optional classes preserve the
+  remaining protections. See [UltiLogin's isolation](https://github.com/UltiKits/UltiLogin/pull/84) and
+  [capability-specific fallback](https://github.com/UltiKits/UltiLogin/pull/85).
+
 ### Where runtime dependencies come from
 
 The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and UniversalScheduler
