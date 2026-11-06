@@ -3789,7 +3789,8 @@ descriptor change can no longer pass CI unnoticed.
 
 The 6.4.0-line UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade target the same
 **Paper 1.19.2 build 163+** floor as the framework. Below Minecraft 1.21 these modules require
-**UltiTools 6.4.0+**; an older framework must be upgraded rather than used without adaptation.
+**UltiTools 6.4.0+**; once their module-side version gates land, they refuse to start with an
+upgrade message on an older framework rather than run without adaptation.
 On Minecraft 1.21+ they retain compatibility with UltiTools 6.3.x. This is a conditional runtime
 requirement, not an instruction to raise every module's `api-version` unconditionally.
 
@@ -3803,7 +3804,9 @@ refused rather than partially rewritten. This adaptation applies to framework-lo
 not to standalone Bukkit plugins loaded by Paper. See [the invoke-kind change](https://github.com/UltiKits/UltiTools-Reborn/pull/809).
 
 **Warnings do not mean recovery.** At startup the linkage audit emits **one WARNING per unresolved
-reference** not covered by a rewrite rule and continues loading the module; it does not reject the
+reference in the module's own component-scanned packages** when no rewrite rule covers that reference.
+Unresolved references in bundled third-party classes are grouped into **one INFO summary line per
+top-level library package**. The audit continues loading the module; it does not reject the
 module merely because the audit found a reference. If the container actually skips a bean because it
 references an absent server class, a separate warning names the module, bean, missing class and all
 lost event handlers, including inherited handlers. Those handlers remain unregistered. The framework
@@ -3812,9 +3815,12 @@ handlers inside one class. See [the audit and skipped-bean diagnostics](https://
 
 **Module-author pattern for optional events.** Keep required handlers in a class whose signatures do
 not refer to optional server types. Put optional handlers in separate classes outside **every**
-`@UltiToolsModule.scanBasePackages` **string prefix**, not merely outside its Java subpackages:
-for a scan root `com.ultikits.plugins.login`, `com.ultikits.plugins.logincompat` is unsafe, while
-`com.ultikits.plugins.compat.login` is outside that prefix. Check all declared roots. Probe the optional
+`@UltiToolsModule.scanBasePackages` **string prefix** for compatibility with older frameworks
+(before the 6.3.2 scan fix), which match the raw prefix rather than a complete Java package:
+for a scan root `com.ultikits.plugins.login`, `com.ultikits.plugins.logincompat` is unsafe on those
+older frameworks, while `com.ultikits.plugins.compat.login` is outside that prefix. From the 6.3.2
+scan fix onward, sibling packages sharing only a textual prefix are not scanned. Check all declared
+roots. Probe the optional
 event with `Class.forName` before loading/constructing and explicitly registering its listener; do not
 make it an automatically scanned IoC component. Unregister manually registered listeners on module
 unload. One absent parameter type can prevent reflection of the entire class, so a probe does not
