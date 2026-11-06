@@ -114,6 +114,16 @@ class CjkScopeScriptTest {
     }
 
     @Test
+    void selfTestPinsHalfwidthPunctuationAndKatakanaBoundaries() throws Exception {
+        prepare("class Sample {}\n");
+        Result result = gate("--self-test");
+        assertThat(result.exit).as(result.output).isZero();
+        for (String codePoint : Arrays.asList("FF61", "FF64", "FF65", "FF9F")) {
+            assertThat(result.output).contains("PASS: assertion 4c — halfwidth U+" + codePoint + " matches.");
+        }
+    }
+
+    @Test
     void unicodeContractIsPinnedInBothDirections() throws Exception {
         prepare("// ひらがなカタカナ・㈱\n");
         assertThat(gate().exit).isZero();
