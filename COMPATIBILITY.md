@@ -359,6 +359,11 @@ action log closes.
 These are documented, not defended; each needs a crash, an unusual layout, or a step the operator should not
 take.
 
+- **JDK HTTP debug logging can expose the server credential.** The JDK-internal logger
+  `sun.net.www.protocol.http.HttpURLConnection` at `FINE` or lower can print request headers,
+  including `Authorization: Bearer ...` sent by `CloudHttp` when logout revokes the credential at
+  `/v1/agent/credential/revoke`. Do not enable this logger on production servers. Retiring
+  `UltiCloudRequests` does not remove this limitation; the framework does not redact the JDK's wire logs.
 - **Commands are at most once.** A `command.execute` or `server.power` id is persisted before the
   acknowledgement and before the command runs. A crash between persisting the id and running the command loses
   that command; it is never run twice.
