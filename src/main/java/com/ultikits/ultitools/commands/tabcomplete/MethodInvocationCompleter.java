@@ -10,6 +10,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import com.ultikits.ultitools.UltiTools;
@@ -150,6 +151,11 @@ public class MethodInvocationCompleter implements TabCompleter {
     @SuppressWarnings("unchecked")
     private List<String> invokeSuggestMethod(TabCompletionContext context, Method suggestMethod) {
         try {
+            Class<?>[] paramTypes = suggestMethod.getParameterTypes();
+            SuggestSignatureShape shape = classifySuggestSignature(paramTypes);
+            if (requiresPlayer(shape) && context.getPlayer() == null) {
+                return Collections.emptyList();
+            }
             suggestMethod.setAccessible(true);
             
             // Determine the target object
@@ -174,15 +180,22 @@ public class MethodInvocationCompleter implements TabCompleter {
             // check, T-05-fix Part 2) uses -- one decision point, not two independently
             // maintained lists of "which signatures are supported".
             Object result;
-            Class<?>[] paramTypes = suggestMethod.getParameterTypes();
-            SuggestSignatureShape shape = classifySuggestSignature(paramTypes);
-
             switch (shape) {
                 case NO_ARGS:
                     result = suggestMethod.invoke(target);
                     break;
                 case PLAYER_ONLY:
                     result = suggestMethod.invoke(target, context.getPlayer());
+                    break;
+                case SENDER_ONLY:
+                    result = suggestMethod.invoke(target, context.getSender());
+                    break;
+                case SENDER_AND_STRING:
+                    result = suggestMethod.invoke(target, context.getSender(), context.getCurrentInput());
+                    break;
+                case SENDER_COMMAND_ARGS:
+                    result = suggestMethod.invoke(target, context.getSender(), context.getCommand(),
+                            context.getArgs());
                     break;
                 case STRING_ONLY:
                     // (String) -- the current partial token being completed. Mirrors
@@ -208,7 +221,7 @@ public class MethodInvocationCompleter implements TabCompleter {
                     // Unreachable by construction in a module that passed load --
                     // PluginManager.validateCommandExecutorContract (T-05-fix Part 2) refuses to
                     // load any module whose @CmdParam.suggest() method-name resolves to a
-                    // signature outside the five shapes above. If this IS reached anyway (e.g. a
+                    // signature outside the supported shapes above. If this IS reached anyway (e.g. a
                     // signature that changed after load), fail loudly instead of silently
                     // invoking with the wrong arity and swallowing the result -- that silent
                     // wrong-invocation behaviour is exactly the defect class this fix exists to
@@ -217,7 +230,8 @@ public class MethodInvocationCompleter implements TabCompleter {
                             + "signature (this should have been refused at load time): "
                             + declaringClass.getName() + "#" + suggestMethod.getName() + " has "
                             + paramTypes.length + " parameter(s). Supported signatures: (), (Player), "
-                            + "(String), (Player, String), (Player, Command, String[]).");
+                            + "(String), (Player, String), (Player, Command, String[]), (CommandSender), "
+                            + "(CommandSender, String), (CommandSender, Command, String[]).");
                     return Collections.emptyList();
             }
             
@@ -261,6 +275,9 @@ public class MethodInvocationCompleter implements TabCompleter {
         STRING_ONLY,
         PLAYER_AND_STRING,
         PLAYER_COMMAND_ARGS,
+        SENDER_ONLY,
+        SENDER_AND_STRING,
+        SENDER_COMMAND_ARGS,
         UNSUPPORTED
     }
 
@@ -296,9 +313,18 @@ public class MethodInvocationCompleter implements TabCompleter {
         }
     }
 
+    private static boolean requiresPlayer(SuggestSignatureShape shape) {
+        return shape == SuggestSignatureShape.PLAYER_ONLY
+                || shape == SuggestSignatureShape.PLAYER_AND_STRING
+                || shape == SuggestSignatureShape.PLAYER_COMMAND_ARGS;
+    }
+
     private static SuggestSignatureShape classifySingleParamShape(Class<?> paramType) {
         if (paramType == Player.class) {
             return SuggestSignatureShape.PLAYER_ONLY;
+        }
+        if (paramType == CommandSender.class) {
+            return SuggestSignatureShape.SENDER_ONLY;
         }
         if (paramType == String.class) {
             return SuggestSignatureShape.STRING_ONLY;
@@ -310,6 +336,9 @@ public class MethodInvocationCompleter implements TabCompleter {
         if (paramTypes[0] == Player.class && paramTypes[1] == String.class) {
             return SuggestSignatureShape.PLAYER_AND_STRING;
         }
+        if (paramTypes[0] == CommandSender.class && paramTypes[1] == String.class) {
+            return SuggestSignatureShape.SENDER_AND_STRING;
+        }
         return SuggestSignatureShape.UNSUPPORTED;
     }
 
@@ -317,6 +346,10 @@ public class MethodInvocationCompleter implements TabCompleter {
         if (paramTypes[0] == Player.class && paramTypes[1] == Command.class
                 && paramTypes[2] == String[].class) {
             return SuggestSignatureShape.PLAYER_COMMAND_ARGS;
+        }
+        if (paramTypes[0] == CommandSender.class && paramTypes[1] == Command.class
+                && paramTypes[2] == String[].class) {
+            return SuggestSignatureShape.SENDER_COMMAND_ARGS;
         }
         return SuggestSignatureShape.UNSUPPORTED;
     }

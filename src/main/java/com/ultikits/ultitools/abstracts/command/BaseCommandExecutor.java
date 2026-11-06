@@ -1088,17 +1088,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     @Override
     @Nullable
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (!(sender instanceof Player)) {
-            return null;
-        }
-        
-        // Check if this command is console-only
-        CmdTarget cmdTarget = this.getClass().getAnnotation(CmdTarget.class);
-        if (cmdTarget != null && cmdTarget.value() == CmdTarget.CmdTargetType.CONSOLE) {
-            return null;
-        }
-        
-        return suggest((Player) sender, command, args);
+        return suggest(sender, command, args);
     }
     
     /**
@@ -1112,6 +1102,22 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      */
     protected List<String> suggest(Player player, Command command, String[] args) {
         return CommandTabCompletionDispatch.suggest(mappings, player, command, args, this);
+    }
+
+    /**
+     * Generates suggestions for any sender. Player requests continue through the legacy
+     * {@link #suggest(Player, Command, String[])} override hook.
+     *
+     * @param sender the sender requesting completion
+     * @param command the command
+     * @param args the current arguments
+     * @return the suggestions, with unavailable mappings silently excluded by default
+     */
+    protected List<String> suggest(CommandSender sender, Command command, String[] args) {
+        if (sender instanceof Player) {
+            return suggest((Player) sender, command, args);
+        }
+        return CommandTabCompletionDispatch.suggest(mappings, sender, command, args, this);
     }
     
     /**
