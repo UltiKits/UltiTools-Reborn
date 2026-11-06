@@ -465,7 +465,8 @@ public class TaskManager {
                     plugin.getPluginName(), handle.owner, source.configName(), source.key, seconds,
                     ConfigBindings.TIMER_RULE, currentTicks / ConfigBindings.TICKS_PER_SECOND));
             report.partial(ConfigBindings.reloadReason(ConfigBindings.SCHEDULED_KEPT_KEY, handle.owner,
-                    source.configName(), source.key, seconds, ConfigBindings.TIMER_RULE,
+                    source.configName(), source.key, seconds,
+                    ConfigBindings.reloadReason(ConfigBindings.TIMER_RULE_KEY, ConfigBindings.MAX_TICK_SECONDS),
                     currentTicks / ConfigBindings.TICKS_PER_SECOND));
         }
         return currentTicks;

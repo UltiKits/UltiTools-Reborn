@@ -21,10 +21,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.ultikits.ultitools.annotations.config.Range;
+import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Size;
@@ -90,6 +95,99 @@ class NotEmptyDefaultConstraintsTest {
         Set<String> tags = new LinkedHashSet<>(Collections.singletonList("a"));
 
         ParserShapedShortDefault(String path) { super(path); }
+    }
+
+    /** Edit diagnostics must use declared YAML paths, not the different Java member names (#598). */
+    static class EditableConfig extends AbstractConfigEntity {
+        @Range(min = 1, max = 5)
+        @ConfigEntry(path = "retry-count")
+        int retryCount = 3;
+
+        @NotEmpty
+        @ConfigEntry(path = "allowed-commands")
+        List<String> allowedCommands = new ArrayList<>(Collections.singletonList("login"));
+
+        @Size(min = 2, max = 8)
+        @ConfigEntry(path = "display-name")
+        String displayName = "name";
+
+        @Pattern(regex = "[a-z]+")
+        @ConfigEntry(path = "mode-code")
+        String modeCode = "abc";
+
+        EditableConfig(String path) { super(path); }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"retry-count=0", "allowed-commands=[]", "display-name=\"x\"", "mode-code=\"ABC\""})
+    void editRefusalNamesTheDeclaredKeyAndDoesNotRequestRestart(String candidate) throws Exception {
+        Path file = write("retry-count: 3\nallowed-commands: [login]\ndisplay-name: name\nmode-code: abc\n");
+        EditableConfig entity = new EditableConfig("sidebar.yml");
+        entity.init(plugin);
+        byte[] before = Files.readAllBytes(file);
+        String key = candidate.substring(0, candidate.indexOf('='));
+        JsonObject edit = new JsonObject();
+        edit.add(key, JsonParser.parseString(candidate.substring(candidate.indexOf('=') + 1)));
+
+        assertThatThrownBy(() -> entity.validateProposedProperties(edit))
+                .isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("edit was not applied")
+                .hasMessageContaining("key '" + key + "'")
+                .hasMessageNotContaining("refused to load").hasMessageNotContaining("restart")
+                .hasMessageNotContaining("retryCount").hasMessageNotContaining("allowedCommands")
+                .hasMessageNotContaining("displayName").hasMessageNotContaining("modeCode");
+        assertThatThrownBy(() -> entity.updateProperties(edit))
+                .isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("edit was not applied")
+                .hasMessageContaining("key '" + key + "'")
+                .hasMessageNotContaining("refused to load").hasMessageNotContaining("restart");
+        assertThat(Files.readAllBytes(file)).isEqualTo(before);
+        assertThat(entity.retryCount).isEqualTo(3);
+        assertThat(entity.allowedCommands).containsExactly("login");
+        assertThat(entity.displayName).isEqualTo("name");
+        assertThat(entity.modeCode).isEqualTo("abc");
+        assertThat(entity.isModifiedSinceSnapshot()).isFalse();
+    }
+
+    @Test
+    void bindingRangeEditRefusalUsesTheSameEditDiagnostic() throws Exception {
+        Path file = write("retry-count: 3\nallowed-commands: [login]\ndisplay-name: name\nmode-code: abc\n");
+        EditableConfig entity = new EditableConfig("sidebar.yml");
+        entity.init(plugin);
+        entity.addBindingRange("retry-count", "must be at most 3 seconds", seconds -> seconds != null && seconds <= 3);
+        byte[] before = Files.readAllBytes(file);
+        JsonObject edit = new JsonObject();
+        edit.addProperty("retry-count", 4);
+        assertThatThrownBy(() -> entity.validateProposedProperties(edit))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("edit was not applied")
+                .hasMessageContaining("key 'retry-count'").hasMessageNotContaining("refused to load")
+                .hasMessageNotContaining("restart");
+        assertThatThrownBy(() -> entity.updateProperties(edit))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("edit was not applied")
+                .hasMessageContaining("key 'retry-count'").hasMessageNotContaining("restart");
+        assertThat(entity.retryCount).isEqualTo(3);
+        assertThat(Files.readAllBytes(file)).isEqualTo(before);
+    }
+
+    @Test
+    void aRefusedEditDoesNotChangeLaterLoadOrReloadDiagnostics() throws Exception {
+        Path file = write("retry-count: 3\nallowed-commands: [login]\ndisplay-name: name\nmode-code: abc\n");
+        EditableConfig entity = new EditableConfig("sidebar.yml");
+        entity.init(plugin);
+        JsonObject edit = new JsonObject();
+        edit.addProperty("retry-count", 0);
+        assertThatThrownBy(() -> entity.updateProperties(edit)).isInstanceOf(ConfigurationException.class);
+        Files.write(file, new String(Files.readAllBytes(file), StandardCharsets.UTF_8)
+                .replace("retry-count: 3", "retry-count: 0").getBytes(StandardCharsets.UTF_8));
+
+        assertThatThrownBy(entity::reload).isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("did not reload").hasMessageContaining("field 'retryCount'")
+                .hasMessageContaining("reload again").hasMessageNotContaining("edit was not applied");
+        assertThat(entity.retryCount).isEqualTo(3);
+        assertThatThrownBy(() -> new EditableConfig("sidebar.yml").init(plugin))
+                .isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("refused to load").hasMessageContaining("field 'retryCount'")
+                .hasMessageContaining("restart");
     }
 
     @BeforeEach
@@ -211,7 +309,7 @@ class NotEmptyDefaultConstraintsTest {
         JsonObject edit = new JsonObject();
         edit.add("lines", new JsonArray());
         assertThatThrownBy(() -> sideBar.updateProperties(edit)).isInstanceOf(ConfigurationException.class)
-                .hasMessageContaining("field 'lines' must not be empty");
+                .hasMessageContaining("key 'lines' must not be empty");
         assertThat(sideBar.lines).hasSize(3);
         assertThat(Files.readAllBytes(file)).isEqualTo(before);
         assertThatThrownBy(() -> sideBar.validateProposedProperties(edit)).isInstanceOf(ConfigurationException.class);
@@ -228,7 +326,7 @@ class NotEmptyDefaultConstraintsTest {
         JsonObject edit = new JsonObject();
         edit.add("aliases", new JsonObject());
         assertThatThrownBy(() -> sideBar.updateProperties(edit)).isInstanceOf(ConfigurationException.class)
-                .hasMessageContaining("field 'aliases' must not be empty");
+                .hasMessageContaining("key 'aliases' must not be empty");
         assertThat(Files.readAllBytes(file)).isEqualTo(before);
     }
 

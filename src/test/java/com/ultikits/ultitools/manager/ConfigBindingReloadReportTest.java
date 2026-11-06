@@ -8,6 +8,20 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import org.bukkit.Bukkit;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitScheduler;
+import org.mockito.AdditionalAnswers;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
@@ -53,9 +67,11 @@ class ConfigBindingReloadReportTest {
 
     /** Bound period. */
     public static class BoundPeriodBean {
+        int runs;
+
         @Scheduled(config = BindingTimingConfig.class, periodKey = "timer.period")
         public void tick() {
-            // Scheduling is what is asserted.
+            runs++;
         }
     }
 
@@ -169,6 +185,97 @@ class ConfigBindingReloadReportTest {
 
         assertThat(report.getPartialReasons()).hasSize(1).allSatisfy(reason -> assertThat(reason)
                 .contains("@Scheduled").contains("task registry unavailable"));
+    }
+
+    @Test
+    @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes") // inject one ordinary scheduler failure after the first update
+    void aLaterTaskFailureDoesNotPretendEarlierUpdatesWereRolledBack() throws Exception {
+        TaskManager tasks = new TaskManager(host);
+        useTaskManager(tasks);
+        BoundPeriodBean first = new BoundPeriodBean();
+        BoundPeriodBean second = new BoundPeriodBean();
+        config.setPeriodSeconds(5);
+        tasks.registerScheduledMethods(module, first);
+        tasks.registerScheduledMethods(module, second);
+        config.setPeriodSeconds(10);
+        BukkitScheduler real = Bukkit.getScheduler();
+        BukkitScheduler failing = mock(BukkitScheduler.class, AdditionalAnswers.delegatesTo(real));
+        AtomicInteger arms = new AtomicInteger();
+        Mockito.doAnswer(call -> {
+            if (arms.incrementAndGet() == 2) {
+                throw new IllegalStateException("scheduler unavailable");
+            }
+            return real.runTaskTimer(call.getArgument(0), (Runnable) call.getArgument(1),
+                    (Long) call.getArgument(2), (Long) call.getArgument(3));
+        }).when(failing).runTaskTimer(Mockito.any(Plugin.class), Mockito.any(Runnable.class),
+                Mockito.anyLong(), Mockito.anyLong());
+        ReloadReport report;
+        try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class, Mockito.CALLS_REAL_METHODS)) {
+            bukkit.when(Bukkit::getScheduler).thenReturn(failing);
+            report = module.reloadWithReport();
+        }
+        MockBukkit.getMock().getScheduler().performTicks(201);
+        assertThat(first.runs).as("the first task retains its new 200-tick period, not the old 100").isEqualTo(2);
+        assertThat(second.runs).as("the later task's replacement could not be armed").isZero();
+        assertThat(arms.get()).isEqualTo(2);
+        assertThat(report.getPartialReasons()).singleElement().asString()
+                .contains("updates applied before the failure remain in effect")
+                .contains("remaining updates did not complete")
+                .doesNotContain("the running values are kept");
+    }
+
+    /** Real shipped catalogue content, with only the singleton wiring mocked. */
+    private void useCatalogue(String language) throws Exception {
+        JsonObject catalogue;
+        try (InputStreamReader reader = new InputStreamReader(getClass().getResourceAsStream("/lang/" + language + ".json"),
+                StandardCharsets.UTF_8)) {
+            catalogue = JsonParser.parseReader(reader).getAsJsonObject();
+        }
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        org.bukkit.configuration.file.FileConfiguration running = UltiTools.getInstance().getConfig();
+        TestHelper.mockUltiToolsInstance(framework -> {
+            when(framework.getConfigManager()).thenReturn(configs);
+            when(framework.getPluginManager()).thenReturn(pluginManager);
+            when(framework.getConfig()).thenReturn(running);
+            when(framework.i18n(Mockito.anyString())).thenAnswer(call -> {
+                String key = call.getArgument(0);
+                return catalogue.has(key) ? catalogue.get(key).getAsString() : key;
+            });
+        });
+    }
+
+    @Test
+    void chineseTimerRefusalTranslatesTheOwnedRule() throws Exception {
+        useCatalogue("zh");
+        loadScheduledTask();
+        config.setPeriodSeconds(0);
+        assertThat(module.reloadWithReport().getPartialReasons()).singleElement().asString()
+                .contains("整数秒").contains("1").contains(String.valueOf(ConfigBindings.MAX_TICK_SECONDS))
+                .doesNotContain("a bound").doesNotContain("whole number").doesNotContain("does not mean off");
+    }
+
+    @Test
+    void chineseCooldownRefusalTranslatesTheOwnedReasonAndRule() throws Exception {
+        useCatalogue("zh");
+        loadCooldownExecutor();
+        config.setWildCooldown(-1);
+        assertThat(module.reloadWithReport().getPartialReasons()).singleElement().asString()
+                .contains("整数秒").contains("-1").contains(String.valueOf(Integer.MAX_VALUE))
+                .doesNotContain("it has value").doesNotContain("after the reload").doesNotContain("a bound");
+    }
+
+    @Test
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // exercise the real source's incomplete-load signal
+    void chineseCooldownRefusalTranslatesTheIncompleteConfigSource() throws Exception {
+        useCatalogue("zh");
+        loadCooldownExecutor();
+        Field incomplete = AbstractConfigEntity.class.getDeclaredField("lastInitIncomplete");
+        incomplete.setAccessible(true);
+        incomplete.setBoolean(config, true);
+        assertThat(module.reloadWithReport().getPartialReasons()).singleElement().asString()
+                .contains("config/timing.yml").contains("60").contains("未完成")
+                .doesNotContain("the reload of").doesNotContain("did not complete")
+                .doesNotContain("were not validated");
     }
 
     @Test

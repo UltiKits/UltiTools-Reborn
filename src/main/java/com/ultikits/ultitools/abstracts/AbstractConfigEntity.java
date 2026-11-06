@@ -114,6 +114,9 @@ public abstract class AbstractConfigEntity {
     /** Set only while a reload validates the values it read, for the refusal's wording (#595). */
     @Getter(AccessLevel.NONE)
     private boolean validatingReload;
+    /** Scoped to edit validation under the entity monitor; never changes load/reload outcomes. */
+    @Getter(AccessLevel.NONE)
+    private boolean validatingEdit;
     @Getter(AccessLevel.NONE)
     private boolean deferInitialization;
     @Getter(AccessLevel.NONE)
@@ -2276,7 +2279,9 @@ public abstract class AbstractConfigEntity {
      * #reload()} already use - before either document mutation or file persistence
      * runs. A violating value refuses with {@link ConfigurationException} instead of being
      * written: the operator's file is left byte-identical, and every field this call touched is
-     * restored to the value it held before the call, so memory never disagrees with disk (D-01,
+     * restored to the value it held before the call. Edit refusals name the declared configuration keys and
+     * ask the operator to correct the proposal, not to restart the running module (#598). Thus memory never
+     * disagrees with disk (D-01,
      * D-04). The entity keeps running after a refusal, so its in-memory state must not be left
      * holding a rejected value; {@link #reload()} follows the same all-or-nothing rule. The same
      * holds when the file replacement itself fails: every field and every piece of save
@@ -2594,8 +2599,14 @@ public abstract class AbstractConfigEntity {
             touchedFieldsOut.add(field); previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
             ReflectionUtil.setFieldValue(this, field, entry.getValue());
         }
-        validateFields();
-        validateBindingRanges(touchedFieldsOut);
+        boolean previousEdit = validatingEdit;
+        validatingEdit = true;
+        try {
+            validateFields();
+            validateBindingRanges(touchedFieldsOut);
+        } finally {
+            validatingEdit = previousEdit;
+        }
         return leaves;
     }
 
@@ -2788,7 +2799,7 @@ public abstract class AbstractConfigEntity {
         }
         if (!violations.isEmpty()) {
             String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
-            throw ConfigurationException.validationFailed(moduleName, configFilePath, violations);
+            throw editValidationFailed(moduleName, violations);
         }
     }
 
@@ -2876,10 +2887,25 @@ public abstract class AbstractConfigEntity {
 
         if (!violations.isEmpty()) {
             String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
+            if (validatingEdit) { throw editValidationFailed(moduleName, violations); }
             throw validatingReload
                     ? ConfigurationException.reloadValidationFailed(moduleName, configFilePath, violations)
                     : ConfigurationException.validationFailed(moduleName, configFilePath, violations);
         }
+    }
+
+    /** Edit refusal, shared by annotation and binding-range checks; memory and file are restored by the caller. */
+    private ConfigurationException editValidationFailed(String moduleName, List<String> violations) {
+        return new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+                "Module '" + moduleName + "': configuration edit was not applied to file '" + configFilePath
+                        + "': " + String.join("; ", violations)
+                        + ". The file and running values are unchanged - correct the proposed value(s) and try again.");
+    }
+
+    /** The declared key for an edit, retaining the established Java-field diagnostics at load and reload. */
+    private String validationLocation(Field field) {
+        return validatingEdit ? "key " + describeKey(field, Collections.<String>emptyList())
+                : "field '" + field.getName() + "'";
     }
 
     /**
@@ -2934,23 +2960,24 @@ public abstract class AbstractConfigEntity {
         }
         if (isRangeViolation(field, value)) {
             Range range = field.getAnnotation(Range.class);
-            return String.format("field '%s' value %s is out of range [%s, %s]",
-                    field.getName(), value, range.min(), range.max());
+            return String.format("%s value %s is out of range [%s, %s]",
+                    validationLocation(field), value, range.min(), range.max());
         }
         if (isNotEmptyViolation(field, value)) {
-            return String.format("field '%s' must not be empty", field.getName());
+            return String.format("%s must not be empty", validationLocation(field));
         }
         if (isSizeViolation(field, value)) {
             Size size = field.getAnnotation(Size.class);
             int len = getValueLength(value);
-            return String.format("field '%s' size %d is out of bounds [%d, %d]",
-                    field.getName(), len, size.min(), size.max());
+            return String.format("%s size %d is out of bounds [%d, %d]",
+                    validationLocation(field), len, size.min(), size.max());
         }
         if (isPatternViolation(field, value)) {
             Pattern pattern = field.getAnnotation(Pattern.class);
-            String displayValue = isSecretShapedFieldName(field.getName()) ? "<redacted>" : "'" + value + "'";
-            return String.format("field '%s' value %s does not match pattern '%s'",
-                    field.getName(), displayValue, pattern.regex());
+            String displayValue = (isSecretShapedFieldName(field.getName()) || validatingEdit && secretSetting(field))
+                    ? "<redacted>" : "'" + value + "'";
+            return String.format("%s value %s does not match pattern '%s'",
+                    validationLocation(field), displayValue, pattern.regex());
         }
         return null;
     }
@@ -3004,8 +3031,8 @@ public abstract class AbstractConfigEntity {
         } else if (field.getAnnotation(NotEmpty.class) != null && !sized) {
             annotation = "@NotEmpty"; reason = "it applies to text, lists, sets, maps and arrays only";
         }
-        return annotation == null ? null : String.format("field '%s' holds a %s, which %s cannot read (%s)",
-                field.getName(), value.getClass().getSimpleName(), annotation, reason);
+        return annotation == null ? null : String.format("%s holds a %s, which %s cannot read (%s)",
+                validationLocation(field), value.getClass().getSimpleName(), annotation, reason);
     }
 
     private boolean isRangeViolation(Field field, Object value) {
