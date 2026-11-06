@@ -42,6 +42,8 @@ final class ModuleClassLoader extends URLClassLoader {
     private final ConcurrentMap<String, Object> packageLocks = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Package> ownPackages = new ConcurrentHashMap<>();
     private final Set<URL> auditedModules = ConcurrentHashMap.newKeySet();
+    private final ConcurrentMap<URL, LinkageAudit.Audit> moduleAudits = new ConcurrentHashMap<>();
+    private final Set<URL> reportedModules = ConcurrentHashMap.newKeySet();
 
     /** Production foundation: deliberately no compatibility rules or additional logging. */
     ModuleClassLoader(URL[] urls, ClassLoader parent, URL serverJar) {
@@ -67,7 +69,26 @@ final class ModuleClassLoader extends URLClassLoader {
         return LinkageAudit.scan(module, getParent(), rules);
     }
 
-    /** Audits each explicit module once before PluginManager starts loading modules. */
+    LinkageAudit.Audit inspect(File module) throws IOException {
+        return LinkageAudit.inspect(module, getParent(), rules);
+    }
+
+    /** Emits a cached audit only when normal assembly has obtained the module's real scan roots. */
+    void reportModule(Class<?> mainClass, String[] roots, java.util.logging.Logger logger) {
+        CodeSource codeSource = mainClass.getProtectionDomain().getCodeSource();
+        if (codeSource == null) {
+            return;
+        }
+        URL source = codeSource.getLocation();
+        LinkageAudit.Audit audit = moduleAudits.get(source);
+        if (audit != null && reportedModules.add(source)) {
+            audit.report(audit.moduleName, caller -> Arrays.stream(roots).anyMatch(root ->
+                    com.ultikits.ultitools.context.ComponentScanner.matchesPackage(caller, root)),
+                    logger::warning, logger::info);
+        }
+    }
+
+    /** Pre-scans each explicit module once; classification waits for normal container assembly. */
     void auditModules(java.util.logging.Logger logger) {
         for (URL source : getURLs()) {
             if (!moduleJars.contains(source) || !auditedModules.add(source)) {
@@ -78,7 +99,7 @@ final class ModuleClassLoader extends URLClassLoader {
                 if (module.isDirectory()) {
                     continue;
                 }
-                LinkageAudit.warn(module, getParent(), rules, logger);
+                moduleAudits.put(source, inspect(module));
             } catch (IOException | URISyntaxException | RuntimeException failure) {
                 // Audit is diagnostic only: the original loader still decides whether a module loads.
                 logger.log(java.util.logging.Level.WARNING,

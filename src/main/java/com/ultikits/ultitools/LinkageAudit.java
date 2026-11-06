@@ -26,6 +26,10 @@ import java.util.HashMap;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Logger;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
  * Read-only startup and offline audit of symbolic server/framework references, not a verifier.
@@ -37,17 +41,26 @@ final class LinkageAudit {
     }
 
     static List<Finding> scan(File module, ClassLoader api, List<ClassRewriteRule> rules) throws IOException {
-        LinkageApiIndex index = new LinkageApiIndex(api);
+        return inspect(module, api, rules).findings;
+    }
+
+    static Audit inspect(File module, ClassLoader api, List<ClassRewriteRule> rules) throws IOException {
         List<Finding> findings = new ArrayList<>();
-        try (JarFile jar = new JarFile(module)) {
+        Set<String> packages = new HashSet<>();
+        // Resource lookup is parent-first, just like the defining loader. The subject contributes
+        // metadata only; no subject class is defined or initialized by this resource-only index.
+        try (URLClassLoader resources = new URLClassLoader(new URL[]{module.toURI().toURL()}, api);
+                JarFile jar = new JarFile(module)) {
+            LinkageApiIndex index = new LinkageApiIndex(resources);
             for (JarEntry entry : effectiveClasses(jar)) {
                 try (InputStream input = jar.getInputStream(entry)) {
                     ClassReader reader = new ClassReader(input);
+                    packages.add(packageName(reader.getClassName()));
                     reader.accept(new Scanner(reader.getClassName(), index, rules, findings), ClassReader.SKIP_FRAMES);
                 }
             }
         }
-        return Collections.unmodifiableList(findings);
+        return new Audit(module.getName(), findings, packages);
     }
 
     private static Iterable<JarEntry> effectiveClasses(JarFile jar) throws IOException {
@@ -99,24 +112,32 @@ final class LinkageAudit {
         }
     }
 
-    /** Explicit API paths never inherit the host process's Paper API. Additional API jars are repeatable. */
+    /**
+     * Explicit API paths never inherit the host process's Paper API. Additional API jars are repeatable.
+     * The --api index must include every runtime dependency whose classes the audited code extends
+     * or calls: the server API and its transitive dependencies, plus the audited artifact's own
+     * provided/runtime dependencies.
+     */
     static int run(String[] arguments, PrintStream output) throws IOException {
         List<URL> apis = new ArrayList<>();
         List<File> modules = new ArrayList<>();
+        List<String> ownRoots = new ArrayList<>();
         for (int i = 0; i < arguments.length; i++) {
             if ("--api".equals(arguments[i]) && i + 1 < arguments.length) {
                 for (String path : arguments[++i].split(java.util.regex.Pattern.quote(File.pathSeparator))) {
                     apis.add(new File(path).toURI().toURL());
                 }
+            } else if ("--own".equals(arguments[i]) && i + 1 < arguments.length) {
+                ownRoots.add(arguments[++i]);
             } else if (arguments[i].startsWith("--")) {
-                output.println("Usage: LinkageAudit --api <api.jar[:dependency.jar...]> <module.jar>...");
+                output.println("Usage: LinkageAudit --api <api.jar[:dependency.jar...]> [--own <package/prefix/>]... <module.jar>...");
                 return 2;
             } else {
                 modules.add(new File(arguments[i]));
             }
         }
         if (apis.isEmpty() || modules.isEmpty()) {
-            output.println("Usage: LinkageAudit --api <api.jar[:dependency.jar...]> <module.jar>...");
+            output.println("Usage: LinkageAudit --api <api.jar[:dependency.jar...]> [--own <package/prefix/>]... <module.jar>...");
             return 2;
         }
         // The executing framework supplies its own API, but never supplies a fallback server API.
@@ -125,11 +146,9 @@ final class LinkageAudit {
         try (URLClassLoader loader = new URLClassLoader(apis.toArray(new URL[0]), null);
                 ModuleClassLoader moduleLoader = new ModuleClassLoader(new URL[0], loader, null)) {
             for (File module : modules) {
-                List<Finding> findings = moduleLoader.audit(module);
-                for (Finding finding : findings) {
-                    output.println(finding.message(module.getName()));
-                }
-                if (!findings.isEmpty()) {
+                Audit audit = moduleLoader.inspect(module);
+                if (audit.report(module.getName(), caller -> ownRoots.isEmpty()
+                        || ownRoots.stream().anyMatch(caller::startsWith), output::println, output::println)) {
                     status = 1;
                 }
             }
@@ -147,6 +166,51 @@ final class LinkageAudit {
                 || owner.startsWith("com/destroystokyo/") || owner.startsWith("net/kyori/")
                 || owner.startsWith("co/aikar/") || owner.startsWith("org/spigotmc/")
                 || owner.startsWith("com/ultikits/ultitools/");
+    }
+
+    private static String packageName(String className) {
+        int slash = className.lastIndexOf('/');
+        return slash < 0 ? "" : className.substring(0, slash);
+    }
+
+    /** Unclassified pre-scan result; runtime ownership is supplied only after normal main loading. */
+    static final class Audit {
+        final String moduleName;
+        final List<Finding> findings;
+        private final Set<String> packages;
+
+        Audit(String moduleName, List<Finding> findings, Set<String> packages) {
+            this.moduleName = moduleName;
+            this.findings = Collections.unmodifiableList(new ArrayList<>(findings));
+            this.packages = Collections.unmodifiableSet(new HashSet<>(packages));
+        }
+
+        boolean report(String module, Predicate<String> own, Consumer<String> warning, Consumer<String> info) {
+            boolean unresolvedOwn = false;
+            Map<String, Integer> libraries = new LinkedHashMap<>();
+            for (Finding finding : findings) {
+                if (own.test(finding.referringClass)) {
+                    warning.accept(finding.message(module));
+                    unresolvedOwn = true;
+                } else {
+                    libraries.merge(libraryRoot(finding.referringClass), 1, Integer::sum);
+                }
+            }
+            libraries.forEach((library, count) -> info.accept(module + ": " + count
+                    + " unresolved references in bundled library " + library.replace('/', '.')
+                    + " (not checked per reference; such libraries usually guard platform-specific code at run time)"));
+            return unresolvedOwn;
+        }
+
+        private String libraryRoot(String caller) {
+            String root = packageName(caller);
+            for (String parent = packageName(root); !parent.isEmpty(); parent = packageName(parent)) {
+                if (packages.contains(parent)) {
+                    root = parent;
+                }
+            }
+            return root.isEmpty() ? "<default>" : root;
+        }
     }
 
     static final class Finding {

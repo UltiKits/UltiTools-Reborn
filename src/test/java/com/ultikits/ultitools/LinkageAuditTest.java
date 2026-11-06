@@ -172,7 +172,137 @@ class LinkageAuditTest implements Opcodes {
     }
 
     @Test
-    void startupAuditsBeforeActualModuleLoadAndUsesTheLoadersRuleSnapshot() throws Exception {
+    void startupDefersOutputUntilMainClassAndRealScanRootsAreKnown() throws Exception {
+        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        org.mockbukkit.mockbukkit.MockBukkit.mock();
+        try {
+            runtimeOrdering(true);
+            runtimeOrdering(false);
+        } finally {
+            com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void runtimeOrdering(boolean annotated) throws Exception {
+        String property = "ultitools.audit2.created";
+        System.clearProperty(property);
+        Map<String, byte[]> classes = new LinkedHashMap<>();
+        ClassWriter main = new ClassWriter(0);
+        main.visit(V1_8, ACC_PUBLIC, "runtime/entry/Main", null,
+                "com/ultikits/ultitools/abstracts/UltiToolsPlugin", null);
+        if (annotated) {
+            net.bytebuddy.jar.asm.AnnotationVisitor annotation = main.visitAnnotation(
+                    "Lcom/ultikits/ultitools/annotations/UltiToolsModule;", true);
+            net.bytebuddy.jar.asm.AnnotationVisitor roots = annotation.visitArray("scanBasePackages");
+            roots.visit(null, "runtime.own");
+            roots.visitEnd();
+            net.bytebuddy.jar.asm.AnnotationVisitor markers = annotation.visitArray("scanBasePackageClasses");
+            markers.visit(null, net.bytebuddy.jar.asm.Type.getObjectType("runtime/marker/Marker"));
+            markers.visitEnd();
+            annotation.visitEnd();
+        }
+        classes.put("runtime/entry/Main", bytes(main));
+        classes.put("runtime/marker/Marker", bytes(caller("runtime/marker/Marker")));
+        for (String name : Arrays.asList("runtime/own/Service", "runtime/ownExtra/Caller",
+                "runtime/marker/Caller", "runtime/entry/Caller", "bundled/lib/Caller")) {
+            ClassWriter writer = caller(name);
+            if (name.endsWith("Service")) {
+                writer.visitAnnotation("Lcom/ultikits/ultitools/annotations/Service;", true).visitEnd();
+                MethodVisitor constructor = writer.visitMethod(ACC_PUBLIC, "<init>", "()V", null, null);
+                constructor.visitCode();
+                constructor.visitVarInsn(ALOAD, 0);
+                constructor.visitMethodInsn(INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+                constructor.visitLdcInsn(property);
+                constructor.visitLdcInsn("created");
+                constructor.visitMethodInsn(INVOKESTATIC, "java/lang/System", "setProperty",
+                        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", false);
+                constructor.visitInsn(POP);
+                constructor.visitInsn(RETURN);
+                constructor.visitMaxs(2, 1);
+                constructor.visitEnd();
+            }
+            MethodVisitor unused = method(writer, "unused", "()V");
+            unused.visitMethodInsn(INVOKESTATIC, "org/bukkit/Audit2Absent", "missing", "()V", false);
+            finish(unused);
+            classes.put(name, bytes(writer));
+        }
+        File module = jar("runtime-" + annotated + ".jar", classes);
+        List<String> order = new ArrayList<>();
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = capture(records);
+        logger.addHandler(new Handler() {
+            public void publish(LogRecord record) {
+                assertTrue(order.contains("main"));
+                assertFalse(order.contains("scan"));
+                assertNull(System.getProperty(property));
+                order.add("audit");
+            }
+            public void flush() { /* No buffering. */ }
+            public void close() { /* No resources. */ }
+        });
+        PluginManager manager = org.mockito.Mockito.spy(new PluginManager());
+        com.ultikits.ultitools.context.SimpleContainer container =
+                new com.ultikits.ultitools.context.SimpleContainer() {
+                    @Override public void scanComponents(String... roots) {
+                        assertFalse(records.isEmpty());
+                        order.add("scan");
+                        super.scanComponents(roots);
+                    }
+                };
+        UltiTools framework = org.mockito.Mockito.mock(UltiTools.class);
+        com.ultikits.ultitools.manager.DependenceManagers dependencies = org.mockito.Mockito.mock(
+                com.ultikits.ultitools.manager.DependenceManagers.class);
+        org.mockito.Mockito.when(dependencies.getContext()).thenReturn(new com.ultikits.ultitools.context.SimpleContainer());
+        org.mockito.Mockito.when(framework.getDependenceManagers()).thenReturn(dependencies);
+        org.mockito.Mockito.when(framework.getConfigManager()).thenReturn(org.mockito.Mockito.mock(
+                com.ultikits.ultitools.manager.ConfigManager.class));
+        org.mockito.Mockito.when(framework.getDataStore()).thenReturn(org.mockito.Mockito.mock(
+                com.ultikits.ultitools.interfaces.DataStore.class, org.mockito.Mockito.CALLS_REAL_METHODS));
+        java.lang.reflect.Method assemble = PluginManager.class.getDeclaredMethod("assemblePluginContainer",
+                com.ultikits.ultitools.context.SimpleContainer.class,
+                com.ultikits.ultitools.abstracts.UltiToolsPlugin.class, Class.class, ClassLoader.class);
+        assemble.setAccessible(true);
+        try (org.mockito.MockedStatic<UltiTools> frameworkCalls = org.mockito.Mockito.mockStatic(
+                    UltiTools.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+                ModuleClassLoader loader = new ModuleClassLoader(new URL[]{module.toURI().toURL()},
+                    getClass().getClassLoader(), null)) {
+            frameworkCalls.when(UltiTools::getInstance).thenReturn(framework);
+            java.lang.reflect.Field loaderField = PluginManager.class.getDeclaredField("classLoader");
+            loaderField.setAccessible(true);
+            loaderField.set(manager, loader);
+            org.mockito.Mockito.doAnswer(invocation -> {
+                assertTrue(records.isEmpty(), "classification must wait for the normally loaded main class");
+                Class<? extends com.ultikits.ultitools.abstracts.UltiToolsPlugin> type = loader.loadClass(
+                        "runtime.entry.Main").asSubclass(com.ultikits.ultitools.abstracts.UltiToolsPlugin.class);
+                order.add("main");
+                com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin = org.mockito.Mockito.mock(type);
+                org.mockito.Mockito.when(plugin.getPluginName()).thenReturn("runtime");
+                assemble.invoke(manager, container, plugin, type, loader);
+                if (annotated) {
+                    assertEquals("created", System.getProperty(property), "real scanned service must instantiate");
+                    order.add("bean");
+                }
+                return null;
+            }).when(manager).init(loader);
+            UltiTools.initModulesWithAudit(loader, manager, logger);
+            assertEquals("main", order.get(0));
+            assertTrue(order.indexOf("audit") < order.indexOf("scan"));
+            if (annotated) assertTrue(order.indexOf("scan") < order.indexOf("bean"));
+            assertEquals(annotated ? 3 : 1, records.stream()
+                    .filter(r -> r.getLevel().equals(java.util.logging.Level.WARNING)).count());
+            assertTrue(records.stream().anyMatch(r -> r.getMessage().contains(
+                    annotated ? "runtime.ownExtra.Caller.unused" : "runtime.entry.Caller.unused")));
+            org.mockito.Mockito.verify(manager).getPluginScanPackages(
+                    (Class<? extends com.ultikits.ultitools.abstracts.UltiToolsPlugin>) loader.loadClass("runtime.entry.Main"));
+        } finally {
+            container.close();
+            System.clearProperty(property);
+        }
+    }
+
+    @Test
+    void startupPrescanUsesTheLoadersRuleSnapshotWithoutChangingDefinitionBytes() throws Exception {
         ClassWriter writer = caller("fixture/Loadable");
         MethodVisitor broken = method(writer, "unused", "()V");
         broken.visitMethodInsn(INVOKESTATIC, "org/bukkit/Absent", "missing", "()V", false);
@@ -186,15 +316,17 @@ class LinkageAuditTest implements Opcodes {
         try (ModuleClassLoader loader = new ModuleClassLoader(new URL[]{module.toURI().toURL()},
                 getClass().getClassLoader(), null, Collections.emptyList(), (name, value) -> defined.add(value))) {
             org.mockito.Mockito.doAnswer(invocation -> {
-                assertEquals(1, records.size(), "startup warning must precede module loading");
-                assertNotNull(loader.loadClass("fixture.Loadable"));
+                assertTrue(records.isEmpty(), "pre-scan must not guess ownership");
+                Class<?> mainClass = loader.loadClass("fixture.Loadable");
+                loader.reportModule(mainClass, new String[]{"fixture"}, capture(records));
                 return null;
             }).when(manager).init(loader);
             UltiTools.initModulesWithAudit(loader, manager, capture(records));
             org.mockito.Mockito.verify(manager).init(loader);
             assertArrayEquals(original, defined.get(0), "audit cannot reencode module bytes");
             loader.auditModules(capture(records));
-            assertEquals(1, records.size(), "module JAR is audited once per loader");
+            loader.reportModule(loader.loadClass("fixture.Loadable"), new String[]{"fixture"}, capture(records));
+            assertEquals(1, records.size(), "module JAR is audited and reported once per loader");
         }
         ClassRewriteRule fake = new ClassRewriteRule() {
             public boolean wouldChange(String name, byte[] value) { return false; }
@@ -208,7 +340,8 @@ class LinkageAuditTest implements Opcodes {
             List<LogRecord> covered = new ArrayList<>();
             loader.auditModules(capture(covered));
             assertTrue(covered.isEmpty(), "audit must use the same immutable rules as class definition");
-            assertNotNull(loader.loadClass("fixture.Loadable"));
+            loader.reportModule(loader.loadClass("fixture.Loadable"), new String[]{"fixture"}, capture(covered));
+            assertTrue(covered.isEmpty());
         }
     }
 
@@ -309,6 +442,121 @@ class LinkageAuditTest implements Opcodes {
         }
     }
 
+    @Test
+    void offlineOwnRootsKeepWarningsAndSummarizeBundledPackages() throws Exception {
+        File module = scopeJar();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertEquals(1, LinkageAudit.run(new String[]{"--api", apiJar().getPath(), "--own", "app/",
+                module.getPath()}, new PrintStream(output)));
+        List<String> lines = Arrays.asList(output.toString("UTF-8").trim().split("\\R"));
+        assertEquals(4, lines.size());
+        assertTrue(lines.get(0).startsWith("Module 'scope.jar': app.Main."));
+        assertTrue(lines.get(0).endsWith("Continuing module loading."));
+        assertTrue(lines.contains(summary("scope.jar", 2, "com.github.alpha")));
+        assertTrue(lines.contains(summary("scope.jar", 1, "com.github.beta")));
+        assertTrue(lines.contains(summary("scope.jar", 1, "other")));
+        assertFalse(output.toString("UTF-8").contains("com.github.alpha.deep.Caller."));
+    }
+
+    @Test
+    void offlineMultipleOwnRootsAreAdditive() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertEquals(1, LinkageAudit.run(new String[]{"--api", apiJar().getPath(), "--own", "app/",
+                "--own", "other/", scopeJar().getPath()}, new PrintStream(output)));
+        String text = output.toString("UTF-8");
+        assertEquals(2, Arrays.stream(text.trim().split("\\R")).filter(line -> line.startsWith("Module '")).count());
+        assertTrue(text.contains("other.Main.<field> missing"));
+        assertFalse(text.contains("bundled library other"));
+    }
+
+    @Test
+    void offlineThirdPartyOnlyReturnsZeroAndStillPrintsSummaries() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertEquals(0, LinkageAudit.run(new String[]{"--api", apiJar().getPath(), "--own", "absent/",
+                scopeJar().getPath()}, new PrintStream(output)));
+        String text = output.toString("UTF-8");
+        assertFalse(text.contains("Continuing module loading."));
+        assertTrue(text.contains(summary("scope.jar", 2, "com.github.alpha")));
+        assertEquals(4, Arrays.stream(text.trim().split("\\R")).count());
+    }
+
+    @Test
+    void offlineDefaultStillTreatsEveryClassAsOwn() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertEquals(1, LinkageAudit.run(new String[]{"--api", apiJar().getPath(), scopeJar().getPath()},
+                new PrintStream(output)));
+        assertEquals(5, output.toString("UTF-8").trim().split("\\R").length);
+        assertFalse(output.toString("UTF-8").contains("bundled library"));
+    }
+
+    @Test
+    void resolvesMembersThroughOwnersPresentOnlyInTheSubjectJar() throws Exception {
+        Map<String, byte[]> classes = new LinkedHashMap<>();
+        ClassWriter owner = new ClassWriter(0);
+        owner.visit(V1_8, ACC_PUBLIC, "org/bukkit/SubjectChild", null, "org/bukkit/Api", null);
+        classes.put("org/bukkit/SubjectChild", bytes(owner));
+        ClassWriter caller = caller("app/Caller");
+        MethodVisitor call = method(caller, "call", "()V");
+        call.visitMethodInsn(INVOKEVIRTUAL, "org/bukkit/SubjectChild", "exists", "()Ljava/lang/String;", false);
+        call.visitFieldInsn(GETFIELD, "org/bukkit/SubjectChild", "exists", "I");
+        call.visitLdcInsn(new Handle(H_INVOKEVIRTUAL, "org/bukkit/SubjectChild", "exists", "()Ljava/lang/String;", false));
+        finish(call);
+        classes.put("app/Caller", bytes(caller));
+        try (URLClassLoader api = api()) {
+            assertTrue(LinkageAudit.scan(jar("subject-owner.jar", classes), api, Collections.emptyList()).isEmpty());
+        }
+    }
+
+    @Test
+    void subjectMetadataUsesParentFirstPrecedenceAndEffectiveMultiReleaseVariant() throws Exception {
+        ClassWriter caller = caller("app/Caller");
+        MethodVisitor call = method(caller, "call", "()V");
+        call.visitMethodInsn(INVOKEVIRTUAL, "org/bukkit/SubjectChild", "exists", "()Ljava/lang/String;", false);
+        call.visitFieldInsn(GETFIELD, "org/bukkit/SubjectChild", "exists", "I");
+        finish(call);
+        java.util.jar.Manifest manifest = new java.util.jar.Manifest();
+        manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
+        manifest.getMainAttributes().putValue("Multi-Release", "true");
+        Path path = temporary.resolve("subject-multi.jar");
+        try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(path), manifest)) {
+            output.putNextEntry(new JarEntry("app/Caller.class"));
+            output.write(bytes(caller));
+            output.closeEntry();
+            output.putNextEntry(new JarEntry("org/bukkit/Api.class"));
+            output.write(bytes(caller("org/bukkit/Api"))); // Must not shadow the supplied API's members.
+            output.closeEntry();
+            for (int version : new int[]{0, 9, 99}) {
+                ClassWriter owner = new ClassWriter(0);
+                owner.visit(V1_8, ACC_PUBLIC, "org/bukkit/SubjectChild", null,
+                        version == 9 ? "org/bukkit/Api" : "org/bukkit/MissingParent", null);
+                String prefix = version == 0 ? "" : "META-INF/versions/" + version + "/";
+                output.putNextEntry(new JarEntry(prefix + "org/bukkit/SubjectChild.class"));
+                output.write(bytes(owner));
+                output.closeEntry();
+            }
+        }
+        try (URLClassLoader api = api()) {
+            assertTrue(LinkageAudit.scan(path.toFile(), api, Collections.emptyList()).isEmpty());
+        }
+    }
+
+    private File scopeJar() throws Exception {
+        Map<String, byte[]> classes = new LinkedHashMap<>();
+        classes.put("com/github/alpha/Root", bytes(caller("com/github/alpha/Root")));
+        for (String name : Arrays.asList("app/Main", "other/Main", "com/github/alpha/deep/Caller",
+                "com/github/alpha/second/Caller", "com/github/beta/Caller")) {
+            ClassWriter writer = caller(name);
+            writer.visitField(ACC_PUBLIC, "missing", "Lorg/bukkit/Absent;", null, null).visitEnd();
+            classes.put(name, bytes(writer));
+        }
+        return jar("scope.jar", classes);
+    }
+
+    private static String summary(String module, int count, String library) {
+        return module + ": " + count + " unresolved references in bundled library " + library
+                + " (not checked per reference; such libraries usually guard platform-specific code at run time)";
+    }
+
     private byte[] inventory() {
         ClassWriter writer = caller("fixture/Inventory");
         String[] events = {"org/bukkit/event/entity/EntityMountEvent",
@@ -397,7 +645,16 @@ class LinkageAuditTest implements Opcodes {
     private File jar(String name, Map<String, byte[]> entries) throws Exception {
         Path path = temporary.resolve(name);
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(path))) {
+            java.util.Set<String> directories = new java.util.HashSet<>();
             for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+                String key = entry.getKey();
+                for (int slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
+                    String directory = key.substring(0, slash + 1);
+                    if (directories.add(directory)) {
+                        output.putNextEntry(new JarEntry(directory));
+                        output.closeEntry();
+                    }
+                }
                 output.putNextEntry(new JarEntry(entry.getKey() + ".class"));
                 output.write(entry.getValue());
                 output.closeEntry();

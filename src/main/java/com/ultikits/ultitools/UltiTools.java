@@ -533,7 +533,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
     static void initModulesWithAudit(URLClassLoader loader, PluginManager manager, Logger logger)
             throws IOException {
         if (loader instanceof ModuleClassLoader) {
-            ((ModuleClassLoader) loader).auditModules(logger);
+            ModuleClassLoader modules = (ModuleClassLoader) loader;
+            modules.auditModules(logger);
+            manager.setModuleScanObserver((mainClass, roots) -> modules.reportModule(mainClass, roots, logger));
         }
         manager.init(loader);
     }
