@@ -30,8 +30,9 @@ import org.jetbrains.annotations.ApiStatus;
  * ({@link Connection#setAutoCommit(boolean)}), so auto-commit is restored only after a commit or
  * rollback that succeeded. A connection whose commit or rollback failed is discarded instead: a
  * HikariCP pool is told to evict it ({@link HikariDataSource#evictConnection(Connection)}, which
- * closes the physical connection, and the database rolls the open transaction back), and any other
- * connection is closed. Returning a connection after a failed rollback risks letting the next
+ * closes the physical connection), and any other connection is closed. Whether closing an unresolved
+ * transaction rolls it back depends on the JDBC driver's close policy; the framework requests no
+ * further commit. Returning a connection after a failed rollback risks letting the next
  * borrower join an unresolved transaction; explicit eviction ensures that connection is never
  * handed out again.
  * <p>
@@ -41,7 +42,7 @@ import org.jetbrains.annotations.ApiStatus;
  *       stored.</li>
  *   <li>A commit that finds the transaction marked rollback-only rolls it back and throws
  *       {@link UnexpectedRollbackException}: a confirmed rollback, none of its writes stored. If
- *       that rollback fails, the connection is discarded and nothing is committed either.</li>
+ *       that rollback fails, the connection is discarded and the framework issues no commit.</li>
  *   <li>After a failed rollback, the connection is discarded and the framework issues no
  *       commit.</li>
  *   <li>After a commit that fails at {@link Connection#commit()} ({@code DataAccessException},
@@ -372,8 +373,9 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
     /**
      * Ends the transaction context: removes it from this thread and never throws.
      * <p>
-     * {@code completed} -- the commit or rollback succeeded: auto-commit is restored and the
-     * connection closed (back to the pool). Otherwise the connection is discarded through
+     * {@code completed} -- the commit or rollback succeeded: auto-commit restoration is attempted,
+     * and the connection is closed (back to the pool) even if restoration fails. Cleanup failures are
+     * logged without changing the transaction's outcome. Otherwise the connection is discarded through
      * {@link #discardConnection(DataSource, Connection)} and auto-commit is never switched on
      * (#634).
      *
@@ -388,8 +390,13 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
         try {
             if (ctx.connection != null && !ctx.connection.isClosed()) {
                 if (completed) {
-                    ctx.connection.setAutoCommit(true);
-                    ctx.connection.close();
+                    try {
+                        ctx.connection.setAutoCommit(true);
+                    } catch (SQLException e) {
+                        LOGGER.log(Level.WARNING, "Failed to restore auto-commit after transaction completion", e);
+                    } finally {
+                        ctx.connection.close();
+                    }
                 } else {
                     discardConnection(dataSource, ctx.connection);
                 }
@@ -407,9 +414,10 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
      * Discards a connection whose commit or rollback failed, without ever switching auto-commit on
      * (UltiTools-Reborn#634): JDBC commits an open transaction when auto-commit is switched on. When
      * {@code dataSource} is, or wraps, a {@link HikariDataSource} and {@code connection} is one of its
-     * connections, the pool evicts it -- the physical connection is closed, the database rolls the
-     * open transaction back, and the connection is never handed out again; the caller must not use
-     * it afterwards. Any other connection is closed. Never throws; a failure is logged.
+     * connections, the pool evicts it -- the physical connection is closed and never handed out
+     * again; the caller must not use it afterwards. Any other connection is closed. Closing an
+     * unresolved transaction follows the JDBC driver's policy, not a driver-independent rollback
+     * guarantee; the framework requests no further commit. Never throws; a failure is logged.
      *
      * @param dataSource the data source {@code connection} came from, possibly {@code null}
      * @param connection the connection to discard, possibly {@code null}
