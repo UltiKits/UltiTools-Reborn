@@ -51,6 +51,8 @@ jobs:
     - name: 📥 Checkout code
       # The tag's commit; release_artifacts.py checks the retained files against it.
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - name: ☕ Set up JDK 21
       uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -169,6 +171,8 @@ jobs:
     - name: 📥 Checkout code
       # The tag's commit; release_artifacts.py checks the retained files against it.
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - name: ☕ Set up JDK 21 with Sonatype credentials
       uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -177,19 +181,13 @@ jobs:
         distribution: 'temurin'
         cache: maven
         server-id: ultikits-sonatype
-        server-username: SONATYPE_USERNAME
-        server-password: SONATYPE_PASSWORD
+        server-username-env-var: SONATYPE_USERNAME
+        server-password-env-var: SONATYPE_PASSWORD
         gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
-        gpg-passphrase: MAVEN_GPG_PASSPHRASE
+        gpg-passphrase-env-var: MAVEN_GPG_PASSPHRASE
 
     - name: Set up pinned Maven for Central staging
       run: bash .github/scripts/setup-pinned-maven.sh
-
-    - name: 🔐 Configure GPG agent for CI
-      run: |
-        echo "allow-loopback-pinentry" >> "${GNUPGHOME:?GNUPGHOME must be set by actions/setup-java}"/gpg-agent.conf
-        echo "pinentry-mode loopback" >> "${GNUPGHOME:?GNUPGHOME must be set by actions/setup-java}"/gpg.conf
-        gpg-connect-agent reloadagent /bye || true
 
     - name: 🔑 Check GPG key expiry
       # Placed after the key is imported and before anything is signed. The key is already in the
