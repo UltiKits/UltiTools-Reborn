@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #
+# BEGIN USAGE
 # Release entrypoint for UltiTools-API. Run locally. It builds a release candidate once,
 # keeps the exact bytes it built, and later publishes those same bytes after independent
 # acceptance, without building again.
@@ -39,6 +40,7 @@
 #   --branch <name>           Release branch (default main).
 #   --yes                     Skip the interactive confirmation.
 #   -h, --help                Show this help.
+# END USAGE
 #
 # 发布入口。在本机跑：--prepare 只构建一次并保留当次产物，独立验收之后
 # --publish-approved 发布同一份字节，不再重新构建。
@@ -78,7 +80,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="${SCRIPT_DIR}/release_artifacts.py"
 
 usage() {
-    sed -n '3,33p' "${SCRIPT_DIR}/release.sh" | sed 's/^# \{0,1\}//'
+    sed -n '/^# BEGIN USAGE$/,/^# END USAGE$/p' "${SCRIPT_DIR}/release.sh" | sed '1d;$d;s/^# \{0,1\}//'
 }
 
 die() { echo "❌ $*" >&2; exit 1; }

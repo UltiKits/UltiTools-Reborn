@@ -739,6 +739,16 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.assertIn("--prerelease only labels the GitHub release", result.stdout.decode())
         self.assertIn("permanent Maven Central publication", result.stdout.decode())
 
+    def test_help_lists_notes_file_and_prerelease_options(self):
+        result = subprocess.run([cast(str, BASH), str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+        output = result.stdout.decode()
+        self.assertEqual(result.returncode, 0, output)
+        for option in ("--notes-file <path>       Read release notes from a file.",
+                       "--prerelease              Mark the release as a prerelease."):
+            with self.subTest(option=option):
+                self.assertIn(option, output)
+
     def test_release_documentation_explains_prerelease_and_automatic_notes_limits(self):
         document = (REPO_ROOT / "PROJECT.md").read_text().split("## CI\n", 1)[1].split("## Scope Boundaries", 1)[0]
         self.assertIn("`--prerelease` only labels the GitHub release", document)
