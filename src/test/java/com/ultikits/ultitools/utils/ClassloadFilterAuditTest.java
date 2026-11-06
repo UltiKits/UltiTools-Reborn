@@ -72,7 +72,7 @@ class ClassloadFilterAuditTest {
     }
 
     @Test
-    void dangerousPackageMatchingRequiresBoundary() {
+    void dangerousPackageMatchingRetainsHistoricalTextPrefix() {
         for (String prefix : ClassloadFilterAudit.DANGEROUS_PACKAGE_PREFIXES) {
             assertThat(ClassloadFilterAudit.classify(prefix)).as("exact package %s", prefix)
                     .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
@@ -80,21 +80,31 @@ class ClassloadFilterAuditTest {
                     .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
             assertThat(ClassloadFilterAudit.classify(prefix + ".child.Example")).as("subpackage of %s", prefix)
                     .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
-            assertThat(ClassloadFilterAudit.classify(prefix + "x.Example")).as("sibling of %s", prefix)
-                    .isEqualTo(ClassloadFilterAudit.Layer.WHITELIST);
+            assertThat(ClassloadFilterAudit.classify(prefix + "x.Example"))
+                    .as("historical text-prefix match for sibling of %s", prefix)
+                    .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
         }
     }
 
     @Test
-    void trustedPackageMatchingRequiresBoundary() {
+    void trustedPackageMatchingRetainsHistoricalTextPrefix() {
         for (String prefix : ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES) {
             assertThat(ClassloadFilterAudit.classify(prefix)).as("exact package %s", prefix).isNull();
             assertThat(ClassloadFilterAudit.classify(prefix + ".Example")).as("class in %s", prefix).isNull();
             assertThat(ClassloadFilterAudit.classify(prefix + ".child.Example"))
                     .as("subpackage of %s", prefix).isNull();
-            assertThat(ClassloadFilterAudit.classify(prefix + "x.Example")).as("sibling of %s", prefix)
-                    .isEqualTo(ClassloadFilterAudit.Layer.WHITELIST);
+            assertThat(ClassloadFilterAudit.classify(prefix + "x.Example"))
+                    .as("historical text-prefix match for sibling of %s", prefix).isNull();
         }
+    }
+
+    @Test
+    void historicalTextPrefixesPreserveLayerAttribution() {
+        assertThat(ClassloadFilterAudit.classify("com.sunrise.Example"))
+                .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
+        assertThat(ClassloadFilterAudit.classify("com.ultikits.pluginsx.Helper")).isNull();
+        assertThat(ClassloadFilterAudit.classify("org.bukkitx.FileUtil"))
+                .isEqualTo(ClassloadFilterAudit.Layer.KEYWORD);
     }
 
     @Nested
