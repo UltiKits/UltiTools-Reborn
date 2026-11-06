@@ -20,7 +20,7 @@ explains it; the sections below are the reference and stay authoritative where t
 8. Move each legacy parser (`@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`, `StringHashMapParser`) to a public top-level `ConfigConverter` annotated `@ConfigConverterFor` in a scanned package, and register a converter for any declared field type the framework does not support, which otherwise refuses the module; the legacy parsers are deprecated in 6.3.0 and announced for removal in 6.4.0 (see [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)).
 9. If a field uses `@Scheduled(config = …, periodKey/delayKey = …)` or `@CmdCD(config = …, key = …)`, declare `api-version: 630`, keep a bound `@Scheduled` synchronous, and drop any `@Range` on the bound field, whose range the binding replaces (see [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)).
 10. Check command bodies for the one-tick delay they no longer get: a synchronous body now runs at dispatch, so code inside an `InventoryClickEvent` that opens or closes an inventory or dispatches a command must defer it with `runTask`, and a body that dispatches its own command meets `@UsageLimit` and `@CmdCD` on the same tick (see [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)).
-11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
+11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file if its `(String)` default instance could be constructed (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
 12. Keep the framework out of your JAR, and if your module uses XSeries declare it yourself as `provided`/`compileOnly` (`com.github.cryptomorin:XSeries:13.7.1` or your own pin): the framework no longer shades it but still delivers it at runtime through its `libraries:` block, and Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
 13. Know the framework's own server requirements: Paper 1.19.2 build 163 or newer, Java 17 below Paper 1.20.5 and Java 21 from it; the UltiKits modules state only the UltiTools-API version they support (6.3.0 or later for `api-version: 630`) (see [Support matrix](#support-matrix)).
 14. If your module uses `DataOperator#transaction(...)` or `@Transactional` on JSON storage, or relies on a failing joined `@Transactional` method or a failing nested `DataOperator#transaction(...)` scope being survivable, review the transaction changes: on `datasource.type: json` transactions are now staged, atomic across a plugin's tables and durable once `commit` returns; a plain JSON write can wait up to 5 seconds for a transaction's table lock; a transaction begun by `DataOperator#transaction(...)` locks each table at its first read, as 6.2.5 ran each callback alone per operator, so a read inside it can wait up to 5 seconds too; a `@Transactional` method that computes a write from a value it read uses `updateIf` or `@Transactional(isolation = Isolation.REPEATABLE_READ)`; and on every backend a failing joined method or nested scope marks the whole transaction rollback-only, so the outermost commit throws `UnexpectedRollbackException` (see [JSON transactions](#json-transactions-630--staged-atomic-and-durable), [A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) and [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)). If you also run the server, read the operator guidance in the JSON transactions section: back up `.ultitools-journal` with the tables, never delete it, and run one server per data folder.
@@ -39,7 +39,7 @@ explains it; the sections below are the reference and stay authoritative where t
 8. 把每个旧解析器（`@ConfigEntry(parser = …)`、`Parser`、`ObjectConfigSerializer`、`ConfigParser`、`DefaultConfigParser`、`StringHashMapParser`）改写为扫描包内带 `@ConfigConverterFor` 的 public 顶层 `ConfigConverter`，并为框架不支持的声明字段类型注册转换器，否则模块会被拒绝；旧解析器在 6.3.0 弃用，公告在 6.4.0 删除（见 [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)）。
 9. 字段使用 `@Scheduled(config = …, periodKey/delayKey = …)` 或 `@CmdCD(config = …, key = …)` 时，声明 `api-version: 630`，绑定配置的 `@Scheduled` 保持同步，并删除该字段上的 `@Range`（由绑定自带的范围取代）（见 [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)）。
 10. 检查依赖“延后一刻执行”的命令代码：同步命令体现在于分发时立即执行，因此在 `InventoryClickEvent` 中打开或关闭物品栏、或分发命令的代码要用 `runTask` 推迟，分发自身命令的命令体会在同一刻遇到 `@UsageLimit` 和 `@CmdCD`（见 [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)）。
-11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
+11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 在能通过 `(String)` 构造器创建默认实例时，会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
 12. 不要把框架打进自己的 JAR；模块用到 XSeries 时请自行以 `provided`/`compileOnly` 声明（`com.github.cryptomorin:XSeries:13.7.1` 或你自己固定的版本）：框架不再内嵌它，但仍通过自己的 `libraries:` 在运行时提供，Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
 13. 了解框架本身的服务器要求：Paper 1.19.2 build 163 或更新，Paper 1.20.5 以下用 Java 17，1.20.5 起用 Java 21；UltiKits 官方模块只写明它们支持的 UltiTools-API 版本（`api-version: 630` 即 6.3.0 或更高）（见 [Support matrix](#support-matrix)）。
 14. 如果模块在 JSON 存储上使用 `DataOperator#transaction(...)` 或 `@Transactional`，或者依赖“失败的加入方 `@Transactional` 方法 / 失败的嵌套 `DataOperator#transaction(...)` 作用域可以被调用方承受”，请检查事务相关的变化：`datasource.type: json` 下的事务现在是暂存的、跨同一插件各表原子的，并且在 `commit` 返回后即持久；普通 JSON 写入可能为等待事务的表锁而停顿最多 5 秒；由 `DataOperator#transaction(...)` 开启的事务在第一次读取某张表时就锁住它（与 6.2.5 中每个回调按操作器逐个运行一致），所以其中的读取也可能停顿最多 5 秒；凭读到的值计算写入的 `@Transactional` 方法应使用 `updateIf` 或 `@Transactional(isolation = Isolation.REPEATABLE_READ)`；在所有后端上，失败的加入方方法或嵌套作用域都会把整个事务标记为仅回滚，最外层提交会抛出 `UnexpectedRollbackException`（见 [JSON transactions](#json-transactions-630--staged-atomic-and-durable)、[A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) 和 [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)）。如果你同时运营服务器，请阅读 JSON 事务一节中的服主须知：把 `.ultitools-journal` 与各表一起备份、永远不要删除它，并且一个数据文件夹只运行一个服务器。
@@ -2584,6 +2584,21 @@ This section governs the third kind.
   metrics code reads that file at start, before any plugin loads, and rewrites an unparseable copy or one without
   `serverUuid` with fresh defaults (measured on Paper 1.21.11), so on Paper such a file is replaced by the server, never by
   UltiTools, and UltiTools only ever sees a valid file.
+- **Configuration constraint violations refuse load or reload instead of rewriting the file** (as of
+  v6.3.0). A value violating `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text refuses the module
+  at load. At `/ul reload`, the reload is refused and the running values are kept. The error names
+  the field and its constraint; the operator's file is not rewritten to a default. In 6.2.5,
+  validation first tried to construct a default instance of the config class through its `(String)`
+  constructor, passing the config path. If that succeeded, a violating value was reset to its
+  declared default and the file saved; if construction failed (including a missing constructor),
+  validation was skipped with only a FINE diagnostic. The in-memory default for an empty
+  `@NotEmpty` list, set or map is a separate case, described in the next entry.
+
+  中文补充：**配置约束违规时拒绝加载或重载，不再改写文件**（自 6.3.0 起）。违反 `@Range`、`@Size`、
+  `@Pattern` 或文本上 `@NotEmpty` 的值会让模块在加载时被拒绝；`/ul reload` 时拒绝这次重载并保留运行中的值，
+  错误会写明字段和约束，不会把服主的文件改写成默认值。6.2.5 会先通过配置类的 `(String)` 构造器传入配置路径来
+  创建默认实例：成功时才会校验、把违规值重置为声明默认值并保存文件；构造失败（包括没有这个构造器）时跳过校验，
+  只记录 FINE 诊断。空的 `@NotEmpty` 列表、集合或映射在内存中使用默认值，属于下一条说明的独立情况。
 - **`@NotEmpty` on a list, set or map now acts** ([#630](https://github.com/UltiKits/UltiTools-Reborn/issues/630), as of
   v6.3.0, maintainer decision of 2026-10-06). Before 6.3.0 the check read only the value's text, so an empty list (`[]`)
   or map (`{}`) passed and the module ran on an empty value its declaration forbids (UltiKits/UltiCleaner#34: an empty
@@ -2598,12 +2613,13 @@ This section governs the third kind.
   for that key. The declared default must itself satisfy the field's constraints - be non-empty, and inside the field's
   `@Size` if it has one (UltiSideBar's `lines` is `@NotEmpty @Size(min = 1, max = 15)`): a default that does not refuses
   the module at load as a declaration error naming the field and the constraint, whatever the file holds. `@NotEmpty` on text refuses
-  the module at load, naming the field, like every other constraint violation in 6.3.0 (6.2.x reset the value to its
-  default and saved the file). A `@NotEmpty` list written as an explicit `null` (`key: ~`) runs the declared default
-  in memory with the warning and the file is not written (6.2.x reset it to the default and wrote the default into
-  the file; earlier 6.3.0 snapshots refused the module).
+  the module at load, naming the field, like every other constraint violation in 6.3.0. In 6.2.5, subject to the
+  constructor condition in the preceding entry, it reset the value to its default and saved the file. A `@NotEmpty`
+  list written as an explicit `null` (`key: ~`) runs the declared default in memory with the warning and the file is
+  not written (6.2.5 reset it to the default and wrote the default into the file under the same constructor condition;
+  earlier 6.3.0 snapshots refused the module).
 
-  中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（字段名、某一级键名，或值与默认值中的映射键像机密时，两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。面板显示的是文件中的值（`[]`），而模块运行的是默认值。面板写入会让该值变空时，与其他违规一样被拒绝，什么都不写。服主命令用 `saveOperatorChange` 写这个设置时，写入的是运行中的值（默认值加上服主的改动），替换掉 `[]`：这是服主对该键的明确要求。声明的默认值本身必须满足该字段的约束——非空，并且若字段带 `@Size` 则在其范围内（UltiSideBar 的 `lines` 是 `@NotEmpty @Size(min = 1, max = 15)`）：不满足时属于声明错误，无论文件里写的是什么，加载时都会拒绝该模块并写明字段和约束。文本上的 `@NotEmpty` 与 6.3.0 中其他约束违规一样，拒绝加载并指明字段（6.2.x 会把值重置为默认值并保存文件）。写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表在内存中改用声明的默认值并给出同一条警告，文件不写（6.2.x 会重置为默认值并把默认值写进文件；本周期较早的 6.3.0 快照则拒绝模块）。
+  中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（字段名、某一级键名，或值与默认值中的映射键像机密时，两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。面板显示的是文件中的值（`[]`），而模块运行的是默认值。面板写入会让该值变空时，与其他违规一样被拒绝，什么都不写。服主命令用 `saveOperatorChange` 写这个设置时，写入的是运行中的值（默认值加上服主的改动），替换掉 `[]`：这是服主对该键的明确要求。声明的默认值本身必须满足该字段的约束——非空，并且若字段带 `@Size` 则在其范围内（UltiSideBar 的 `lines` 是 `@NotEmpty @Size(min = 1, max = 15)`）：不满足时属于声明错误，无论文件里写的是什么，加载时都会拒绝该模块并写明字段和约束。文本上的 `@NotEmpty` 与 6.3.0 中其他约束违规一样，拒绝加载并指明字段（6.2.5 在满足上一条的构造器条件时，会把值重置为默认值并保存文件）。写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表在内存中改用声明的默认值并给出同一条警告，文件不写（6.2.5 在满足同一构造器条件时，会重置为默认值并把默认值写进文件；本周期较早的 6.3.0 快照则拒绝模块）。
 - **`@Range` refuses NaN** ([#625](https://github.com/UltiKits/UltiTools-Reborn/issues/625), as of v6.3.0). The check
   compared with `<` and `>`, both false for NaN, so `exp-tax-rate: .nan` passed a `@Range(min = 0.0, max = 1.0)` and
   reached the module (UltiKits/UltiTrade#65). Now a value must satisfy `min <= value <= max`: NaN is out of every range and
@@ -2877,8 +2893,9 @@ its meaning.
   disconnect, heartbeat and reconnect lines, and the warnings about a message that could not be sent
   are written to the server console as before, but the log stream drops them. With
   `ultipanel.logging.batch.enabled: false`, each logged `error` reply used to be streamed, rejected
-  by the panel's quota and replied to again: 42,066 `[WebSocket error] Rate limit exceeded` lines in
-  one measured run. A panel view that showed these lines no longer receives them.
+  by the panel's quota and replied to again: 42,066 such `Rate limit exceeded` lines in one run
+  measured on a 6.3.0 snapshot (6.2.5 logged the same reply as `[WebSocket错误] ...`). A panel view
+  that showed these lines no longer receives them.
 - **The panel's log stream mirrors the server console** (maintainer decision, 2026-10-03). Paper prints
   its own output through Log4j — command feedback, a module's reply to the console sender, joins and
   quits, chat, vanilla warnings and errors, and player command lines — and before 6.3.0 none of it
@@ -3707,8 +3724,8 @@ In other words, the guidance elsewhere in this document — that a lagging pin i
 does not need to be changed for its own sake — **does not apply here**. That guidance says not to move
 the pin without a reason; a descriptor change is a reason.
 
-As for how often to check: from 6.3.0 the framework's CI build (`mvn verify`, on every push and pull
-request) runs the japicmp gate against the configured baseline release (6.2.5 for 6.3.0) and fails on any
+As for how often to check: from 6.3.0 the Maven build path in `maven-ci.yml` (`mvn verify`) runs
+the japicmp gate against the configured baseline release (6.2.5 for 6.3.0) and fails on any
 binary-incompatible change to a public or protected member that is not excluded in `pom.xml`; a build made with
 `mvn package` alone does not run it. Re-verify your
 module whenever you raise its pin or its `api-version`.
@@ -3719,8 +3736,8 @@ module whenever you raise its pin or its `api-version`.
   sentence began as an inference; the second instance in this section (6.2.0 → 6.2.1) confirmed it —
   that was a PATCH. **"Watching MINOR releases is enough" does not hold.**
 - With the japicmp gate wired up (6.3.0), binary compatibility against the baseline release is verified per
-  method by a machine in every CI build, a PATCH included; a binary-incompatible change can pass only if it is
-  explicitly excluded.
+  method by the Maven build path in `maven-ci.yml`, a PATCH included; a binary-incompatible change can pass
+  that gate only if it is explicitly excluded. Plain-documentation CI runs skip the Maven build.
 
 ### A floor no linker enforces: config-bound `@Scheduled` and `@CmdCD` (6.3.0)
 
@@ -3759,7 +3776,7 @@ over.
 A human process cannot catch this class of change: it would require an author changing a field type to
 realise that this alters the descriptor of a public method. What can catch it is a machine comparing
 descriptors method by method, that is, the japicmp gate (issue #216). From 6.3.0 that gate
-runs in the framework's CI build (`mvn verify`) against the configured baseline release and fails on any
+runs in the Maven build path in `maven-ci.yml` (`mvn verify`) against the configured baseline release and fails on any
 binary-incompatible change to a public or protected member that is not excluded in `pom.xml`, so an unintentional
 descriptor change can no longer pass CI unnoticed.
 
