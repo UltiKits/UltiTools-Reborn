@@ -16,8 +16,10 @@ import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,7 +33,8 @@ import java.util.jar.Manifest;
 /**
  * The single, parent-first module loader. Only classes physically supplied by explicit module JAR
  * URLs enter the ordered rewrite chain. Server JARs, directories and manifest Class-Path additions
- * retain URLClassLoader's own definition path; resources and closing are inherited unchanged.
+ * retain URLClassLoader's own definition path. Resource discovery remains inherited; module JAR
+ * handles are retained until this loader closes, just like URLClassLoader's own JAR handles.
  */
 final class ModuleClassLoader extends URLClassLoader {
     static {
@@ -46,6 +49,9 @@ final class ModuleClassLoader extends URLClassLoader {
     private final Set<URL> auditedModules = ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<URL, LinkageAudit.Audit> moduleAudits = new ConcurrentHashMap<>();
     private final Set<URL> reportedModules = ConcurrentHashMap.newKeySet();
+    // This monitor guards handle creation and closing, never class rewriting or definition.
+    private final Map<URL, JarFile> moduleJarFiles = new HashMap<>();
+    private boolean closed;
 
     /** Production foundation: deliberately no compatibility rules or additional logging. */
     ModuleClassLoader(URL[] urls, ClassLoader parent, URL serverJar) {
@@ -126,14 +132,16 @@ final class ModuleClassLoader extends URLClassLoader {
             if (!moduleJars.contains(source)) {
                 return super.findClass(binaryName);
             }
-            // Direct URL connections are not registered in URLClassLoader's closeables. Never
-            // leave one in the global JarURLConnection cache: its handle belongs to this read.
-            jarConnection.setUseCaches(false);
+            JarFile jar = moduleJar(source, jarConnection);
+            // findResource has already selected the entry, including a multi-release version.
+            JarEntry entry = jar.getJarEntry(jarConnection.getEntryName());
+            if (entry == null) {
+                throw new ClassNotFoundException(binaryName);
+            }
             byte[] bytes;
             Manifest manifest;
             CodeSigner[] signers;
-            try (JarFile jar = jarConnection.getJarFile(); InputStream input = jarConnection.getInputStream()) {
-                JarEntry entry = jarConnection.getJarEntry();
+            try (InputStream input = jar.getInputStream(entry)) {
                 bytes = readFully(input);
                 // Signature verification populates signers only after the entire entry is read.
                 signers = entry.getCodeSigners();
@@ -147,6 +155,54 @@ final class ModuleClassLoader extends URLClassLoader {
             return defineClass(binaryName, rewritten, 0, rewritten.length, new CodeSource(source, signers));
         } catch (IOException e) {
             throw new ClassNotFoundException("Could not read module class " + binaryName, e);
+        }
+    }
+
+    private JarFile moduleJar(URL source, JarURLConnection connection) throws IOException {
+        synchronized (moduleJarFiles) {
+            if (closed) {
+                throw new IOException("Module class loader is closed");
+            }
+            JarFile jar = moduleJarFiles.get(source);
+            if (jar == null) {
+                // This verifying handle belongs to the loader, not the global connection cache.
+                connection.setUseCaches(false);
+                jar = connection.getJarFile();
+                moduleJarFiles.put(source, jar);
+            }
+            return jar;
+        }
+    }
+
+    @Override
+    public void close() throws IOException {
+        synchronized (moduleJarFiles) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            IOException failure = null;
+            try {
+                super.close();
+            } catch (IOException e) {
+                failure = e;
+            } finally {
+                for (JarFile jar : moduleJarFiles.values()) {
+                    try {
+                        jar.close();
+                    } catch (IOException e) {
+                        if (failure == null) {
+                            failure = e;
+                        } else {
+                            failure.addSuppressed(e);
+                        }
+                    }
+                }
+                moduleJarFiles.clear();
+            }
+            if (failure != null) {
+                throw failure;
+            }
         }
     }
 
