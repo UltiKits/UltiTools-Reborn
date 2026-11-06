@@ -143,6 +143,7 @@ class ReleaseValidationTests(unittest.TestCase):
         required = {("maven-ci.yml", "release-tooling"), ("publish-packages.yml", "publish-central")}
         exempt = {
             ("maven-ci.yml", "test"),  # Verification, no staging or release probes.
+            ("maven-ci.yml", "real-mysql"),  # Disposable database verification, no Central staging.
             ("publish-packages.yml", "publish-github"),  # deploy-file, not Central staging.
             ("snapshot-publish.yml", "snapshot-publish"),  # Indexed deferral, not a staging ZIP.
         }

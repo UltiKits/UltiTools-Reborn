@@ -2258,7 +2258,13 @@ This section governs the third kind.
   JSON the values are compared as `double`, which is also approximate beyond
   ±9,007,199,254,740,992. A field of any other type is compared as the database compares the stored
   text. Earlier 6.3.0 snapshots treated `%` and `_` as wildcards and compared SQLite text columns as
-  text; no release did. `EQUAL`, `getLike` and `Query#like` are unchanged. `exist(...)`,
+  text; no release did. `EQUAL`, `getLike` and `Query#like` are unchanged. In particular, numeric
+  `EQUAL` on a default MySQL text column and on JSON can match neighbouring whole numbers beyond
+  ±2^53; an `updateIf` precondition can therefore match a different value from the one read. On JSON,
+  the Gson map used to evaluate conditions already converts numbers to `double` before the equality
+  fallback compares them, so declaring a numeric column type does not restore exact matching there.
+  Do not use such numbers as exact compare-and-set tokens. On MySQL, declare a `BIGINT` column when
+  exact integral equality is needed. `exist(...)`,
   `exist(entity)` and an `eq`-only `Query#exists()` threw `ClassCastException` on SQLite from 6.2.x
   on, because sqlite-jdbc reports `COUNT(*)` as an `Integer`; they now answer normally. Measured on
   the fifteen modules' `master` and UltiTools-External-Example (2026-10-19), no `src/main` code uses
@@ -2295,7 +2301,11 @@ This section governs the third kind.
   ±9,007,199,254,740,992（2^53）的整数在那里只是近似比较；需要精确结果时，请为该列声明数值 `type`（例如
   `@Column(value = "stamp", type = "BIGINT")`）。在 JSON 上按 `double` 比较，超出 ±9,007,199,254,740,992 时同样是近似的。
   其他类型的字段按数据库比较所存文本的方式比较。本周期较早的 6.3.0 快照把 `%` 和 `_` 当作通配符，并在 SQLite
-  上把文本列按文本比较；没有任何正式版本如此。`EQUAL`、`getLike` 和 `Query#like` 不变。`exist(...)`、`exist(entity)`
+  上把文本列按文本比较；没有任何正式版本如此。`EQUAL`、`getLike` 和 `Query#like` 不变。特别是，MySQL 默认文本列和
+  JSON 的数值 `EQUAL` 可能同时匹配超出 ±2^53 的相邻整数，因此 `updateIf` 的前提也可能匹配不同于先前读到的值。
+  JSON 用于条件求值的 Gson map 在 equality 回退比较之前就已将数字转为 `double`，声明数值列类型不能恢复它的精确匹配。
+  不要把这类数字用作要求精确匹配的 compare-and-set 标记；MySQL 需要精确整数相等时，请显式声明 `BIGINT` 列。
+  `exist(...)`、`exist(entity)`
   以及只含 `eq` 条件的 `Query#exists()` 自 6.2.x 起在 SQLite 上会抛出 `ClassCastException`（sqlite-jdbc 把
   `COUNT(*)` 报告为 `Integer`），现在能正常返回结果。在十五个模块的 `master` 与 UltiTools-External-Example 上测得
   （2026-10-19）：`src/main` 中没有代码使用 `INCLUDE`、`STARTSWITH`、`ENDSWITH`、`GREATER`、`LESS`、`comparison(...)`

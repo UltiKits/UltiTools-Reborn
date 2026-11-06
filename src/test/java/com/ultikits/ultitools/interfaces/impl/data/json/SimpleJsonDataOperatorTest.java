@@ -72,6 +72,88 @@ class SimpleJsonDataOperatorTest {
         operator = new SimpleJsonDataOperator<>(storeDir.getAbsolutePath(), TestData.class);
     }
 
+    @Nested
+    class NullComparisonValues {
+        private WhereCondition condition(Comparison comparison, Object value) {
+            return WhereCondition.builder().column("name").comparison(comparison).value(value).build();
+        }
+
+        private void assertTypedRefusal(Runnable operation) {
+            assertThatThrownBy(operation::run).isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
+        }
+
+        @Test
+        void nullNonEqualQueriesAndDeletesAreTypedRefusals() {
+            for (boolean populated : Arrays.asList(false, true)) {
+                if (populated) {
+                    operator.insert(new TestData("null-guard", "kept", 1));
+                }
+                for (Comparison comparison : Comparison.values()) {
+                    if (comparison == Comparison.EQUAL) {
+                        continue;
+                    }
+                    WhereCondition invalid = condition(comparison, null);
+                    WhereCondition misses = condition(Comparison.EQUAL, "missing");
+                    for (WhereCondition[] conditions : Arrays.asList(new WhereCondition[]{invalid},
+                            new WhereCondition[]{invalid, misses}, new WhereCondition[]{misses, invalid})) {
+                        assertTypedRefusal(() -> operator.getAll(conditions));
+                        assertTypedRefusal(() -> operator.exist(conditions));
+                        assertTypedRefusal(() -> operator.page(1, 10, conditions));
+                        assertTypedRefusal(() -> operator.del(conditions));
+                        assertThat(operator.getAll()).hasSize(populated ? 1 : 0);
+                    }
+                }
+            }
+        }
+
+        @Test
+        void refusedNullDeleteStagesNothingInATransaction() throws Exception {
+            operator.insert(new TestData("null-guard", "kept", 1));
+            operator.transaction(() -> {
+                for (Comparison comparison : Comparison.values()) {
+                    if (comparison != Comparison.EQUAL) {
+                        assertTypedRefusal(() -> operator.del(condition(comparison, null)));
+                    }
+                }
+                assertThat(operator.transactionManager().currentTransaction().hasStagedWrites(operator)).isFalse();
+                assertThat(operator.getById("null-guard").getName()).isEqualTo("kept");
+                return null;
+            });
+            assertThat(operator.getById("null-guard").getName()).isEqualTo("kept");
+        }
+
+        @Test
+        void equalNullAndEmptyConditionBehaviourIsUnchanged() {
+            operator.insert(new TestData("null-guard", "kept", 1));
+            WhereCondition equalNull = condition(Comparison.EQUAL, null);
+            assertThatThrownBy(() -> operator.getAll(equalNull)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> operator.exist(equalNull)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> operator.page(1, 10, equalNull)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> operator.del(equalNull)).isInstanceOf(NullPointerException.class);
+            assertThat(operator.getAll(WhereCondition.empty())).hasSize(1);
+            assertThat(operator.getAll(new WhereCondition[0])).isEmpty();
+            assertThat(operator.exist()).isFalse();
+            assertThat(operator.page(1, 10)).isEmpty();
+            assertThatThrownBy(() -> operator.del(WhereCondition.empty())).isInstanceOf(NullPointerException.class);
+            assertThat(operator.getById("null-guard")).isNotNull();
+        }
+
+        @Test
+        void absentStoredFieldsDoNotMatchAnyOrdinaryFilter() {
+            operator.insert(new TestData("null-field", null, 1));
+            for (Comparison comparison : Comparison.values()) {
+                WhereCondition condition = condition(comparison, "anything");
+                assertThat(operator.getAll(condition)).isEmpty();
+                assertThat(operator.exist(condition)).isFalse();
+                assertThat(operator.page(1, 10, condition)).isEmpty();
+                operator.del(condition);
+                assertThat(operator.getById("null-field")).isNotNull();
+            }
+        }
+    }
+
     // ==================== Constructor Tests ====================
     
     @Nested
