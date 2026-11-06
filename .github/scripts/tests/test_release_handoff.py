@@ -1181,6 +1181,26 @@ class EdgeHandoffTests(HandoffTestCase):
                     self.assertNotEqual(result.returncode, 0, result.stdout.decode())
                     self.assertIn("accepted_row_not_in_response", result.stdout.decode())
 
+    def test_dotted_accepted_row_requires_its_own_token_in_retained_response(self):
+        manifest, _, _ = self.approved()
+        row = "ultitools.ul.reload"
+        for mention, accepted in ((row, True), (row + ".", True), ("(" + row + ")", True),
+                                  (row + ". Next sentence.", True), (row + ".\nNext sentence.", True),
+                                  (row + ".neg-x", False), (row + ".c", False),
+                                  ("x." + row, False), ("." + row, False),
+                                  ("ultitoolsXulXreload", False)):
+            with self.subTest(mention=mention):
+                authority, uat = self.fx.write_receipts(
+                    manifest, response_text="publish these exact five files; " + mention,
+                    scope_overrides={"accepted_blocked_uat_rows": [row]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": [row]}})
+                result = self.validate_receipts(manifest, authority, uat)
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn("accepted_row_not_in_response", result.stdout.decode())
+
     def test_passing_uat_does_not_report_stale_accepted_rows(self):
         manifest, _, _ = self.approved()
         authority, uat = self.fx.write_receipts(

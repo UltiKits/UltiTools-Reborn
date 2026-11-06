@@ -608,8 +608,8 @@ def check_authority_response(receipt, path, problems):
             rows = scope.get("accepted_blocked_uat_rows") if isinstance(scope, dict) else None
             if isinstance(rows, list) and valid_row_ids(rows):
                 for row in rows:
-                    # Hyphens and word characters belong to row IDs; surrounding punctuation does not.
-                    if not re.search(r"(?<![\w-])" + re.escape(row) + r"(?![\w-])", decoded):
+                    # Dotted prefixes/suffixes belong to row IDs; a sentence-ending period does not.
+                    if not re.search(r"(?<![\w.-])" + re.escape(row) + r"(?!\.?[\w-])", decoded):
                         problems.add("accepted_row_not_in_response",
                                      "accepted blocked UAT row %r must appear as a whole token in the response" % row)
 
