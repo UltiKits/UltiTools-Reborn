@@ -769,6 +769,8 @@ class DataSourceTransactionManagerTest {
             logger.addHandler(this);
         }
 
+        // Thread identity deliberately limits warning capture to this test's executing thread.
+        @SuppressWarnings("PMD.CompareObjectsWithEquals")
         @Override
         public void publish(LogRecord record) {
             if (Thread.currentThread() == owner && Level.WARNING.equals(record.getLevel())) {
