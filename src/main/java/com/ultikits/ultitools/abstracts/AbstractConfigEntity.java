@@ -1750,19 +1750,7 @@ public abstract class AbstractConfigEntity {
         lastLoadUnparseable = false;
         ConfigDocument next = loaded.state() == ConfigLoadResult.State.LOADED
                 ? loaded.document() : ConfigDocument.empty();
-        // One key semantics (#612): a declared setting held in two forms - a flat dotted key and nested keys, or two
-        // splits of its dots - is refused before any value is bound, naming the file and the setting, never a value.
-        List<String> heldTwice = new ArrayList<>();
-        for (Field field : configEntryFields()) {
-            if (heldTwice(next, field)) { heldTwice.add(heldTwiceReason(field)); }
-        }
-        if (!heldTwice.isEmpty()) {
-            // Not a value violation: the operator chooses which form stays (gate-1 R613-04).
-            throw new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
-                    "Module '" + ultiToolsPlugin.getPluginName() + "' refused to load: configuration file '" + configFilePath
-                            + "' writes a setting in two forms: " + String.join("; ", heldTwice)
-                            + ". The file was not modified - delete one of the two forms and restart.");
-        }
+        refuseDuplicateSettings(next);
         // Presence describes the load input, never defaults/comment writes or a later save read.
         Map<String, Object> loadedPresence = next.toPlain();
         Map<Field, Object> baseline = new LinkedHashMap<>(declaredDefaults);
@@ -1782,24 +1770,7 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             Object raw = next.get(keysIn(next, field));
-            try {
-                ConversionResult<Object> converted = registry().fromPlainResult(raw, declaredType(field),
-                        configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
-                ReflectionUtil.setFieldValue(this, field, converted.value());
-                for (ConversionFailure failure : converted.failures()) {
-                    warnConversion(field, failure.cause(), failure.raw(), raw);
-                }
-            } catch (ConversionException failure) {
-                warnConversion(field, failure, raw, raw);
-                // Restore the initially declared default, not a live unsaved value or the last load.
-                try {
-                    Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field),
-                            configFilePath, keys(field), field.getAnnotation(ConfigEntry.class)).value();
-                    ReflectionUtil.setFieldValue(this, field, value);
-                } catch (ConversionException invalidDefault) {
-                    throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
-                }
-            }
+            bindLoadedValue(field, raw);
             useDeclaredDefaultIfEmpty(field, raw);
             // Spelled like the file just read: the raw acknowledgement is refreshed only at the end of this load.
             Object theirs = plainValue(field, false, raw);
@@ -2096,18 +2067,7 @@ public abstract class AbstractConfigEntity {
         if (orderedEquals(mine, base)) { return theirs; }
         if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
         if (theirs instanceof Map && !((Map<?, ?>) theirs).containsKey("==") && splitsByEntry(declared, base, mine)) {
-            Type valueType = mapValueType(declared);
-            Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
-            Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
-            Map<String, Object> merged = new LinkedHashMap<>();
-            for (Object key : keys) {
-                List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
-                Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
-                        m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
-                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType, field, child, conflicts);
-                if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
-            }
-            return merged;
+            return mergeReloadMap(base, mine, theirs, declared, field, leaf, conflicts);
         }
         if (mine instanceof Map || mine instanceof List) {
             // A composite value or a list is replaced whole; its contents are not listed (they may hold anything;
@@ -2486,14 +2446,7 @@ public abstract class AbstractConfigEntity {
             String path = edit.getKey();
             Object raw = jsonToPlain(edit.getValue());
             if (displayed.has(path) && PlainData.plainEquals(jsonToPlain(displayed.get(path)), raw)) { continue; }
-            Field owner = null;
-            for (Field field : configEntryFields()) {
-                String entry = fieldPath(field);
-                if (path.equals(entry)) { owner = field; break; }
-                if (path.startsWith(entry + ".") && (owner == null || entry.length() > fieldPath(owner).length())) {
-                    owner = field;
-                }
-            }
+            Field owner = panelOwner(path);
             if (owner == null) { refused.add(describeUndeclared(path) + ": no declared entry"); continue; }
             if (path.equals(fieldPath(owner))) {
                 proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
@@ -2556,6 +2509,90 @@ public abstract class AbstractConfigEntity {
             proposed.put(owner, tree);
             if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(match); }
         }
+        captureCompositeWrites(proposed);
+        Map<Field, Object> converted = convertPanelCandidates(proposed, refused);
+        if (!refused.isEmpty()) { throw new ConfigurationException("File " + configFilePath + ": " + String.join("; ", refused)); }
+        for (Map.Entry<Field, Object> entry : converted.entrySet()) {
+            Field field = entry.getKey(); field.setAccessible(true);
+            touchedFieldsOut.add(field); previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
+            ReflectionUtil.setFieldValue(this, field, entry.getValue());
+        }
+        validateFields();
+        validateBindingRanges(touchedFieldsOut);
+        return leaves;
+    }
+
+    /** Checks ambiguous setting ownership before binding any value; the caller retains its entity monitor. */
+    private void refuseDuplicateSettings(ConfigDocument next) {
+        // One key semantics (#612): a declared setting held in two forms - a flat dotted key and nested keys, or two
+        // splits of its dots - is refused before any value is bound, naming the file and the setting, never a value.
+        List<String> heldTwice = new ArrayList<>();
+        for (Field field : configEntryFields()) {
+            if (heldTwice(next, field)) { heldTwice.add(heldTwiceReason(field)); }
+        }
+        if (!heldTwice.isEmpty()) {
+            // Not a value violation: the operator chooses which form stays (gate-1 R613-04).
+            throw new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Module '" + ultiToolsPlugin.getPluginName() + "' refused to load: configuration file '" + configFilePath
+                            + "' writes a setting in two forms: " + String.join("; ", heldTwice)
+                            + ". The file was not modified - delete one of the two forms and restart.");
+        }
+    }
+
+    /** Converts one loaded field, reporting omissions and falling back to its declared default without writing. */
+    private void bindLoadedValue(Field field, Object raw) {
+        try {
+            ConversionResult<Object> converted = registry().fromPlainResult(raw, declaredType(field),
+                    configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+            ReflectionUtil.setFieldValue(this, field, converted.value());
+            for (ConversionFailure failure : converted.failures()) {
+                warnConversion(field, failure.cause(), failure.raw(), raw);
+            }
+        } catch (ConversionException failure) {
+            warnConversion(field, failure, raw, raw);
+            // Restore the initially declared default, not a live unsaved value or the last load.
+            try {
+                Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field),
+                        configFilePath, keys(field), field.getAnnotation(ConfigEntry.class)).value();
+                ReflectionUtil.setFieldValue(this, field, value);
+            } catch (ConversionException invalidDefault) {
+                throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
+            }
+        }
+    }
+
+    /** Merges real map keys in file-first order; recursive conflicts still use the setting's redacted display rule. */
+    private Object mergeReloadMap(Object base, Object mine, Object theirs, Type declared, Field field, List<String> leaf,
+            List<String> conflicts) {
+        Type valueType = mapValueType(declared);
+        Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
+        Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
+        Map<String, Object> merged = new LinkedHashMap<>();
+        for (Object key : keys) {
+            List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
+            Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
+                    m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
+                    t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType, field, child, conflicts);
+            if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
+        }
+        return merged;
+    }
+
+    /** Finds the longest declared setting prefix for a panel path, with an exact setting taking precedence. */
+    private Field panelOwner(String path) {
+        Field owner = null;
+        for (Field field : configEntryFields()) {
+            String entry = fieldPath(field);
+            if (path.equals(entry)) { owner = field; break; }
+            if (path.startsWith(entry + ".") && (owner == null || entry.length() > fieldPath(owner).length())) {
+                owner = field;
+            }
+        }
+        return owner;
+    }
+
+    /** Captures edited whole composites before conversion; the caller owns the monitor and publication order. */
+    private void captureCompositeWrites(Map<Field, Object> proposed) {
         for (Map.Entry<Field, Map<List<String>, RawEntry>> reads : compositeReads.entrySet()) {
             Object proposal = proposed.get(reads.getKey());
             Map<List<String>, Object> wholes = new LinkedHashMap<>();
@@ -2565,6 +2602,10 @@ public abstract class AbstractConfigEntity {
             }
             compositeWrites.put(reads.getKey(), wholes);
         }
+    }
+
+    /** Converts all proposals before any field is published; failures accumulate as redacted panel reasons. */
+    private Map<Field, Object> convertPanelCandidates(Map<Field, Object> proposed, List<String> refused) {
         Map<Field, Object> converted = new LinkedHashMap<>();
         for (Map.Entry<Field, Object> proposal : proposed.entrySet()) {
             Field field = proposal.getKey();
@@ -2588,15 +2629,7 @@ public abstract class AbstractConfigEntity {
                         + typeName(failure.declaredType()));
             }
         }
-        if (!refused.isEmpty()) { throw new ConfigurationException("File " + configFilePath + ": " + String.join("; ", refused)); }
-        for (Map.Entry<Field, Object> entry : converted.entrySet()) {
-            Field field = entry.getKey(); field.setAccessible(true);
-            touchedFieldsOut.add(field); previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
-            ReflectionUtil.setFieldValue(this, field, entry.getValue());
-        }
-        validateFields();
-        validateBindingRanges(touchedFieldsOut);
-        return leaves;
+        return converted;
     }
 
     /**
