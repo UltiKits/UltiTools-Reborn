@@ -195,41 +195,75 @@ class ConsoleTabCompletionTest {
         String[] receivedArgs;
         int playerCalls;
 
-        @Override protected void handleHelp(CommandSender sender) { }
+        @Override protected void handleHelp(CommandSender sender) {
+            // Help is not exercised by completion requests.
+        }
         @CmdMapping(format = "<name>")
-        public void first(@CmdParam(value = "name", suggest = "suggestSenderString") String name) { }
+        public void first(@CmdParam(value = "name", suggest = "suggestSenderString") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "sender <name>")
-        public void sender(@CmdParam(value = "name", suggest = "suggestSender") String name) { }
+        public void sender(@CmdParam(value = "name", suggest = "suggestSender") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "senderstring <name>")
-        public void senderString(@CmdParam(value = "name", suggest = "suggestSenderString") String name) { }
+        public void senderString(@CmdParam(value = "name", suggest = "suggestSenderString") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "senderargs <name>")
-        public void senderArgs(@CmdParam(value = "name", suggest = "suggestSenderArgs") String name) { }
+        public void senderArgs(@CmdParam(value = "name", suggest = "suggestSenderArgs") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "player <name>")
-        public void player(@CmdParam(value = "name", suggest = "suggestPlayer") String name) { }
+        public void player(@CmdParam(value = "name", suggest = "suggestPlayer") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "playerstring <name>")
-        public void playerString(@CmdParam(value = "name", suggest = "suggestPlayerString") String name) { }
+        public void playerString(@CmdParam(value = "name", suggest = "suggestPlayerString") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "playerargs <name>")
-        public void playerArgs(@CmdParam(value = "name", suggest = "suggestPlayerArgs") String name) { }
+        public void playerArgs(@CmdParam(value = "name", suggest = "suggestPlayerArgs") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "zero <name>")
-        public void zero(@CmdParam(value = "name", suggest = "suggestZero") String name) { }
+        public void zero(@CmdParam(value = "name", suggest = "suggestZero") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "string <name>")
-        public void string(@CmdParam(value = "name", suggest = "suggestString") String name) { }
+        public void string(@CmdParam(value = "name", suggest = "suggestString") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "boolean <name>")
-        public void bool(@CmdParam(value = "name", suggest = "@boolean") String name) { }
+        public void bool(@CmdParam(value = "name", suggest = "@boolean") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "online <name>")
-        public void online(@CmdParam(value = "name", suggest = "@players") String name) { }
+        public void online(@CmdParam(value = "name", suggest = "@players") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "custom <name>")
-        public void custom(@CmdParam(value = "name", suggest = "@consoleFixture") String name) { }
+        public void custom(@CmdParam(value = "name", suggest = "@consoleFixture") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
         @CmdMapping(format = "playeronly <name>")
-        public void playerOnly(@CmdParam(value = "name", suggest = "suggestSenderString") String name) { }
+        public void playerOnly(@CmdParam(value = "name", suggest = "suggestSenderString") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
         @CmdMapping(format = "consoleonly <name>")
-        public void consoleOnly(@CmdParam(value = "name", suggest = "suggestSenderString") String name) { }
+        public void consoleOnly(@CmdParam(value = "name", suggest = "suggestSenderString") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "secret <name>", permission = "fixture.secret")
-        public void secret(@CmdParam(value = "name", suggest = "suggestSenderString") String name) { }
+        public void secret(@CmdParam(value = "name", suggest = "suggestSenderString") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         @CmdMapping(format = "oponly <name>", requireOp = true)
-        public void opOnly(@CmdParam(value = "name", suggest = "suggestSenderString") String name) { }
+        public void opOnly(@CmdParam(value = "name", suggest = "suggestSenderString") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
 
         public List<String> suggestSender(CommandSender sender) {
             receivedSender = sender;
@@ -258,9 +292,13 @@ class ConsoleTabCompletionTest {
     }
 
     static class TargetExecutor extends BaseCommandExecutor {
-        @Override protected void handleHelp(CommandSender sender) { }
+        @Override protected void handleHelp(CommandSender sender) {
+            // Help is not exercised by completion requests.
+        }
         @CmdMapping(format = "senderstring <name>")
-        public void mapping(@CmdParam(value = "name", suggest = "suggestNames") String name) { }
+        public void mapping(@CmdParam(value = "name", suggest = "suggestNames") String name) {
+            // Mapping fixture only; completion never executes command bodies.
+        }
         public List<String> suggestNames(CommandSender sender, String input) { return Arrays.asList("spawn"); }
     }
     @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
