@@ -34,7 +34,8 @@ import org.jetbrains.annotations.ApiStatus;
  * transaction rolls it back depends on the JDBC driver's close policy; the framework requests no
  * further commit. Returning a connection after a failed rollback risks letting the next
  * borrower join an unresolved transaction; explicit eviction ensures that connection is never
- * handed out again.
+ * handed out again. A connection whose auto-commit restoration fails after a successful commit or
+ * rollback is also discarded; that cleanup failure does not change the completed transaction's outcome.
  * <p>
  * What the caller can rely on afterwards (this class serves SQLite and MySQL):
  * <ul>
@@ -374,8 +375,9 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
      * Ends the transaction context: removes it from this thread and never throws.
      * <p>
      * {@code completed} -- the commit or rollback succeeded: auto-commit restoration is attempted,
-     * and the connection is closed (back to the pool) even if restoration fails. Cleanup failures are
-     * logged without changing the transaction's outcome. Otherwise the connection is discarded through
+     * and the connection is closed (back to the pool) only if restoration succeeds. If restoration
+     * fails, the connection is discarded instead. Cleanup failures are logged without changing the
+     * transaction's outcome. If commit or rollback failed, the connection is discarded through
      * {@link #discardConnection(DataSource, Connection)} and auto-commit is never switched on
      * (#634).
      *
@@ -390,12 +392,18 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
         try {
             if (ctx.connection != null && !ctx.connection.isClosed()) {
                 if (completed) {
+                    boolean restored = false;
                     try {
                         ctx.connection.setAutoCommit(true);
+                        restored = true;
                     } catch (SQLException e) {
-                        LOGGER.log(Level.WARNING, "Failed to restore auto-commit after transaction completion", e);
-                    } finally {
+                        LOGGER.log(Level.WARNING, "Failed to restore auto-commit after transaction completion; "
+                                + "discarding the connection", e);
+                    }
+                    if (restored) {
                         ctx.connection.close();
+                    } else {
+                        discardConnection(dataSource, ctx.connection);
                     }
                 } else {
                     discardConnection(dataSource, ctx.connection);
@@ -411,8 +419,9 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
     }
 
     /**
-     * Discards a connection whose commit or rollback failed, without ever switching auto-commit on
-     * (UltiTools-Reborn#634): JDBC commits an open transaction when auto-commit is switched on. When
+     * Discards a connection whose commit, rollback, or auto-commit restoration failed, without ever
+     * switching auto-commit on (UltiTools-Reborn#634): JDBC commits an open transaction when auto-commit
+     * is switched on. When
      * {@code dataSource} is, or wraps, a {@link HikariDataSource} and {@code connection} is one of its
      * connections, the pool evicts it -- the physical connection is closed and never handed out
      * again; the caller must not use it afterwards. Any other connection is closed. Closing an

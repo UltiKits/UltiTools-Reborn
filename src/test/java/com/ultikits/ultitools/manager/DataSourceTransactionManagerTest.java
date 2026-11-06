@@ -7,8 +7,23 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.Mockito.*;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.pool.HikariProxyConnection;
+import org.h2.jdbc.JdbcConnection;
+import org.h2.jdbcx.JdbcDataSource;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -564,9 +579,11 @@ class DataSourceTransactionManagerTest {
     @DisplayName("cleanup 测试")
     class CleanupTests {
 
-        @Test
-        @DisplayName("Successful commit still releases the connection when auto-commit restoration fails")
-        void successfulCommitClosesConnectionWhenRestoreFails() throws Exception {
+        @ParameterizedTest
+        @ValueSource(booleans = {false, true})
+        @DisplayName("Successful commit discards the connection when auto-commit restoration fails")
+        void successfulCommitDiscardsConnectionWhenRestoreFails(boolean pooled) throws Exception {
+            HikariDataSource pool = configureCleanupSource(pooled);
             SQLException restoreFailure = new SQLException("Injected auto-commit restore failure");
             doThrow(restoreFailure).when(mockConnection).setAutoCommit(true);
             transactionManager.begin();
@@ -580,13 +597,15 @@ class DataSourceTransactionManagerTest {
                     () -> assertContextCleared(),
                     () -> assertThat(warnings.records).anySatisfy(record ->
                             assertThat(record.getThrown()).isSameAs(restoreFailure)),
-                    () -> verify(mockConnection, times(1)).close());
+                    () -> assertDiscarded(pool));
             }
         }
 
-        @Test
-        @DisplayName("Successful rollback still releases the connection when auto-commit restoration fails")
-        void successfulRollbackClosesConnectionWhenRestoreFails() throws Exception {
+        @ParameterizedTest
+        @ValueSource(booleans = {false, true})
+        @DisplayName("Successful rollback discards the connection when auto-commit restoration fails")
+        void successfulRollbackDiscardsConnectionWhenRestoreFails(boolean pooled) throws Exception {
+            HikariDataSource pool = configureCleanupSource(pooled);
             SQLException restoreFailure = new SQLException("Injected rollback restore failure");
             doThrow(restoreFailure).when(mockConnection).setAutoCommit(true);
             transactionManager.begin();
@@ -597,7 +616,7 @@ class DataSourceTransactionManagerTest {
                 () -> verify(mockConnection, times(1)).rollback(),
                 () -> verify(mockConnection, never()).commit(),
                 () -> assertContextCleared(),
-                () -> verify(mockConnection, times(1)).close());
+                () -> assertDiscarded(pool));
         }
 
         @Test
@@ -652,9 +671,15 @@ class DataSourceTransactionManagerTest {
                 () -> verify(mockConnection, times(1)).close());
         }
 
-        @Test
-        @DisplayName("Restore and close failures are both observable without changing successful commit")
-        void successfulCommitRetainsBothRestoreAndCloseFailures() throws Exception {
+        @ParameterizedTest
+        @ValueSource(booleans = {false, true})
+        @DisplayName("Restore and discard failures remain observable without changing successful commit")
+        void successfulCommitRetainsRestoreAndDiscardFailures(boolean pooled) throws Exception {
+            HikariDataSource pool = configureCleanupSource(pooled);
+            IllegalStateException evictionFailure = new IllegalStateException("Injected eviction failure");
+            if (pool != null) {
+                doThrow(evictionFailure).when(pool).evictConnection(mockConnection);
+            }
             SQLException restoreFailure = new SQLException("Injected first cleanup failure");
             SQLException closeFailure = new SQLException("Injected second cleanup failure");
             doThrow(restoreFailure).when(mockConnection).setAutoCommit(true);
@@ -670,6 +695,10 @@ class DataSourceTransactionManagerTest {
                     () -> assertContextCleared(),
                     () -> assertThat(warnings.failures()).contains(restoreFailure, closeFailure),
                     () -> verify(mockConnection, times(1)).close());
+                if (pool != null) {
+                    verify(pool).evictConnection(mockConnection);
+                    assertThat(warnings.failures()).contains(evictionFailure);
+                }
             }
         }
 
@@ -716,6 +745,113 @@ class DataSourceTransactionManagerTest {
                 () -> verify(mockConnection, times(1)).close(),
                 () -> assertContextCleared(),
                 () -> verify(innerConnection, times(1)).close());
+        }
+
+        private HikariDataSource configureCleanupSource(boolean pooled) throws SQLException {
+            if (!pooled) {
+                return null;
+            }
+            HikariDataSource pool = mock(HikariDataSource.class);
+            mockConnection = mock(HikariProxyConnection.class);
+            when(pool.getConnection()).thenReturn(mockConnection);
+            transactionManager = new DataSourceTransactionManager(pool);
+            return pool;
+        }
+
+        private void assertDiscarded(HikariDataSource pool) throws SQLException {
+            if (pool == null) {
+                verify(mockConnection, times(1)).close();
+            } else {
+                verify(pool, times(1)).evictConnection(mockConnection);
+                verify(mockConnection, never()).close();
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {false, true})
+        @DisplayName("A real Hikari pool never reuses a physical connection after a non-fatal restore failure")
+        void realHikariReplacesConnectionAfterNonFatalRestoreFailure(boolean commit) throws Exception {
+            JdbcDataSource raw = new JdbcDataSource();
+            raw.setURL("jdbc:h2:mem:restore-" + UUID.randomUUID());
+            AtomicBoolean failRestore = new AtomicBoolean();
+            AtomicInteger injectedFailures = new AtomicInteger();
+            AtomicInteger commits = new AtomicInteger();
+            AtomicInteger rollbacks = new AtomicInteger();
+            // HY000 / error code 0 is not in Hikari's fatal SQLState or error-code sets.
+            SQLException restoreFailure = new SQLException("Injected non-fatal restore failure", "HY000", 0);
+            DataSource faulty = mock(DataSource.class);
+            when(faulty.getConnection()).thenAnswer(invocation -> {
+                Connection delegate = raw.getConnection();
+                return Proxy.newProxyInstance(Connection.class.getClassLoader(),
+                        new Class<?>[] {Connection.class}, (proxy, method, args) -> {
+                            if ("setAutoCommit".equals(method.getName())
+                                    && Boolean.TRUE.equals(args[0]) && failRestore.get()) {
+                                injectedFailures.incrementAndGet();
+                                throw restoreFailure;
+                            }
+                            try {
+                                Object result = method.invoke(delegate, args);
+                                if ("commit".equals(method.getName())) {
+                                    commits.incrementAndGet();
+                                } else if ("rollback".equals(method.getName())) {
+                                    rollbacks.incrementAndGet();
+                                }
+                                return result;
+                            } catch (InvocationTargetException e) {
+                                throw e.getCause();
+                            }
+                        });
+            });
+            HikariConfig config = new HikariConfig();
+            config.setDataSource(faulty);
+            config.setMaximumPoolSize(1);
+            config.setMinimumIdle(0);
+            config.setConnectionTimeout(5000);
+            config.setPoolName("restore-failure-" + commit);
+            // Keep the isolated in-memory database alive while eviction closes its pooled session.
+            try (Connection observer = raw.getConnection();
+                 Statement statement = observer.createStatement();
+                 HikariDataSource pool = new HikariDataSource(config)) {
+                statement.execute("CREATE TABLE restore_result (id INT)");
+                JdbcConnection original;
+                try (Connection borrowed = pool.getConnection()) {
+                    original = borrowed.unwrap(JdbcConnection.class);
+                }
+                transactionManager = new DataSourceTransactionManager(pool);
+                transactionManager.begin();
+                Connection transactional = transactionManager.getConnection();
+                assertThat(transactional.unwrap(JdbcConnection.class))
+                        .as("control: ordinary close recycles the same physical connection").isSameAs(original);
+                try (Statement write = transactional.createStatement()) {
+                    write.executeUpdate("INSERT INTO restore_result VALUES (1)");
+                }
+                failRestore.set(true);
+                try (CleanupWarnings warnings = new CleanupWarnings()) {
+                    assertThatCode(() -> {
+                        if (commit) {
+                            transactionManager.commit();
+                        } else {
+                            transactionManager.rollback();
+                        }
+                    }).doesNotThrowAnyException();
+                    assertThat(injectedFailures.get()).as("the restore fault was actually injected").isPositive();
+                    assertThat(warnings.failures()).contains(restoreFailure);
+                    assertContextCleared();
+                    assertThat(commits.get()).isEqualTo(commit ? 1 : 0);
+                    assertThat(rollbacks.get()).isEqualTo(commit ? 0 : 1);
+                    try (ResultSet rows = statement.executeQuery("SELECT COUNT(*) FROM restore_result")) {
+                        assertThat(rows.next()).isTrue();
+                        assertThat(rows.getInt(1)).as("completion outcome survives cleanup failure")
+                                .isEqualTo(commit ? 1 : 0);
+                    }
+                    try (Connection next = pool.getConnection()) {
+                        JdbcConnection replacement = next.unwrap(JdbcConnection.class);
+                        assertThat(replacement).as("failed restore must evict, not recycle, the physical connection")
+                                .isNotSameAs(original);
+                        assertThat(replacement.getAutoCommit()).isTrue();
+                    }
+                }
+            }
         }
 
         private void assertContextCleared() {
