@@ -25,6 +25,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPTS.parent.parent
@@ -732,7 +733,7 @@ class TracerHandoffTests(HandoffTestCase):
 class ReleaseDocumentationTests(unittest.TestCase):
 
     def test_help_explains_prerelease_does_not_prevent_permanent_central_publication(self):
-        result = subprocess.run([BASH, str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
+        result = subprocess.run([cast(str, BASH), str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout.decode())
         self.assertIn("--prerelease only labels the GitHub release", result.stdout.decode())
@@ -765,7 +766,7 @@ class ReleaseNotesTests(HandoffTestCase):
             # notes fallback directly, without weakening that unrelated publication guard.
             body = RELEASE_SH.read_text().split("resolve_notes() {", 1)[1].split("\n}\n", 1)[0]
             command = "resolve_notes() {" + body + "\n}\nNOTES=''\nNOTES_FILE=''\nresolve_notes\nprintf '%s' \"$NOTES\""
-            result = subprocess.run([BASH, "-ec", command], cwd=str(self.fx.work), env=self.fx.env,
+            result = subprocess.run([cast(str, BASH), "-ec", command], cwd=str(self.fx.work), env=self.fx.env,
                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assert_no_build()
