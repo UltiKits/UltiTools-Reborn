@@ -362,6 +362,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // Plan 22-21 (S-60): the player-link API exists before the modules that set its handler load.
         cloudFeatures = CloudFeatures.start(this);
         initPluginModules();
+        ((ModuleClassLoader) ultiToolsClassLoader).logRewriteCounts(getLogger());
         migrateCapabilitiesConfig();
         initWebSocketManagers();
         startMetrics(this, 8652, getLogger());
