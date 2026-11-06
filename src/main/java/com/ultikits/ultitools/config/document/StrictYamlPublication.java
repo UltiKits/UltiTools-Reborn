@@ -127,18 +127,20 @@ final class StrictYamlPublication {
                 }
             }
             // Retry only an exclusive name collision. No existing entry is ever reused or cleaned.
+            Path temp;
+            FileChannel channel;
             for (;;) {
-                Path temp = path.resolveSibling(path.getFileName() + ".ultitools-stage-" + files.nonce() + ".tmp");
-                FileChannel channel;
+                temp = path.resolveSibling(path.getFileName() + ".ultitools-stage-" + files.nonce() + ".tmp");
                 try {
                     channel = files.open(temp);
+                    break;
                 } catch (FileAlreadyExistsException collision) {
                     continue;
                 } catch (UnsupportedOperationException failure) {
                     throw new IOException("Private POSIX staging is unsupported", failure);
                 }
-                return finishStage(temp, channel, text);
             }
+            return finishStage(temp, channel, text);
         }
 
         /** Completes and closes exactly the channel just created; cleanup keeps the same primary failure. */

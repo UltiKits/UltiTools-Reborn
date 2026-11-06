@@ -468,7 +468,7 @@ class StrictYamlPublicationTest {
         String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
         // JVM/classpath are from the test runtime; @TempDir and literal @ValueSource arguments supply no user input.
         // Separate argv starts this fixed helper class directly, with no shell or operator/player/network data.
-        // nosemgrep: Semgrep_java_inject_rule-CommandInjection, Semgrep_java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
+        // nosemgrep: java_inject_rule-CommandInjection, java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
         Process child = new ProcessBuilder(java, "-cp", classpath, HaltChild.class.getName(), file.toString(), point)
                 .inheritIO().start();
         try {
