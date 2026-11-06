@@ -3833,38 +3833,71 @@ public class PluginManager {
             throw refused;
         }
 
+        try {
+            registerExternalResources(adapter, context);
+        } catch (RuntimeException | Error failed) {
+            unwindRefusedExternal(adapter, context, scope, ownershipAdded);
+            throw failed;
+        }
+
         String pluginName = adapter.getPluginName();
-
-        // 4. Register @Scheduled tasks
-        if (taskManager != null) {
-            for (Object bean : context.getSingletonValues()) {
-                taskManager.registerScheduledMethodsExternal(pluginName, bean);
-            }
-        }
-
-        // 5. Register @PlayerCache beans
-        if (playerCacheManager != null) {
-            for (Object bean : context.getSingletonValues()) {
-                playerCacheManager.registerBean(bean);
-            }
-        }
-
-        // 6. Register @ModuleEventHandler with EventBus
-        EventBus eventBus = UltiTools.getInstance().getEventBus();
-        if (eventBus != null) {
-            for (Object bean : context.getSingletonValues()) {
-                registerModuleEventHandlersExternal(eventBus, pluginName, bean);
-            }
-        }
-
-        // 7. Register commands and listeners
-        UltiTools.getInstance().getCommandManager().registerAllExternal(adapter);
-        UltiTools.getInstance().getListenerManager().registerAllExternal(adapter);
-
         connectedExternalScanPackages.put(pluginName, adapter.getScanPackage());
 
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
+    }
+
+    /**
+     * Registers Bukkit-facing resources only after container validation. Each inverse is recorded
+     * before its registration starts, so a partially completed failing stage is undone as well.
+     * Cleanup runs in reverse order, before the caller closes the container and releases ownership.
+     * A cleanup failure is attached to the original exception rather than hiding it or skipping
+     * the remaining inverses. No configuration or language file is written by this path.
+     */
+    private void registerExternalResources(ExternalPluginAdapter adapter, SimpleContainer context) {
+        String pluginName = adapter.getPluginName();
+        List<Runnable> rollback = new ArrayList<>();
+        try {
+            if (taskManager != null) {
+                rollback.add(() -> taskManager.cancelAllExternal(pluginName));
+                for (Object bean : context.getSingletonValues()) {
+                    taskManager.registerScheduledMethodsExternal(pluginName, bean);
+                }
+            }
+
+            if (playerCacheManager != null) {
+                for (Object bean : context.getSingletonValues()) {
+                    rollback.add(() -> playerCacheManager.unregisterBean(bean));
+                    playerCacheManager.registerBean(bean);
+                }
+            }
+
+            EventBus eventBus = UltiTools.getInstance().getEventBus();
+            if (eventBus != null) {
+                rollback.add(() -> eventBus.unregisterAll(pluginName));
+                for (Object bean : context.getSingletonValues()) {
+                    registerModuleEventHandlersExternal(eventBus, pluginName, bean);
+                }
+            }
+
+            CommandManager commands = UltiTools.getInstance().getCommandManager();
+            rollback.add(() -> commands.unregisterAllExternal(pluginName));
+            commands.registerAllExternal(adapter);
+            ListenerManager listeners = UltiTools.getInstance().getListenerManager();
+            rollback.add(() -> listeners.unregisterAllExternal(pluginName));
+            listeners.registerAllExternal(adapter);
+        } catch (RuntimeException | Error failed) {
+            for (int index = rollback.size() - 1; index >= 0; index--) {
+                try {
+                    rollback.get(index).run();
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (cleanupFailure != failed) {
+                        failed.addSuppressed(cleanupFailure);
+                    }
+                }
+            }
+            throw failed;
+        }
     }
 
     /**
