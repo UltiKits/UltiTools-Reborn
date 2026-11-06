@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /** Failsafe runs after shade: inspect every class, including bundled dependency packages. */
+// The *IT suffix intentionally follows Maven Failsafe discovery for execution after package/shade.
+@SuppressWarnings("PMD.ClassNamingConventions")
 class PackagedRuntimeLibraryIT {
     @TempDir
     Path temporary;
