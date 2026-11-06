@@ -362,8 +362,11 @@ take.
 - **JDK HTTP debug logging can expose the server credential.** The JDK-internal logger
   `sun.net.www.protocol.http.HttpURLConnection` at `FINE` or lower can print request headers,
   including `Authorization: Bearer ...` sent by `CloudHttp` when logout revokes the credential at
-  `/v1/agent/credential/revoke`. Do not enable this logger on production servers. Retiring
-  `UltiCloudRequests` does not remove this limitation; the framework does not redact the JDK's wire logs.
+  `/v1/agent/credential/revoke`. Retiring `UltiCloudRequests` does not remove this limitation;
+  the framework does not redact the JDK's wire logs. The WebSocket library's logger
+  `org.java_websocket` at `TRACE` can likewise record the bearer-bearing handshake on connect and reconnect.
+  Do not enable either logger on production servers; if enabled for debugging, treat the resulting logs
+  as credential-bearing material.
 - **Commands are at most once.** A `command.execute` or `server.power` id is persisted before the
   acknowledgement and before the command runs. A crash between persisting the id and running the command loses
   that command; it is never run twice.
