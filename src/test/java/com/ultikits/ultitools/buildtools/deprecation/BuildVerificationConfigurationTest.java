@@ -290,7 +290,7 @@ class BuildVerificationConfigurationTest {
                 assertThat(ignores).extracting(rule -> rule.get("versions")).containsExactly(
                         java.util.Collections.singletonList(">=6"), null, null,
                         java.util.Collections.singletonList(">=5"), null, null, null, null,
-                        java.util.Collections.singletonList(">=6"), java.util.Arrays.asList("<1.21", ">=1.22"));
+                        java.util.Collections.singletonList(">=6"), java.util.Collections.singletonList(">=1.22"));
             } else {
                 assertThat(update).doesNotContainKey("open-pull-requests-limit");
             }
