@@ -56,6 +56,7 @@ class ModuleUpdateCommandTest {
         MockBukkit.mock();
         UltiTools ultiTools = TestHelper.mockUltiToolsInstance();
         UpdateManager updateManager = mock(UpdateManager.class);
+        when(updateManager.isCheckComplete()).thenReturn(true);
         when(updateManager.getModuleUpdates()).thenReturn(updates);
         when(ultiTools.getUpdateManager()).thenReturn(updateManager);
         sender = mock(CommandSender.class);
