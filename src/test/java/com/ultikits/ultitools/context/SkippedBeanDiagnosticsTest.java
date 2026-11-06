@@ -45,8 +45,12 @@ class SkippedBeanDiagnosticsTest implements Opcodes {
         logger.setLevel(Level.ALL);
         handler = new Handler() {
             public void publish(LogRecord record) { captured.add(record); }
-            public void flush() { }
-            public void close() { }
+            public void flush() {
+                // Records are stored immediately; nothing is buffered.
+            }
+            public void close() {
+                // The capture handler owns no resources.
+            }
         };
         handler.setLevel(Level.ALL);
         logger.addHandler(handler);

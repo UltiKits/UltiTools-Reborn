@@ -125,13 +125,14 @@ public final class ModuleScanDiagnostics {
 
     private static String describeFailure(String className, Throwable cause) {
         boolean frameworkMismatch = false;
-        for (int depth = 0; cause != null && depth < 8; depth++, cause = cause.getCause()) {
-            String message = cause.getMessage();
+        Throwable cursor = cause;
+        for (int depth = 0; cursor != null && depth < 8; depth++, cursor = cursor.getCause()) {
+            String message = cursor.getMessage();
             if (message == null) {
                 continue;
             }
             String normalized = message.trim().replace('/', '.');
-            if (cause instanceof NoClassDefFoundError || cause instanceof ClassNotFoundException) {
+            if (cursor instanceof NoClassDefFoundError || cursor instanceof ClassNotFoundException) {
                 // A failed initializer ("Could not initialize class ...") is not an absent type.
                 if (normalized.indexOf(' ') >= 0) {
                     continue;
@@ -141,7 +142,7 @@ public final class ModuleScanDiagnostics {
                             + "; handlers/signatures requiring this class are unavailable on this server)";
                 }
                 frameworkMismatch |= normalized.startsWith("com.ultikits.ultitools.");
-            } else if (cause instanceof IncompatibleClassChangeError) {
+            } else if (cursor instanceof IncompatibleClassChangeError) {
                 frameworkMismatch |= normalized.contains("com.ultikits.ultitools.");
             }
         }

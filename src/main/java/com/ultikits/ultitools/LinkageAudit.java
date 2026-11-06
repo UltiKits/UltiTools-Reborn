@@ -32,7 +32,9 @@ import java.util.logging.Logger;
  * Reflection, string lookups, NMS and behaviour behind unchanged signatures are out of scope.
  */
 final class LinkageAudit {
-    private LinkageAudit() { }
+    private LinkageAudit() {
+        // Utility class; use the static audit entry points.
+    }
 
     static List<Finding> scan(File module, ClassLoader api, List<ClassRewriteRule> rules) throws IOException {
         LinkageApiIndex index = new LinkageApiIndex(api);
@@ -57,34 +59,38 @@ final class LinkageAudit {
         Map<String, Integer> versions = new HashMap<>();
         Enumeration<JarEntry> entries = jar.entries();
         while (entries.hasMoreElements()) {
-            JarEntry entry = entries.nextElement();
-            String name = entry.getName();
-            int version = 0;
-            if (name.startsWith("META-INF/versions/") && multiRelease) {
-                String versioned = name.substring("META-INF/versions/".length());
-                int slash = versioned.indexOf('/');
-                if (slash < 0) {
-                    continue;
-                }
-                try {
-                    version = Integer.parseInt(versioned.substring(0, slash));
-                } catch (NumberFormatException invalidEntry) {
-                    continue;
-                }
-                if (version < 9 || version > runtime) {
-                    continue;
-                }
-                name = versioned.substring(slash + 1);
-            }
-            if (name.startsWith("META-INF/") || !name.endsWith(".class")) {
-                continue;
-            }
-            if (!versions.containsKey(name) || version > versions.get(name)) {
-                selected.put(name, entry);
-                versions.put(name, version);
-            }
+            selectClassEntry(entries.nextElement(), multiRelease, runtime, selected, versions);
         }
         return selected.values();
+    }
+
+    private static void selectClassEntry(JarEntry entry, boolean multiRelease, int runtime,
+            Map<String, JarEntry> selected, Map<String, Integer> versions) {
+        String name = entry.getName();
+        int version = 0;
+        if (name.startsWith("META-INF/versions/") && multiRelease) {
+            String versioned = name.substring("META-INF/versions/".length());
+            int slash = versioned.indexOf('/');
+            if (slash < 0) {
+                return;
+            }
+            try {
+                version = Integer.parseInt(versioned.substring(0, slash));
+            } catch (NumberFormatException invalidEntry) {
+                return;
+            }
+            if (version < 9 || version > runtime) {
+                return;
+            }
+            name = versioned.substring(slash + 1);
+        }
+        if (name.startsWith("META-INF/") || !name.endsWith(".class")) {
+            return;
+        }
+        if (!versions.containsKey(name) || version > versions.get(name)) {
+            selected.put(name, entry);
+            versions.put(name, version);
+        }
     }
 
     static void warn(File module, ClassLoader api, List<ClassRewriteRule> rules, Logger logger) throws IOException {

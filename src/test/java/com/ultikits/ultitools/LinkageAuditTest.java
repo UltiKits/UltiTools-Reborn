@@ -1,5 +1,6 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.manager.PluginManager;
 import net.bytebuddy.jar.asm.ClassWriter;
 import net.bytebuddy.jar.asm.Handle;
 import net.bytebuddy.jar.asm.MethodVisitor;
@@ -180,8 +181,8 @@ class LinkageAuditTest implements Opcodes {
         File module = jar("loadable.jar", original);
         List<LogRecord> records = new ArrayList<>();
         List<byte[]> defined = new ArrayList<>();
-        com.ultikits.ultitools.manager.PluginManager manager = org.mockito.Mockito.mock(
-                com.ultikits.ultitools.manager.PluginManager.class);
+        PluginManager manager = org.mockito.Mockito.mock(
+                PluginManager.class);
         try (ModuleClassLoader loader = new ModuleClassLoader(new URL[]{module.toURI().toURL()},
                 getClass().getClassLoader(), null, Collections.emptyList(), (name, value) -> defined.add(value))) {
             org.mockito.Mockito.doAnswer(invocation -> {
@@ -264,8 +265,8 @@ class LinkageAuditTest implements Opcodes {
         Path invalid = temporary.resolve("invalid.jar");
         Files.write(invalid, new byte[]{0, 1, 2});
         List<LogRecord> records = new ArrayList<>();
-        com.ultikits.ultitools.manager.PluginManager manager = org.mockito.Mockito.mock(
-                com.ultikits.ultitools.manager.PluginManager.class);
+        PluginManager manager = org.mockito.Mockito.mock(
+                PluginManager.class);
         try (ModuleClassLoader loader = new ModuleClassLoader(new URL[]{invalid.toUri().toURL()},
                 getClass().getClassLoader(), null)) {
             UltiTools.initModulesWithAudit(loader, manager, capture(records));
@@ -379,8 +380,12 @@ class LinkageAuditTest implements Opcodes {
         logger.setUseParentHandlers(false);
         logger.addHandler(new Handler() {
             public void publish(LogRecord record) { records.add(record); }
-            public void flush() { }
-            public void close() { }
+            public void flush() {
+                // Records are stored immediately; nothing is buffered.
+            }
+            public void close() {
+                // The capture handler owns no resources.
+            }
         });
         return logger;
     }

@@ -48,6 +48,10 @@ final class LinkageApiIndex {
         if (constructor) {
             return false;
         }
+        return inheritedMethod(type, key, seen);
+    }
+
+    private boolean inheritedMethod(ApiType type, String key, Set<String> seen) {
         // Interface resolution may use public instance members of Object, not its private methods.
         if (type.isInterface) {
             Integer access = read("java/lang/Object").methods.get(key);

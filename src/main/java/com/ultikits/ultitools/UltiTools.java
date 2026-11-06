@@ -530,7 +530,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     /** Startup seam: diagnostics never change PluginManager's bean decisions. */
-    static void initModulesWithAudit(URLClassLoader loader, PluginManager manager, java.util.logging.Logger logger)
+    static void initModulesWithAudit(URLClassLoader loader, PluginManager manager, Logger logger)
             throws IOException {
         if (loader instanceof ModuleClassLoader) {
             ((ModuleClassLoader) loader).auditModules(logger);

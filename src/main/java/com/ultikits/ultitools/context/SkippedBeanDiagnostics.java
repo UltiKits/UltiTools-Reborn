@@ -16,7 +16,9 @@ import java.util.logging.Logger;
 
 /** Diagnostics for an observed bean skip, without changing the container's loading decisions. */
 final class SkippedBeanDiagnostics {
-    private SkippedBeanDiagnostics() { }
+    private SkippedBeanDiagnostics() {
+        // Utility class; diagnostics have no instance state.
+    }
 
     static void warn(String module, Class<?> beanClass, Throwable failure, Logger logger) {
         if (module == null || module.trim().isEmpty()) {
@@ -81,12 +83,13 @@ final class SkippedBeanDiagnostics {
     }
 
     private static String missingServerClass(Throwable failure) {
-        for (int depth = 0; failure != null && depth < 8; failure = failure.getCause(), depth++) {
+        Throwable cursor = failure;
+        for (int depth = 0; cursor != null && depth < 8; cursor = cursor.getCause(), depth++) {
             String missing = null;
-            if (failure instanceof TypeNotPresentException) {
-                missing = ((TypeNotPresentException) failure).typeName();
-            } else if (failure instanceof NoClassDefFoundError || failure instanceof ClassNotFoundException) {
-                missing = failure.getMessage();
+            if (cursor instanceof TypeNotPresentException) {
+                missing = ((TypeNotPresentException) cursor).typeName();
+            } else if (cursor instanceof NoClassDefFoundError || cursor instanceof ClassNotFoundException) {
+                missing = cursor.getMessage();
             }
             if (missing == null) {
                 continue;
