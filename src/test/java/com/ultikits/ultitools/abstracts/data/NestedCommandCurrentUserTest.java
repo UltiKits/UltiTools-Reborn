@@ -141,7 +141,8 @@ class NestedCommandCurrentUserTest {
      * Unsafe reads avoid requiring JVM --add-opens flags in either local or CI test forks; no writes
      * or changes to the production ThreadLocal are made by this probe.
      */
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    // ThreadLocalMap identifies keys by identity, not equals(); this probe must use the same rule.
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.CompareObjectsWithEquals"})
     private static boolean hasCurrentUserEntry() {
         try {
             Field singleton = Unsafe.class.getDeclaredField("theUnsafe");
