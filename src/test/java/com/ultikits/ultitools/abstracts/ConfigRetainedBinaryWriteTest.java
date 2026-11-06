@@ -145,10 +145,9 @@ class ConfigRetainedBinaryWriteTest {
                 Arguments.of("unquoted binary", "blob: !!binary YWI=\n", LAYOUT_REFUSAL + " (line 2)"),
                 Arguments.of("nested unquoted binary", "outer:\n  blob: !!binary YWI=\n", LAYOUT_REFUSAL + " (line 3)"),
                 Arguments.of("block-form set", "blob: !!set\n  ? a\nother: x\n", LAYOUT_REFUSAL),
-                // The parser ends the set's last null value at the start of the next line, so a write of the key that
-                // directly follows a block-form set is refused by the shared-line check instead.
+                // #628: the set's implicit null has no text span; the real refusal is the set entry's layout change.
                 Arguments.of("block-form set right above the written key", "blob: !!set\n  ? a\n",
-                        "a key this write owns shares line 4 with a key it does not own"));
+                        LAYOUT_REFUSAL + " (line 3)"));
     }
 
     /**
@@ -168,9 +167,9 @@ class ConfigRetainedBinaryWriteTest {
         OperatorFiles.WriteResult result = OperatorFiles.write(snapshot, values(Collections.singletonList("motd"), "new"));
 
         assertThat(result).isEqualTo(OperatorFiles.WriteResult.REFUSED);
-        assertThat(warnings).extracting(LogRecord::getMessage).singleElement().asString().contains(reason);
         assertThat(text()).isEqualTo(original);
         assertThat(file.toFile().lastModified()).isEqualTo(modified);
+        assertThat(warnings).extracting(LogRecord::getMessage).singleElement().asString().contains(reason);
     }
 
     @Test

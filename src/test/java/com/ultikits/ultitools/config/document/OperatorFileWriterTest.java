@@ -9,6 +9,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -16,11 +17,16 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The config write gate on its own: what it refuses, what it publishes, and how (maintainer decisions of
@@ -254,6 +260,98 @@ class OperatorFileWriterTest {
 
         assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.WRITTEN);
         assertThat(read(target)).isEqualTo("a: 1\nb: 2");
+    }
+
+    static Stream<Arguments> insertionsAfterEmptySiblings() {
+        List<Arguments> cases = new ArrayList<>();
+        String[][] layouts = {
+            {"nested", "a:\n  b:\n", "    ", "c", "a/b/d"},
+            {"dotted", "a.b:\n", "  ", "c", "a.b/d"},
+            {"mixed", "a:\n", "  ", "b.c", "a/b.d"}
+        };
+        for (String[] layout : layouts) {
+            for (String ending : Arrays.asList("\n", "\r\n", "")) {
+                String separator = ending.isEmpty() ? "\n" : ending;
+                for (String value : Arrays.asList("", " ''", " null", " ~")) {
+                    for (boolean commented : new boolean[] {false, true}) {
+                        List<String> path = Arrays.asList(layout[4].split("/"));
+                        String before = layout[1].replace("\n", separator) + layout[2] + layout[3] + ":" + value;
+                        String inserted = (commented ? layout[2] + "# D" + separator : "")
+                                + layout[2] + path.get(path.size() - 1) + ": 2";
+                        String name = layout[0] + "/value=" + value + "/comment=" + commented
+                                + "/ending=" + ending.replace("\r", "CR").replace("\n", "LF");
+                        cases.add(Arguments.of(name, before + ending, path, commented,
+                                before + separator + inserted + ending));
+                    }
+                }
+            }
+        }
+        return cases.stream();
+    }
+
+    /** #628: a zero-text null owns no value line, even when its mark moves past an inserted comment. */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("insertionsAfterEmptySiblings")
+    void insertsAfterAnEmptySiblingWithoutChangingAnyOperatorBytes(String name, String before, List<String> path,
+            boolean commented, String expected) throws Exception {
+        Path target = tempDir.resolve("empty-sibling.yml");
+        Files.write(target, before.getBytes(StandardCharsets.UTF_8));
+        java.util.function.Consumer<ConfigDocument> insert = document -> {
+            document.set(path, 2);
+            if (commented) {
+                document.setFrameworkComment(path, Collections.singletonList("D"));
+            }
+        };
+        OwnedPaths owned = OwnedPaths.builder().value(path).build();
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(target, owned, null, insert);
+
+        assertThat(result.outcome()).as("%s: %s", name, result.reason()).isEqualTo(OperatorFileWriter.Outcome.WRITTEN);
+        assertThat(Files.readAllBytes(target)).as("only the inserted lines and their separator are new")
+                .isEqualTo(expected.getBytes(StandardCharsets.UTF_8));
+        assertThat(ConfigDocument.load(target).document().get(path)).isEqualTo(2);
+        assertThat(OperatorFileWriter.write(target, owned, null, insert).outcome())
+                .as("a second start changes nothing").isEqualTo(OperatorFileWriter.Outcome.UNCHANGED);
+        assertThat(warnings).isEmpty();
+    }
+
+    /** The same zero-text value must not extend an owned key over the next sibling's key or comment. */
+    @ParameterizedTest(name = "remove={0}")
+    @ValueSource(booleans = {false, true})
+    void changingOrRemovingAnEmptyValueKeepsTheNextSibling(boolean remove) throws Exception {
+        Path target = tempDir.resolve("owned-empty.yml");
+        String next = "  # operator note\n  d: 3\n";
+        Files.write(target, ("a:\n  c:\n" + next).getBytes(StandardCharsets.UTF_8));
+        List<String> path = Arrays.asList("a", "c");
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(target, OwnedPaths.builder().value(path).build(),
+                null, document -> {
+                    if (remove) {
+                        document.remove(path);
+                    } else {
+                        document.set(path, 2);
+                    }
+                });
+
+        assertThat(result.outcome()).as(result.reason()).isEqualTo(OperatorFileWriter.Outcome.WRITTEN);
+        assertThat(read(target)).isEqualTo("a:\n" + (remove ? "" : "  c: 2\n") + next);
+        assertThat(warnings).isEmpty();
+    }
+
+    /** #628: recursive mapping spans also stop at the last actual key, not its empty value's next-token mark. */
+    @Test
+    void replacingAMappingEndingInAnEmptyValueKeepsTheFollowingKey() throws Exception {
+        Path target = tempDir.resolve("owned-mapping.yml");
+        String next = "# operator note\nother: 3\n";
+        Files.write(target, ("a:\n  c:\n" + next).getBytes(StandardCharsets.UTF_8));
+        List<String> path = Collections.singletonList("a");
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(target, OwnedPaths.builder().value(path).build(),
+                null, document -> document.set(path, Collections.singletonMap("c", 2)));
+
+        assertThat(result.outcome()).as(result.reason()).isEqualTo(OperatorFileWriter.Outcome.WRITTEN);
+        assertThat(read(target)).isEqualTo("a:\n  c: 2\n" + next);
+        assertThat(warnings).isEmpty();
     }
 
     /** An edit that changes a key it does not own is refused, whatever the renderer would produce. */
