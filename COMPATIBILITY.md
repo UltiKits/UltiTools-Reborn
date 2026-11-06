@@ -3156,7 +3156,13 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - A directory that cannot be forced to disk because of a real I/O error is logged at `WARNING` (`Could not force
   the directory <directory> to disk ...`). A commit made while that happens is committed and survives a server
   crash; it survives a power loss only once the next flush has completed. A flush or a start-up recovery that
-  meets the failure fails and is repeated, and the journal is not emptied meanwhile.
+  meets the failure fails and is repeated; records are retained until their deletion step. If the final force
+  after journal unlinking fails, the records are already absent, and a retry finding an empty journal does not
+  force that directory again.
+- Reopening an empty journal can reuse internal sequence numbers. Reuse alone does not lose data: the risk of
+  an old deleted record reappearing requires an unsupported or failed durability barrier and an additional
+  power-loss window before a successful directory force establishes the new state. The empty-retry caveat
+  above does not add a durability barrier; do not treat such a retry as proof of power-loss durability.
 
 **For server operators.**
 

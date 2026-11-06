@@ -299,6 +299,20 @@ class JsonEntityFileNameTest {
         assertThat(JsonFileNames.entityFile(relative, key)).isEqualTo(relative.resolve(key + ".json"));
     }
 
+    @Test
+    @DisplayName("A resolver keeping the exact basename but changing the parent is refused")
+    void entityFileRefusesTheSameBasenameInAnotherDirectory() {
+        Path table = tempDir.resolve("rows");
+        JsonFileNames.installResolver((directory, fileName) ->
+                directory.resolveSibling("other-rows").resolve(fileName));
+        try {
+            assertThat(catchThrowable(() -> JsonFileNames.entityFile(table, "same-name")))
+                    .isInstanceOf(InvalidPathException.class);
+        } finally {
+            JsonFileNames.resetResolver();
+        }
+    }
+
     // ===== Existing files are never renamed =====
 
     @Test

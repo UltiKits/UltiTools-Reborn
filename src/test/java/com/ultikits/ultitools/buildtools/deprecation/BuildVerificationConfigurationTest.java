@@ -373,7 +373,8 @@ class BuildVerificationConfigurationTest {
         Process process = new ProcessBuilder("python3", "-I", "-c", LIFECYCLE_PROBE,
                 Paths.get("").toAbsolutePath().toString(), temporary.toString(), scenario)
                 .redirectErrorStream(true).redirectOutput(output.toFile()).start();
-        boolean finished = process.waitFor(90, TimeUnit.SECONDS);
+        // Nested Maven/JVM fixtures share the build machine; allow load without an unbounded wait.
+        boolean finished = process.waitFor(300, TimeUnit.SECONDS);
         if (!finished) {
             process.destroyForcibly();
         }
