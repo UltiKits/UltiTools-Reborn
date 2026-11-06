@@ -385,13 +385,40 @@ def lookup(path, context):
     return "" if node is None else str(node)
 
 
+def split_expression(expression, operator):
+    """Split only at top-level operators, not inside parentheses or quoted literals."""
+    parts, start, depth, quoted = [], 0, 0, False
+    for index, char in enumerate(expression):
+        if char == "'":
+            quoted = not quoted
+        elif not quoted:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif depth == 0 and expression.startswith(operator, index):
+                parts.append(expression[start:index])
+                start = index + len(operator)
+        if depth < 0:
+            raise UnsupportedExpression("unbalanced parentheses in %r" % expression)
+    if depth or quoted:
+        raise UnsupportedExpression("unbalanced expression %r" % expression)
+    return parts + [expression[start:]]
+
+
 def evaluate(expression, context):
     expression = expression.strip()
     # GitHub evaluates && before || and short-circuits both operators.
-    if " || " in expression:
-        return any(evaluate(part, context) for part in expression.split(" || "))
-    if " && " in expression:
-        return all(evaluate(part, context) for part in expression.split(" && "))
+    parts = split_expression(expression, " || ")
+    if len(parts) > 1:
+        return any(evaluate(part, context) for part in parts)
+    parts = split_expression(expression, " && ")
+    if len(parts) > 1:
+        return all(evaluate(part, context) for part in parts)
+    if expression.startswith("(") and expression.endswith(")"):
+        return evaluate(expression[1:-1], context)
+    if expression == "!cancelled()":
+        return not context.get("cancelled", False)
     path_comparison = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_.-]*)\s*(==|!=)\s*([A-Za-z_][A-Za-z0-9_.-]*)", expression)
     if path_comparison:
         equal = lookup(path_comparison.group(1), context) == lookup(path_comparison.group(3), context)
@@ -2007,6 +2034,9 @@ if goals == ["deploy:deploy-file"]:
         shutil.copyfile(props[key], str(target))
     sys.exit(0)
 if goals == ["org.sonatype.central:central-publishing-maven-plugin:0.9.0:publish"]:
+    if os.environ.get("FAKE_CENTRAL_PUBLISH_FAIL") == "1":
+        sys.stderr.write("simulated Central publication failure\n")
+        sys.exit(1)
     real = [os.environ["REAL_MVN"], "-B", "-o", "-s", os.environ["EMPTY_SETTINGS"],
             "-Dmaven.repo.local=" + os.environ["MAVEN_LOCAL_REPO"], "-DcentralBaseUrl=https://127.0.0.1:9"] + args
     env = dict(os.environ)
@@ -2243,16 +2273,54 @@ class PublishWorkflowFixture(object):
                             "SONATYPE_PASSWORD": "fixture-password", "MAVEN_GPG_PASSPHRASE": "",
                             "MAVEN_GPG_PRIVATE_KEY": "fixture-key-material", "DOCS_REPO_TOKEN": "fixture-docs"},
                 "vars": dict(self.vars), "github": {"token": "fixture-github-token", "ref_name": TAG},
-                "needs": {"validate": {"outputs": {"version": version}}}}
+                # Individual-job tests assume successful dependencies; run_release supplies actual results.
+                "needs": {"validate": {"outputs": {"version": version}, "result": "success"},
+                          "publish-central": {"result": "success"}}}
 
-    def run(self, job_name, version=VERSION):
+    def run(self, job_name, version=VERSION, needs=None, cancelled=False):
         workflow = load_workflow(PUBLISH_WORKFLOW)
+        job = workflow["jobs"][job_name]
         runner = self.root / "runners" / job_name
         runner.mkdir()
-        result = run_job(workflow["jobs"][job_name], self.release.checkout, self.env(runner), self.context(version),
-                         runner, uses_handler=self.simulate_uses)
+        context = self.context(version)
+        context["cancelled"] = cancelled
+        if needs is not None:
+            context["needs"] = needs
+        # Actions implicitly applies success() unless the job condition has a status-check function.
+        condition = str(job.get("if", ""))
+        if needs is not None and "cancelled()" not in condition and any(
+                value["result"] != "success" for value in needs.values()):
+            result = JobResult()
+            result.status = "skipped"
+        else:
+            result = run_job(job, self.release.checkout, self.env(runner), context,
+                             runner, uses_handler=self.simulate_uses)
         result.runner = runner
         return result
+
+    def run_release(self, tag=TAG):
+        """Schedule the real workflow DAG with actual dependency outputs and job results."""
+        jobs = load_workflow(PUBLISH_WORKFLOW)["jobs"]
+        results = {}
+        self.extra_env["GITHUB_REF_NAME"] = tag
+
+        def visit(name):
+            if name in results:
+                return
+            dependencies = jobs[name].get("needs", [])
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+            needs = {}
+            for dependency in dependencies:
+                visit(dependency)
+                result = results[dependency]
+                needs[dependency] = {"result": result.status,
+                                     "outputs": job_outputs(jobs[dependency], result)}
+            results[name] = self.run(name, needs=needs)
+
+        for name in jobs:
+            visit(name)
+        return results
 
     def run_validate(self):
         workflow = load_workflow(PUBLISH_WORKFLOW)
@@ -2307,6 +2375,84 @@ class PublishWorkflowTests(unittest.TestCase):
         self.assertEqual(self.fixture.entries("mvn-forbidden"), [])
         for entry in self.fixture.entries("gh"):
             self.assertEqual(entry["argv"][:2], ["release", "download"], entry["argv"])
+
+    def test_central_failure_blocks_github_publication(self):
+        for label, setting in (("lookup", {"FAKE_CENTRAL_STATUS": "503"}),
+                               ("publish", {"FAKE_CENTRAL_PUBLISH_FAIL": "1"})):
+            with self.subTest(failure=label):
+                fixture = PublishWorkflowFixture(self.release, tempfile.mkdtemp(prefix="wf-fail-", dir=self.tmp))
+                self.fixture = fixture
+                fixture.extra_env.update(setting)
+                results = fixture.run_release()
+                self.assertEqual(results["publish-central"].status, "failure", results["publish-central"].log)
+                self.assertEqual(results["publish-github"].status, "skipped", results["publish-github"].log)
+                self.assertEqual(fixture.mvn_goal_calls("deploy:deploy-file"), [])
+                self.assertFalse((fixture.state / "ghp").exists())
+                self.assertFalse((fixture.state / "central-published").exists())
+                self.assert_no_lifecycle_build()
+                kill_agent(fixture.gnupg)
+
+    def test_central_success_precedes_github_publication(self):
+        results = self.fixture.run_release()
+        for name in ("validate", "publish-central", "publish-github"):
+            self.assertEqual(results[name].status, "success", results[name].log)
+        calls = self.fixture.entries("mvn")
+        central = self.fixture.mvn_goal_calls("org.sonatype.central:central-publishing-maven-plugin:0.9.0:publish")
+        github = self.fixture.mvn_goal_calls("deploy:deploy-file")
+        self.assertEqual(len(central), 1)
+        self.assertEqual(len(github), 1)
+        self.assertLess(calls.index(central[0]), calls.index(github[0]))
+        self.assertTrue((self.fixture.state / "central-published").is_dir())
+        self.assertTrue((self.fixture.state / "ghp").is_dir())
+        self.assert_no_lifecycle_build()
+
+    def test_disabled_central_preserves_github_only_publication(self):
+        # Keep Central's existing 'true' guard; false, unset and empty retain GitHub-only publishing.
+        for variables in ({"PUBLISH_TO_CENTRAL": "false"}, {}, {"PUBLISH_TO_CENTRAL": ""}):
+            with self.subTest(variables=variables):
+                fixture = PublishWorkflowFixture(self.release, tempfile.mkdtemp(prefix="wf-off-", dir=self.tmp))
+                self.fixture = fixture
+                fixture.vars = variables
+                results = fixture.run_release()
+                self.assertEqual(results["validate"].status, "success")
+                self.assertEqual(results["publish-central"].status, "skipped")
+                self.assertEqual(results["publish-github"].status, "success", results["publish-github"].log)
+                self.assertEqual(len(fixture.mvn_goal_calls("deploy:deploy-file")), 1)
+                self.assertFalse((fixture.state / "central-published").exists())
+                self.assertEqual(fixture.entries("real-mvn"), [])
+                self.assert_no_lifecycle_build()
+                kill_agent(fixture.gnupg)
+
+    def test_failed_validation_blocks_both_channels_even_with_central_disabled(self):
+        self.fixture.vars = {"PUBLISH_TO_CENTRAL": "false"}
+        results = self.fixture.run_release(tag="not-a-version")
+        self.assertEqual(results["validate"].status, "failure")
+        self.assertEqual(results["publish-central"].status, "skipped")
+        self.assertEqual(results["publish-github"].status, "skipped")
+        self.assertEqual(self.fixture.entries("mvn"), [])
+
+    def test_cancelled_release_does_not_start_github_publication(self):
+        result = self.fixture.run("publish-github", cancelled=True, needs={
+            "validate": {"result": "success", "outputs": {"version": VERSION}},
+            "publish-central": {"result": "success"}})
+        self.assertEqual(result.status, "skipped", result.log)
+        self.assertEqual(self.fixture.entries("mvn"), [])
+
+    def test_enabled_central_must_succeed_not_merely_finish(self):
+        for status in ("skipped", "cancelled"):
+            with self.subTest(central=status):
+                fixture = PublishWorkflowFixture(self.release, tempfile.mkdtemp(prefix="wf-status-", dir=self.tmp))
+                self.fixture = fixture
+                result = fixture.run("publish-github", needs={
+                    "validate": {"result": "success", "outputs": {"version": VERSION}},
+                    "publish-central": {"result": status}})
+                self.assertEqual(result.status, "skipped", result.log)
+                self.assertEqual(fixture.entries("mvn"), [])
+                kill_agent(fixture.gnupg)
+
+    def test_github_job_explicitly_depends_on_central(self):
+        job = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-github"]
+        self.assertEqual(job["needs"], ["validate", "publish-central"])
 
     def test_gpg_home_is_exported_only_after_setup_java_imports_key(self):
         runner = self.fixture.root / "runners" / "home-export"

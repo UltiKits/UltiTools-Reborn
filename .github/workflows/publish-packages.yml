@@ -41,7 +41,12 @@ jobs:
     name: 📦 GitHub Packages
     timeout-minutes: 20
     runs-on: ubuntu-latest
-    needs: validate
+    # Central must succeed before GitHub Packages publishes when Central is enabled.
+    # When PUBLISH_TO_CENTRAL is not 'true' (false, unset or empty), keep GitHub-only publication.
+    # A status check avoids Actions' implicit success() skipping this job for that disabled dependency;
+    # validation must still succeed, and cancellation must never start a new publication.
+    needs: [validate, publish-central]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (needs.publish-central.result == 'success' || vars.PUBLISH_TO_CENTRAL != 'true') }}
     permissions:
       # contents: read -- the job only downloads the retained assets of the published release.
       contents: read
