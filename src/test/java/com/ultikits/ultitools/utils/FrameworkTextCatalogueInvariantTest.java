@@ -169,7 +169,7 @@ class FrameworkTextCatalogueInvariantTest {
         Map<String, String> misused = holderMisuses(sources, holderConstants);
         List<String> violations = new ArrayList<>();
         for (JavaLiteralScanner.Literal literal : literals) {
-            if (isTranslated(literal) || KEYS_VIA_VARIABLE.contains(literal.value)
+            if (isTranslated(literal) || isVariableKeySite(literal)
                     || exemptionFor(literal) != null) {
                 continue;
             }
@@ -254,12 +254,39 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     private static boolean isTranslated(JavaLiteralScanner.Literal literal) {
-        if (literal.callName == null) {
+        if (literal.characterLiteral || !literal.wholeArgument || literal.callName == null) {
             return false;
         }
-        return TRANSLATORS.contains(literal.callName)
-                || (HELPER.equals(literal.receiver)
-                        && ("text".equals(literal.callName) || "format".equals(literal.callName)));
+        if (isHelperCall(literal)) {
+            return true;
+        }
+        if (!TRANSLATORS.contains(literal.callName)) {
+            return false;
+        }
+        if ("i18n".equals(literal.callName) && "UltiTools.getInstance()".equals(literal.receiver)) {
+            return true;
+        }
+        // Only these declaring classes own implicit translator calls in the framework today.
+        return literal.receiver == null && (("i18n".equals(literal.callName)
+                && "UltiTools".equals(literal.enclosingType)
+                && "com/ultikits/ultitools/UltiTools.java".equals(literal.file))
+                || ("localize".equals(literal.callName) && "DataStoreManager".equals(literal.enclosingType)
+                && "com/ultikits/ultitools/manager/DataStoreManager.java".equals(literal.file)));
+    }
+
+    private static boolean isVariableKeySite(JavaLiteralScanner.Literal literal) {
+        if (!KEYS_VIA_VARIABLE.contains(literal.value) || literal.characterLiteral) {
+            return false;
+        }
+        if ("com/ultikits/ultitools/commands/UltiToolsCommands.java".equals(literal.file)) {
+            return "UltiToolsCommands".equals(literal.enclosingType) && "help".equals(literal.site)
+                    && literal.value.equals(KEYS_VIA_VARIABLE.get(6));
+        }
+        int button = KEYS_VIA_VARIABLE.indexOf(literal.value);
+        List<String> names = Arrays.asList("PREVIOUS", "NEXT", "BACK", "QUIT", "OK", "CANCEL");
+        return "com/ultikits/ultitools/entities/Buttons.java".equals(literal.file)
+                && "Buttons".equals(literal.enclosingType) && button < names.size()
+                && names.get(button).equals(literal.site) && literal.wholeArgument;
     }
 
     private static boolean isHelperCall(JavaLiteralScanner.Literal literal) {
@@ -312,8 +339,8 @@ class FrameworkTextCatalogueInvariantTest {
         JsonObject en = catalogue("en");
         JsonObject zh = catalogue("zh");
         for (String key : KEYS_VIA_VARIABLE) {
-            assertThat(literals.stream().anyMatch(l -> l.value.equals(key)))
-                    .as("listed key is still in the source: %s", key).isTrue();
+            assertThat(literals.stream().filter(l -> l.value.equals(key) && isVariableKeySite(l)).count())
+                    .as("exactly one authorized declaration site remains for %s", key).isEqualTo(1);
             assertThat(en.has(key)).as("en.json has %s", key).isTrue();
             assertThat(zh.has(key)).as("zh.json has %s", key).isTrue();
         }
@@ -357,6 +384,55 @@ class FrameworkTextCatalogueInvariantTest {
             }
         }
         assertThat(mismatched).isEmpty();
+    }
+
+    /** Legacy keys predate source-text format specifiers; never rename those public lookup keys. */
+    private static Map<String, List<String>> legacyFormatSignatures() {
+        Map<String, List<String>> signatures = new LinkedHashMap<>();
+        signatures.put("参数错误", Arrays.asList("%s", "%s", "%s"));
+        signatures.put("缺少参数", Arrays.asList("%s", "%s", "%s"));
+        signatures.put("指令正确用法", Arrays.asList("%s", "%s"));
+        signatures.put("需要权限", Arrays.asList("%s"));
+        return signatures;
+    }
+
+    private static List<String> expectedFormatSignature(String key) {
+        Map<String, List<String>> legacy = legacyFormatSignatures();
+        return legacy.containsKey(key) ? legacy.get(key) : formatSignature(key);
+    }
+
+    private static List<String> formatSignature(String value) {
+        return placeholders(Pattern.compile("%(?:\\d+\\$)?[-#+ 0,(]*\\d*(?:\\.\\d+)?[a-zA-Z]"), value);
+    }
+
+    @Test
+    void legacyTranslationsKeepTheirExplicitFormatSignatures() throws IOException {
+        for (String code : Arrays.asList("en", "zh")) {
+            JsonObject translations = catalogue(code);
+            for (Map.Entry<String, List<String>> entry : legacyFormatSignatures().entrySet()) {
+                assertThat(formatSignature(entry.getKey())).as("legacy source key has no placeholders").isEmpty();
+                assertThat(translations.has(entry.getKey())).isTrue();
+                assertThat(formatSignature(translations.get(entry.getKey()).getAsString()))
+                        .as("%s legacy format signature: %s", code, entry.getKey()).isEqualTo(entry.getValue());
+            }
+            String ordinary = "操作频繁，请 %d 秒后再试";
+            assertThat(formatSignature(translations.get(ordinary).getAsString()))
+                    .isEqualTo(expectedFormatSignature(ordinary)).containsExactly("%d");
+        }
+    }
+
+    @Test
+    void legacySignatureOverridesRejectDroppedAddedChangedAndReindexedPlaceholders() {
+        for (Map.Entry<String, List<String>> entry : legacyFormatSignatures().entrySet()) {
+            String correct = String.join(" ", entry.getValue());
+            assertThat(formatSignature(correct)).isEqualTo(expectedFormatSignature(entry.getKey()));
+            assertThat(formatSignature(correct.substring(2))).isNotEqualTo(expectedFormatSignature(entry.getKey()));
+            assertThat(formatSignature(correct + " %s")).isNotEqualTo(expectedFormatSignature(entry.getKey()));
+            assertThat(formatSignature(correct.replaceFirst("%s", "%d")))
+                    .isNotEqualTo(expectedFormatSignature(entry.getKey()));
+            assertThat(formatSignature(correct.replaceFirst("%s", "%2\\$s")))
+                    .isNotEqualTo(expectedFormatSignature(entry.getKey()));
+        }
     }
 
     private static List<String> placeholders(Pattern spec, String text) {
@@ -480,21 +556,54 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     @Test
-    @DisplayName("fixture: direct translator calls and listed keys stay accepted; a raw literal stays a violation")
+    @DisplayName("fixture: genuine direct translator calls stay accepted; a raw literal stays a violation")
     void existingRulesAreUnchanged() {
         String source = String.join("\n",
                 "class Plain {",
                 "    void use() {",
-                "        i18n(\"夹具键：直接翻译\");",
+                "        UltiTools.getInstance().i18n(\"夹具键：直接翻译\");",
                 "        FrameworkText.format(\"夹具键：直接翻译\", 1);",
-                "        String back = \"上一页\";",
                 "        player.sendMessage(\"夹具：原样发给玩家\");",
                 "    }",
                 "}");
         Map<String, String> sources = new LinkedHashMap<>();
         sources.put("fixture/Plain.java", source);
         assertThat(findViolations(sources, fixtureCatalogue(false), fixtureCatalogue(true)))
-                .containsExactly("fixture/Plain.java:6 \"夹具：原样发给玩家\"");
+                .containsExactly("fixture/Plain.java:5 \"夹具：原样发给玩家\"");
+    }
+
+    @Test
+    void cjkCharacterLiteralsCannotBypassTheCatalogue() {
+        assertThat(plainViolations("player.sendMessage('中');")).hasSize(1);
+        assertThat(plainViolations("char c = '\\u4e2d';")).hasSize(1);
+        assertThat(plainViolations("char c = 'x';")).isEmpty();
+    }
+
+    @Test
+    void variableKeyExemptionsAreBoundToTheirDeclarationSite() {
+        assertThat(plainViolations("player.sendMessage(\"上一页\");")).hasSize(1);
+        assertThat(plainViolations("String raw = \"取消\";")).hasSize(1);
+    }
+
+    @Test
+    void unrelatedTranslatorNamesDoNotExemptRawText() {
+        assertThat(plainViolations("other.i18n(\"夹具键：直接翻译\");")).hasSize(1);
+        assertThat(plainViolations("other.localize(\"夹具键：直接翻译\");")).hasSize(1);
+        assertThat(plainViolations("i18n(\"夹具键：直接翻译\");")).hasSize(1);
+        assertThat(plainViolations("UltiTools.getInstance().i18n(\"夹具键：直接翻译\");")).isEmpty();
+    }
+
+    @Test
+    void translatorFirstArgumentMustBeAWholeLiteral() {
+        assertThat(plainViolations("UltiTools.getInstance().i18n(\"夹具键：直接翻译\" + suffix);")).hasSize(1);
+        assertThat(plainViolations("FrameworkText.format(\"夹具键：直接翻译\" + suffix, 1);")).hasSize(1);
+        assertThat(plainViolations("FrameworkText.text(\"夹具键：直接翻译\" /* comment */);")).isEmpty();
+    }
+
+    private static List<String> plainViolations(String statement) {
+        Map<String, String> sources = new LinkedHashMap<>();
+        sources.put("fixture/Plain.java", "class Plain { void use() { " + statement + " } }");
+        return findViolations(sources, fixtureCatalogue(false), fixtureCatalogue(true));
     }
 
     // ---- controls for the scanner itself ----
@@ -518,7 +627,9 @@ class FrameworkTextCatalogueInvariantTest {
                 "}");
         Map<String, JavaLiteralScanner.Literal> byValue = new LinkedHashMap<>();
         for (JavaLiteralScanner.Literal literal : JavaLiteralScanner.scan("X.java", source)) {
-            byValue.put(literal.value, literal);
+            if (!literal.characterLiteral) {
+                byValue.put(literal.value, literal);
+            }
         }
         assertThat(byValue.keySet()).containsExactly(
                 "多行调用", "前半", "后半", "已翻译", "格式 %s", "带引号的\"中文");

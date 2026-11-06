@@ -2865,6 +2865,22 @@ its meaning.
   logged meanwhile can arrive before the last replay messages. The buffer applies the stream's
   filters as records arrive and is released without sending anything when there is no cloud login
   or when its time is up; with the `logs` capability off it is not attached and keeps nothing.
+- **Known limitations of custom logging, reloads and source format strings** (#571):
+  - Custom logging formatters and log-parameter `toString()` implementations must not write another
+    eligible root log record each time a buffered record is rendered. Doing so can feed the start-up
+    replay continuously and prevent it from finishing. Keep formatting side-effect free; remove or
+    correct a recursively logging formatter or parameter implementation rather than relying on the
+    log stream to stop that recursion.
+  - Bukkit `/reload` is unsupported. If an old plugin class loader remains reachable after such a
+    reload, its audit/scan logger bridges can remain attached and duplicate diagnostic lines. Use a
+    full server stop and start after changing plugin JARs. `/ul reload` reloads module configuration;
+    it is not Bukkit `/reload` and does not replace plugin JARs.
+  - `FrameworkText.format(key, args)` requires a valid source format string and matching arguments.
+    An invalid translation falls back to formatting the source key, but an invalid source format or
+    incompatible arguments can still throw `IllegalFormatException`. Module authors must validate
+    their source format and argument types; operators should report an offending module rather than
+    expect a language-file edit to repair an invalid source call. This is not a second fallback that
+    silently drops the arguments.
 - **Panel log delivery is best effort; the server's `latest.log` is authoritative** (#583, #571).
   The stream is a convenience copy of the console, not a record of it. Two known gaps in 6.3.0: if
   the panel connection drops while the start-up replay above is still sending, the replay entries

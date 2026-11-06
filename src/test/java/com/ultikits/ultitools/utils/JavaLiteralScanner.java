@@ -6,7 +6,7 @@ import java.util.Deque;
 import java.util.List;
 
 /**
- * A small Java-aware scanner that lists every string literal of a source file together with the
+ * A small Java-aware scanner that lists every string and character literal of a source file together with the
  * call it is the direct first argument of, if any. Used by the catalogue invariant (#556), which
  * must not be a same-line grep: a literal in a multi-line call or in a concatenation has to be seen
  * exactly as the compiler sees it, and text inside comments must be ignored.
@@ -181,11 +181,19 @@ final class JavaLiteralScanner {
     }
 
     private void skipCharLiteral() {
+        int startLine = line;
         pos++;
+        StringBuilder value = new StringBuilder();
         while (pos < source.length() && source.charAt(pos) != '\'') {
-            pos += source.charAt(pos) == '\\' ? 2 : 1;
+            if (source.charAt(pos) == '\\') {
+                readEscape(value);
+            } else {
+                value.append(source.charAt(pos++));
+            }
         }
         pos++;
+        found.add(new Literal(file, startLine, value.toString(), null, null, null, currentScope(),
+                false, null, true));
         addToken("'");
     }
 
@@ -212,8 +220,19 @@ final class JavaLiteralScanner {
                 receiver = tokens.get(size - 4);
             }
         }
+        if (size >= 8 && tokens.subList(size - 8, size - 2).equals(
+                java.util.Arrays.asList("UltiTools", ".", "getInstance", "(", ")", "."))) {
+            receiver = "UltiTools.getInstance()";
+        }
+        // An arbitrary expression receiver (foo().i18n) must not look like an implicit call.
+        if (receiver == null && size >= 3 && ".".equals(tokens.get(size - 3))) {
+            receiver = "<expression>";
+        }
+        char next = nextSignificantChar();
+        String site = size >= 2 && "=".equals(tokens.get(size - 1)) && next == ';'
+                ? tokens.get(size - 2) : callName;
         found.add(new Literal(file, startLine, value, callName, receiver, constantNameBeforeLiteral(),
-                currentScope()));
+                currentScope(), next == ')' || next == ',', site, false));
         addToken("\"");
     }
 
@@ -292,8 +311,14 @@ final class JavaLiteralScanner {
         /** Innermost named type whose body encloses this literal, or {@code null} at top level. */
         final String enclosingType;
 
+        /** A literal alone, rather than a concatenation or receiver expression, is the whole argument. */
+        final boolean wholeArgument;
+        /** Assigned variable or constructor/call name at this exact occurrence. */
+        final String site;
+        final boolean characterLiteral;
+
         Literal(String file, int line, String value, String callName, String receiver, String constantName,
-                String enclosingType) {
+                String enclosingType, boolean wholeArgument, String site, boolean characterLiteral) {
             this.file = file;
             this.line = line;
             this.value = value;
@@ -301,6 +326,9 @@ final class JavaLiteralScanner {
             this.receiver = receiver;
             this.constantName = constantName;
             this.enclosingType = enclosingType;
+            this.wholeArgument = wholeArgument;
+            this.site = site;
+            this.characterLiteral = characterLiteral;
         }
 
         @Override
