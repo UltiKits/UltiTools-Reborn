@@ -135,7 +135,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * when the module's reload hook recorded parts that did not reload in its {@link ReloadReport}
      * (#529). Package-private for the same catalogue-coverage test as that key.
      */
-    static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module '%s' reloaded partially; not reloaded: %s";
+    static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module %s reloaded partially; not reloaded: %s";
     /**
      * The partial reason in the report {@link #reloadWithReport()} returns when the call was
      * refused because it was made off the server thread (#538). Not an i18n key: nothing
