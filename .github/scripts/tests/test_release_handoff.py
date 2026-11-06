@@ -729,6 +729,105 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertFalse(self.retain.exists())
 
 
+class ReleaseDocumentationTests(unittest.TestCase):
+
+    def test_help_explains_prerelease_does_not_prevent_permanent_central_publication(self):
+        result = subprocess.run([BASH, str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assertIn("--prerelease only labels the GitHub release", result.stdout.decode())
+        self.assertIn("permanent Maven Central publication", result.stdout.decode())
+
+    def test_release_documentation_explains_prerelease_and_automatic_notes_limits(self):
+        document = (REPO_ROOT / "PROJECT.md").read_text().split("## CI\n", 1)[1].split("## Scope Boundaries", 1)[0]
+        self.assertIn("`--prerelease` only labels the GitHub release", document)
+        self.assertIn("permanent Maven Central publication", document)
+        self.assertIn("most recent 50 commits", document)
+        self.assertIn("10 commits when no tag exists", document)
+        self.assertIn("`--notes-file`", document)
+
+
+class ReleaseNotesTests(HandoffTestCase):
+
+    def publish_history(self, count, tagged=True, *notes_options):
+        # The fixture already has one commit after its prior-release tag.
+        for index in range(1, count):
+            self.fx.git_raw("commit", "--allow-empty", "-qm", "change %d" % index)
+        if not tagged:
+            self.fx.git_raw("tag", "-d", "v" + PRIOR)
+            self.fx.git_raw("--git-dir", str(self.fx.origin), "tag", "-d", "v" + PRIOR)
+        self.fx.git_raw("push", "-q", "origin", "main")
+        # Compute the uncapped control before prepare/publication can create a tag.
+        log_range = ["v" + PRIOR + "..HEAD"] if tagged else []
+        history = self.fx.git_raw("log", *log_range, "--pretty=format:- %s (%h)").splitlines()
+        if not tagged:
+            # A retained release requires a prior formal tag. Exercise the existing no-tag
+            # notes fallback directly, without weakening that unrelated publication guard.
+            body = RELEASE_SH.read_text().split("resolve_notes() {", 1)[1].split("\n}\n", 1)[0]
+            command = "resolve_notes() {" + body + "\n}\nNOTES=''\nNOTES_FILE=''\nresolve_notes\nprintf '%s' \"$NOTES\""
+            result = subprocess.run([BASH, "-ec", command], cwd=str(self.fx.work), env=self.fx.env,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assert_no_build()
+            self.assertEqual(self.fx.gh_writes(), [])
+            return result.stdout.decode(), history
+        manifest = self.prepared()
+        authority, uat = self.fx.write_receipts(manifest)
+        self.fx.log.write_text("")
+        # HandoffTestCase.publish injects --notes, so deliberately bypass it here.
+        result = self.fx.run_release("--publish-approved", str(manifest), "--authority-receipt", str(authority),
+                                     "--uat-receipt", str(uat), "--yes", *notes_options,
+                                     env={"FAKE_MVN_FORBID": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assert_no_build()
+        notes = self.fx.gh_state_data()["releases"][TAG]["notes"]
+        return notes, history
+
+    def test_automatic_notes_mark_truncation_after_fifty_commits(self):
+        notes, history = self.publish_history(51)
+        self.assertEqual(len(history), 51)
+        self.assertEqual([line for line in notes.splitlines() if line.startswith("- ")], history[:50])
+        self.assertIn("Release notes truncated to the most recent 50 commits", notes)
+        self.assertIn("use --notes-file for complete release notes", notes)
+        self.assertNotIn(history[50], notes)
+
+    def test_exactly_fifty_commits_are_not_marked_truncated(self):
+        notes, history = self.publish_history(50)
+        self.assertEqual(len(history), 50)
+        self.assertEqual(notes, "\n".join(history))
+
+    def test_short_history_is_not_marked_truncated(self):
+        notes, history = self.publish_history(3)
+        self.assertEqual(len(history), 3)
+        self.assertEqual(notes, "\n".join(history))
+
+    def test_untagged_history_marks_truncation_after_ten_commits(self):
+        notes, history = self.publish_history(10, False)
+        # Untagged history also includes the fixture's initial release commit.
+        self.assertEqual(len(history), 11)
+        self.assertEqual([line for line in notes.splitlines() if line.startswith("- ")], history[:10])
+        self.assertIn("Release notes truncated to the most recent 10 commits", notes)
+        self.assertIn("use --notes-file for complete release notes", notes)
+
+    def test_exactly_ten_untagged_commits_are_not_marked_truncated(self):
+        notes, history = self.publish_history(9, False)
+        self.assertEqual(len(history), 10)
+        self.assertEqual(notes, "\n".join(history))
+
+    def test_explicit_notes_are_not_changed_or_marked_truncated(self):
+        original = "Curated release notes.\n\n- Keep this exact formatting."
+        notes, _ = self.publish_history(51, True, "--notes", original)
+        self.assertEqual(notes, original)
+
+    def test_notes_file_is_not_changed_or_marked_truncated(self):
+        original = "Curated notes from a file.\n\n- Keep this exact formatting."
+        path = self.fx.root / "notes.txt"
+        path.write_text(original)
+        notes, _ = self.publish_history(51, True, "--notes-file", str(path))
+        self.assertEqual(notes, original)
+        self.assertEqual(path.read_text(), original)
+
+
 def rewrite_manifest(path, mutate):
     """Rewrite a retained manifest canonically after applying mutate(data)."""
     path = Path(path)

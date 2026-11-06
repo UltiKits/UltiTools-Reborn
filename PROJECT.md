@@ -99,6 +99,14 @@ After independent acceptance and the maintainer's decision, `--publish-approved 
 rebuilding. `publish-packages.yml` consumes the attached assets on `release: published`; it does not
 compile a replacement artifact. There is no `workflow_dispatch` release workflow.
 
+**Warning: `--prerelease` only labels the GitHub release. It does not prevent permanent Maven Central publication
+when Central publishing is enabled. Published coordinates cannot be overwritten or deleted; this is not a dry run.**
+
+Without explicit notes, the script uses the most recent 50 commits since the nearest tag, or
+10 commits when no tag exists, and marks the notes when that limit truncates the history.
+Use `--notes-file` for complete, curated release notes. Explicit `--notes` and `--notes-file`
+content does not receive an automatic truncation notice.
+
 The framework release retains accepted bytes — **get maintainer sign-off before
 changing `publish-packages.yml` or `.github/scripts/release.sh`.** Verification-only changes to
 `maven-ci.yml` are made routinely.
