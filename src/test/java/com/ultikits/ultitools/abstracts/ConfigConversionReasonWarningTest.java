@@ -89,13 +89,15 @@ class ConfigConversionReasonWarningTest {
 
     private List<String> loadWarnings(String yaml) throws IOException {
         // Supply every fixture key: missing-key insertion is unrelated to diagnostic rendering.
-        if (!yaml.startsWith("title:") && !yaml.contains("\ntitle:")) { yaml += "title: default\n"; }
-        if (!yaml.startsWith("labels:") && !yaml.contains("\nlabels:")) { yaml += "labels: {}\n"; }
-        if (!yaml.startsWith("limits:") && !yaml.contains("\nlimits:")) { yaml += "limits: {}\n"; }
-        if (!yaml.startsWith("auth-label:") && !yaml.contains("\nauth-label:")) { yaml += "auth-label: hidden\n"; }
+        String completeYaml = yaml;
+        String[] defaults = {"title: default\n", "labels: {}\n", "limits: {}\n", "auth-label: hidden\n"};
+        for (String entry : defaults) {
+            String key = entry.substring(0, entry.indexOf(':') + 1);
+            if (!completeYaml.startsWith(key) && !completeYaml.contains("\n" + key)) { completeYaml += entry; }
+        }
         Path file = tempDir.resolve(PATH);
         Files.createDirectories(file.getParent());
-        Files.write(file, yaml.getBytes(StandardCharsets.UTF_8));
+        Files.write(file, completeYaml.getBytes(StandardCharsets.UTF_8));
         try (MockedStatic<PackageScanUtils> scanner = mockStatic(PackageScanUtils.class)) {
             scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(any(), anyString(), any()))
                     .thenAnswer(call -> {
@@ -108,7 +110,7 @@ class ConfigConversionReasonWarningTest {
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
             loaded = new Values(PATH);
             loaded.init(plugin);
-            assertThat(Files.readAllBytes(file)).isEqualTo(yaml.getBytes(StandardCharsets.UTF_8));
+            assertThat(Files.readAllBytes(file)).isEqualTo(completeYaml.getBytes(StandardCharsets.UTF_8));
             return warnings.messages();
         }
     }
