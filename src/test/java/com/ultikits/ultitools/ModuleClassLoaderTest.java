@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -103,6 +104,38 @@ class ModuleClassLoaderTest {
             assertThat(defined.get()).as("bytes immediately before the actual defineClass").isNotNull();
             assertThat(sha256(defined.get())).isEqualTo(sha256(original));
             assertThat(loader.loadClass("fixture.Plain").getClassLoader()).isSameAs(loader);
+        }
+    }
+
+    @Test
+    void replacedJar_keepsLazyClassesFromTheOriginalJar() throws Exception {
+        Path jar = jar("original.jar", null, entries("fixture/A.class", type("fixture.A", "old-A"),
+                "fixture/B.class", type("fixture.B", "old-B")));
+        Path replacement = jar("replacement.jar", null, entries("fixture/A.class", type("fixture.A", "new-A"),
+                "fixture/B.class", type("fixture.B", "new-B")));
+        try (URLClassLoader baseline = new URLClassLoader(new URL[]{jar.toUri().toURL()}, null);
+                URLClassLoader loader = loader(jar)) {
+            assertThat(value(baseline.loadClass("fixture.A"))).isEqualTo("old-A");
+            assertThat(value(loader.loadClass("fixture.A"))).isEqualTo("old-A");
+            Files.move(replacement, jar, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            String expected = value(baseline.loadClass("fixture.B"));
+            assertThat(expected).as("plain URLClassLoader keeps the already-open JAR").isEqualTo("old-B");
+            assertThat(value(loader.loadClass("fixture.B"))).isEqualTo(expected);
+        }
+    }
+
+    @Test
+    void deletedJar_keepsLazyClassesFromTheOriginalJar() throws Exception {
+        Path jar = jar("deleted.jar", null, entries("fixture/A.class", type("fixture.A", "old-A"),
+                "fixture/B.class", type("fixture.B", "old-B")));
+        try (URLClassLoader baseline = new URLClassLoader(new URL[]{jar.toUri().toURL()}, null);
+                URLClassLoader loader = loader(jar)) {
+            assertThat(value(baseline.loadClass("fixture.A"))).isEqualTo("old-A");
+            assertThat(value(loader.loadClass("fixture.A"))).isEqualTo("old-A");
+            Files.delete(jar);
+            String expected = value(baseline.loadClass("fixture.B"));
+            assertThat(expected).as("plain URLClassLoader keeps the already-open JAR").isEqualTo("old-B");
+            assertThat(value(loader.loadClass("fixture.B"))).isEqualTo(expected);
         }
     }
 
