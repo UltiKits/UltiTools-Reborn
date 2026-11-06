@@ -101,8 +101,8 @@ class ModuleScanDiagnosticsTest {
         String message = severe.get(0).getMessage();
         assertTrue(message.contains(moduleName), "the SEVERE message must name the module: " + message);
         assertTrue(message.contains(className), "the SEVERE message must name the skipped class: " + message);
-        assertTrue(message.contains("COMPATIBILITY.md"),
-                "the SEVERE message must point at COMPATIBILITY.md: " + message);
+        assertTrue(message.contains("https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md"),
+                "the SEVERE message must point at a resolvable compatibility URL: " + message);
     }
 
     @Test
