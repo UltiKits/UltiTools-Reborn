@@ -2129,14 +2129,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private InputStream getInputStream() throws IOException {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
-        String path = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
-        try {
-            URL url = new java.net.URI("jar:file:" + path + "!/plugin.yml").toURL();
-            JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-            return jarConnection.getInputStream();
-        } catch (java.net.URISyntaxException e) {
-            throw new IOException("Invalid URL format", e);
-        }
+        URL fileUrl = CodeSourceLocations.toFile(jar).toURI().toURL();
+        URL url = new URL("jar:" + fileUrl.toExternalForm() + "!/plugin.yml");
+        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
+        return jarConnection.getInputStream();
     }
 
     /**
@@ -2150,9 +2146,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         try {
             CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
             if (src != null && src.getLocation() != null) {
-                String path = src.getLocation().getPath();
-                int slash = path.lastIndexOf('/');
-                return slash >= 0 ? path.substring(slash + 1) : path;
+                return CodeSourceLocations.toFile(src.getLocation()).getName();
             }
         } catch (Exception ignored) {
             // Best effort only - fall through to the class-name fallback below.
