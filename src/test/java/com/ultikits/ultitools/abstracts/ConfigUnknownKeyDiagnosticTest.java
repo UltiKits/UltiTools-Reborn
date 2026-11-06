@@ -366,8 +366,12 @@ class ConfigUnknownKeyDiagnosticTest {
             @Override public void publish(LogRecord record) {
                 if (record.getMessage().contains(DIAGNOSTIC)) { records.add(record); }
             }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() {
+                // Records are stored in memory; there is no buffered output to flush.
+            }
+            @Override public void close() {
+                // This handler owns no resources; the enclosing finally removes it from the logger.
+            }
         };
         logger.addHandler(handler);
         try {
