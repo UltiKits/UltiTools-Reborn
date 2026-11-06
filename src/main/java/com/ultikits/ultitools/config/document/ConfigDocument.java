@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.config.document;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.Reader;
 import java.io.StringReader;
 import java.io.StringWriter;
@@ -182,17 +184,39 @@ public final class ConfigDocument {
 
     static ConfigLoadResult load(Path file, AtomicConfigWriter.FileOperations files) {
         synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
-            return loadLocked(file, files);
+            return loadLocked(file, files, true);
         }
     }
 
-    private static ConfigLoadResult loadLocked(Path file, AtomicConfigWriter.FileOperations files) {
-        AtomicConfigWriter.deleteStaleTemporaries(file);
+    /** Read-only opt-in gate load: no stale-temp scan, backup cleanup or final-link traversal. */
+    static ConfigLoadResult loadForStrictWrite(Path file) {
+        synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+            return loadLocked(file, AtomicConfigWriter.FILES_FOR_LOAD, false);
+        }
+    }
+
+    /** Strict UTF-8 decoding remains in loadLocked; this read itself never follows a final symlink. */
+    static byte[] readForStrictWrite(Path file) throws IOException {
+        try (InputStream input = java.nio.file.Files.newInputStream(file, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private static ConfigLoadResult loadLocked(Path file, AtomicConfigWriter.FileOperations files, boolean maintenance) {
+        if (maintenance) {
+            AtomicConfigWriter.deleteStaleTemporaries(file);
+        }
         byte[] bytes;
         Path destination;
         try {
-            destination = AtomicConfigWriter.resolve(file);
-            bytes = files.read(destination);
+            destination = maintenance ? AtomicConfigWriter.resolve(file) : file;
+            bytes = maintenance ? files.read(destination) : readForStrictWrite(destination);
         } catch (NoSuchFileException e) {
             return ConfigLoadResult.absent(file);
         } catch (IOException e) {
@@ -204,7 +228,9 @@ public final class ConfigDocument {
             ConfigLoadResult loaded = ConfigLoadResult.loaded(file, parse(StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(bytes)).toString()), sha256(bytes));
-            AtomicConfigWriter.deleteBackupAfterLoad(destination, files);
+            if (maintenance) {
+                AtomicConfigWriter.deleteBackupAfterLoad(destination, files);
+            }
             return loaded;
         } catch (CharacterCodingException e) {
             return ConfigLoadResult.unparseable(file, "Config file is not valid UTF-8: " + e.getMessage());

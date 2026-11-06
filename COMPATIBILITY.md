@@ -1079,7 +1079,8 @@ A file whose own put-back failed is left as the SEVERE describes, with its frame
 it again, and its configuration refuses every write until the operator compares the two and reloads.
 Recovery errors are attached as suppressed exceptions; persistently unavailable storage can prevent
 restoration and is not falsely reported as a successful rollback. Semantic no-ops write nothing.
-This is not a crash-safe multi-file transaction: a JVM crash between moves remains deferred to #545.
+This is not a crash-safe multi-file transaction: a JVM crash between moves can leave a partial batch.
+The single-file opt-in helper added for #545 in 6.4.0 does not change this limitation or the panel's writer.
 The panel message shape and public `loadFromJson` signatures are unchanged. Internal staged-entity
 coordination bridges are not a module transaction API.
 
@@ -1093,8 +1094,85 @@ Object>)` writes only the named whole keys (a key containing `.` is one key), th
 only while the file still holds the snapshot's bytes, and returns `WRITTEN`, `UNCHANGED`, `FILE_CHANGED` or `REFUSED`
 (a layout the gate cannot keep byte for byte, or anchors, with one WARNING naming the file, the keys and the reason).
 Values must be plain data - serialize an `ItemStack` first; anything else throws `IllegalArgumentException` before
-the file is touched. It never creates, deletes or renames a file, is not a general file API (UltiKits/UltiTools-Reborn#545
-stays a later feature), and is not for `@ConfigEntity` files, which keep their own save rules.
+the file is touched. It never creates, deletes or renames a file and is not for `@ConfigEntity` files, which keep
+their own save rules. Its publication, live-link handling and backed in-place fallback are unchanged by the separate
+6.4.0 opt-in API below.
+
+### Strict single-file module YAML publication (6.4.0, opt-in)
+
+`com.ultikits.ultitools.config.CrashSafeYamlFiles` is an additive, YAML-only helper for a module's **explicit operator
+create/edit action** (#545). It does not automatically migrate any module, `OperatorFiles.write`, `@ConfigEntity`,
+framework state or credential file. It is not an arbitrary byte writer, a whole-file overwrite API, a repair tool,
+a delete/rename API or a multi-file transaction.
+
+```java
+OperatorFiles.Snapshot snapshot = OperatorFiles.read(kitFile);
+OperatorFiles.WriteResult edited = CrashSafeYamlFiles.write(snapshot,
+        Collections.singletonMap(Collections.singletonList("items"), serializedItems));
+// Or, for an explicit create action (the parent directory already exists):
+OperatorFiles.WriteResult created = CrashSafeYamlFiles.create(newKitFile,
+        Collections.singletonMap("items", serializedItems));
+// A module updates live state only after WRITTEN (or UNCHANGED for an edit).
+```
+
+- `write(OperatorFiles.Snapshot, Map<List<String>, Object>) throws IOException` owns only the named complete key
+  paths. It reuses the config gate's plain-data validation, snapshot fingerprint, parse/render/reparse checks and
+  exact unowned-byte protection (comments, unknown keys, BOM and line endings included). A later operator save is
+  `FILE_CHANGED`; malformed, anchored or unpreservable YAML is `REFUSED`, never repaired. A missing target is
+  `FILE_CHANGED`, not recreated. An empty edit and a semantic no-op are `UNCHANGED` without staging or metadata changes.
+- `create(File, Map<String, Object>) throws IOException` validates and copies the complete plain-data root map.
+  Keys containing dots are literal keys, null values are valid, and an empty map is a valid creation. Any existing
+  entry, including a directory or dangling symlink, is `FILE_CHANGED` even with identical bytes. It never claims an
+  empty final path and then fills it. It returns `WRITTEN`, `FILE_CHANGED` or `REFUSED`, never `UNCHANGED`.
+- Both methods copy and validate arguments before I/O. Null arguments/keys, invalid write paths and non-plain values
+  throw `IllegalArgumentException`; serialize Bukkit objects first. Neither helper changes the module's live objects.
+
+**Support and metadata are deliberately bounded.** The supported entry points take `File` (a snapshot also comes from
+`OperatorFiles.read(File)`) and therefore use the JVM's default filesystem. This first version requires ordinary files
+on a local default POSIX filesystem with native atomic rename/link semantics, working POSIX attributes and an already
+existing parent. The real parent is resolved before appending the final basename, so a parent symlink followed by `..`
+keeps filesystem meaning. There is no path sandbox; modules supply trusted paths. An existing final symlink is refused,
+live or dangling; directories/devices and other nonregular write targets are refused, not followed or replaced.
+
+Existing files preserve exactly the nine POSIX permission bits, owner and group, applied and verified on the staged
+inode before commit. Failure to reproduce a promised attribute aborts publication. A file the process cannot write, or
+with no POSIX write bit, is refused even if directory permissions would permit replacement. Staging is exclusively
+created at 0600 before any content, written through that created channel, narrowed to 0000 before any necessary
+owner/group transition, then given its final mode and verified. New files keep the process-created owner/group and
+0600: **this is a new API default, not a change to old writers**. Non-POSIX providers (normal Windows included) and a
+Java-exposed ACL view on parent/target/stage cause refusal. Attribute lookup failures are not evidence of no ACL.
+
+No ACL copier is supplied. The absence of a Java ACL view does **not** establish the absence of Linux `setfacl` or
+default ACLs, SELinux labels or other metadata Java does not expose. Do not adopt this helper for a file whose layout
+requires preserving those, xattrs, alternate streams, special mode bits, inode identity, hard-link relationships,
+creation timestamps or arbitrary flags. Replacement creates a new inode; existing hard-link aliases keep old content.
+Unknown metadata follows replacement/new-file semantics; the helper cannot detect every incompatible layout.
+
+**Publication and interruption.** A random same-directory `<name>.ultitools-stage-<32 lower-case hex>.tmp` receives
+all UTF-8 bytes and metadata, `FileChannel.force(true)` and successful close **before** publication. Existing-file
+commit is successful `Files.move(stage, target, ATOMIC_MOVE)`; unsupported atomic replacement throws (including
+`AtomicMoveNotSupportedException` unchanged). Creation uses `Files.createLink(target, completedStage)`, not an atomic
+move pretending to be exclusive create. Native POSIX `link` creates a new entry atomically or fails on an existing
+entry (including symlinks); this is not a blanket atomicity claim for every NIO provider. Unsupported link publication
+throws `IOException`. There is **no** copy, ordinary move, in-place truncation or journal fallback in this helper.
+
+Directory forcing is best effort after publication (creation: after link, and again after temp unlink); a failure warns
+once per directory/reason and does not misreport committed data as unchanged. `WRITTEN` means complete publication,
+not universal power-loss durability. With a functioning OS/filesystem, a process crash leaves old/absent or complete-new
+final content; OS crash, sudden power loss, remote storage, device/controller failure and filesystem recovery remain
+outside that guarantee. Same-JVM config writes share a lock and recheck bytes/kind/promised metadata before commit,
+but there is no cross-process lock and an external editor/rename/chmod can race the final check-to-publication window.
+Do not share these files with concurrent uncoordinated writers.
+
+**No automatic recovery.** There is no startup scan, journal, replay, promotion or rollback. Cleanup touches only the
+exact temp this invocation created, and only while a non-null file key and regular-file kind still prove its identity.
+Unknown/changed/unreadable identities and failed cleanup leave a warning naming the retained temp. A pre-commit cleanup
+failure does not mask the original error; a post-commit one still returns `WRITTEN`. Later invocations never reuse or
+remove a prior temp, and strict reads never run the legacy temp/backup maintenance. After stopping the server and
+competing writers, inspect the target and named leftovers; do not assume a temp is newer or authoritative or promote it
+automatically. Remove only a temp recognized as no longer needed, otherwise keep it and use an independently trusted
+backup or the module's explicit recreate action. Retained temps may contain new data with the declared final POSIX mode;
+protect them like the YAML file itself. Module adoption and bilingual developer documentation are separate follow-ups.
 
 ### Migrating legacy parsers to converters
 
@@ -1226,8 +1304,8 @@ its first child key cannot be read and the file is protected as unparseable
 ([#580](https://github.com/UltiKits/UltiTools-Reborn/issues/580), closed by documenting it; see "Layouts the reader
 cannot read"). A file that uses anchors, aliases or merge keys is never written; one warning per file per run names it.
 No general alias-preservation guarantee is claimed, and apart from putting back the in-place write that just failed
-(#622), nothing is restored from an earlier backup. [#545](https://github.com/UltiKits/UltiTools-Reborn/issues/545) remains the
-separate crash-safe multi-file transaction limit.
+(#622), nothing is restored from an earlier backup. Crash-safe multi-file transactions remain unsupported;
+the single-file opt-in helper for [#545](https://github.com/UltiKits/UltiTools-Reborn/issues/545) does not solve that limit.
 
 Three YAML spellings fail the write gate's check (6.3.0). A framework write changes only the keys it owns and verifies
 that every other line of the file keeps its bytes and its value; these spellings cannot pass that check. None of them blocks
@@ -1264,9 +1342,9 @@ such spelling: keep binary values out of the keys of a file the framework writes
 - 框架自己的 `plugins/UltiTools/config.yml` 启动时补入缺少的面板键（能力开关、`ultipanel.commands.blocklist`、`ultipanel.files.editable-roots`、操作日志轮转键）同样经过写入闸门，只插入（#605）。补键迁移是 6.3.0 新增的（6.2.x 只在 `config.yml` 不存在时写入它）；它在本周期较早的 6.3.0 快照中的第一个版本会整份重写文件：十六进制数变成十进制、锚点被展开、`o.O` 这样的含点键被拆成嵌套映射、显式 `null` 被替换。现在其余每个字节保持不变（已在每个已发布的 6.2.x `config.yml` 上实测）；闸门无法逐字节写回的文件（手工对齐、锚点）保持原样，警告一次列出这些键，由 jar 自带 `config.yml` 中的默认值（现在也列出命令黑名单和可编辑根目录）生效。若文件以扁平含点键（如 `ultipanel.capabilities.logs: false`）或含点的节键保存其中某个设置，而插入的嵌套节会在服务器读取时取代它，同样不写入：警告一次，指出文件和该设置（不含任何值），缺少的键使用 jar 默认值。较早版本实测：6.0.9 和 6.1.x 的 `config.yml` 同样只插入；6.0.9 之前各个 6.0.x 版本（6.0.0 至 6.0.8）的 `config.yml` 含 `trustIp: [ ]`（方括号内侧有空格），每次启动都被拒绝并警告一次、指出第 14 行，缺少的键使用 jar 默认值，不写入任何内容——只有从 6.0.8 或更早版本直接升级才会遇到；改成 `trustIp: []` 或手工补上这些键即可消除警告。
 - UltiTools 只在 `plugins/bStats/config.yml` 不存在、或已含 `serverUuid` 时启动 bStats（#606）。该文件由所有使用 bStats 的插件共用；此前无法解析的文件被当作空文件，bStats 的默认值会写在它上面。现在无法读取、无法解析或缺少 `serverUuid` 的文件逐字节保持不变，记一行日志说明，本次运行 UltiTools 不发送统计。在 Paper 上，服务器自带的统计代码会在任何插件加载之前读取该文件，并用新的默认值重写无法解析或缺少 `serverUuid` 的文件（在 Paper 1.21.11 上实测），因此这类文件是被服务器本身替换的，而不是被 UltiTools 替换的，UltiTools 只会看到有效的文件。
 - 面板编辑 `server.properties` 时只替换它指定的那个键所在行的值文字（#607）：键、分隔符、注释、顺序和其它每个字节保持不变（含 UTF-8 的 `motd`），按服务器读取该文件的方式解码和编码（严格 UTF-8，不是 UTF-8 时用 ISO-8859-1），校验后原子写入。同一个键定义在多行、或定义续到下一行时拒绝，原因注明行号（不含值）；`set_all` 回复把它列在 `failed` 中，并在新增的 `failureReasons` 字段中给出原因，服务器日志对每个被拒的键只记一次。服务器自己下次启动时仍会整份重写该文件（在 Paper 1.21.11 上实测）。
-- 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API（#545 仍是以后的功能），也不用于 `@ConfigEntity` 文件。
+- 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API，也不用于 `@ConfigEntity` 文件。6.4.0 的独立选择性入口 `CrashSafeYamlFiles`（#545）提供已有 YAML 指定键编辑与完整新映射的排他创建；不改变旧入口的链接或 fallback 行为。新入口仅支持默认本地 POSIX 文件系统的原生 rename/link 发布，保留九位权限和 owner/group，新文件 0600；非 POSIX 或 Java 暴露 ACL view 时拒绝，原子替换/link 不支持时失败且无退路，不保留所有隐藏 ACL/xattr/安全标签或硬链接关系。无自动恢复或遗留文件扫描，不保证断电与多文件事务；完整边界、并发限制和服主清理步骤见上方英文 6.4.0 小节。
 - 面板编辑复合值（Bukkit `Vector`、`Location`，或映射条目中的此类值）内的一个字段时，写入的是文件中原样的整个值、只改该字段，其余字段保持服主写下的字节（`y: 64`、`pitch: 0` 不会变成 `64.0`）。面板发送的整数、或文件中该值其它字段里的整数，在模块自身的值为浮点数的位置按浮点数转换（Bukkit 的 `Vector` 自己不放宽），被编辑的字段按该类型写入（`7` 写成 `7.0`），因此编辑后的文件能被重新加载（#609）。文件中 `Vector` 或 `BlockVector` 坐标里的整数（`y: 64`）现在按该数字加载：Bukkit 的 `Vector` 只接受 `Double` 坐标，此前这样的值会以 SEVERE 堆栈失败并使用声明默认值；框架现在只在内存中把 `Vector` 的 `x`、`y`、`z` 放宽为浮点数——文件保持 `y: 64`，未改动的保存不写入，其它类型不放宽。模块在内存中删除且未保存的映射分组，编辑其下的键会被拒绝，注明“not found in memory”。
-- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件只提示一次（6.2.5 在加载时就会重写它：启动时写入声明默认值，重载时写入运行中的值；关闭时再用模块内存中的值重写一次）。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不会阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。6.2.5 及以前在服务器关闭时由 `saveAll()` 用模块内存中的值重写所有已注册的配置文件，6.3.0 直接取消，没有过渡期。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载时释放该模块的配置实体（6.2.5 不释放）。已知限制：#578 中仍适用的是符号链接后跟 `..` 的临时文件路径和 Unicode 文件的样式检测耗时；锚点容器与别名注释两项不会发生，因为任何写入路径都不写入使用锚点、别名或合并键的文件。#580（见上文读取器无法读取的排版）和多文件崩溃限制 #545 仍存在。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
+- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件只提示一次（6.2.5 在加载时就会重写它：启动时写入声明默认值，重载时写入运行中的值；关闭时再用模块内存中的值重写一次）。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不会阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。6.2.5 及以前在服务器关闭时由 `saveAll()` 用模块内存中的值重写所有已注册的配置文件，6.3.0 直接取消，没有过渡期。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载时释放该模块的配置实体（6.2.5 不释放）。已知限制：#578 中仍适用的是符号链接后跟 `..` 的临时文件路径和 Unicode 文件的样式检测耗时；锚点容器与别名注释两项不会发生，因为任何写入路径都不写入使用锚点、别名或合并键的文件。#580（见上文读取器无法读取的排版）和多文件崩溃限制仍存在（#545 的 6.4.0 单文件 helper 不解决多文件事务）。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
 
 ## What the version number means
 
