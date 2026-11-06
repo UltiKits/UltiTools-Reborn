@@ -1,5 +1,7 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.context.ComponentScanner;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
@@ -83,7 +85,7 @@ final class ModuleClassLoader extends URLClassLoader {
         LinkageAudit.Audit audit = moduleAudits.get(source);
         if (audit != null && reportedModules.add(source)) {
             audit.report(audit.moduleName, caller -> Arrays.stream(roots).anyMatch(root ->
-                    com.ultikits.ultitools.context.ComponentScanner.matchesPackage(caller, root)),
+                    ComponentScanner.matchesPackage(caller, root)),
                     logger::warning, logger::info);
         }
     }

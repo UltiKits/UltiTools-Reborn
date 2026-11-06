@@ -1,6 +1,13 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import net.bytebuddy.jar.asm.ClassWriter;
 import net.bytebuddy.jar.asm.Handle;
 import net.bytebuddy.jar.asm.MethodVisitor;
@@ -173,13 +180,12 @@ class LinkageAuditTest implements Opcodes {
 
     @Test
     void startupDefersOutputUntilMainClassAndRealScanRootsAreKnown() throws Exception {
-        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        MockBukkitHelper.ensureCleanState();
         org.mockbukkit.mockbukkit.MockBukkit.mock();
         try {
-            runtimeOrdering(true);
-            runtimeOrdering(false);
+            assertAll(() -> runtimeOrdering(true), () -> runtimeOrdering(false));
         } finally {
-            com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+            MockBukkitHelper.safeUnmock();
         }
     }
 
@@ -242,8 +248,8 @@ class LinkageAuditTest implements Opcodes {
             public void close() { /* No resources. */ }
         });
         PluginManager manager = org.mockito.Mockito.spy(new PluginManager());
-        com.ultikits.ultitools.context.SimpleContainer container =
-                new com.ultikits.ultitools.context.SimpleContainer() {
+        SimpleContainer container =
+                new SimpleContainer() {
                     @Override public void scanComponents(String... roots) {
                         assertFalse(records.isEmpty());
                         order.add("scan");
@@ -251,34 +257,32 @@ class LinkageAuditTest implements Opcodes {
                     }
                 };
         UltiTools framework = org.mockito.Mockito.mock(UltiTools.class);
-        com.ultikits.ultitools.manager.DependenceManagers dependencies = org.mockito.Mockito.mock(
-                com.ultikits.ultitools.manager.DependenceManagers.class);
-        org.mockito.Mockito.when(dependencies.getContext()).thenReturn(new com.ultikits.ultitools.context.SimpleContainer());
+        DependenceManagers dependencies = org.mockito.Mockito.mock(
+                DependenceManagers.class);
+        org.mockito.Mockito.when(dependencies.getContext()).thenReturn(new SimpleContainer());
         org.mockito.Mockito.when(framework.getDependenceManagers()).thenReturn(dependencies);
         org.mockito.Mockito.when(framework.getConfigManager()).thenReturn(org.mockito.Mockito.mock(
-                com.ultikits.ultitools.manager.ConfigManager.class));
+                ConfigManager.class));
         org.mockito.Mockito.when(framework.getDataStore()).thenReturn(org.mockito.Mockito.mock(
-                com.ultikits.ultitools.interfaces.DataStore.class, org.mockito.Mockito.CALLS_REAL_METHODS));
+                DataStore.class, org.mockito.Mockito.CALLS_REAL_METHODS));
         java.lang.reflect.Method assemble = PluginManager.class.getDeclaredMethod("assemblePluginContainer",
-                com.ultikits.ultitools.context.SimpleContainer.class,
-                com.ultikits.ultitools.abstracts.UltiToolsPlugin.class, Class.class, ClassLoader.class);
-        assemble.setAccessible(true);
+                SimpleContainer.class,
+                UltiToolsPlugin.class, Class.class, ClassLoader.class);
         try (org.mockito.MockedStatic<UltiTools> frameworkCalls = org.mockito.Mockito.mockStatic(
                     UltiTools.class, org.mockito.Mockito.CALLS_REAL_METHODS);
                 ModuleClassLoader loader = new ModuleClassLoader(new URL[]{module.toURI().toURL()},
                     getClass().getClassLoader(), null)) {
             frameworkCalls.when(UltiTools::getInstance).thenReturn(framework);
             java.lang.reflect.Field loaderField = PluginManager.class.getDeclaredField("classLoader");
-            loaderField.setAccessible(true);
-            loaderField.set(manager, loader);
+            ReflectionUtil.setFieldValue(manager, loaderField, loader);
             org.mockito.Mockito.doAnswer(invocation -> {
                 assertTrue(records.isEmpty(), "classification must wait for the normally loaded main class");
-                Class<? extends com.ultikits.ultitools.abstracts.UltiToolsPlugin> type = loader.loadClass(
-                        "runtime.entry.Main").asSubclass(com.ultikits.ultitools.abstracts.UltiToolsPlugin.class);
+                Class<? extends UltiToolsPlugin> type = loader.loadClass(
+                        "runtime.entry.Main").asSubclass(UltiToolsPlugin.class);
                 order.add("main");
-                com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin = org.mockito.Mockito.mock(type);
+                UltiToolsPlugin plugin = org.mockito.Mockito.mock(type);
                 org.mockito.Mockito.when(plugin.getPluginName()).thenReturn("runtime");
-                assemble.invoke(manager, container, plugin, type, loader);
+                ReflectionUtil.invoke(manager, assemble, container, plugin, type, loader);
                 if (annotated) {
                     assertEquals("created", System.getProperty(property), "real scanned service must instantiate");
                     order.add("bean");
@@ -294,7 +298,7 @@ class LinkageAuditTest implements Opcodes {
             assertTrue(records.stream().anyMatch(r -> r.getMessage().contains(
                     annotated ? "runtime.ownExtra.Caller.unused" : "runtime.entry.Caller.unused")));
             org.mockito.Mockito.verify(manager).getPluginScanPackages(
-                    (Class<? extends com.ultikits.ultitools.abstracts.UltiToolsPlugin>) loader.loadClass("runtime.entry.Main"));
+                    (Class<? extends UltiToolsPlugin>) loader.loadClass("runtime.entry.Main"));
         } finally {
             container.close();
             System.clearProperty(property);
