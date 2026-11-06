@@ -472,16 +472,20 @@ class ModuleClassLoaderTest {
 
     @Test
     void signedJar_preservesVerifiedSignersAndRejectsTampering() throws Exception {
-        Path jar = jar("signed.jar", manifest(), entries("fixture/Signed.class", type("fixture.Signed", "signed")));
-        // Ephemeral test-only identity; never accesses the user's keystores or credentials.
-        Path key = temp.resolve("fixture.p12");
-        tool("keytool", "-genkeypair", "-alias", "fixture", "-keyalg", "RSA", "-keystore", key.toString(),
-                "-storepass", "fixture-only", "-keypass", "fixture-only", "-dname", "CN=Loader Test", "-validity", "2", "-noprompt");
-        tool("jarsigner", "-keystore", key.toString(), "-storepass", "fixture-only", jar.toString(), "fixture");
+        Path jar = temp.resolve("signed.jar");
+        // The public fixture contains only fixture.Signed.value() returning "signed", a self-signed
+        // test certificate and its JAR signature, never a private key. Base64 preserves its bytes
+        // as a text resource. Tests need neither external commands nor access to any keystore.
+        try (InputStream input = getClass().getResourceAsStream("/classloader/signed-module.jar.base64")) {
+            assertThat(input).as("public signed JAR fixture").isNotNull();
+            Files.write(jar, java.util.Base64.getMimeDecoder().decode(read(input)));
+        }
         try (URLClassLoader baseline = new URLClassLoader(new URL[]{jar.toUri().toURL()}, null);
                 URLClassLoader loader = loader(jar)) {
             Class<?> old = baseline.loadClass("fixture.Signed");
             Class<?> actual = loader.loadClass("fixture.Signed");
+            assertThat(value(old)).isEqualTo("signed");
+            assertThat(value(actual)).isEqualTo("signed");
             assertThat(old.getSigners()).isNotEmpty();
             assertThat(actual.getSigners()).containsExactly(old.getSigners());
             assertThat(actual.getProtectionDomain().getCodeSource()).isEqualTo(old.getProtectionDomain().getCodeSource());
@@ -503,18 +507,6 @@ class ModuleClassLoaderTest {
             assertThatThrownBy(() -> baseline.loadClass("fixture.Signed")).isInstanceOf(SecurityException.class);
             assertThatThrownBy(() -> loader.loadClass("fixture.Signed")).isInstanceOf(SecurityException.class);
         }
-    }
-
-    private void tool(String name, String... args) throws Exception {
-        List<String> command = new ArrayList<>();
-        command.add(Paths.get(System.getProperty("java.home"), "bin", name).toString());
-        Collections.addAll(command, args);
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        byte[] output;
-        try (InputStream input = process.getInputStream()) {
-            output = read(input);
-        }
-        assertThat(process.waitFor()).as("%s: %s", name, new String(output, StandardCharsets.UTF_8)).isZero();
     }
 
     private int openHandles(Path jar) throws IOException {
