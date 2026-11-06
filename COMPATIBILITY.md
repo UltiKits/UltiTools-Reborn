@@ -707,7 +707,9 @@ no later save re-adds the key ([#596](https://github.com/UltiKits/UltiTools-Rebo
 Warnings name the file, key and failed position/type and, as of 6.3.0 (#590), the converter's own
 reason (the message it gave `ConversionException`, without the location prefix) as `(reason: ...)`;
 secret-shaped values and nested credentials are redacted, the reason with them, and a multi-line
-reason is kept on one log line. Unsupported declared types fail preflight before the file is read or created; register
+reason is kept on one log line. As of v6.3.2 (#593), raw diagnostic values use the same normalization:
+control characters and Unicode line separators are replaced by spaces in warnings only, without changing
+configuration values or file content. Unsupported declared types fail preflight before the file is read or created; register
 `@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
 fallback requires a registered alias; registered custom converters keep ownership of their types.
 For every value `x` of the declared type whose collections and arrays contain no null element,
