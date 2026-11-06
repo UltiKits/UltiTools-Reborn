@@ -158,6 +158,25 @@ committing; never publish its contents.
    transaction.
 6. **Event listeners need the framework's `@EventListener`**, not just Bukkit's `Listener` interface.
 
+## Known verification-tool limitations
+
+These uncommon source forms are outside the supported lexical/name-resolution subset of the build
+instruments (see [issue #681](https://github.com/UltiKits/UltiTools-Reborn/issues/681)):
+
+- **Unicode-escaped Java delimiters:** `check-cjk-scope.sh` reads raw source and does not perform Java's
+  Unicode-escape translation. Encoding a quote or comment delimiter as a Unicode escape can desynchronize
+  its comment state and hide a later CJK comment. Write quotes and comment delimiters literally; do not
+  use Unicode escapes to encode Java lexical syntax. A successful gate is not proof for that source form.
+- **A declared member type colliding with a class type parameter:** when both share a simple name and a
+  deprecated signature uses that name, the deprecation scanner can resolve the parameter instead of the
+  member type and refuse registry generation with `No reflected member matched`. Avoid the name collision
+  or qualify the member type in the signature. This limitation concerns a member type declared in that
+  class; an inherited member type does not supersede the class's own type parameter.
+- **Static method/field imports colliding with signature types:** a single static import of a method or
+  field can stop the scanner's same-package/on-demand type lookup when a deprecated signature uses the
+  same simple name. Registry generation refuses the unmatched signature rather than writing an incorrect
+  entry. Qualify the signature type, or remove/rename the colliding import.
+
 ## Related Docs
 
 Reading order for an agent starting work here:
