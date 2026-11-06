@@ -143,64 +143,7 @@ class StrictYamlPublicationTest {
     void preCommitFailuresPreserveOldBytesWithoutFallback(String point) throws Exception {
         IOException sentinel = "atomic".equals(point)
                 ? new AtomicMoveNotSupportedException("stage", "target", "test") : new IOException("injected " + point);
-        StrictYamlPublication.FILES.set(new StrictYamlPublication.Operations() {
-            @Override
-            public void write(FileChannel channel, ByteBuffer bytes) throws IOException {
-                if ("write".equals(point)) {
-                    channel.write(ByteBuffer.wrap(new byte[]{'x'}));
-                    throw sentinel;
-                }
-                StrictYamlPublication.Operations.super.write(channel, bytes);
-            }
-            @Override
-            public void force(FileChannel channel) throws IOException {
-                if ("force".equals(point)) {
-                    throw sentinel;
-                }
-                StrictYamlPublication.Operations.super.force(channel);
-            }
-            @Override
-            public void close(FileChannel channel) throws IOException {
-                StrictYamlPublication.Operations.super.close(channel);
-                if ("close".equals(point)) {
-                    throw sentinel;
-                }
-            }
-            @Override
-            public void permissions(Path path, Set<PosixFilePermission> permissions) throws IOException {
-                if ("permissions".equals(point)) {
-                    throw sentinel;
-                }
-                StrictYamlPublication.Operations.super.permissions(path, permissions);
-            }
-            @Override
-            public PosixFileAttributes posix(Path path) throws IOException {
-                PosixFileAttributes real = StrictYamlPublication.Operations.super.posix(path);
-                if (!path.equals(file) && !path.equals(directory)) {
-                    if ("owner".equals(point) || "group".equals(point)) {
-                        return changedIdentity(real, "owner".equals(point));
-                    }
-                    if ("verify".equals(point)) {
-                        PosixFileAttributes mismatch = mock(PosixFileAttributes.class, delegatesTo(real));
-                        doReturn(mode("---------")).when(mismatch).permissions();
-                        return mismatch;
-                    }
-                }
-                return real;
-            }
-            @Override
-            public void owner(Path path, UserPrincipal owner) throws IOException {
-                throw sentinel;
-            }
-            @Override
-            public void group(Path path, GroupPrincipal group) throws IOException {
-                throw sentinel;
-            }
-            @Override
-            public void move(Path source, Path target) throws IOException {
-                throw sentinel;
-            }
-        });
+        StrictYamlPublication.FILES.set(new PreCommitFailureOperations(point, sentinel));
         if ("verify".equals(point)) {
             assertThatThrownBy(this::edit).isInstanceOf(IOException.class).hasMessageContaining("metadata");
         } else {
@@ -523,6 +466,9 @@ class StrictYamlPublicationTest {
         }
         String java = Paths.get(System.getProperty("java.home"), "bin", "java").toString();
         String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+        // JVM/classpath are from the test runtime; @TempDir and literal @ValueSource arguments supply no user input.
+        // Separate argv starts this fixed helper class directly, with no shell or operator/player/network data.
+        // nosemgrep: Semgrep_java_inject_rule-CommandInjection, Semgrep_java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
         Process child = new ProcessBuilder(java, "-cp", classpath, HaltChild.class.getName(), file.toString(), point)
                 .inheritIO().start();
         try {
@@ -584,6 +530,81 @@ class StrictYamlPublicationTest {
                         Collections.singletonMap(Collections.singletonList("items"), "new"));
             }
             throw new AssertionError("The child did not reach the requested publication point");
+        }
+    }
+
+    /** Each override names one injected fault; its control flow is independent of the enclosing assertion method. */
+    private final class PreCommitFailureOperations implements StrictYamlPublication.Operations {
+        private final String point;
+        private final IOException sentinel;
+
+        private PreCommitFailureOperations(String point, IOException sentinel) {
+            this.point = point;
+            this.sentinel = sentinel;
+        }
+
+        @Override
+        public void write(FileChannel channel, ByteBuffer bytes) throws IOException {
+            if ("write".equals(point)) {
+                channel.write(ByteBuffer.wrap(new byte[]{'x'}));
+                throw sentinel;
+            }
+            StrictYamlPublication.Operations.super.write(channel, bytes);
+        }
+
+        @Override
+        public void force(FileChannel channel) throws IOException {
+            if ("force".equals(point)) {
+                throw sentinel;
+            }
+            StrictYamlPublication.Operations.super.force(channel);
+        }
+
+        @Override
+        public void close(FileChannel channel) throws IOException {
+            StrictYamlPublication.Operations.super.close(channel);
+            if ("close".equals(point)) {
+                throw sentinel;
+            }
+        }
+
+        @Override
+        public void permissions(Path path, Set<PosixFilePermission> permissions) throws IOException {
+            if ("permissions".equals(point)) {
+                throw sentinel;
+            }
+            StrictYamlPublication.Operations.super.permissions(path, permissions);
+        }
+
+        @Override
+        public PosixFileAttributes posix(Path path) throws IOException {
+            PosixFileAttributes real = StrictYamlPublication.Operations.super.posix(path);
+            if (!path.equals(file) && !path.equals(directory)) {
+                if ("owner".equals(point) || "group".equals(point)) {
+                    return changedIdentity(real, "owner".equals(point));
+                }
+                if ("verify".equals(point)) {
+                    PosixFileAttributes mismatch = mock(PosixFileAttributes.class, delegatesTo(real));
+                    doReturn(mode("---------")).when(mismatch).permissions();
+                    return mismatch;
+                }
+            }
+            return real;
+        }
+
+        @Override
+        public void owner(Path path, UserPrincipal owner) throws IOException {
+            throw sentinel;
+        }
+
+        @Override
+        public void group(Path path, GroupPrincipal group) throws IOException {
+            throw sentinel;
+        }
+
+        @Override
+        public void move(Path source, Path target) throws IOException {
+            throw sentinel;
         }
     }
 

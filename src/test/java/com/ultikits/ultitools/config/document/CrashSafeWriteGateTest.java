@@ -91,37 +91,7 @@ class CrashSafeWriteGateTest {
     @ValueSource(strings = {"bytes", "mode", "owner", "group", "symlink", "directory", "deleted"})
     void finalRecheckAbandonsChangedContentKindOrPromisedMetadata(String mutation) throws Exception {
         OperatorFiles.Snapshot snapshot = OperatorFiles.read(file.toFile());
-        StrictYamlPublication.FILES.set(new StrictYamlPublication.Operations() {
-            @Override
-            public void force(FileChannel channel) throws IOException {
-                StrictYamlPublication.Operations.super.force(channel);
-                if ("bytes".equals(mutation)) {
-                    Files.write(file, "items: operator\n".getBytes(StandardCharsets.UTF_8));
-                } else if ("mode".equals(mutation)) {
-                    Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-r-----"));
-                } else if ("deleted".equals(mutation)) {
-                    Files.delete(file);
-                } else if ("symlink".equals(mutation) || "directory".equals(mutation)) {
-                    Files.delete(file);
-                    if ("symlink".equals(mutation)) {
-                        Files.createSymbolicLink(file, directory.resolve("missing.yml"));
-                    } else {
-                        Files.createDirectory(file);
-                    }
-                }
-            }
-
-            @Override
-            public java.nio.file.attribute.PosixFileAttributes posix(Path path) throws IOException {
-                java.nio.file.attribute.PosixFileAttributes attributes = StrictYamlPublication.Operations.super.posix(path);
-                // Deterministically vary identity metadata without requiring chown privileges on the test host.
-                if (path.equals(file) && ("owner".equals(mutation) || "group".equals(mutation)) && checks++ > 0) {
-                    return StrictYamlPublicationTest.changedIdentity(attributes, "owner".equals(mutation));
-                }
-                return attributes;
-            }
-            private int checks;
-        });
+        StrictYamlPublication.FILES.set(new FinalRecheckOperations(mutation));
         assertThat(CrashSafeYamlFiles.write(snapshot, Collections.singletonMap(Collections.singletonList("items"), "new")))
                 .isEqualTo(OperatorFiles.WriteResult.FILE_CHANGED);
         if ("bytes".equals(mutation)) {
@@ -205,6 +175,45 @@ class CrashSafeWriteGateTest {
         } finally {
             release.countDown();
             workers.shutdownNow();
+        }
+    }
+
+    /** Final-check mutations are independent fixture operations rather than branches of the assertion method. */
+    private final class FinalRecheckOperations implements StrictYamlPublication.Operations {
+        private final String mutation;
+        private int checks;
+
+        private FinalRecheckOperations(String mutation) {
+            this.mutation = mutation;
+        }
+
+        @Override
+        public void force(FileChannel channel) throws IOException {
+            StrictYamlPublication.Operations.super.force(channel);
+            if ("bytes".equals(mutation)) {
+                Files.write(file, "items: operator\n".getBytes(StandardCharsets.UTF_8));
+            } else if ("mode".equals(mutation)) {
+                Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-r-----"));
+            } else if ("deleted".equals(mutation)) {
+                Files.delete(file);
+            } else if ("symlink".equals(mutation) || "directory".equals(mutation)) {
+                Files.delete(file);
+                if ("symlink".equals(mutation)) {
+                    Files.createSymbolicLink(file, directory.resolve("missing.yml"));
+                } else {
+                    Files.createDirectory(file);
+                }
+            }
+        }
+
+        @Override
+        public java.nio.file.attribute.PosixFileAttributes posix(Path path) throws IOException {
+            java.nio.file.attribute.PosixFileAttributes attributes = StrictYamlPublication.Operations.super.posix(path);
+            // Deterministically vary identity metadata without requiring chown privileges on the test host.
+            if (path.equals(file) && ("owner".equals(mutation) || "group".equals(mutation)) && checks++ > 0) {
+                return StrictYamlPublicationTest.changedIdentity(attributes, "owner".equals(mutation));
+            }
+            return attributes;
         }
     }
 

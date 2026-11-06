@@ -137,30 +137,35 @@ final class StrictYamlPublication {
                 } catch (UnsupportedOperationException failure) {
                     throw new IOException("Private POSIX staging is unsupported", failure);
                 }
-                StrictYamlPublication staged = new StrictYamlPublication(this, temp);
-                try {
-                    try (Opened opened = new Opened(channel, files)) {
-                        staged.fileKey = files.basic(temp).fileKey();
-                        PosixFileAttributes initial = requirePosix(temp, files);
-                        Metadata desired = creating ? new Metadata(PRIVATE, initial.owner(), initial.group()) : expected;
-                        if (!initial.permissions().equals(PRIVATE)) {
-                            throw new IOException("Private staging metadata could not be verified");
-                        }
-                        ByteBuffer bytes = ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8));
-                        while (bytes.hasRemaining()) {
-                            files.write(opened.channel, bytes);
-                        }
-                        desired.apply(temp, initial, files);
-                        files.force(opened.channel);
-                        if (!desired.matches(requirePosix(temp, files))) {
-                            throw new IOException("Promised staging metadata could not be verified");
-                        }
+                return finishStage(temp, channel, text);
+            }
+        }
+
+        /** Completes and closes exactly the channel just created; cleanup keeps the same primary failure. */
+        private StrictYamlPublication finishStage(Path temp, FileChannel channel, String text) throws IOException {
+            StrictYamlPublication staged = new StrictYamlPublication(this, temp);
+            try {
+                try (Opened opened = new Opened(channel, files)) {
+                    staged.fileKey = files.basic(temp).fileKey();
+                    PosixFileAttributes initial = requirePosix(temp, files);
+                    Metadata desired = creating ? new Metadata(PRIVATE, initial.owner(), initial.group()) : expected;
+                    if (!initial.permissions().equals(PRIVATE)) {
+                        throw new IOException("Private staging metadata could not be verified");
                     }
-                    return staged;
-                } catch (IOException | RuntimeException | Error failure) {
-                    staged.discard(failure);
-                    throw failure;
+                    ByteBuffer bytes = ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8));
+                    while (bytes.hasRemaining()) {
+                        files.write(opened.channel, bytes);
+                    }
+                    desired.apply(temp, initial, files);
+                    files.force(opened.channel);
+                    if (!desired.matches(requirePosix(temp, files))) {
+                        throw new IOException("Promised staging metadata could not be verified");
+                    }
                 }
+                return staged;
+            } catch (IOException | RuntimeException | Error failure) {
+                staged.discard(failure);
+                throw failure;
             }
         }
     }
@@ -296,11 +301,17 @@ final class StrictYamlPublication {
         } catch (NoSuchFileException absent) {
             return true;
         } catch (IOException | RuntimeException failure) {
-            if (primary != null && primary != failure) {
-                primary.addSuppressed(failure);
-            }
+            suppressCleanupFailure(primary, failure);
             retained("cleanup failed (" + failure.getClass().getSimpleName() + ")");
             return false;
+        }
+    }
+
+    /** Throwable.addSuppressed rejects self-suppression by identity, not by an overridable equals implementation. */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Identity is required by Throwable's self-suppression contract.
+    private static void suppressCleanupFailure(Throwable primary, Throwable failure) {
+        if (primary != null && primary != failure) {
+            primary.addSuppressed(failure);
         }
     }
 

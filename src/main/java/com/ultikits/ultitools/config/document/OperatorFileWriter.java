@@ -531,16 +531,7 @@ public final class OperatorFileWriter {
             synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
                 Throwable primary = null;
                 try {
-                    if (temporary.matchesTarget()) {
-                        byte[] now = readOrNull(file, temporary.strict());
-                        if (creating && now == null) {
-                            temporary.commitAsNewFile();
-                            published = true;
-                        } else if (!creating && now != null && ConfigDocument.sha256(now).equals(read)) {
-                            temporary.commit();
-                            published = true;
-                        }
-                    }
+                    publishIfCurrent(creating);
                 } catch (FileAlreadyExistsException appeared) {
                     if (temporary.strict() && !creating) {
                         primary = appeared;
@@ -567,6 +558,20 @@ public final class OperatorFileWriter {
             }
             return changed(absolute, owned, keys, creating ? "a file appeared while the new content was being prepared"
                     : "the file changed while the new content was being prepared");
+        }
+
+        /** Called under WRITE_LOAD_LOCK; the same final check and commit points for each publication strategy. */
+        private void publishIfCurrent(boolean creating) throws IOException {
+            if (temporary.matchesTarget()) {
+                byte[] now = readOrNull(file, temporary.strict());
+                if (creating && now == null) {
+                    temporary.commitAsNewFile();
+                    published = true;
+                } else if (!creating && now != null && ConfigDocument.sha256(now).equals(read)) {
+                    temporary.commit();
+                    published = true;
+                }
+            }
         }
 
         /**
