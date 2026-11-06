@@ -96,7 +96,7 @@ public final class ModuleScanDiagnostics {
         }
         SKIPPED_CLASSES_BY_MODULE
                 .computeIfAbsent(moduleName, key -> new CopyOnWriteArrayList<>())
-                .add(className);
+                .add(describeFailure(className, cause));
         DIAGNOSTICS_LOGGER.log(Level.FINE,
                 "Module '" + moduleName + "' could not load scanned class '" + className + "'", cause);
     }
@@ -119,9 +119,40 @@ public final class ModuleScanDiagnostics {
         }
         String message = "Module '" + moduleName + "' skipped " + skipped.size()
                 + " class(es) that failed to load during startup and continued loading without "
-                + "them: " + String.join(", ", skipped) + ". This usually means the module was "
-                + OLDER_API_CAUSE + " -- " + COMPATIBILITY_POINTER + ".";
+                + "them: " + String.join(", ", skipped) + ". See COMPATIBILITY.md for compatibility guidance.";
         DIAGNOSTICS_LOGGER.log(Level.SEVERE, message);
+    }
+
+    private static String describeFailure(String className, Throwable cause) {
+        boolean frameworkMismatch = false;
+        for (int depth = 0; cause != null && depth < 8; depth++, cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (message == null) {
+                continue;
+            }
+            String normalized = message.trim().replace('/', '.');
+            if (cause instanceof NoClassDefFoundError || cause instanceof ClassNotFoundException) {
+                // A failed initializer ("Could not initialize class ...") is not an absent type.
+                if (normalized.indexOf(' ') >= 0) {
+                    continue;
+                }
+                if (isServerClass(normalized)) {
+                    return className + " (missing server class " + normalized
+                            + "; handlers/signatures requiring this class are unavailable on this server)";
+                }
+                frameworkMismatch |= normalized.startsWith("com.ultikits.ultitools.");
+            } else if (cause instanceof IncompatibleClassChangeError) {
+                frameworkMismatch |= normalized.contains("com.ultikits.ultitools.");
+            }
+        }
+        return frameworkMismatch ? className + " (" + OLDER_API_CAUSE + " -- " + COMPATIBILITY_POINTER + ")"
+                : className + " (class linkage failed; see the per-class diagnostic for its cause)";
+    }
+
+    private static boolean isServerClass(String name) {
+        return name.startsWith("org.bukkit.") || name.startsWith("io.papermc.")
+                || name.startsWith("com.destroystokyo.") || name.startsWith("org.spigotmc.")
+                || name.startsWith("net.kyori.") || name.startsWith("co.aikar.");
     }
 
     private static boolean isBlank(String value) {

@@ -67,6 +67,41 @@ class ModuleScanDiagnosticsTest {
         diagnosticsLogger.removeHandler(captureHandler);
     }
 
+    @Test
+    void missingServerClassIsNamedWithoutBlamingFrameworkAge() {
+        String module = "server-gap-" + System.nanoTime();
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.LoginListener",
+                new IllegalStateException("validation", new NoClassDefFoundError(
+                        "io/papermc/paper/event/player/PlayerSwapWithEquipmentSlotEvent")));
+        ModuleScanDiagnostics.emitSummary(module);
+        String message = withLevel(Level.SEVERE).get(0).getMessage();
+        assertTrue(message.contains("io.papermc.paper.event.player.PlayerSwapWithEquipmentSlotEvent"));
+        assertTrue(message.contains("fixture.LoginListener"));
+        assertFalse(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE));
+    }
+
+    @Test
+    void genuineFrameworkMismatchKeepsItsExistingAdvice() {
+        String module = "framework-gap-" + System.nanoTime();
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.LegacyBean",
+                new NoSuchMethodError("com.ultikits.ultitools.abstracts.UltiToolsPlugin.removed()V"));
+        ModuleScanDiagnostics.emitSummary(module);
+        assertTrue(withLevel(Level.SEVERE).get(0).getMessage().contains(ModuleScanDiagnostics.OLDER_API_CAUSE));
+    }
+
+    @Test
+    void thirdPartyAndOrdinaryFailuresAreNotCalledFrameworkMismatches() {
+        String module = "other-gap-" + System.nanoTime();
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.OptionalBean",
+                new NoClassDefFoundError("third/party/Absent"));
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.BrokenBean", new LinkageError("ordinary failure"));
+        ModuleScanDiagnostics.emitSummary(module);
+        String message = withLevel(Level.SEVERE).get(0).getMessage();
+        assertTrue(message.contains("fixture.OptionalBean"));
+        assertTrue(message.contains("fixture.BrokenBean"));
+        assertFalse(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE));
+    }
+
     private List<LogRecord> withLevel(Level level) {
         List<LogRecord> result = new ArrayList<>();
         for (LogRecord record : captured) {
