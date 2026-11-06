@@ -71,6 +71,32 @@ class ClassloadFilterAuditTest {
         Locale.setDefault(originalLocale);
     }
 
+    @Test
+    void dangerousPackageMatchingRequiresBoundary() {
+        for (String prefix : ClassloadFilterAudit.DANGEROUS_PACKAGE_PREFIXES) {
+            assertThat(ClassloadFilterAudit.classify(prefix)).as("exact package %s", prefix)
+                    .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
+            assertThat(ClassloadFilterAudit.classify(prefix + ".Example")).as("class in %s", prefix)
+                    .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
+            assertThat(ClassloadFilterAudit.classify(prefix + ".child.Example")).as("subpackage of %s", prefix)
+                    .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
+            assertThat(ClassloadFilterAudit.classify(prefix + "x.Example")).as("sibling of %s", prefix)
+                    .isEqualTo(ClassloadFilterAudit.Layer.WHITELIST);
+        }
+    }
+
+    @Test
+    void trustedPackageMatchingRequiresBoundary() {
+        for (String prefix : ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES) {
+            assertThat(ClassloadFilterAudit.classify(prefix)).as("exact package %s", prefix).isNull();
+            assertThat(ClassloadFilterAudit.classify(prefix + ".Example")).as("class in %s", prefix).isNull();
+            assertThat(ClassloadFilterAudit.classify(prefix + ".child.Example"))
+                    .as("subpackage of %s", prefix).isNull();
+            assertThat(ClassloadFilterAudit.classify(prefix + "x.Example")).as("sibling of %s", prefix)
+                    .isEqualTo(ClassloadFilterAudit.Layer.WHITELIST);
+        }
+    }
+
     @Nested
     @DisplayName("Test 1: exact-name blacklist layer")
     class BlacklistLayerTests {

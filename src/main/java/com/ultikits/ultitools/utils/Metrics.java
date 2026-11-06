@@ -369,8 +369,9 @@ public class Metrics {
                         new String(new byte[] {'y', 'o', 'u', 'r', '.', 'p', 'a', 'c', 'k', 'a', 'g', 'e'});
                 // We want to make sure no one just copy & pastes the example and uses the wrong
                 // package names
-                if (MetricsBase.class.getPackage().getName().startsWith(defaultPackage)
-                        || MetricsBase.class.getPackage().getName().startsWith(examplePackage)) {
+                String packageName = MetricsBase.class.getPackage().getName();
+                if (packageName.equals(defaultPackage) || packageName.startsWith(defaultPackage + ".")
+                        || packageName.equals(examplePackage) || packageName.startsWith(examplePackage + ".")) {
                     throw new IllegalStateException("bStats Metrics class has not been relocated correctly!");
                 }
             }

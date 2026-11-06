@@ -10,10 +10,10 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * GEN-07's observe-only classload filter audit (D-14): reproduces the exact matching semantics of
- * the three name-based filter layers {@link SecurityPolicy#isSafeClassName(String)} used to
- * enforce before D-12/D-13, and records what each removed layer WOULD have refused -- it refuses
- * nothing itself.
+ * GEN-07's observe-only classload filter audit (D-14): reproduces the three name-based filter
+ * layers {@link SecurityPolicy#isSafeClassName(String)} used to enforce before D-12/D-13, and
+ * records what each removed layer WOULD have refused -- it refuses nothing itself. Package
+ * prefixes match complete package segments, not sibling packages sharing a textual prefix (#807).
  * <p>
  * <b>Package-private on purpose.</b> This class holds the four lists {@code SecurityPolicy} used
  * to own directly (moved here once {@link SecurityPolicy#addTrustedPackage(String)} and
@@ -200,14 +200,14 @@ final class ClassloadFilterAudit {
         }
 
         for (String dangerousPrefix : DANGEROUS_PACKAGE_PREFIXES) {
-            if (className.startsWith(dangerousPrefix)) {
+            if (className.equals(dangerousPrefix) || className.startsWith(dangerousPrefix + ".")) {
                 return Layer.PACKAGE_PREFIX;
             }
         }
 
         boolean trusted = false;
         for (String trustedPrefix : TRUSTED_PACKAGE_PREFIXES) {
-            if (className.startsWith(trustedPrefix)) {
+            if (className.equals(trustedPrefix) || className.startsWith(trustedPrefix + ".")) {
                 trusted = true;
                 break;
             }

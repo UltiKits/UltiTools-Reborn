@@ -168,7 +168,7 @@ public class ComponentScanner {
                 JarEntry entry = entries.nextElement();
                 String entryName = entry.getName();
 
-                if (entryName.startsWith(packagePath) && entryName.endsWith(".class") && !entry.isDirectory()) {
+                if (entryName.startsWith(packagePath + "/") && entryName.endsWith(".class") && !entry.isDirectory()) {
                     String className = entryName
                             .replace('/', '.')
                             .replace(".class", "");
