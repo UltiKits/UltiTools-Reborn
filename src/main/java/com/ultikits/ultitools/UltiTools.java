@@ -345,7 +345,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // JAR, and decided after the modules load (initPluginModules). Their log lines wait for
         // the language to be loaded.
         moduleFileTransactions = new ModuleFileTransactions(getDataFolder());
-        ultiToolsClassLoader = new URLClassLoader(getModuleUrls(), getClassLoader());
+        ultiToolsClassLoader = new ModuleClassLoader(getModuleUrls(), getClassLoader(), getServerJar());
         this.eventBus = new EventBus();
 
         if (!initDependencies()) {
@@ -516,7 +516,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             file.mkdirs();
         }
         try {
-            loadModulesThenObserve(moduleFileTransactions, () -> pluginManager.init(ultiToolsClassLoader),
+            loadModulesThenObserve(moduleFileTransactions, () -> initModulesWithAudit(ultiToolsClassLoader, pluginManager, getLogger()),
                     pluginManager::getPluginList);
         } catch (IOException e) {
             // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this is
@@ -527,6 +527,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } finally {
             moduleFileTransactions.flushReports(getLogger(), this::i18n);
         }
+    }
+
+    /** Startup seam: diagnostics never change PluginManager's bean decisions. */
+    static void initModulesWithAudit(URLClassLoader loader, PluginManager manager, Logger logger)
+            throws IOException {
+        if (loader instanceof ModuleClassLoader) {
+            ModuleClassLoader modules = (ModuleClassLoader) loader;
+            modules.auditModules(logger);
+            manager.setModuleScanObserver((mainClass, roots) -> modules.reportModule(mainClass, roots, logger));
+        }
+        manager.init(loader);
     }
 
     /** The module loading step {@link #loadModulesThenObserve} wraps. */
