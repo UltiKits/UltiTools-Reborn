@@ -50,7 +50,6 @@ import com.ultikits.ultitools.utils.TestHelper;
 @DisplayName("Config-bound async @Scheduled observation and dispatch (#535)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class TaskManagerConfigBoundAsyncTest {
-    private JavaPlugin host;
     private UltiToolsPlugin module;
     private BindingTimingConfig config;
     private TaskManager manager;
@@ -101,7 +100,7 @@ class TaskManagerConfigBoundAsyncTest {
     void setUp() {
         MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
-        host = MockBukkit.createMockPlugin();
+        JavaPlugin host = MockBukkit.createMockPlugin();
         module = mock(UltiToolsPlugin.class);
         lenient().when(module.getPluginName()).thenReturn("AsyncTimingModule");
         config = new BindingTimingConfig();
@@ -341,12 +340,19 @@ class TaskManagerConfigBoundAsyncTest {
         Handler capture = new Handler() {
             @Override
             public void publish(LogRecord record) {
-                if (record.getLevel() == Level.WARNING) {
+                if (Level.WARNING.equals(record.getLevel())) {
                     warnings.add(record);
                 }
             }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override
+            public void flush() {
+                // Records are appended directly to the in-memory list.
+            }
+
+            @Override
+            public void close() {
+                // No resources are owned by this capture handler.
+            }
         };
         Bukkit.getLogger().addHandler(capture);
         try (SchedulerProbe probe = new SchedulerProbe()) {
