@@ -1614,6 +1614,10 @@ The default completion path silently excludes mappings disallowed by the effecti
 `@CmdTarget`, class or mapping permissions, or OP requirements, before invoking any provider.
 As in command validation, `@CmdTarget(CONSOLE)` means a non-player sender. A denied mapping
 contributes no suggestions; completion does not run commands, cooldowns or usage locks.
+If the default non-player pipeline has no candidates, the executor returns `null` to preserve
+Bukkit's online-player-name fallback, including commands that only override `suggest(Player, ...)`.
+Player requests keep their existing suggestion hook and empty-list results. In particular, a player
+completing a console-only executor now receives an empty list rather than Bukkit's player-name fallback.
 
 A method named by `@CmdParam(suggest = "suggestNames")` may use any of these signatures:
 

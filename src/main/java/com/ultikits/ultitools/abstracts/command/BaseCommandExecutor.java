@@ -1111,13 +1111,18 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * @param sender the sender requesting completion
      * @param command the command
      * @param args the current arguments
-     * @return the suggestions, with unavailable mappings silently excluded by default
+     * @return the suggestions, with unavailable mappings silently excluded by default;
+     *         null for a non-player with no candidates, preserving Bukkit's default completion
      */
+    @Nullable
     protected List<String> suggest(CommandSender sender, Command command, String[] args) {
         if (sender instanceof Player) {
             return suggest((Player) sender, command, args);
         }
-        return CommandTabCompletionDispatch.suggest(mappings, sender, command, args, this);
+        List<String> suggestions = CommandTabCompletionDispatch.suggest(mappings, sender, command, args, this);
+        // An empty list suppresses Bukkit's player-name fallback; non-players had that fallback
+        // before sender-aware providers were introduced, including player-only module overrides.
+        return suggestions.isEmpty() ? null : suggestions;
     }
     
     /**
