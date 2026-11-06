@@ -3746,12 +3746,19 @@ So **a module that uses either binding must declare `api-version: 630`** in its 
 floor makes an older framework refuse the module at load, rather than run it with the wrong timing.
 Raising the `pom.xml` pin alone does not do this, for the reason given above. So that the mistake
 surfaces on the version you develop against, 6.3.0 itself refuses a module that uses a binding while
-declaring a lower `api-version`, naming the module, the binding and the required floor. A bound
-`@Scheduled` must also be synchronous: `async = true` together with a binding is refused at load,
-because a reload can keep an async task's place in its cycle only by predicting when the server
-dispatches async work (#535 tracks a design that observes it instead). The binding is
-additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
+declaring a lower `api-version`, naming the module, the binding and the required floor. The binding
+is additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
 and need no change.
+
+**Config-bound async scheduling (#535).** `async = true` can be combined with a binding. A synchronous
+trigger records its fire tick on the main thread, where `/ul reload` also runs, before dispatching the
+method body with a one-tick async delay. The body starts one scheduler heartbeat after its trigger,
+or later under load. Reload preserves the trigger's cycle (last observed fire + new period, or next
+tick if overdue), not the worker's start/completion time, and leaves work already dispatched alone.
+Slow async bodies may overlap and must not use thread-unsafe Bukkit APIs. Unload cancels the trigger
+and queued workers; a body already executing may finish. Literal async scheduling and sync bindings
+are unchanged. Older framework versions that support only sync bindings refuse the async combination
+at load rather than silently running it synchronously.
 
 **A bound field must not also carry a module `@Range`.** The binding's own range is the field's
 range: 1 to `Integer.MAX_VALUE / 20` seconds for a period or delay, and 0 (no cooldown) to
