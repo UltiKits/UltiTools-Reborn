@@ -669,14 +669,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             return "the file is unreadable (" + (loaded.cause() == null ? "I/O failure"
                     : loaded.cause().getClass().getSimpleName()) + ")";
         }
-        if (loaded.parserMessage() != null) {
-            Matcher location = Pattern.compile(
-                    "(?m)^ *in [^\\r\\n]*, line ([0-9]+), column ([0-9]+):? *$").matcher(loaded.parserMessage());
-            if (location.find()) {
-                return "invalid YAML at line " + location.group(1) + ", column " + location.group(2);
-            }
-        }
-        return "invalid YAML or UTF-8";
+        return loaded.safeParserLocation();
     }
 
     /**

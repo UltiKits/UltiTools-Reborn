@@ -320,11 +320,27 @@ class FrameworkConfigMigrationGateTest {
         assertThat(migrationLog).hasSize(1);
         LogRecord record = migrationLog.get(0);
         assertThat(record.getLevel()).isEqualTo(Level.SEVERE);
-        assertThat(record.getMessage()).contains(file.getAbsolutePath(), "invalid YAML", "line 1", "column")
+        assertThat(record.getMessage()).contains(file.getAbsolutePath(), "invalid YAML at line 2, column 1")
                 .doesNotContain(secret).doesNotContain("password:");
         assertThat(record.getThrown()).as("logging a sanitized message with the raw throwable still leaks").isNull();
         assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
         assertThat(gateWarnings).isEmpty();
+    }
+
+    @Test
+    void anIndentationErrorReportsTheProblemMarkInsteadOfTheEnclosingBlock() throws Exception {
+        byte[] original = "a:\n  b: migration-secret-sentinel\n  c: 2\n d: 3\n".getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+
+        assertThat(migrate(file)).isFalse();
+
+        assertThat(migrationLog).hasSize(1);
+        LogRecord record = migrationLog.get(0);
+        assertThat(record.getLevel()).isEqualTo(Level.SEVERE);
+        assertThat(record.getMessage()).contains("invalid YAML at line 4, column 2")
+                .doesNotContain("migration-secret-sentinel", "line 1, column 1", "\n", "\r");
+        assertThat(record.getThrown()).isNull();
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
     }
 
     @Test
