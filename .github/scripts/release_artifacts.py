@@ -608,9 +608,10 @@ def check_authority_response(receipt, path, problems):
             rows = scope.get("accepted_blocked_uat_rows") if isinstance(scope, dict) else None
             if isinstance(rows, list) and valid_row_ids(rows):
                 for row in rows:
-                    if row not in decoded:
+                    # Hyphens and word characters belong to row IDs; surrounding punctuation does not.
+                    if not re.search(r"(?<![\w-])" + re.escape(row) + r"(?![\w-])", decoded):
                         problems.add("accepted_row_not_in_response",
-                                     "accepted blocked UAT row %r must appear verbatim in the response" % row)
+                                     "accepted blocked UAT row %r must appear as a whole token in the response" % row)
 
 
 def valid_row_ids(rows):
@@ -674,11 +675,10 @@ def check_authority(manifest, manifest_sha, path, problems):
 def check_blocked_uat_details(entry, problems):
     """Cross-check optional row/count evidence without requiring it on older receipts."""
     blocked = entry.get("blocked_rows")
+    counts = entry.get("counts")
+    counts_valid = isinstance(counts, dict) and all(is_int(value) and value >= 0 for value in counts.values())
     if "counts" in entry:
-        counts = entry["counts"]
-        if not isinstance(counts, dict) or any(
-                key in counts and (not is_int(counts[key]) or counts[key] < 0)
-                for key in ("fail", "blocked")):
+        if not counts_valid:
             problems.add("uat_counts_invalid", "UAT counts must contain non-negative integer counts")
         else:
             if counts.get("fail", 0) != 0:
@@ -692,9 +692,16 @@ def check_blocked_uat_details(entry, problems):
             return
         if any(row.get("status") == "fail" for row in rows):
             problems.add("uat_failed_rows", "blocked UAT must not contain failed rows")
+        if any(row.get("status") not in ("pass", "blocked") for row in rows):
+            problems.add("uat_row_status_invalid", "blocked UAT row statuses must be exactly pass or blocked")
         actual = [row.get("id") for row in rows if row.get("status") == "blocked"]
         if not all(isinstance(row, str) for row in actual) or sorted(actual) != blocked:
             problems.add("uat_blocked_rows_mismatch", "blocked-status row ids must exactly match blocked_rows")
+        if counts_valid:
+            tally = {status: sum(row.get("status") == status for row in rows)
+                     for status in ("pass", "blocked", "fail")}
+            if any(counts.get(status, 0) != tally.get(status, 0) for status in set(counts) | set(tally)):
+                problems.add("uat_counts_mismatch", "UAT counts must equal the tally of row statuses")
 
 
 def check_gate_evidence(gates, manifest, path, problems, accepted_rows=None):

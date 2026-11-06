@@ -1120,6 +1120,67 @@ class EdgeHandoffTests(HandoffTestCase):
                 else:
                     self.assertEqual(result.returncode, 0, result.stdout.decode())
 
+    def test_blocked_uat_rejects_noncanonical_row_statuses(self):
+        manifest, _, _ = self.approved()
+        for status in ("failed", "FAIL", None, "", "skipped", True, ["pass"]):
+            with self.subTest(status=status):
+                row = {"id": "row-other"}
+                if status is not None:
+                    row["status"] = status
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a"],
+                                            "rows": [{"id": "row-a", "status": "blocked"}, row]}})
+                result = self.validate_receipts(manifest, authority, uat)
+                self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                self.assertIn("uat_row_status_invalid", result.stdout.decode())
+
+    def test_blocked_uat_counts_must_match_complete_row_tally(self):
+        manifest, _, _ = self.approved()
+        rows = [{"id": "row-a", "status": "blocked"}, {"id": "row-pass", "status": "pass"}]
+        for counts in ({"pass": 0, "blocked": 1, "fail": 0},
+                       {"pass": 2, "blocked": 1, "fail": 0},
+                       {"blocked": 1}, {"pass": 1}, {}):
+            with self.subTest(counts=counts):
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a"],
+                                            "rows": rows, "counts": counts}})
+                result = self.validate_receipts(manifest, authority, uat)
+                self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                self.assertIn("uat_counts_mismatch", result.stdout.decode())
+
+    def test_blocked_uat_validates_pass_count_type(self):
+        manifest, _, _ = self.approved()
+        for count in (-1, True, "1", 1.0):
+            with self.subTest(count=count):
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a"],
+                                            "counts": {"pass": count, "blocked": 1}}})
+                result = self.validate_receipts(manifest, authority, uat)
+                self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                self.assertIn("uat_counts_invalid", result.stdout.decode())
+
+    def test_accepted_rows_require_whole_tokens_in_retained_response(self):
+        manifest, _, _ = self.approved()
+        for mention, accepted in (("row-a; row-b", True), ("(row-a), [row-b].", True),
+                                  ("row-a\nrow-b", True), ("row-a1; row-b", False),
+                                  ("prefixrow-a; row-b", False), ("row-a-extra; row-b", False),
+                                  ("prefix-row-a; row-b", False), ("row-a_suffix; row-b", False),
+                                  ("αrow-a; row-b", False)):
+            with self.subTest(mention=mention):
+                authority, uat = self.fx.write_receipts(
+                    manifest, response_text="publish these exact five files; " + mention,
+                    scope_overrides={"accepted_blocked_uat_rows": ["row-a", "row-b"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a", "row-b"]}})
+                result = self.validate_receipts(manifest, authority, uat)
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn("accepted_row_not_in_response", result.stdout.decode())
+
     def test_passing_uat_does_not_report_stale_accepted_rows(self):
         manifest, _, _ = self.approved()
         authority, uat = self.fx.write_receipts(
