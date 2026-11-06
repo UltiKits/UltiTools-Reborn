@@ -1,6 +1,12 @@
 package com.ultikits.ultitools;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
@@ -21,6 +27,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
 
+import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,7 +36,11 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import org.mockito.MockedConstruction;
+import org.mockito.MockedStatic;
+
 import com.ultikits.ultitools.config.document.ConfigDocument;
+import com.ultikits.ultitools.config.document.ConfigLoadResult;
 import com.ultikits.ultitools.entities.Capability;
 
 /**
@@ -293,6 +304,184 @@ class FrameworkConfigMigrationGateTest {
         assertThat(server.getBoolean(Capability.PLAYER_ACTIONS.getConfigPath(), true)).isFalse();
         assertThat(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8))
                 .startsWith(new String(original, StandardCharsets.UTF_8).trim());
+    }
+
+    @Test
+    void anUnparseableFileLogsOnlyItsSafeLocationWithoutAParserSnippetOrThrowable() throws Exception {
+        String secret = "migration-secret-sentinel";
+        byte[] original = ("password: [" + secret + "\n").getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+        ConfigLoadResult loaded = ConfigDocument.load(file.toPath());
+        assertThat(loaded.state()).isEqualTo(ConfigLoadResult.State.UNPARSEABLE);
+        assertThat(loaded.parserMessage()).as("the parser message really contains the fictional secret").contains(secret);
+
+        assertThat(migrate(file)).isFalse();
+
+        assertThat(migrationLog).hasSize(1);
+        LogRecord record = migrationLog.get(0);
+        assertThat(record.getLevel()).isEqualTo(Level.SEVERE);
+        assertThat(record.getMessage()).contains(file.getAbsolutePath(), "invalid YAML", "line 1", "column")
+                .doesNotContain(secret).doesNotContain("password:");
+        assertThat(record.getThrown()).as("logging a sanitized message with the raw throwable still leaks").isNull();
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
+        assertThat(gateWarnings).isEmpty();
+    }
+
+    @Test
+    void anUnreadableLoadLogsItsFailureClassButNotItsMessageOrThrowable() throws Exception {
+        File file = write("language: zh\n".getBytes(StandardCharsets.UTF_8));
+        byte[] original = Files.readAllBytes(file.toPath());
+        ConfigLoadResult unreadable = mock(ConfigLoadResult.class);
+        when(unreadable.state()).thenReturn(ConfigLoadResult.State.UNREADABLE);
+        when(unreadable.cause()).thenReturn(new IOException("migration-secret-sentinel"));
+
+        try (MockedStatic<ConfigDocument> reads = mockStatic(ConfigDocument.class)) {
+            reads.when(() -> ConfigDocument.load(file.toPath())).thenReturn(unreadable);
+            assertThat(migrate(file)).isFalse();
+        }
+
+        assertThat(migrationLog).hasSize(1);
+        assertThat(migrationLog.get(0).getMessage()).contains(file.getAbsolutePath(), "unreadable", "IOException")
+                .doesNotContain("migration-secret-sentinel");
+        assertThat(migrationLog.get(0).getThrown()).isNull();
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
+    }
+
+    @Test
+    void anAbsentFileIsNamedWithoutBeingCreated() throws Exception {
+        File file = directory.resolve("absent-config.yml").toFile();
+
+        assertThat(migrate(file)).isFalse();
+
+        assertThat(file).doesNotExist();
+        assertThat(migrationLog).hasSize(1);
+        assertThat(migrationLog.get(0).getLevel()).isEqualTo(Level.SEVERE);
+        assertThat(migrationLog.get(0).getMessage()).contains(file.getAbsolutePath(), "absent");
+        assertThat(migrationLog.get(0).getThrown()).isNull();
+    }
+
+    static Stream<String> blockingScalars() {
+        return Stream.of("ultipanel: migration-secret-sentinel\n", "ultipanel:\n  capabilities: false\n");
+    }
+
+    @ParameterizedTest
+    @MethodSource("blockingScalars")
+    void aScalarBlockingASectionIsNotMisreportedAsADottedKeyCollision(String text) throws Exception {
+        byte[] original = text.getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+
+        assertThat(migrate(file)).isFalse();
+
+        assertMigrationValidationWarning(file, text.startsWith("ultipanel: migration") ? "ultipanel" : "ultipanel.capabilities");
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
+    }
+
+    @Test
+    void aFileChangedBeforeValidationIsNotMisreportedAsADottedKeyCollision() throws Exception {
+        byte[] original = "language: zh\n".getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+        ConfigLoadResult loaded = ConfigDocument.load(file.toPath());
+        ConfigLoadResult changed = mock(ConfigLoadResult.class);
+        when(changed.state()).thenReturn(ConfigLoadResult.State.LOADED);
+        when(changed.fingerprint()).thenReturn("different-fingerprint");
+
+        try (MockedStatic<ConfigDocument> reads = mockStatic(ConfigDocument.class)) {
+            reads.when(() -> ConfigDocument.load(file.toPath())).thenReturn(loaded, loaded, changed);
+            assertThat(migrate(file)).isFalse();
+        }
+
+        assertMigrationValidationWarning(file, "the whole file");
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
+    }
+
+    @Test
+    void anUnreadableRenderingIsNotMisreportedAsADottedKeyCollision() throws Exception {
+        byte[] original = "language: zh\n".getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+        ConfigLoadResult loaded = ConfigDocument.load(file.toPath());
+        ConfigLoadResult fresh = mock(ConfigLoadResult.class);
+        ConfigDocument candidate = mock(ConfigDocument.class);
+        when(fresh.state()).thenReturn(ConfigLoadResult.State.LOADED);
+        when(fresh.fingerprint()).thenReturn(loaded.fingerprint());
+        when(fresh.document()).thenReturn(candidate);
+        when(candidate.render()).thenReturn("password: [migration-secret-sentinel\n");
+
+        try (MockedStatic<ConfigDocument> reads = mockStatic(ConfigDocument.class)) {
+            reads.when(() -> ConfigDocument.load(file.toPath())).thenReturn(loaded, loaded, fresh);
+            assertThat(migrate(file)).isFalse();
+        }
+
+        assertMigrationValidationWarning(file, "the whole file");
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
+    }
+
+    @Test
+    void aChangedFileDuringTheBukkitRereadWarnsOnceWithoutWritingAndRetriesNextStart() throws Exception {
+        File file = write("language: zh\n".getBytes(StandardCharsets.UTF_8));
+        ConfigLoadResult loaded = ConfigDocument.load(file.toPath());
+        byte[] edited = "language: en\n# operator edit\n".getBytes(StandardCharsets.UTF_8);
+        Files.write(file.toPath(), edited);
+        ConfigLoadResult changed = ConfigDocument.load(file.toPath());
+
+        try (MockedStatic<ConfigDocument> reads = mockStatic(ConfigDocument.class)) {
+            reads.when(() -> ConfigDocument.load(file.toPath())).thenReturn(loaded, changed);
+            assertThat(migrate(file)).isFalse();
+        }
+
+        assertBukkitRereadWarning(file);
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(edited);
+        assertThat(migrate(file)).as("the next start retries rather than permanently protecting the file").isTrue();
+    }
+
+    @Test
+    void anUnavailableBukkitRereadWarnsOnceWithoutWriting() throws Exception {
+        byte[] original = "language: zh\n".getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+        ConfigLoadResult loaded = ConfigDocument.load(file.toPath());
+        ConfigLoadResult unreadable = mock(ConfigLoadResult.class);
+        when(unreadable.state()).thenReturn(ConfigLoadResult.State.UNREADABLE);
+
+        try (MockedStatic<ConfigDocument> reads = mockStatic(ConfigDocument.class)) {
+            reads.when(() -> ConfigDocument.load(file.toPath())).thenReturn(loaded, unreadable);
+            assertThat(migrate(file)).isFalse();
+        }
+
+        assertBukkitRereadWarning(file);
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
+    }
+
+    @Test
+    void aBukkitParserFailureWarnsWithoutItsMessageOrThrowable() throws Exception {
+        byte[] original = "language: zh\n".getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+
+        try (MockedConstruction<YamlConfiguration> parsers = mockConstruction(YamlConfiguration.class,
+                (parser, context) -> doThrow(new InvalidConfigurationException("migration-secret-sentinel"))
+                        .when(parser).loadFromString(anyString()))) {
+            assertThat(migrate(file)).isFalse();
+            assertThat(parsers.constructed()).hasSize(1);
+        }
+
+        assertBukkitRereadWarning(file);
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
+    }
+
+    private void assertMigrationValidationWarning(File file, String key) {
+        assertThat(migrationLog).hasSize(1);
+        assertThat(migrationLog.get(0).getLevel()).isEqualTo(Level.WARNING);
+        assertThat(migrationLog.get(0).getMessage()).contains(file.getAbsolutePath(), key, "validation")
+                .doesNotContain("a flat dotted key").doesNotContain("migration-secret-sentinel").doesNotContain("false");
+        assertThat(migrationLog.get(0).getThrown()).isNull();
+        assertThat(gateWarnings).isEmpty();
+    }
+
+    private void assertBukkitRereadWarning(File file) {
+        assertThat(migrationLog).hasSize(1);
+        assertThat(migrationLog.get(0).getLevel()).isEqualTo(Level.WARNING);
+        assertThat(migrationLog.get(0).getMessage()).contains(file.getAbsolutePath(), "read", "next start", "unchanged")
+                .doesNotContain("migration-secret-sentinel");
+        assertThat(migrationLog.get(0).getThrown()).isNull();
+        assertThat(gateWarnings).isEmpty();
     }
 
     /** The comment and key lines the capability migration writes for one switch. */
