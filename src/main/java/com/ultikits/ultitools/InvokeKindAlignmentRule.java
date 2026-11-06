@@ -122,19 +122,21 @@ final class InvokeKindAlignmentRule implements ClassRewriteRule {
             return new MethodVisitor(Opcodes.ASM9, super.visitMethod(access, name, descriptor, signature, exceptions)) {
                 @Override
                 public void visitMethodInsn(int opcode, String owner, String member, String desc, boolean itf) {
+                    int alignedOpcode = opcode;
+                    boolean alignedInterface = itf;
                     Boolean actual = mismatch(owner, itf);
                     if (actual != null) {
                         if (opcode == Opcodes.INVOKESPECIAL) {
                             throw special(owner, member);
                         }
                         if (opcode == Opcodes.INVOKEINTERFACE || opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKESTATIC) {
-                            opcode = opcode == Opcodes.INVOKESTATIC ? opcode
+                            alignedOpcode = opcode == Opcodes.INVOKESTATIC ? opcode
                                     : actual ? Opcodes.INVOKEINTERFACE : Opcodes.INVOKEVIRTUAL;
-                            itf = actual;
+                            alignedInterface = actual;
                             changes++;
                         }
                     }
-                    super.visitMethodInsn(opcode, owner, member, desc, itf);
+                    super.visitMethodInsn(alignedOpcode, owner, member, desc, alignedInterface);
                 }
 
                 @Override

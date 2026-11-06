@@ -224,8 +224,12 @@ class InvokeKindAlignmentRuleTest {
         List<String> messages = new ArrayList<>();
         Handler handler = new Handler() {
             @Override public void publish(LogRecord record) { messages.add(record.getMessage()); }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() {
+                // Messages are collected in memory, so there is nothing to flush.
+            }
+            @Override public void close() {
+                // This in-memory handler owns no resources to close.
+            }
         };
         logger.addHandler(handler);
         try (URLClassLoader parent = fixture.parent();

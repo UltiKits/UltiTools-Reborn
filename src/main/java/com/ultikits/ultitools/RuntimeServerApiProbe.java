@@ -45,6 +45,9 @@ final class RuntimeServerApiProbe implements ServerApiProbe {
     private Optional<Class<?>> resolve(String owner) {
         return types.computeIfAbsent(owner, name -> {
             try {
+                // Names come from the module's own bytecode references; initialize=false runs no static initializer.
+                // Classes are only inspected for kind/members, never instantiated or invoked.
+                // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
                 return Optional.of(Class.forName(name.replace('/', '.'), false, parent));
             } catch (ClassNotFoundException absent) {
                 return Optional.empty();
@@ -55,34 +58,49 @@ final class RuntimeServerApiProbe implements ServerApiProbe {
 
     private static boolean findMethod(Class<?> type, String name, String descriptor) {
         if ("<init>".equals(name)) {
-            for (Constructor<?> constructor : type.getDeclaredConstructors()) {
-                if (Type.getConstructorDescriptor(constructor).equals(descriptor)) {
-                    return true;
-                }
-            }
-            return false;
+            return declaresConstructor(type, descriptor);
         }
         if ("<clinit>".equals(name)) {
             return false;
         }
-        if (type.isInterface()) {
-            if (declaresMethod(type, name, descriptor, false)) {
+        boolean declared = type.isInterface() ? findInterfaceOwnerMethod(type, name, descriptor)
+                : findClassMethod(type, name, descriptor);
+        return declared || findInheritedInterfaceMethod(type, name, descriptor);
+    }
+
+    private static boolean declaresConstructor(Class<?> type, String descriptor) {
+        for (Constructor<?> constructor : type.getDeclaredConstructors()) {
+            if (Type.getConstructorDescriptor(constructor).equals(descriptor)) {
                 return true;
             }
-            // JVMS interface method resolution also admits public instance methods of Object.
-            for (Method method : Object.class.getDeclaredMethods()) {
-                if (Modifier.isPublic(method.getModifiers()) && !Modifier.isStatic(method.getModifiers())
-                        && matches(method, name, descriptor)) {
-                    return true;
-                }
-            }
-        } else {
-            for (Class<?> current = type; current != null; current = current.getSuperclass()) {
-                if (declaresMethod(current, name, descriptor, false)) {
-                    return true;
-                }
+        }
+        return false;
+    }
+
+    private static boolean findInterfaceOwnerMethod(Class<?> type, String name, String descriptor) {
+        if (declaresMethod(type, name, descriptor, false)) {
+            return true;
+        }
+        // JVMS interface method resolution also admits public instance methods of Object.
+        for (Method method : Object.class.getDeclaredMethods()) {
+            if (Modifier.isPublic(method.getModifiers()) && !Modifier.isStatic(method.getModifiers())
+                    && matches(method, name, descriptor)) {
+                return true;
             }
         }
+        return false;
+    }
+
+    private static boolean findClassMethod(Class<?> type, String name, String descriptor) {
+        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+            if (declaresMethod(current, name, descriptor, false)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean findInheritedInterfaceMethod(Class<?> type, String name, String descriptor) {
         Set<Class<?>> visited = new HashSet<>();
         for (Class<?> current = type; current != null; current = current.getSuperclass()) {
             for (Class<?> superinterface : current.getInterfaces()) {

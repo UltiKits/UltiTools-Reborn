@@ -33,7 +33,7 @@ class RuntimeServerApiProbeTest {
             assertThat(probe.hasMethod(owner, "<init>", "()V")).isTrue();
             assertThat(probe.hasField(owner, "FIELD", "Ljava/lang/String;")).isTrue();
             assertThat(probe.hasField(owner, "FIELD", "Ljava/lang/Object;")).isFalse();
-            assertThatThrownBy(() -> Class.forName(owner.replace('/', '.'), true, parent))
+            assertThatThrownBy(() -> Class.forName("org.bukkit.compatfixture.Shape", true, parent))
                     .isInstanceOf(AssertionError.class).hasMessage("initialized");
         }
     }

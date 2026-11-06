@@ -50,6 +50,7 @@ final class InvokeKindTestFixture {
         return caller.getMethod("run", Object.class).invoke(null, receiver);
     }
 
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // The cause guard tests identity, not logical equality.
     static Throwable root(Throwable failure) {
         Throwable result = failure;
         while (result.getCause() != null && result.getCause() != result) {
@@ -184,30 +185,9 @@ final class InvokeKindTestFixture {
             method.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/function/Supplier", "get", "()Ljava/lang/Object;", true);
             method.visitTypeInsn(Opcodes.CHECKCAST, "java/lang/String");
         } else if ("handle".equals(form) || "static-handle".equals(form) || "special-handle".equals(form) || "condy".equals(form)) {
-            boolean isStatic = "static-handle".equals(form);
-            int tag = isStatic ? Opcodes.H_INVOKESTATIC : "special-handle".equals(form) ? Opcodes.H_INVOKESPECIAL : virtualTag;
-            Handle target = new Handle(tag, owner, member, descriptor, itf);
-            if ("condy".equals(form)) {
-                Handle bootstrap = new Handle(Opcodes.H_INVOKESTATIC, "java/lang/invoke/ConstantBootstraps", "explicitCast",
-                        "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/Class;Ljava/lang/Object;)Ljava/lang/Object;", false);
-                ConstantDynamic inner = new ConstantDynamic("inner", "Ljava/lang/invoke/MethodHandle;", bootstrap, target);
-                method.visitLdcInsn(new ConstantDynamic("outer", "Ljava/lang/invoke/MethodHandle;", bootstrap, inner));
-            } else {
-                method.visitLdcInsn(target);
-            }
-            if (!isStatic) {
-                receiver(method, owner);
-            }
-            method.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/invoke/MethodHandle", "invokeExact",
-                    isStatic ? descriptor : "(L" + owner + ";)Ljava/lang/String;", false);
+            handleInvocation(method, owner, form, itf, member);
         } else {
-            boolean isStatic = "static".equals(form);
-            if (!isStatic) {
-                receiver(method, owner);
-            }
-            int opcode = isStatic ? Opcodes.INVOKESTATIC : "special".equals(form) ? Opcodes.INVOKESPECIAL
-                    : itf ? Opcodes.INVOKEINTERFACE : Opcodes.INVOKEVIRTUAL;
-            method.visitMethodInsn(opcode, owner, member, descriptor, itf);
+            methodInvocation(method, owner, form, itf, member);
         }
         if ("twice".equals(form)) {
             method.visitInsn(Opcodes.POP);
@@ -219,6 +199,38 @@ final class InvokeKindTestFixture {
         method.visitEnd();
         writer.visitEnd();
         return writer.toByteArray();
+    }
+
+    private static void handleInvocation(MethodVisitor method, String owner, String form, boolean itf, String member) {
+        String descriptor = "()Ljava/lang/String;";
+        int virtualTag = itf ? Opcodes.H_INVOKEINTERFACE : Opcodes.H_INVOKEVIRTUAL;
+        boolean isStatic = "static-handle".equals(form);
+        int tag = isStatic ? Opcodes.H_INVOKESTATIC : "special-handle".equals(form) ? Opcodes.H_INVOKESPECIAL : virtualTag;
+        Handle target = new Handle(tag, owner, member, descriptor, itf);
+        if ("condy".equals(form)) {
+            Handle bootstrap = new Handle(Opcodes.H_INVOKESTATIC, "java/lang/invoke/ConstantBootstraps", "explicitCast",
+                    "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/Class;Ljava/lang/Object;)Ljava/lang/Object;", false);
+            ConstantDynamic inner = new ConstantDynamic("inner", "Ljava/lang/invoke/MethodHandle;", bootstrap, target);
+            method.visitLdcInsn(new ConstantDynamic("outer", "Ljava/lang/invoke/MethodHandle;", bootstrap, inner));
+        } else {
+            method.visitLdcInsn(target);
+        }
+        if (!isStatic) {
+            receiver(method, owner);
+        }
+        method.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/invoke/MethodHandle", "invokeExact",
+                isStatic ? descriptor : "(L" + owner + ";)Ljava/lang/String;", false);
+    }
+
+    private static void methodInvocation(MethodVisitor method, String owner, String form, boolean itf, String member) {
+        String descriptor = "()Ljava/lang/String;";
+        boolean isStatic = "static".equals(form);
+        if (!isStatic) {
+            receiver(method, owner);
+        }
+        int opcode = isStatic ? Opcodes.INVOKESTATIC : "special".equals(form) ? Opcodes.INVOKESPECIAL
+                : itf ? Opcodes.INVOKEINTERFACE : Opcodes.INVOKEVIRTUAL;
+        method.visitMethodInsn(opcode, owner, member, descriptor, itf);
     }
 
     private static void receiver(MethodVisitor method, String owner) {
