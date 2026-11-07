@@ -820,11 +820,14 @@ class ConfigTypedMapKeyTest {
 
         // To this parser '02' is -2, a key neither the module nor the file holds: the line '2' is not its spelling.
         config.padded.remove(2);
-        try {
-            config.saveOperatorMapEntry("padded", "02");
-        } catch (ConfigWriteRefusedException refused) {
-            assertThat(refused).hasMessageNotContaining("several spellings");
-        }
+        byte[] beforeNoOp = Files.readAllBytes(file().toPath());
+        long modified = file().lastModified();
+
+        assertThatCode(() -> config.saveOperatorMapEntry("padded", "02")).doesNotThrowAnyException();
+
+        assertThat(Files.readAllBytes(file().toPath())).as("an absent parser-owned entry is a successful no-op")
+                .isEqualTo(beforeNoOp);
+        assertThat(file().lastModified()).as("a no-op does not rewrite the operator's file").isEqualTo(modified);
         assertThat(text()).as("the entry 2 the operator did not name").isEqualTo(afterSecond);
     }
 

@@ -290,7 +290,7 @@ class BuildVerificationConfigurationTest {
                 assertThat(ignores).extracting(rule -> rule.get("versions")).containsExactly(
                         java.util.Collections.singletonList(">=6"), null, null,
                         java.util.Collections.singletonList(">=5"), null, null, null, null,
-                        java.util.Collections.singletonList(">=6"), java.util.Arrays.asList("<1.21", ">=1.22"));
+                        java.util.Collections.singletonList(">=6"), java.util.Collections.singletonList(">=1.22"));
             } else {
                 assertThat(update).doesNotContainKey("open-pull-requests-limit");
             }
@@ -306,7 +306,7 @@ class BuildVerificationConfigurationTest {
         assertThat(triggers).containsOnlyKeys("push", "pull_request");
         for (String event : java.util.Arrays.asList("push", "pull_request")) {
             assertThat(triggers.get(event)).isEqualTo(java.util.Collections.singletonMap(
-                    "branches", java.util.Collections.singletonList("main")));
+                    "branches", java.util.Arrays.asList("main", "release/**")));
         }
         Map<String, Map<String, Object>> jobs = (Map<String, Map<String, Object>>) workflow.get("jobs");
         assertThat(jobs).containsOnlyKeys("test", "release-tooling");
@@ -373,7 +373,8 @@ class BuildVerificationConfigurationTest {
         Process process = new ProcessBuilder("python3", "-I", "-c", LIFECYCLE_PROBE,
                 Paths.get("").toAbsolutePath().toString(), temporary.toString(), scenario)
                 .redirectErrorStream(true).redirectOutput(output.toFile()).start();
-        boolean finished = process.waitFor(90, TimeUnit.SECONDS);
+        // Nested Maven/JVM fixtures share the build machine; allow load without an unbounded wait.
+        boolean finished = process.waitFor(300, TimeUnit.SECONDS);
         if (!finished) {
             process.destroyForcibly();
         }
