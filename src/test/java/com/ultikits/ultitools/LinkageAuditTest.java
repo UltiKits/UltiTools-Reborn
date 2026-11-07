@@ -773,8 +773,21 @@ class LinkageAuditTest implements Opcodes {
         Map<String, byte[]> classes = new LinkedHashMap<>();
         ClassWriter parent = caller("org/bukkit/Api");
         parent.visitField(ACC_PUBLIC, "exists", "I", null, null).visitEnd();
-        finish(method(parent, "exists", "()Ljava/lang/String;"));
-        finish(method(parent, "<init>", "(I)V"));
+        // API members are instance members built with legal flags: a static <init> is a
+        // ClassFormatError as soon as any probe loads org/bukkit/Api.
+        MethodVisitor exists = parent.visitMethod(ACC_PUBLIC, "exists", "()Ljava/lang/String;", null, null);
+        exists.visitCode();
+        exists.visitInsn(ACONST_NULL);
+        exists.visitInsn(ARETURN);
+        exists.visitMaxs(1, 1);
+        exists.visitEnd();
+        MethodVisitor constructor = parent.visitMethod(ACC_PUBLIC, "<init>", "(I)V", null, null);
+        constructor.visitCode();
+        constructor.visitVarInsn(ALOAD, 0);
+        constructor.visitMethodInsn(INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        constructor.visitInsn(RETURN);
+        constructor.visitMaxs(1, 2);
+        constructor.visitEnd();
         classes.put("org/bukkit/Api", bytes(parent));
         ClassWriter child = new ClassWriter(0);
         child.visit(V1_8, ACC_PUBLIC, "org/bukkit/Child", null, "org/bukkit/Api", null);
