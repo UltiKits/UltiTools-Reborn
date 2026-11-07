@@ -293,24 +293,28 @@ class LinkageAuditTest implements Opcodes {
             assertEquals("main", order.get(0));
             assertTrue(order.indexOf("audit") < order.indexOf("scan"));
             if (annotated) assertTrue(order.indexOf("scan") < order.indexOf("bean"));
-            assertEquals(annotated ? 2 : 1, records.stream()
-                    .filter(r -> r.getLevel().equals(java.util.logging.Level.WARNING)).count());
-            assertTrue(records.stream().anyMatch(r -> r.getLevel().equals(java.util.logging.Level.WARNING)
-                    && r.getMessage().contains(
-                            annotated ? "runtime.own.Service.unused" : "runtime.entry.Caller.unused")));
-            if (annotated) {
-                assertTrue(records.stream().anyMatch(r -> r.getLevel().equals(java.util.logging.Level.WARNING)
-                        && r.getMessage().contains("runtime.marker.Caller.unused")));
-                assertFalse(records.stream().anyMatch(r -> r.getLevel().equals(java.util.logging.Level.WARNING)
-                        && r.getMessage().contains("runtime.ownExtra.Caller.unused")));
-                assertTrue(records.stream().anyMatch(r -> r.getLevel().equals(java.util.logging.Level.INFO)
-                        && r.getMessage().equals(summary(module.getName(), 1, "runtime.ownExtra"))));
-            }
+            assertRuntimeScanRootDiagnostics(annotated, module, records);
             org.mockito.Mockito.verify(manager).getPluginScanPackages(
                     (Class<? extends UltiToolsPlugin>) loader.loadClass("runtime.entry.Main"));
         } finally {
             container.close();
             System.clearProperty(property);
+        }
+    }
+
+    private static void assertRuntimeScanRootDiagnostics(boolean annotated, File module, List<LogRecord> records) {
+        assertEquals(annotated ? 2 : 1, records.stream()
+                .filter(r -> r.getLevel().equals(java.util.logging.Level.WARNING)).count());
+        assertTrue(records.stream().anyMatch(r -> r.getLevel().equals(java.util.logging.Level.WARNING)
+                && r.getMessage().contains(
+                        annotated ? "runtime.own.Service.unused" : "runtime.entry.Caller.unused")));
+        if (annotated) {
+            assertTrue(records.stream().anyMatch(r -> r.getLevel().equals(java.util.logging.Level.WARNING)
+                    && r.getMessage().contains("runtime.marker.Caller.unused")));
+            assertFalse(records.stream().anyMatch(r -> r.getLevel().equals(java.util.logging.Level.WARNING)
+                    && r.getMessage().contains("runtime.ownExtra.Caller.unused")));
+            assertTrue(records.stream().anyMatch(r -> r.getLevel().equals(java.util.logging.Level.INFO)
+                    && r.getMessage().equals(summary(module.getName(), 1, "runtime.ownExtra"))));
         }
     }
 
