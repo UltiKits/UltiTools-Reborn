@@ -5,7 +5,8 @@ import copy
 import os
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as element_tree
+from defusedxml.ElementTree import parse as parse_xml
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +35,7 @@ class Dependency:
         return self.group, self.artifact
 
 
-def required_text(element: ET.Element, path: str) -> str:
+def required_text(element: element_tree.Element, path: str) -> str:
     value = element.findtext(path, namespaces=NAMESPACE)
     if value is None or not value.strip():
         raise ValueError("Missing POM value: " + path)
@@ -64,13 +65,13 @@ def resolve_dependencies(pom: Path, directory: Path, scope: str) -> list[Depende
     return dependencies
 
 
-def paper_pom(project: ET.Element, directory: Path, version: str) -> Path:
+def paper_pom(project: element_tree.Element, directory: Path, version: str) -> Path:
     """Resolve Paper independently, including descendants mediated out of our POM."""
     directory.mkdir(parents=True, exist_ok=True)
-    pom = ET.Element("project", xmlns=NAMESPACE["m"])
+    pom = element_tree.Element("project", xmlns=NAMESPACE["m"])
     for name, value in (("modelVersion", "4.0.0"), ("groupId", "linkage.audit"),
                         ("artifactId", "paper-api-classpath"), ("version", "1")):
-        ET.SubElement(pom, name).text = value
+        element_tree.SubElement(pom, name).text = value
     for name in ("properties", "dependencyManagement", "repositories"):
         element = project.find("m:" + name, NAMESPACE)
         if element is not None:
@@ -80,11 +81,11 @@ def paper_pom(project: ET.Element, directory: Path, version: str) -> Path:
             for child in cloned.iter():
                 child.tag = child.tag.removeprefix("{" + NAMESPACE["m"] + "}")
             pom.append(cloned)
-    dependency = ET.SubElement(ET.SubElement(pom, "dependencies"), "dependency")
+    dependency = element_tree.SubElement(element_tree.SubElement(pom, "dependencies"), "dependency")
     for name, value in (("groupId", PAPER[0]), ("artifactId", PAPER[1]), ("version", version)):
-        ET.SubElement(dependency, name).text = value
+        element_tree.SubElement(dependency, name).text = value
     path = directory / "pom.xml"
-    ET.ElementTree(pom).write(path, encoding="utf-8", xml_declaration=True)
+    element_tree.ElementTree(pom).write(path, encoding="utf-8", xml_declaration=True)
     return path
 
 
@@ -120,7 +121,7 @@ def framework_resolution(framework: list[Dependency], modern: list[Dependency]) 
 
 def main():
     pom_path = Path("pom.xml").resolve(strict=True)
-    project = ET.parse(pom_path).getroot()
+    project = parse_xml(pom_path).getroot()
     version = required_text(project, "m:version")
     framework = Path(sys.argv[1] if len(sys.argv) == 2 else
                      "target/UltiTools-API-" + version + ".jar").resolve(strict=True)

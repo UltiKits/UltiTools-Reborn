@@ -48,10 +48,6 @@ jobs:
       if: steps.changes.outputs.build == 'true'
       run: mvn -B clean verify
 
-    - name: Audit framework linkage against old Paper APIs
-      if: steps.changes.outputs.build == 'true'
-      run: python3 -I .github/scripts/audit_framework_linkage.py
-
     - name: Verify checkout remains clean
       if: steps.changes.outputs.build == 'true'
       run: |
@@ -60,6 +56,14 @@ jobs:
           printf '%s\n' "$STATUS"
           exit 1
         fi
+
+    - name: Install pinned linkage-audit Python dependencies
+      if: steps.changes.outputs.build == 'true'
+      run: bash .github/scripts/setup-linkage-audit-python.sh
+
+    - name: Audit framework linkage against old Paper APIs
+      if: steps.changes.outputs.build == 'true'
+      run: python3 -I .github/scripts/audit_framework_linkage.py
 
     - name: 🧪 Run isolated-tagged tests
       # A fresh Maven/Surefire JVM still isolates scheduler state. Reuse compiled classes, not reports.
@@ -212,6 +216,10 @@ jobs:
       # Run flatten online to populate its runtime realm, then resolve the offline Central probe dependencies.
       if: steps.changes.outputs.tooling == 'true'
       run: mvn -B -ntp process-resources dependency:resolve-plugins
+
+    - name: Install pinned linkage-audit Python dependencies
+      if: steps.changes.outputs.tooling == 'true'
+      run: bash .github/scripts/setup-linkage-audit-python.sh
 
     - name: Release tooling regression suites
       if: steps.changes.outputs.tooling == 'true'

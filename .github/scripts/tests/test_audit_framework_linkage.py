@@ -10,7 +10,9 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as element_tree
+from defusedxml.ElementTree import fromstring as parse_xml_string, parse as parse_xml
+from defusedxml.common import EntitiesForbidden
 import zipfile
 
 
@@ -83,19 +85,24 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
         self.assertFalse(output.exists())
 
     def test_modern_paper_graph_is_resolved_as_independent_root(self):
-        project = ET.fromstring('''<project xmlns="http://maven.apache.org/POM/4.0.0">
+        project = parse_xml_string('''<project xmlns="http://maven.apache.org/POM/4.0.0">
           <properties><paper.version>1.21.11-R0.1-SNAPSHOT</paper.version></properties>
           <repositories><repository><id>paper</id><url>https://example.invalid/</url></repository></repositories>
           <dependencies><dependency><groupId>unrelated</groupId><artifactId>not-paper</artifactId>
           <version>1</version></dependency></dependencies></project>''')
         path = AUDIT.paper_pom(project, self.root, "${paper.version}")
         self.assertNotIn("ns0:", path.read_text(encoding="utf-8"))
-        generated = ET.parse(path).getroot()
+        generated = parse_xml(path).getroot()
         dependencies = generated.findall("m:dependencies/m:dependency", AUDIT.NAMESPACE)
         self.assertEqual(1, len(dependencies))
         self.assertEqual("paper-api", AUDIT.required_text(dependencies[0], "m:artifactId"))
         self.assertEqual("${paper.version}", AUDIT.required_text(dependencies[0], "m:version"))
         self.assertEqual("1.21.11-R0.1-SNAPSHOT", AUDIT.required_text(generated, "m:properties/m:paper.version"))
+        hostile = self.root / "entity.xml"
+        hostile.write_text('<!DOCTYPE project [<!ENTITY value "expanded">]><project>&value;</project>',
+                           encoding="utf-8")
+        with self.assertRaises(EntitiesForbidden):
+            AUDIT.parse_xml(hostile)
 
     def test_main_uses_old_graph_first_and_only_framework_as_subject(self):
         framework = self.jar("framework")
@@ -103,7 +110,7 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
         old = self.jar("paper-api", group="io.papermc.paper")
         old_child = self.jar("old-child")
         modern = self.jar("paper-api-modern", group="io.papermc.paper")
-        project = ET.fromstring('''<project xmlns="http://maven.apache.org/POM/4.0.0">
+        project = parse_xml_string('''<project xmlns="http://maven.apache.org/POM/4.0.0">
           <version>1</version><dependencies><dependency><groupId>io.papermc.paper</groupId>
           <artifactId>paper-api</artifactId><version>modern</version></dependency></dependencies></project>''')
         invocations = []
@@ -119,7 +126,7 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
                 return [supplemental]
             return [old_child, old]
 
-        with patch.object(AUDIT.ET, "parse", return_value=ET.ElementTree(project)), \
+        with patch.object(AUDIT, "parse_xml", return_value=element_tree.ElementTree(project)), \
                 patch.object(AUDIT, "resolve_dependencies", side_effect=resolve), \
                 patch.object(AUDIT.subprocess, "run", side_effect=lambda args, **kw: invocations.append(args)), \
                 patch.object(sys, "argv", [str(SCRIPT), str(framework.path)]), \
