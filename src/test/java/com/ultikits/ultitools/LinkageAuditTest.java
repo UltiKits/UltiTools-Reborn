@@ -557,6 +557,154 @@ class LinkageAuditTest implements Opcodes {
         }
     }
 
+    @Test
+    void javacSwitchMapMissingConstantIsGuardedInStartupAndOfflineAudits() throws Exception {
+        Map<String, byte[]> compiled = compileFixture("switch", "return value == null ? 0 : switchValue(value);");
+        File module = jar("switch.jar", compiled);
+        File oldApi = enumApiJar();
+        try (URLClassLoader api = new URLClassLoader(new URL[]{oldApi.toURI().toURL()}, null)) {
+            assertTrue(LinkageAudit.scan(module, api, Collections.emptyList()).isEmpty());
+            List<LogRecord> records = new ArrayList<>();
+            try (ModuleClassLoader loader = new ModuleClassLoader(new URL[]{module.toURI().toURL()}, api,
+                    null, Collections.emptyList(), null)) {
+                loader.auditModules(capture(records));
+                loader.reportModule(loader.loadClass("fixture.Guarded"), new String[]{"fixture"}, capture(records));
+            }
+            assertTrue(records.isEmpty(), "startup and offline must share the same guarded-field rule");
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertEquals(0, LinkageAudit.run(new String[]{"--api", oldApi.getPath(), "--own", "fixture/",
+                module.getPath()}, new PrintStream(output)));
+        assertEquals("", output.toString("UTF-8"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"NoSuchFieldError", "IncompatibleClassChangeError",
+            "LinkageError", "Error", "Throwable"})
+    void javacExplicitSupertypeCatchesGuardOnlyMissingGetstaticFields(String exception) throws Exception {
+        Map<String, byte[]> compiled = compileFixture(exception,
+                "try { return org.bukkit.FutureEnum.MISSING.ordinal(); } catch (" + exception
+                        + " ignored) { return -1; }");
+        try (URLClassLoader api = new URLClassLoader(new URL[]{enumApiJar().toURI().toURL()}, null)) {
+            assertTrue(LinkageAudit.scan(jar(exception + ".jar", compiled), api, Collections.emptyList()).isEmpty());
+        }
+    }
+
+    @Test
+    void javacUnguardedAndFinallyOnlyReadsStillReportMissingFields() throws Exception {
+        for (String body : Arrays.asList("return org.bukkit.FutureEnum.MISSING.ordinal();",
+                "try { return org.bukkit.FutureEnum.MISSING.ordinal(); } finally { System.nanoTime(); }")) {
+            Map<String, byte[]> compiled = compileFixture("control" + body.length(), body);
+            if (body.contains("finally")) {
+                List<String> catchTypes = new ArrayList<>();
+                new net.bytebuddy.jar.asm.ClassReader(compiled.get("fixture/Guarded")).accept(
+                        new net.bytebuddy.jar.asm.ClassVisitor(ASM9) {
+                            @Override public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                    String signature, String[] exceptions) {
+                                return new MethodVisitor(ASM9) {
+                                    @Override public void visitTryCatchBlock(net.bytebuddy.jar.asm.Label start,
+                                            net.bytebuddy.jar.asm.Label end, net.bytebuddy.jar.asm.Label handler,
+                                            String type) { catchTypes.add(type); }
+                                };
+                            }
+                        }, 0);
+                assertTrue(catchTypes.contains(null), "javac finally must exercise an actual type-0 handler");
+            }
+            try (URLClassLoader api = new URLClassLoader(new URL[]{enumApiJar().toURI().toURL()}, null)) {
+                List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("control.jar", compiled), api,
+                        Collections.emptyList());
+                assertEquals(1, findings.size());
+                assertEquals(Collections.singletonList("MISSING-FIELD"), findings.get(0).problems);
+                assertEquals("MISSING", findings.get(0).reference.getName());
+            }
+        }
+    }
+
+    @Test
+    void guardRangesAreStartInclusiveEndExclusiveAndPreserveOtherReferences() throws Exception {
+        ClassWriter writer = caller("fixture/Ranges");
+        MethodVisitor call = method(writer, "call", "()V");
+        net.bytebuddy.jar.asm.Label start = new net.bytebuddy.jar.asm.Label();
+        net.bytebuddy.jar.asm.Label end = new net.bytebuddy.jar.asm.Label();
+        call.visitTryCatchBlock(start, end, end, "java/lang/NoSuchFieldError");
+        call.visitFieldInsn(GETSTATIC, "org/bukkit/Api", "sameField", "I");
+        call.visitLabel(start);
+        call.visitFieldInsn(GETSTATIC, "org/bukkit/Api", "sameField", "I");
+        call.visitFieldInsn(GETFIELD, "org/bukkit/Api", "instance", "I");
+        call.visitFieldInsn(PUTSTATIC, "org/bukkit/Api", "write", "I");
+        call.visitFieldInsn(PUTFIELD, "org/bukkit/Api", "instanceWrite", "I");
+        call.visitLdcInsn(new Handle(H_GETSTATIC, "org/bukkit/Api", "handle", "I", false));
+        call.visitMethodInsn(INVOKESTATIC, "org/bukkit/Api", "missingMethod", "()V", false);
+        call.visitFieldInsn(GETSTATIC, "org/bukkit/Missing", "owner", "I");
+        call.visitFieldInsn(GETSTATIC, "org/bukkit/Api", "descriptor", "Lorg/bukkit/MissingType;");
+        call.visitLabel(end);
+        call.visitFieldInsn(GETSTATIC, "org/bukkit/Api", "sameField", "I");
+        finish(call);
+        // A different method must not inherit a guard from the previous method.
+        MethodVisitor other = method(writer, "other", "()V");
+        other.visitFieldInsn(GETSTATIC, "org/bukkit/Api", "other", "I");
+        finish(other);
+        try (URLClassLoader api = api()) {
+            List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("ranges.jar", bytes(writer)), api,
+                    Collections.emptyList());
+            List<String> names = new ArrayList<>();
+            for (LinkageAudit.Finding finding : findings) names.add(finding.reference.getName());
+            assertEquals(Arrays.asList("sameField", "instance", "write", "instanceWrite", "handle", "missingMethod",
+                    "owner", null, "sameField", "other"), names);
+            assertEquals(2, Collections.frequency(problemNames(findings), "MISSING-CLASS"));
+            assertEquals(1, Collections.frequency(problemNames(findings), "MISSING-METHOD"));
+        }
+    }
+
+    @Test
+    void unrelatedCatchTypeDoesNotGuardMissingGetstatic() throws Exception {
+        Map<String, byte[]> compiled = compileFixture("unrelated",
+                "try { return org.bukkit.FutureEnum.MISSING.ordinal(); } catch (RuntimeException ignored) { return -1; }");
+        try (URLClassLoader api = new URLClassLoader(new URL[]{enumApiJar().toURI().toURL()}, null)) {
+            assertEquals(1, LinkageAudit.scan(jar("unrelated.jar", compiled), api, Collections.emptyList()).size());
+        }
+    }
+
+    private Map<String, byte[]> compileFixture(String directory, String body) throws Exception {
+        Path root = Files.createDirectories(temporary.resolve(directory));
+        Path enumSource = root.resolve("org/bukkit/FutureEnum.java");
+        Path callerSource = root.resolve("fixture/Guarded.java");
+        Files.createDirectories(enumSource.getParent());
+        Files.createDirectories(callerSource.getParent());
+        Files.write(enumSource, "package org.bukkit; public enum FutureEnum { PRESENT, MISSING }"
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(callerSource, ("package fixture; public class Guarded {"
+                + " public static int read(org.bukkit.FutureEnum value) { " + body + " }"
+                + (body.contains("switchValue") ? " static int switchValue(org.bukkit.FutureEnum value) { switch (value) {"
+                        + " case PRESENT: return 1; case MISSING: return 2; default: return 0; } }" : "") + " }")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        assertNotNull(compiler, "tests require the configured JDK toolchain");
+        assertEquals(0, compiler.run(null, null, null, "-source", "8", "-target", "8", "-g", "-proc:none",
+                "-d", root.toString(), enumSource.toString(), callerSource.toString()));
+        Map<String, byte[]> classes = new LinkedHashMap<>();
+        classes.put("fixture/Guarded", Files.readAllBytes(root.resolve("fixture/Guarded.class")));
+        if (body.contains("switchValue")) {
+            classes.put("fixture/Guarded$1", Files.readAllBytes(root.resolve("fixture/Guarded$1.class")));
+        }
+        return classes;
+    }
+
+    private File enumApiJar() throws Exception {
+        // Keep javac's real enum methods, but remove the future constant from the API index.
+        Path enumClass = temporary.resolve("switch/org/bukkit/FutureEnum.class");
+        if (!Files.exists(enumClass)) compileFixture("switch", "return switchValue(value);");
+        net.bytebuddy.jar.asm.ClassReader reader = new net.bytebuddy.jar.asm.ClassReader(Files.readAllBytes(enumClass));
+        ClassWriter writer = new ClassWriter(0);
+        reader.accept(new net.bytebuddy.jar.asm.ClassVisitor(ASM9, writer) {
+            @Override public net.bytebuddy.jar.asm.FieldVisitor visitField(int access, String name, String descriptor,
+                    String signature, Object value) {
+                return "MISSING".equals(name) ? null : super.visitField(access, name, descriptor, signature, value);
+            }
+        }, 0);
+        return jar("enum-api.jar", writer.toByteArray());
+    }
+
     private File scopeJar() throws Exception {
         Map<String, byte[]> classes = new LinkedHashMap<>();
         classes.put("com/github/alpha/Root", bytes(caller("com/github/alpha/Root")));
