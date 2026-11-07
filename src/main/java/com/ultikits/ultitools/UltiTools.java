@@ -5,7 +5,6 @@ import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -43,7 +42,6 @@ import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.config.document.ConfigDocument;
 import com.ultikits.ultitools.config.document.ConfigLoadResult;
-import com.ultikits.ultitools.config.document.ConfigParseException;
 import com.ultikits.ultitools.config.document.OperatorFileWriter;
 import com.ultikits.ultitools.config.document.OwnedPaths;
 import com.ultikits.ultitools.entities.Capability;
@@ -601,17 +599,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private static boolean migrateCapabilitiesConfig(File configFile, Logger logger) {
         ConfigLoadResult loaded = ConfigDocument.load(configFile.toPath());
         if (loaded.state() != ConfigLoadResult.State.LOADED) {
-            Exception cause = loaded.cause() != null ? loaded.cause()
-                    : loaded.state() == ConfigLoadResult.State.ABSENT ? new FileNotFoundException(configFile.getPath())
-                    : new ConfigParseException(String.valueOf(loaded.parserMessage()), null);
-            logger.log(Level.SEVERE, "Cannot load config.yml for capability migration; the file is not written: "
-                    + cause.getMessage(), cause);
+            logger.log(Level.SEVERE, "Cannot load " + configFile.getAbsolutePath() + " for capability migration: "
+                    + migrationLoadFailure(loaded) + "; the file is not written.");
             return false;
         }
 
         ConfigDocument document = loaded.document();
         YamlConfiguration server = bukkitReading(configFile, loaded.fingerprint());
         if (server == null) {
+            logger.warning("Configuration file " + configFile.getAbsolutePath() + " was not written: capability migration"
+                    + " could not read the file again unchanged and parse it as the server does. The built-in defaults"
+                    + " answer for the missing keys; the file is unchanged. The next start retries the migration.");
             return false;
         }
         Map<List<String>, Object> missing = new LinkedHashMap<>();
@@ -648,10 +646,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
         try {
             String changed = keyBukkitWouldReadDifferently(configFile, loaded.fingerprint(), server, insert);
             if (changed != null) {
-                logger.warning("Configuration file " + configFile.getAbsolutePath() + " was not written: inserting the"
-                        + " missing panel keys would change how the server reads '" + changed + "' (a flat dotted key"
-                        + " and a nested section name the same setting). The built-in defaults answer for the missing"
-                        + " keys; the file is unchanged.");
+                logger.warning("Configuration file " + configFile.getAbsolutePath() + " was not written: capability"
+                        + " migration validation failed for '" + changed + "'. Inserting the missing panel keys could not"
+                        + " be verified to preserve how the server reads the existing file. The built-in defaults answer"
+                        + " for the missing keys; the file is unchanged.");
                 return false;
             }
             OperatorFileWriter.Result result = OperatorFileWriter.write(configFile.toPath(), owned.build(),
@@ -661,6 +659,18 @@ public final class UltiTools extends JavaPlugin implements Localized {
             logger.log(Level.SEVERE, "Failed to persist capability migration: " + e.getMessage(), e);
             return false;
         }
+    }
+
+    /** Only failure categories and numeric locations: parser messages and throwable chains can quote operator values. */
+    private static String migrationLoadFailure(ConfigLoadResult loaded) {
+        if (loaded.state() == ConfigLoadResult.State.ABSENT) {
+            return "the file is absent";
+        }
+        if (loaded.state() == ConfigLoadResult.State.UNREADABLE) {
+            return "the file is unreadable (" + (loaded.cause() == null ? "I/O failure"
+                    : loaded.cause().getClass().getSimpleName()) + ")";
+        }
+        return loaded.safeParserLocation();
     }
 
     /**

@@ -17,6 +17,7 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -163,24 +164,33 @@ public final class ConverterRegistry {
             ordered.sort(java.util.Comparator.comparing(Class::getName));
             for (Class<?> converterClass : ordered) { candidate.discover(converterClass); }
             candidate.sealed = true;
-            MODULES.put(plugin, new Prepared(candidate, union));
+            MODULES.put(plugin, new Prepared(candidate, union,
+                    previous == null ? new IdentityHashMap<>() : previous.configClasses));
             return candidate;
         }
     }
 
     /**
      * Checks exactly the requested auto-registration batch before any entity is constructed.
-     * Discovery caching never skips selection or validation; empty config paths remain ignored.
+     * Successful discovery is cached per module, class-loader identity and exact package, including empty scans.
+     * Each call selects a fresh set for only its requested packages and validates it against the current registry;
+     * cached discovery never skips validation. Empty config paths remain ignored.
      * @param plugin the module selecting the batch
      * @param packages exactly the packages selected for this registration
      * @param loader the class loader used by the selected scan
      * @return the selected config classes, all checked before the caller constructs any
      */
     public static Set<Class<?>> prepareSelectedConfigs(UltiToolsPlugin plugin, String[] packages, ClassLoader loader) {
-        ConverterRegistry registry = prepareModule(plugin, packages, loader);
+        ConverterRegistry registry;
         Set<Class<?>> selected = new LinkedHashSet<>();
-        for (String scanPackage : packages) {
-            selected.addAll(PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, scanPackage, loader));
+        synchronized (MODULES) {
+            registry = prepareModule(plugin, packages, loader);
+            Map<String, Set<Class<?>>> discovered = MODULES.get(plugin).configClasses
+                    .computeIfAbsent(loader, ignored -> new LinkedHashMap<>());
+            for (String scanPackage : packages) {
+                selected.addAll(discovered.computeIfAbsent(scanPackage, name -> Collections.unmodifiableSet(
+                        new LinkedHashSet<>(PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, name, loader)))));
+            }
         }
         selected.removeIf(entity -> entity.getAnnotation(ConfigEntity.class).value().isEmpty());
         for (Class<?> entity : selected) {
@@ -568,9 +578,13 @@ public final class ConverterRegistry {
     private static final class Prepared {
         private final ConverterRegistry registry;
         private final Set<String> packages;
-        private Prepared(ConverterRegistry registry, Set<String> packages) {
+        // Guarded by MODULES; no cached selection retains its weak module key.
+        private final Map<ClassLoader, Map<String, Set<Class<?>>>> configClasses;
+        private Prepared(ConverterRegistry registry, Set<String> packages,
+                Map<ClassLoader, Map<String, Set<Class<?>>>> configClasses) {
             this.registry = registry;
             this.packages = Collections.unmodifiableSet(new LinkedHashSet<>(packages));
+            this.configClasses = configClasses;
         }
     }
 

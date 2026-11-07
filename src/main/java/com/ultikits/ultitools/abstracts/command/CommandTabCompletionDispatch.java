@@ -16,6 +16,9 @@ import org.bukkit.entity.Player;
 import com.google.common.collect.BiMap;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.commands.tabcomplete.TabCompletionContext;
 import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 
@@ -42,7 +45,7 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
  *     literals and parameter slots directly, later-argument literals and parameter slots through
  *     {@code matchCandidates}.</li>
  *     <li>Argument-index -&gt; matched-method -&gt; parameter-name resolution for a multi-token
- *     argument vector ({@link #suggest(BiMap, Player, Command, String[], Object)}), which is
+ *     argument vector ({@link #suggest(BiMap, CommandSender, Command, String[], Object)}), which is
  *     absent from {@code commands/tabcomplete/TabCompletionManager} (its {@code createContext}
  *     leaves {@code matchedMethod}/{@code parameterName} null).</li>
  * </ul>
@@ -86,13 +89,32 @@ public final class CommandTabCompletionDispatch {
      */
     public static List<String> suggest(BiMap<String, Method> mappings, Player player, Command command,
                                         String[] args, Object executorInstance) {
+        return suggest(mappings, (CommandSender) player, command, args, executorInstance);
+    }
+
+    /**
+     * Completes mappings for any sender using the existing parameter-resolution pipeline.
+     * Target, permission and OP restrictions are checked silently before invoking providers.
+     *
+     * @param mappings the executor's mapping table
+     * @param sender the requesting sender
+     * @param command the command being completed
+     * @param args the arguments, including the partial last token
+     * @param executorInstance the executor owning the mappings
+     * @return the suggestions; never null
+     */
+    public static List<String> suggest(BiMap<String, Method> mappings, CommandSender sender, Command command,
+                                        String[] args, Object executorInstance) {
+        if (!isClassPermitted(sender, executorInstance)) {
+            return new ArrayList<>();
+        }
         if (args == null || args.length == 0) {
             return new ArrayList<>();
         }
         if (args.length == 1) {
-            return suggestFirstToken(mappings, player, command, args, executorInstance);
+            return suggestFirstToken(mappings, sender, command, args, executorInstance);
         }
-        return suggestSubsequentToken(mappings, player, command, args, executorInstance);
+        return suggestSubsequentToken(mappings, sender, command, args, executorInstance);
     }
 
     /**
@@ -102,20 +124,20 @@ public final class CommandTabCompletionDispatch {
      * own first-token branch neither sorted nor deduplicated -- adopting the package's
      * behaviour here is a deliberate, named change (see plan 05-05's SUMMARY).
      */
-    private static List<String> suggestFirstToken(BiMap<String, Method> mappings, Player player,
+    private static List<String> suggestFirstToken(BiMap<String, Method> mappings, CommandSender sender,
                                                     Command command, String[] args,
                                                     Object executorInstance) {
         Map<String, Method> visible = new LinkedHashMap<>();
         for (Map.Entry<String, Method> entry : mappings.entrySet()) {
-            if (isVisible(player, entry.getValue())) {
+            if (isVisible(sender, entry.getValue(), executorInstance)) {
                 visible.put(entry.getKey(), entry.getValue());
             }
         }
         TabCompletionManager manager = TabCompletionManager.getInstance();
-        TabCompletionContext context = manager.createContext(player, command, args);
+        TabCompletionContext context = TabCompletionContext.of(sender, command, args);
 
         Set<String> completions = new TreeSet<>(manager.suggestFirstArgs(visible, context));
-        completions.addAll(firstTokenParameterSuggestions(visible, player, command, args,
+        completions.addAll(firstTokenParameterSuggestions(visible, sender, command, args,
                 executorInstance));
         return new ArrayList<>(completions);
     }
@@ -140,7 +162,7 @@ public final class CommandTabCompletionDispatch {
      * @since 6.3.0
      */
     private static List<String> firstTokenParameterSuggestions(Map<String, Method> visible,
-                                                                 Player player, Command command,
+                                                                 CommandSender sender, Command command,
                                                                  String[] args,
                                                                  Object executorInstance) {
         List<String> completions = new ArrayList<>();
@@ -149,7 +171,7 @@ public final class CommandTabCompletionDispatch {
             if (formatArgs.length == 0 || !isParameterToken(formatArgs[0])) {
                 continue;
             }
-            completions.addAll(suggestParameterSlot(player, command, args, 0, entry.getValue(),
+            completions.addAll(suggestParameterSlot(sender, command, args, 0, entry.getValue(),
                     formatArgs[0], executorInstance));
         }
         return completions;
@@ -162,7 +184,7 @@ public final class CommandTabCompletionDispatch {
      * {@code commands/tabcomplete/}) or a literal token.
      * <p>
      * A literal comes from the matched candidate itself and from nothing else: {@link
-     * #matchCandidates(BiMap, Player, String[], int)} has already filtered every candidate by the
+     * #matchCandidates(BiMap, CommandSender, String[], int, Object)} has already filtered every candidate by the
      * typed prefix, by format length and by visibility (permission and OP), so a player who typed
      * {@code alpha} is offered only the literals of the {@code alpha ...} mappings they may see.
      * Until 6.3.0 the literal branch instead rescanned every visible mapping at this position,
@@ -173,17 +195,17 @@ public final class CommandTabCompletionDispatch {
      * the result does not already hold it, in candidate order. Parameter-slot suggestions are a
      * different source and are appended exactly as their completer returns them.
      */
-    private static List<String> suggestSubsequentToken(BiMap<String, Method> mappings, Player player,
+    private static List<String> suggestSubsequentToken(BiMap<String, Method> mappings, CommandSender sender,
                                                          Command command, String[] args,
                                                          Object executorInstance) {
         List<String> completions = new ArrayList<>();
         int targetIndex = args.length - 1;
 
-        for (Method method : matchCandidates(mappings, player, args, targetIndex)) {
+        for (Method method : matchCandidates(mappings, sender, args, targetIndex, executorInstance)) {
             String format = mappings.inverse().get(method);
             String arg = argAt(format, targetIndex);
             if (isParameterToken(arg)) {
-                completions.addAll(suggestParameterSlot(player, command, args, targetIndex, method, arg,
+                completions.addAll(suggestParameterSlot(sender, command, args, targetIndex, method, arg,
                         executorInstance));
             } else if (!completions.contains(arg)) {
                 completions.add(arg);
@@ -193,12 +215,12 @@ public final class CommandTabCompletionDispatch {
         return completions;
     }
 
-    private static List<Method> matchCandidates(BiMap<String, Method> mappings, Player player,
-                                                  String[] args, int targetIndex) {
+    private static List<Method> matchCandidates(BiMap<String, Method> mappings, CommandSender sender,
+                                                  String[] args, int targetIndex, Object executorInstance) {
         List<Method> candidates = new ArrayList<>();
         for (Map.Entry<String, Method> entry : mappings.entrySet()) {
             Method method = entry.getValue();
-            if (!isVisible(player, method)) {
+            if (!isVisible(sender, method, executorInstance)) {
                 continue;
             }
             String[] formatArgs = splitFormat(entry.getKey());
@@ -222,12 +244,12 @@ public final class CommandTabCompletionDispatch {
         return true;
     }
 
-    private static List<String> suggestParameterSlot(Player player, Command command, String[] args,
+    private static List<String> suggestParameterSlot(CommandSender sender, Command command, String[] args,
                                                        int targetIndex, Method method, String arg,
                                                        Object executorInstance) {
         String parameterName = arg.substring(1, arg.length() - 1);
         TabCompletionContext context = TabCompletionContext.builder()
-                .player(player)
+                .sender(sender)
                 .command(command)
                 .args(args)
                 .currentArgIndex(targetIndex)
@@ -270,12 +292,31 @@ public final class CommandTabCompletionDispatch {
      * {@link #checkOp(CommandSender, Method)} themselves are UNCHANGED and still message -- only
      * this tab-completion-only visibility filter switches to the silent predicates below.
      *
-     * @param player the player requesting completion
+     * @param sender the sender requesting completion
      * @param method the candidate {@code @CmdMapping} method
-     * @return {@code true} if the mapping is visible to {@code player}
+     * @param executorInstance the executor providing the class-level target
+     * @return {@code true} if the mapping is visible to {@code sender}
      */
-    private static boolean isVisible(Player player, Method method) {
-        return isPermissionSatisfied(player, method) && isOpSatisfied(player, method);
+    private static boolean isVisible(CommandSender sender, Method method, Object executorInstance) {
+        CmdTarget annotation = executorInstance.getClass().getAnnotation(CmdTarget.class);
+        CmdTarget.CmdTargetType classTarget = annotation == null
+                ? CmdTarget.CmdTargetType.BOTH : annotation.value();
+        CmdTarget.CmdTargetType target = CmdTargetComposition.resolve(classTarget, method);
+        boolean player = sender instanceof Player;
+        if (target == CmdTarget.CmdTargetType.PLAYER && !player
+                || target == CmdTarget.CmdTargetType.CONSOLE && player) {
+            return false;
+        }
+        return isPermissionSatisfied(sender, method) && isOpSatisfied(sender, method);
+    }
+
+    private static boolean isClassPermitted(CommandSender sender, Object executorInstance) {
+        CmdExecutor annotation = executorInstance.getClass().getAnnotation(CmdExecutor.class);
+        if (annotation == null) {
+            return true;
+        }
+        return (annotation.permission().isEmpty() || sender.hasPermission(annotation.permission()))
+                && (!annotation.requireOp() || sender.isOp());
     }
 
     /**
@@ -326,7 +367,7 @@ public final class CommandTabCompletionDispatch {
 
     /**
      * The permission predicate {@link #checkPermission(CommandSender, Method)} messages on, and
-     * {@link #isVisible(Player, Method)} does not -- the single source of truth for BOTH, so the
+     * {@link #isVisible(CommandSender, Method, Object)} does not -- the single source of truth for BOTH, so the
      * two can never independently drift into disagreeing about whether a mapping is permitted.
      *
      * @param sender the command sender being checked
@@ -343,7 +384,7 @@ public final class CommandTabCompletionDispatch {
 
     /**
      * The OP predicate {@link #checkOp(CommandSender, Method)} messages on, and {@link
-     * #isVisible(Player, Method)} does not -- the single source of truth for both.
+     * #isVisible(CommandSender, Method, Object)} does not -- the single source of truth for both.
      *
      * @param sender the command sender being checked
      * @param method the matched {@code @CmdMapping} method

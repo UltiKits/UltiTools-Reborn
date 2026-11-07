@@ -31,6 +31,32 @@ class TabCompletionContextTest {
     @Mock
     private Command mockCommand;
 
+    @Test
+    void legacyPlayerBuilderAndFactoryExposeSender() {
+        assertSame(mockPlayer, TabCompletionContext.builder().player(mockPlayer).build().getSender());
+        assertSame(mockPlayer, TabCompletionContext.of(mockPlayer, mockCommand, new String[]{""}).getSender());
+    }
+
+    @Test
+    void senderBuilderAndFactoryDerivePlayerWithoutConflictingIdentity() {
+        org.bukkit.command.CommandSender console = org.mockito.Mockito.mock(org.bukkit.command.CommandSender.class);
+        TabCompletionContext context = TabCompletionContext.of(console, mockCommand, new String[]{"sp"});
+        assertSame(console, context.getSender());
+        assertNull(context.getPlayer());
+        assertSame(mockPlayer, TabCompletionContext.builder().sender(mockPlayer).build().getPlayer());
+        context = TabCompletionContext.builder().sender(console).player(mockPlayer).build();
+        assertSame(console, context.getSender());
+        assertNull(context.getPlayer());
+    }
+
+    @Test
+    void legacyPackageConstructorIsPreserved() {
+        TabCompletionContext context = new TabCompletionContext(mockPlayer, mockCommand, new String[]{""},
+                0, "", null, null, null);
+        assertSame(mockPlayer, context.getSender());
+        assertSame(mockPlayer, context.getPlayer());
+    }
+
     @Nested
     @DisplayName("Builder Tests")
     class BuilderTests {
