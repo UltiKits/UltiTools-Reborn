@@ -1921,12 +1921,26 @@ This section governs the third kind.
   `commitLanguageProvenance()` as `PluginManager` does if it needs them on disk.
 
   中文补充：6.3.0 起（#567）模块在构造时只解压 `config/` 和 `res/`；磁盘上缺少的 `lang/` 文件在构造时直接按 jar 内的副本解析、不写盘，等加载闸门接受该模块后由 `commitLanguageProvenance()` 解压并记录哈希。因此被闸门拒绝的模块副本（已加载更新版本的旧副本、要求更新框架的模块）不会写入任何语言文件；`config/`、`res/` 仍在构造时解压，被拒绝的副本仍可能留下磁盘原本缺少的这类文件。模块作者注意：构造后从未经 `PluginManager` 注册的实例（例如测试）不会解压 `lang/` 文件，需要时请像 `PluginManager` 一样调用 `commitLanguageProvenance()`。
+  **Crash limitation (#567).** Language replacement, provenance recording and the backup announcement are
+  separate operations, not a crash transaction. If the process stops after replacement but before the announcement,
+  the old bytes remain in `<language-file>.bak` (or `<language-file>.N.bak` when earlier names are taken), but the
+  next start may only record the already-current language file without announcing that backup. After an interrupted
+  upgrade, inspect these backup names beside the module's language files before deleting them. To reuse old wording,
+  copy it into a custom-named language file and select that name; do not replace the official file with the backup.
+  If provenance recording and then the restore move both fail, the error names the bundled file and the retained
+  backup; stop the server before recovering the backup. No backup is automatically loaded as a catalogue.
 - A refused External Plugin API registration leaves nothing behind (#537). When
   `PluginManager#registerExternal` refuses a plugin after recording its data-folder scope — the
   command-executor contract check, the config-binding refusal of #531, or a failed container
   `refresh()` — it closes the context and removes the scope, the entity ownership and the adapter's
   data scope before rethrowing the same exception, so a corrected connection of the same plugin in the
-  same process succeeds (`ultitools.boot.external-refusal-unwind`).
+  same process succeeds (`ultitools.boot.external-refusal-unwind`). As of 6.3.2 (#567), a failure in subsequent
+  scheduling, player-cache, EventBus, command or listener registration also runs the inverse of every attempted
+  registration in reverse order before releasing the context, scope and newly inserted ownership. This includes
+  the failing stage, which may have registered some resources before throwing. The original exception is rethrown;
+  cleanup failures are attached as suppressed exceptions and do not stop the remaining cleanup attempts. If a
+  cleanup operation itself fails, some of its resources may remain until restart; inspect the suppressed exceptions
+  before reconnecting. This does not roll back arbitrary side effects performed by plugin code during initialization.
 - Naming a missing required plugin instead of printing a class-not-found trace (#554). A module
   that cannot load because a plugin in its `plugin.yml` `depend:` list is not installed or not
   enabled used to log `Cannot initialize plugin for <main class>: <missing class>` with a
