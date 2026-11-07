@@ -1197,9 +1197,8 @@ public class PluginManager {
         try {
             half.run();
         } catch (RuntimeException e) {
-            Bukkit.getLogger().log(Level.WARNING, String.format(
-                    "[UltiTools-API] %s: applying reloaded config-bound %s values failed: %s; the running values "
-                            + "are kept", plugin.getPluginName(), what, e.getMessage()), e);
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + plugin.getPluginName() + ": "
+                    + String.format(ConfigBindings.BINDING_STEP_FAILED_KEY, what, e.getMessage()), e);
             String cause = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             report.partial(ConfigBindings.reloadReason(ConfigBindings.BINDING_STEP_FAILED_KEY, what, cause));
         }
@@ -1239,12 +1238,13 @@ public class PluginManager {
         try {
             seconds = source.get();
         } catch (ConfigBindings.ReloadFailedException failed) {
-            keepRunning(plugin, report, bindingKey, before, next, reported, failed.getMessage());
+            keepRunning(plugin, report, bindingKey, before, next, reported, failed.reportReason());
             return;
         }
         if (!ConfigBindings.isValidCooldownSeconds(seconds)) {
             keepRunning(plugin, report, bindingKey, before, next, reported,
-                    "it has value " + seconds + " after the reload; " + ConfigBindings.COOLDOWN_RULE);
+                    ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_INVALID_KEY, seconds,
+                            ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_RULE_KEY, Integer.MAX_VALUE)));
             return;
         }
         int value = seconds.intValue();
@@ -1257,17 +1257,17 @@ public class PluginManager {
     }
 
     private static void keepRunning(UltiToolsPlugin plugin, ReloadReport report, String bindingKey, Integer before,
-                                    Map<String, Integer> next, Set<String> reported, String why) {
+                                    Map<String, Integer> next, Set<String> reported, String reportWhy) {
         if (before != null) {
             next.put(bindingKey, before);
         }
         if (reported.add(bindingKey)) {
-            Bukkit.getLogger().log(Level.WARNING, String.format(
-                    "[UltiTools-API] %s: @CmdCD bound to %s is not updated: %s; keeping %ds",
-                    plugin.getPluginName(), describeBindingKey(bindingKey), why, before));
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + ConfigBindings.reloadReason(
+                    ConfigBindings.COOLDOWN_NOT_UPDATED_WARNING_KEY,
+                    plugin.getPluginName(), describeBindingKey(bindingKey), reportWhy, before));
             // #595: one reason per binding key, like the warning.
             report.partial(ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_KEPT_KEY,
-                    describeBindingKey(bindingKey), why, before));
+                    describeBindingKey(bindingKey), reportWhy, before));
         }
     }
 

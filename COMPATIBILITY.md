@@ -944,6 +944,18 @@ exception propagate; catch `ConfigurationException` to report it in the module's
 Explicit save does not clear protection; only a later successful load permits writes again.
 Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
 
+**Partial module reload (accepted behavior, #593 / #598).** The first failing configuration file stops that
+module's remaining reload steps. Earlier files keep the values already reloaded; the failed file keeps its running
+values. Language rebuilding, the new-language token-comment refresh and the module hook are not reached. Earlier
+files can therefore keep old-language framework comments. Fix the failing file and complete a successful reload to
+refresh them; a full `/ul reload` applies a changed server-wide language. There is no module-wide rollback.
+
+As of 6.3.2 (#598), `validateProposedProperties` and `updateProperties` report a refused edit as an edit that was
+not applied, naming each violating declared configuration key (for example `allowed-commands`, not Java member
+`allowedCommands`). The file and running values are unchanged; correct the proposed values and try the edit again.
+These edit diagnostics do not ask for a restart. Load-time and reload-time refusals keep their existing wording
+and outcomes. Public and protected method signatures are unchanged.
+
 An annotation comment that is exactly one `{key}` token (surrounding whitespace ignored) is resolved
 from the module catalogue. Start-up and reload rewrite, in the current language, only the comment
 lines above a token entry that the framework can identify as its own (a save, an operator change and a panel edit rewrite no
@@ -4117,6 +4129,18 @@ same field would instead make the configuration reload itself fail, which stops 
 module's reload and reports it as failed (since #509, fixed in 6.3.0, a full `/ul reload` still continues with the
 next module). A module that already had a `@Range` on a field it now binds should drop it; the binding's range takes
 over.
+
+As of 6.3.2 (#598), a failure part-way through a config-bound timing refresh is reported honestly: updates applied
+before the failure remain in effect, and the remaining updates did not complete. Tasks and executors are still
+updated individually; no rollback or lifecycle reordering is introduced. The framework-owned timer/cooldown rules
+and incomplete-config reasons in reload reports follow the server's language, including Chinese; arbitrary exception
+messages supplied by other code are not translated.
+
+**Known limitation — internal cooldown state.** Modules must not modify `ConfigBoundCooldownState` or separate its
+paired source and running-seconds maps. They are framework-internal state initialized together. If an extension
+breaks that pairing, a refusal report can display `null` seconds instead of a running value; the framework does not
+repair this unsupported state or invent a fallback cooldown. A normal reload of a null or invalid configured value
+retains its already-initialized running cooldown instead.
 
 ### What this means for us
 
