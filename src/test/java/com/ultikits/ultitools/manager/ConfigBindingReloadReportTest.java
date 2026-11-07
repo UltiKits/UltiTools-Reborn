@@ -412,7 +412,7 @@ class ConfigBindingReloadReportTest {
         BukkitScheduler real = Bukkit.getScheduler();
         BukkitScheduler failing = mock(BukkitScheduler.class, AdditionalAnswers.delegatesTo(real));
         AtomicInteger arms = new AtomicInteger();
-        Mockito.doAnswer(call -> {
+        doAnswer(call -> {
             if (arms.incrementAndGet() == 2) {
                 throw new IllegalStateException("scheduler unavailable");
             }
@@ -421,7 +421,7 @@ class ConfigBindingReloadReportTest {
         }).when(failing).runTaskTimer(Mockito.any(Plugin.class), Mockito.any(Runnable.class),
                 Mockito.anyLong(), Mockito.anyLong());
         ReloadReport report;
-        try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class, Mockito.CALLS_REAL_METHODS)) {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class, Mockito.CALLS_REAL_METHODS)) {
             bukkit.when(Bukkit::getScheduler).thenReturn(failing);
             report = module.reloadWithReport();
         }
@@ -495,7 +495,7 @@ class ConfigBindingReloadReportTest {
         Handler handler = new Handler() {
             @Override
             public void publish(LogRecord logRecord) {
-                if (logRecord.getLevel() == Level.WARNING) {
+                if (Level.WARNING.equals(logRecord.getLevel())) {
                     warnings.add(logRecord.getMessage());
                 }
             }
