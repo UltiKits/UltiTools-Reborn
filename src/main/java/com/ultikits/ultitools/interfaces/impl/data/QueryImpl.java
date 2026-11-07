@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.interfaces.impl.data;
 
 import java.lang.reflect.Field;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -362,9 +364,20 @@ public class QueryImpl<T extends BaseDataEntity<String>> implements Query<T> {
 
         // Both are Comparable
         if (a instanceof Comparable && b instanceof Comparable) {
-            // Handle numeric type mismatches (int vs long, etc.)
             if (a instanceof Number && b instanceof Number) {
-                return Double.compare(((Number) a).doubleValue(), ((Number) b).doubleValue());
+                Number left = (Number) a;
+                Number right = (Number) b;
+                BigDecimal exactLeft = exactFiniteValue(left);
+                BigDecimal exactRight = exactFiniteValue(right);
+                if (exactLeft != null && exactRight != null) {
+                    int result = exactLeft.compareTo(exactRight);
+                    // Keep Double.compare's existing distinction between negative and positive zero.
+                    if (result != 0 || exactLeft.signum() != 0) {
+                        return result;
+                    }
+                }
+                // Non-finite values and unsupported Number implementations keep their old ordering.
+                return Double.compare(left.doubleValue(), right.doubleValue());
             }
             try {
                 return ((Comparable) a).compareTo(b);
@@ -374,6 +387,28 @@ public class QueryImpl<T extends BaseDataEntity<String>> implements Query<T> {
         }
 
         return a.toString().compareTo(b.toString());
+    }
+
+    /** The exact mathematical value of a supported finite number, or null for the legacy path. */
+    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor") // Binary floating-point precision is intentional.
+    private static BigDecimal exactFiniteValue(Number value) {
+        if (value instanceof BigDecimal) {
+            return (BigDecimal) value;
+        }
+        if (value instanceof BigInteger) {
+            return new BigDecimal((BigInteger) value);
+        }
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            return BigDecimal.valueOf(value.longValue());
+        }
+        if (value instanceof Float || value instanceof Double) {
+            double binaryValue = value.doubleValue();
+            if (!Double.isNaN(binaryValue) && !Double.isInfinite(binaryValue)) {
+                // Deliberately retain the binary value, not the rounded decimal rendering of it.
+                return new BigDecimal(binaryValue);
+            }
+        }
+        return null;
     }
 
     /**
