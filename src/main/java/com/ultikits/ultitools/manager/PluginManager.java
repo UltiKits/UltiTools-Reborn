@@ -3541,7 +3541,8 @@ public class PluginManager {
                 + suggestMethod.getDeclaringClass().getName() + "#" + suggestMethod.getName()
                 + formatParameterTypes(suggestMethod.getParameterTypes()) + "' has a signature the "
                 + "tab-completion invoker cannot call. Supported signatures: (), (Player), (String), "
-                + "(Player, String), (Player, Command, String[]).";
+                + "(Player, String), (Player, Command, String[]), (CommandSender), "
+                + "(CommandSender, String), (CommandSender, Command, String[]).";
     }
 
     /**

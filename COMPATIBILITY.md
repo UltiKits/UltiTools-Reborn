@@ -1074,6 +1074,13 @@ signature; `reloadSelf()` is `final` as of 6.3.0 for a separate reason (see
 [Third occurrence: 6.2.5 → 6.3.0, a MINOR](#third-occurrence-625--630-a-minor)). Async third-party callers must
 schedule their reload on the server thread.
 
+Test fixtures that install a Mockito `Server` must provide a non-null `getLogger()` result, as
+Paper does, and explicitly stub `isPrimaryThread()` to match the scenario. An unstubbed server
+reports `false` and returns a null logger, so the off-thread refusal encounters a
+`NullPointerException` while logging instead of returning normally (#582). For ordinary synchronous
+configuration tests, return `true` from `isPrimaryThread()`; for refusal tests, return `false` and
+provide a logger. Do not use an incomplete server stub as evidence of a runtime writer failure.
+
 ### Reload merge rule
 
 As of 6.3.0, reload compares the last effective disk baseline, current serialized fields, and
@@ -1279,9 +1286,11 @@ are different: accepted initialization files persist independently, while the pa
 touched files with in-process rollback.
 
 Known limits remain explicit, not guaranteed away: [#578](https://github.com/UltiKits/UltiTools-Reborn/issues/578)
-records out-of-threat-model storage findings; two still apply - temporary-file identity through a symlink followed by
-`..`, and quadratic style detection in Unicode-heavy files. Its anchored-container and alias-comment items cannot occur,
-because no write path writes a file that uses anchors, aliases or merge keys. A valid block anchor with a comment before
+records a remaining temporary-file identity limit through a symlink followed by `..`. Avoid that path combination and
+use the same resolved real path when staging and loading configuration files. Its quadratic style-detection finding is
+fixed: scalar mark offsets no longer rescan the text from the beginning for each scalar. Its anchored-container and
+alias-comment items cannot occur, because no write path writes a file that uses anchors, aliases or merge keys.
+A valid block anchor with a comment before
 its first child key cannot be read and the file is protected as unparseable
 ([#580](https://github.com/UltiKits/UltiTools-Reborn/issues/580), closed by documenting it; see "Layouts the reader
 cannot read"). A file that uses anchors, aliases or merge keys is never written; one warning per file per run names it.
@@ -1674,6 +1683,39 @@ release as its parent, 6.3.0.
 
 The new base class had one gap at 6.2.5, parameter-level tab completion; it is wired up in 6.3.0, so
 `@CmdParam(suggest = …)` completes parameters, including at the first argument position.
+
+### Sender-aware tab completion (6.3.2)
+
+Module completion is also offered to the console, RCON and other Bukkit `CommandSender`s.
+The default completion path silently excludes mappings disallowed by the effective class/method
+`@CmdTarget`, class or mapping permissions, or OP requirements, before invoking any provider.
+As in command validation, `@CmdTarget(CONSOLE)` means a non-player sender. A denied mapping
+contributes no suggestions; completion does not run commands, cooldowns or usage locks.
+If the default non-player pipeline has no candidates, the executor returns `null` to preserve
+Bukkit's online-player-name fallback, including commands that only override `suggest(Player, ...)`.
+Player requests keep their existing suggestion hook and empty-list results. In particular, a player
+completing a console-only executor now receives an empty list rather than Bukkit's player-name fallback.
+
+A method named by `@CmdParam(suggest = "suggestNames")` may use any of these signatures:
+
+- `()`, `(String)` (the current partial token);
+- `(Player)`, `(Player, String)`, `(Player, Command, String[])` (unchanged, players only);
+- `(CommandSender)`, `(CommandSender, String)`, `(CommandSender, Command, String[])` (players and non-players).
+
+The existing `Player` provider forms are never called with a null player for a non-player request;
+they contribute no parameter suggestions in that case. To enable console completion, widen a
+sender-independent module provider to `CommandSender`, or use the zero-argument / `String` forms.
+Built-in completers also support non-player requests; `@players` lists all online names for a
+non-player, since it has no player-specific `canSee` filter. Player visibility filtering is unchanged.
+
+Custom registered `TabCompleter`s now receive non-player requests too. Read the requesting sender
+from `TabCompletionContext#getSender()` and check `getPlayer()` for null before player-specific work;
+return an empty list when a provider requires a player. Existing `.player(...)` builders and
+`of(Player, Command, String[])` factories still expose that player through both getters.
+The sender-aware builder also accepts `.sender(...)`; an explicit sender takes precedence if both
+fields are set. No existing `Player` overload is removed. A subclass overriding the protected
+`suggest(Player, Command, String[])` hook continues to receive player requests; override the additive
+`suggest(CommandSender, Command, String[])` hook to customize completion for all senders.
 
 (A bare command declared with `@CmdMapping(format = "")` was not executable. This was previously
 scheduled for 6.2.5 and **has been fixed in 6.2.5**.)
@@ -2349,6 +2391,17 @@ This section governs the third kind.
   `Error` 时回滚，保持不变；嵌套、仅回滚标记、传播、隔离级别和超时均不变（这句话只针对本次修复；6.3.0 随后对失败的加入方方法和失败的
   嵌套作用域所做的改动见本文后面两个小节）。没有签名变化。见 `FEATURES.md` 中的
   `ultitools.storage.transaction-failure-paths`。
+
+  **Known limitation — third-party JDBC drivers** (#642): after a rollback fails, the framework
+  requests no further commit, but closing the unresolved transaction follows the driver's policy.
+  A third-party driver that commits on close can therefore persist writes; neither closing nor
+  evicting its connection is a driver-independent rollback guarantee. Use a driver whose close policy
+  matches the application's rollback requirements, and verify its behaviour before relying on it.
+  A failed commit still has an unknown outcome as described above; closing cannot undo an applied commit.
+
+  中文补充：第三方 JDBC 驱动的已知限制（#642）：回滚失败后，框架不会再请求提交，但关闭未结束事务的结果取决于驱动策略。
+  若第三方驱动在 close 时提交，写入仍可能保存；关闭或剔除连接都不是跨驱动的回滚保证。请使用关闭策略符合应用回滚要求的驱动，
+  并在依赖该行为前验证。提交本身失败时，结果仍如上所述未知；关闭连接无法撤销已应用的提交。
 
 - `WhereCondition` comparisons other than `EQUAL` now take effect on SQLite and MySQL (#675).
   6.2.5's SQLite and MySQL operators ignored the comparison and matched every condition by
@@ -3168,6 +3221,17 @@ its meaning.
   中文补充：找不到 Paper 的日志转发器（`org.bukkit.craftbukkit.util.ForwardLogHandler`，例如分支服务端、重定位了
   CraftBukkit 的构建，或转发器被替换）时，控制台镜像不安装：否则每条插件日志都会被推送两次。此时每次服务器运行只记一条
   WARNING，说明面板不会镜像控制台，日志流只包含插件日志（#583）。
+
+  **Known limitation — an earlier instance whose disable never ran** (#642): its `ForwardScope`
+  wrapper can remain around Paper's forwarder on the JUL root logger. A new instance does not
+  recognise that foreign-classloader wrapper as the forwarder, so the "was not found" WARNING does
+  not prove that the underlying forwarder is absent. Let UltiTools disable normally; stop and restart
+  the server when replacing an instance or recovering from a stale wrapper. Do not replace a running
+  plugin instance without its normal disable lifecycle.
+
+  中文补充：旧实例未执行禁用流程时的已知限制（#642）：它的 `ForwardScope` 包装器可能仍在 JUL 根日志器上包着 Paper 的
+  转发器。新实例无法把来自旧类加载器的包装器识别为转发器，因此“was not found”告警不能证明底层转发器不存在。
+  请让 UltiTools 正常完成禁用流程；替换实例或恢复遗留包装器时，停服后重新启动，不要绕过正常禁用流程替换运行中的插件实例。
 - **From the moment UltiTools starts disabling, panel requests get no reply** (#621). An inbound
   panel message, a WebSocket handshake that completes, and every task the WebSocket thread would
   hand to the server scheduler are dropped with one `FINE` line, instead of scheduling work the
