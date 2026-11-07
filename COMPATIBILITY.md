@@ -1825,6 +1825,12 @@ This section governs the third kind.
     has (tokens of your own are kept) — typically after an upgrade changed that message, or a typo —
     is replaced by the official value for that key in memory, with one WARNING naming the file and
     the key; your file is not changed, so update the value there;
+  - **module authors: do not skip supplied argument positions in official format strings.**
+    The placeholder guard compares conversions only at positions both the official and custom values
+    use. If an official value uses only `%2$s`, a custom value can add `%1$d` without changing the
+    highest required argument position; the guard cannot infer the unused argument's type, so formatting
+    can still fail. Official texts should use every supplied position, and custom texts should not add
+    conversions at positions the official text leaves unused (#637);
   - **choose a name no module ships.** A module that does not ship the configured official code
     treats it as a custom name: with `language: en`, a module shipping only `zh` reads a `lang/en.*`
     left in its folder by an older release. And if a later release starts shipping a code you used as
