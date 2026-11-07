@@ -840,7 +840,8 @@ whole value and names the key only), for a panel edit inside a composite value (
 framework last read with that field changed - and only while the file still holds exactly that whole value at write time;
 otherwise the edit is refused naming the setting, "the file changed since it was read; reload first", and nothing is
 written), and for `saveOperatorMapEntry` (map keys that reach inside an entry that is not a map throw `IllegalArgumentException`
-and nothing is written). A save never inserts a key the file lacks, never rewrites a comment and never removes a
+and nothing is written). These module-programming argument errors may include the supplied map keys; do not relay their
+messages to players or panel clients. A save never inserts a key the file lacks, never rewrites a comment and never removes a
 map entry the module did not remove. So a value the operator edited on disk since it was read, a key the operator deleted, a
 value or list element the framework could not use (`interval: 3O0`, `[60, 30, 10, abc]`) and a 6.2 split map entry are
 never written over by a save, whether or not the module changed that setting
@@ -1222,7 +1223,10 @@ public class TokenConverter implements ConfigConverter<Token> {
 The plain boundary permits null, strings, booleans, `Integer`, `Long`, `BigInteger`, `Double`,
 lists and string-keyed maps of those values. Return no Bukkit section, arbitrary Java bean or
 Java class tag. Use `ctx.toPlain(nested)` / `ctx.fromPlain(nested, declaredType)` for recursive
-conversion. A non-plain runtime value in an `Object` slot uses its runtime converter on write;
+conversion. Known limit: a custom converter delegating a concrete typed-map subclass through `ctx.toPlain(nested)` inherits
+the enclosing location's file value for key-spelling lookup, so the nested map can use a parent's key spelling. Construct
+that nested plain map explicitly instead of relying on recursive key-spelling preservation for this case.
+A non-plain runtime value in an `Object` slot uses its runtime converter on write;
 already-plain values stay plain. Integer narrowing is exact and range checked. Float accepts a
 decimal only when `Float.toString(parsedFloat)` prints the same decimal value (scale does not
 matter): `0.03` and `1.50` are accepted, `0.100000001` is not. Float output uses that printable
