@@ -2682,6 +2682,55 @@ This section governs the third kind.
   现在帧内请求的重建在下一帧执行。**已知限制：**这样的坏页面只要还开着，仍会每个 tick 重试一次，每次失败都会记录日志。
   请修复该组件：`State` 不应从 `initState` 抛出异常，应在其中捕获失败并渲染错误状态。
 
+### Declarative GUI known limitations and author guidance
+
+The limitations collected in [#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)
+remain after the frame and child-ownership corrections in
+[#685](https://github.com/UltiKits/UltiTools-Reborn/pull/685). This is guidance for existing behaviour,
+not a change to lifecycle ordering, exception handling, key matching or grid layout.
+
+- **A failing `initState` can keep requesting frames.** If it calls `setState` and then throws,
+  the page retries once per scheduled frame while open and logs each failure. The frame budget
+  prevents the old single-frame retry loop, but does not repair the widget. Catch initialization
+  failures inside the widget and build an error state; close the broken page to stop its retries.
+- **Use stable, unique sibling `SlotKey`s when State identity matters.** After a replacement
+  child fails to mount, its old element has already been disposed. Unkeyed surviving siblings
+  are paired by position on the next reconciliation, so they can be paired with different widgets
+  and lose their State. Keys preserve sibling identity across structural changes, but duplicate
+  sibling keys are invalid: an older element can be orphaned and miss cleanup. Never reuse a key
+  for two siblings in the same child list.
+- **Make `State.dispose()` idempotent and non-throwing.** If it throws while a child is replaced
+  or removed, the element can remain owned and disposal can be attempted again when the page
+  closes. Release resources safely even after partial initialization; do not rely on the framework
+  to recover from a throwing cleanup callback.
+- **A failed replacement inside a single-child wrapper can leave a stale child.** A
+  `StatelessWidget` or `StatefulWidget` wrapper can retain its already-disposed old child when the
+  replacement fails to mount. Later frames can then fail with `State is null`. Avoid throwing
+  from `build` or `initState`; after correcting the widget, close and reopen the GUI rather than
+  relying on another rebuild to repair that wrapper.
+- **Do not close a GUI from inside its `build` method.** Closing disposes the renderer while
+  the running build can still access its root and fail. Close from an event handler instead.
+  A queued rebuild that starts after disposal does nothing; that does not make closing in the
+  middle of an active build safe.
+- **An initial build failure propagates out of `DeclarativeGui.onOpen`.** The first build runs
+  synchronously on the main thread, outside the scheduled frame's per-task exception handler.
+  Do not assume opening a broken widget is swallowed by that handler. Handle expected failures
+  in the widget and render an error state. Normal close releases the mounted tree, provided its
+  disposal callbacks do not themselves throw.
+- **`GuiScheduler.flush()` is a test utility, not the production frame path.** It drains the
+  entire pending queue synchronously without the per-frame budget, and a task failure can
+  propagate to its caller. A task that keeps requeuing itself can keep that drain running.
+  Use normal scheduled frames in production, not `flush()` to force an update.
+- **A queued task's `Error` is not isolated like an `Exception`.** The per-task handler catches
+  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the server
+  scheduler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
+  ordinary module failure handling or assume every throwable is caught by the GUI scheduler.
+- **One `GridView` cell must produce one rendered leaf.** A wrapper may contain that leaf at
+  any depth, but several leaves under the same cell all receive the same computed slot and
+  collide. A leaf's explicit `.slot(...)` does not reserve a separate position: the grid's
+  computed slot wins, including in a multi-leaf cell. Put separately displayed items in separate
+  cells instead of relying on collision or click-handler ordering.
+
 ### Behavioral changes that do need one
 
 - A documented default value flipping.
