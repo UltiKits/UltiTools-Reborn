@@ -21,7 +21,8 @@
 #
 #   The module language guards read the same properties (I18nSourceScanner#containsCjk in each
 #   module: Character.UnicodeScript.HAN || U+3000-U+303F || U+FF00-U+FFEF, iterating code points;
-#   kana is out there too), widened together in 6.3.0 by the maintainer's decision of 2026-09-29
+#   Hiragana U+3040-U+309F and Katakana U+30A0-U+30FF are out there too), widened together in
+#   6.3.0 by the maintainer's decision of 2026-09-29
 #   (UltiRemoteBag#44). Same properties does not mean the same code points on every machine: the
 #   Unicode version follows the toolchain -- PCRE2 on the CI runner here, the JDK in the modules --
 #   so an ideograph a newer Unicode version adds (for example Unicode 15's U+31350-U+323AF, known
@@ -31,10 +32,12 @@
 #   Explicitly OUT of the contract:
 #     - Hiragana / Katakana (kana)            U+3040-U+30FF
 #     - Script=Common characters that only list Han in their script extensions (U+30FB, U+3231 ...)
-#   Halfwidth katakana (U+FF65-U+FF9F) and halfwidth Hangul (U+FFA0-U+FFDC) lie inside U+FF00-U+FFEF
-#   and are matched, exactly as the module guards match them.
+#   Halfwidth punctuation (U+FF61-U+FF64), halfwidth katakana (U+FF65-U+FF9F) and halfwidth Hangul
+#   (U+FFA0-U+FFDC) lie inside U+FF00-U+FFEF and are matched, exactly as the module guards match them.
+#   The module scanners are maintained separately; shared properties do not imply byte-identical copies.
 #   Changing the contract is a deliberate edit, not a silent drift — --self-test pins it in both
-#   directions (assertion 4a: kana must not match; 4b and 8: punctuation, full-width forms and one
+#   directions (assertion 4a: U+3040-U+30FF kana must not match; 4b/4c and 8: punctuation, halfwidth/
+#   fullwidth forms and one
 #   planted character per added Han range must; 9: Script=Common characters with Han in their
 #   script extensions must not, Han ideographs must).
 #
@@ -464,17 +467,17 @@ run_self_test() {
         failures=1
     fi
 
-    # Assertion 4: the encoding boundary itself — kana is OUTSIDE the contract and must not match,
-    # while CJK and full-width punctuation are INSIDE it and must (6.3.0 widening, UltiRemoteBag#44:
-    # the same contract as the module language guards' I18nSourceScanner#containsCjk). Pins the
-    # range in both directions against silent drift.
+    # Assertion 4: Hiragana/Katakana U+3040-U+30FF are OUTSIDE the contract; halfwidth punctuation
+    # U+FF61-U+FF64 and katakana U+FF65-U+FF9F are INSIDE it, as are CJK/fullwidth punctuation
+    # (6.3.0 widening, UltiRemoteBag#44: the same properties as I18nSourceScanner#containsCjk).
+    # Pin each halfwidth boundary separately so one matching character cannot mask a missing range.
     local kana='ひらがなカタカナ'
     local fullwidth='。、！？（）'
     if cjk_grep -q <<< "$(printf '%s' "$kana")"; then
-        echo "FAIL: assertion 4a — kana must not match the contract."
+        echo "FAIL: assertion 4a — U+3040-U+30FF kana must not match the contract."
         failures=1
     else
-        echo "PASS: assertion 4a — kana must not match the contract."
+        echo "PASS: assertion 4a — U+3040-U+30FF kana must not match the contract."
     fi
     if cjk_grep -q <<< "$(printf '%s' "$fullwidth")"; then
         echo "PASS: assertion 4b — CJK and full-width punctuation match the contract."
@@ -482,6 +485,17 @@ run_self_test() {
         echo "FAIL: assertion 4b — CJK and full-width punctuation match the contract."
         failures=1
     fi
+
+    local halfwidth codepoint
+    for halfwidth in $'｡' $'､' $'･' $'ﾟ'; do
+        printf -v codepoint '%04X' "'$halfwidth"
+        if cjk_grep -q <<< "$halfwidth"; then
+            echo "PASS: assertion 4c — halfwidth U+${codepoint} matches."
+        else
+            echo "FAIL: assertion 4c — halfwidth U+${codepoint} must match."
+            failures=1
+        fi
+    done
 
     # Assertion 8: one planted character per range the 6.3.0 widening added, each alone on its
     # line, must match: Extension A (U+3400), a supplementary-plane ideograph (U+20000), a

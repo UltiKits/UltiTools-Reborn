@@ -9,7 +9,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
+import java.lang.ref.Reference;
+import java.lang.reflect.Field;
 import java.util.UUID;
+
+import sun.misc.Unsafe;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -120,6 +124,51 @@ class NestedCommandCurrentUserTest {
         ultiToolsMock.close();
     }
 
+    @Test
+    void clearingAndSwappingToNullRemoveTheActualEntry() {
+        AuditableDataEntity.setCurrentUser(UUID.randomUUID());
+        assertTrue(hasCurrentUserEntry(), "control: a stored user creates a detectable entry");
+        AuditableDataEntity.clearCurrentUser();
+        assertTrue(!hasCurrentUserEntry());
+        AuditableDataEntity.setCurrentUser(null);
+        assertTrue(hasCurrentUserEntry(), "control: even a null value still has a map entry");
+        AuditableDataEntity.swapCurrentUser(null);
+        assertTrue(!hasCurrentUserEntry());
+    }
+
+    /**
+     * Read-only inspection: getCurrentUser() would itself recreate an absent entry with a null value.
+     * Unsafe reads avoid requiring JVM --add-opens flags in either local or CI test forks; no writes
+     * or changes to the production ThreadLocal are made by this probe.
+     */
+    // ThreadLocalMap identifies keys by identity, not equals(); this probe must use the same rule.
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.CompareObjectsWithEquals"})
+    private static boolean hasCurrentUserEntry() {
+        try {
+            Field singleton = Unsafe.class.getDeclaredField("theUnsafe");
+            singleton.setAccessible(true);
+            Unsafe unsafe = (Unsafe) singleton.get(null);
+            Field userField = AuditableDataEntity.class.getDeclaredField("CURRENT_USER");
+            userField.setAccessible(true);
+            Object user = userField.get(null);
+            Object map = unsafe.getObject(Thread.currentThread(),
+                    unsafe.objectFieldOffset(Thread.class.getDeclaredField("threadLocals")));
+            if (map == null) {
+                return false;
+            }
+            Object[] entries = (Object[]) unsafe.getObject(map,
+                    unsafe.objectFieldOffset(map.getClass().getDeclaredField("table")));
+            for (Object entry : entries) {
+                if (entry != null && ((Reference<?>) entry).get() == user) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Cannot inspect the current thread's audit context", e);
+        }
+    }
+
     private static Player player(UUID id) {
         Player player = mock(Player.class);
         when(player.getUniqueId()).thenReturn(id);
@@ -140,6 +189,7 @@ class NestedCommandCurrentUserTest {
         assertEquals(b, inner.observed.get(), "the nested body observes its own sender");
         assertEquals(a, outer.observedAfter.get(),
                 "the outer body observes its own sender again after the nested dispatch returns");
+        assertTrue(!hasCurrentUserEntry(), "the ThreadLocal entry itself must be removed, not set to null");
         assertNull(AuditableDataEntity.getCurrentUser(), "no entry remains after the outermost command");
     }
 
@@ -156,6 +206,7 @@ class NestedCommandCurrentUserTest {
         assertNull(inner.observed.get(),
                 "a console command's writes must not be attributed to the player whose body dispatched it");
         assertEquals(a, outer.observedAfter.get());
+        assertTrue(!hasCurrentUserEntry(), "the ThreadLocal entry itself must be removed, not set to null");
         assertNull(AuditableDataEntity.getCurrentUser());
     }
 
@@ -172,6 +223,7 @@ class NestedCommandCurrentUserTest {
 
         assertEquals(b, inner.observed.get());
         assertEquals(a, outer.observedAfter.get());
+        assertTrue(!hasCurrentUserEntry(), "the ThreadLocal entry itself must be removed, not set to null");
         assertNull(AuditableDataEntity.getCurrentUser());
     }
 
@@ -187,6 +239,7 @@ class NestedCommandCurrentUserTest {
         assertNull(outer.observedBefore.get());
         assertEquals(b, inner.observed.get());
         assertNull(outer.observedAfter.get(), "the console body has no user before or after");
+        assertTrue(!hasCurrentUserEntry(), "the ThreadLocal entry itself must be removed, not set to null");
         assertNull(AuditableDataEntity.getCurrentUser());
     }
 

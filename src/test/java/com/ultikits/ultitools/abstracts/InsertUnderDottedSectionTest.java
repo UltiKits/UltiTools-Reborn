@@ -212,7 +212,8 @@ class InsertUnderDottedSectionTest {
         new Dotted(PATH).init(plugin);
 
         assertThat(text()).isEqualTo("a.b:\n  c: 3\n  # D\n  d: 2\na:\n  b:\n    e: 1\n");
-        assertThat(warningsNamingTheFile()).isEmpty();
+        assertThat(warningsNamingTheFile()).hasSize(1).allSatisfy(warning -> assertThat(warning)
+                .contains("key 'a.b.e'", "no @ConfigEntry declaration"));
     }
 
     @Test
@@ -227,8 +228,10 @@ class InsertUnderDottedSectionTest {
         assertThat(config.c).isEqualTo(1);
         assertThat(config.d).isEqualTo(2);
         List<String> named = warningsNamingTheFile();
-        assertThat(named).hasSize(1);
-        assertThat(named.get(0)).contains(file().toAbsolutePath().toString())
+        assertThat(named).hasSize(3);
+        assertThat(named.get(0)).contains("key 'a.b.x'", "no @ConfigEntry declaration");
+        assertThat(named.get(1)).contains("key 'a.b.y'", "no @ConfigEntry declaration");
+        assertThat(named.get(2)).contains(file().toAbsolutePath().toString())
                 .contains("'a.b.c'").contains("'a.b.d'").contains("section 'a.b' is written in several forms");
     }
 
