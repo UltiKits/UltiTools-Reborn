@@ -20,6 +20,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Classify changed paths
@@ -34,8 +35,8 @@ jobs:
           distribution: 'temurin'
           cache: maven
           server-id: ultikits-sonatype
-          server-username: SONATYPE_USERNAME
-          server-password: SONATYPE_PASSWORD
+          server-username-env-var: SONATYPE_USERNAME
+          server-password-env-var: SONATYPE_PASSWORD
 
       - name: Classify the project version
         if: steps.changes.outputs.product == 'true'
