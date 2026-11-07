@@ -1677,6 +1677,39 @@ release as its parent, 6.3.0.
 The new base class had one gap at 6.2.5, parameter-level tab completion; it is wired up in 6.3.0, so
 `@CmdParam(suggest = …)` completes parameters, including at the first argument position.
 
+### Sender-aware tab completion (6.3.2)
+
+Module completion is also offered to the console, RCON and other Bukkit `CommandSender`s.
+The default completion path silently excludes mappings disallowed by the effective class/method
+`@CmdTarget`, class or mapping permissions, or OP requirements, before invoking any provider.
+As in command validation, `@CmdTarget(CONSOLE)` means a non-player sender. A denied mapping
+contributes no suggestions; completion does not run commands, cooldowns or usage locks.
+If the default non-player pipeline has no candidates, the executor returns `null` to preserve
+Bukkit's online-player-name fallback, including commands that only override `suggest(Player, ...)`.
+Player requests keep their existing suggestion hook and empty-list results. In particular, a player
+completing a console-only executor now receives an empty list rather than Bukkit's player-name fallback.
+
+A method named by `@CmdParam(suggest = "suggestNames")` may use any of these signatures:
+
+- `()`, `(String)` (the current partial token);
+- `(Player)`, `(Player, String)`, `(Player, Command, String[])` (unchanged, players only);
+- `(CommandSender)`, `(CommandSender, String)`, `(CommandSender, Command, String[])` (players and non-players).
+
+The existing `Player` provider forms are never called with a null player for a non-player request;
+they contribute no parameter suggestions in that case. To enable console completion, widen a
+sender-independent module provider to `CommandSender`, or use the zero-argument / `String` forms.
+Built-in completers also support non-player requests; `@players` lists all online names for a
+non-player, since it has no player-specific `canSee` filter. Player visibility filtering is unchanged.
+
+Custom registered `TabCompleter`s now receive non-player requests too. Read the requesting sender
+from `TabCompletionContext#getSender()` and check `getPlayer()` for null before player-specific work;
+return an empty list when a provider requires a player. Existing `.player(...)` builders and
+`of(Player, Command, String[])` factories still expose that player through both getters.
+The sender-aware builder also accepts `.sender(...)`; an explicit sender takes precedence if both
+fields are set. No existing `Player` overload is removed. A subclass overriding the protected
+`suggest(Player, Command, String[])` hook continues to receive player requests; override the additive
+`suggest(CommandSender, Command, String[])` hook to customize completion for all senders.
+
 (A bare command declared with `@CmdMapping(format = "")` was not executable. This was previously
 scheduled for 6.2.5 and **has been fixed in 6.2.5**.)
 
