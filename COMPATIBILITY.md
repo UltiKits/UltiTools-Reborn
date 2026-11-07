@@ -2350,6 +2350,17 @@ This section governs the third kind.
   嵌套作用域所做的改动见本文后面两个小节）。没有签名变化。见 `FEATURES.md` 中的
   `ultitools.storage.transaction-failure-paths`。
 
+  **Known limitation — third-party JDBC drivers** (#642): after a rollback fails, the framework
+  requests no further commit, but closing the unresolved transaction follows the driver's policy.
+  A third-party driver that commits on close can therefore persist writes; neither closing nor
+  evicting its connection is a driver-independent rollback guarantee. Use a driver whose close policy
+  matches the application's rollback requirements, and verify its behaviour before relying on it.
+  A failed commit still has an unknown outcome as described above; closing cannot undo an applied commit.
+
+  中文补充：第三方 JDBC 驱动的已知限制（#642）：回滚失败后，框架不会再请求提交，但关闭未结束事务的结果取决于驱动策略。
+  若第三方驱动在 close 时提交，写入仍可能保存；关闭或剔除连接都不是跨驱动的回滚保证。请使用关闭策略符合应用回滚要求的驱动，
+  并在依赖该行为前验证。提交本身失败时，结果仍如上所述未知；关闭连接无法撤销已应用的提交。
+
 - `WhereCondition` comparisons other than `EQUAL` now take effect on SQLite and MySQL (#675).
   6.2.5's SQLite and MySQL operators ignored the comparison and matched every condition by
   equality; JSON already applied it. As of 6.3.0, `getAll`, `exist`, `page`, `del` and `updateIf`
@@ -3168,6 +3179,17 @@ its meaning.
   中文补充：找不到 Paper 的日志转发器（`org.bukkit.craftbukkit.util.ForwardLogHandler`，例如分支服务端、重定位了
   CraftBukkit 的构建，或转发器被替换）时，控制台镜像不安装：否则每条插件日志都会被推送两次。此时每次服务器运行只记一条
   WARNING，说明面板不会镜像控制台，日志流只包含插件日志（#583）。
+
+  **Known limitation — an earlier instance whose disable never ran** (#642): its `ForwardScope`
+  wrapper can remain around Paper's forwarder on the JUL root logger. A new instance does not
+  recognise that foreign-classloader wrapper as the forwarder, so the "was not found" WARNING does
+  not prove that the underlying forwarder is absent. Let UltiTools disable normally; stop and restart
+  the server when replacing an instance or recovering from a stale wrapper. Do not replace a running
+  plugin instance without its normal disable lifecycle.
+
+  中文补充：旧实例未执行禁用流程时的已知限制（#642）：它的 `ForwardScope` 包装器可能仍在 JUL 根日志器上包着 Paper 的
+  转发器。新实例无法把来自旧类加载器的包装器识别为转发器，因此“was not found”告警不能证明底层转发器不存在。
+  请让 UltiTools 正常完成禁用流程；替换实例或恢复遗留包装器时，停服后重新启动，不要绕过正常禁用流程替换运行中的插件实例。
 - **From the moment UltiTools starts disabling, panel requests get no reply** (#621). An inbound
   panel message, a WebSocket handshake that completes, and every task the WebSocket thread would
   hand to the server scheduler are dropped with one `FINE` line, instead of scheduling work the
