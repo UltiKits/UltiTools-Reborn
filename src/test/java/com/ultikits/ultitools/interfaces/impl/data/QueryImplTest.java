@@ -4,10 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -59,6 +62,89 @@ class QueryImplTest {
             TestEntity e = new TestEntity(name, score, balance);
             e.setId(id);
             return e;
+        }
+    }
+
+    static class NumericRow extends BaseDataEntity<String> {
+        @Column("amount")
+        private final Number amount;
+
+        NumericRow(Number amount) {
+            this.amount = amount;
+        }
+    }
+
+    @Nested
+    class ExactNumericOrdering {
+        @SuppressWarnings("unchecked")
+        private DataOperator<NumericRow> rows(Number... amounts) {
+            DataOperator<NumericRow> source = mock(DataOperator.class);
+            List<NumericRow> values = new ArrayList<>();
+            for (Number amount : amounts) {
+                values.add(new NumericRow(amount));
+            }
+            when(source.getAll()).thenReturn(values);
+            return source;
+        }
+
+        private List<Number> amounts(List<NumericRow> rows) {
+            List<Number> result = new ArrayList<>();
+            for (NumericRow row : rows) {
+                result.add(row.amount);
+            }
+            return result;
+        }
+
+        private void assertOrderedPair(Number lower, Number higher) {
+            for (DataOperator<NumericRow> source : Arrays.asList(rows(higher, lower), rows(lower, higher))) {
+                assertEquals(Collections.singletonList(higher), amounts(new QueryImpl<>(source).where("amount").gt(lower).list()));
+                assertEquals(Collections.singletonList(higher), amounts(new QueryImpl<>(source).where("amount").gte(higher).list()));
+                assertEquals(Collections.singletonList(lower), amounts(new QueryImpl<>(source).where("amount").lt(higher).list()));
+                assertEquals(Collections.singletonList(lower), amounts(new QueryImpl<>(source).where("amount").lte(lower).list()));
+                assertEquals(Arrays.asList(lower, higher), amounts(new QueryImpl<>(source).orderBy("amount").list()));
+                assertEquals(Arrays.asList(higher, lower), amounts(new QueryImpl<>(source).orderByDesc("amount").list()));
+            }
+        }
+
+        @Test
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // All six operations are asserted by assertOrderedPair.
+        void largeIntegralFiltersAndOrderingStayExact() {
+            assertOrderedPair(1L << 53, (1L << 53) + 1);
+            assertOrderedPair(-(1L << 53) - 1, -(1L << 53));
+            assertOrderedPair(Long.MAX_VALUE - 1, Long.MAX_VALUE);
+            assertOrderedPair(Long.MIN_VALUE, Long.MIN_VALUE + 1);
+        }
+
+        @Test
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // All six operations are asserted by assertOrderedPair.
+        void bigNumbersAndMixedFiniteNumbersKeepMathematicalOrder() {
+            assertOrderedPair(new BigInteger("18446744073709551616"), new BigInteger("18446744073709551617"));
+            assertOrderedPair(new BigDecimal("1.00000000000000000001"), new BigDecimal("1.00000000000000000002"));
+            assertOrderedPair(9007199254740992.0, 9007199254740993L);
+            assertOrderedPair(new BigInteger("9007199254740993"), new BigDecimal("9007199254740993.1"));
+            assertOrderedPair(new BigDecimal("0.1"), 0.1d);
+            assertOrderedPair(0.1d, 0.1f);
+            assertOrderedPair(new BigDecimal("1E+400"), BigInteger.TEN.pow(401));
+        }
+
+        @Test
+        void exactNumericEqualityRemainsEqualityAcrossTypes() {
+            DataOperator<NumericRow> source = rows(1L, 1.0d, new BigDecimal("1.00"), BigInteger.ONE);
+            assertTrue(new QueryImpl<>(source).where("amount").gt(1).list().isEmpty());
+            assertTrue(new QueryImpl<>(source).where("amount").lt(1).list().isEmpty());
+            assertEquals(4, new QueryImpl<>(source).where("amount").gte(1).list().size());
+            assertEquals(4, new QueryImpl<>(source).where("amount").lte(1).list().size());
+        }
+
+        @Test
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // All six operations are asserted by assertOrderedPair.
+        void nonFiniteSignedZeroAndUnsupportedNumbersKeepTheirOrder() {
+            assertOrderedPair(Double.NEGATIVE_INFINITY, -1L);
+            assertOrderedPair(1L, Double.POSITIVE_INFINITY);
+            assertOrderedPair(Double.POSITIVE_INFINITY, Double.NaN);
+            assertOrderedPair(-0.0d, 0L);
+            // AtomicInteger is not Comparable: preserve the existing textual fallback, not numeric coercion.
+            assertOrderedPair(new AtomicInteger(10), new AtomicInteger(2));
         }
     }
 

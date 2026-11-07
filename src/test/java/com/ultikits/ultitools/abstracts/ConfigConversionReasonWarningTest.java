@@ -21,6 +21,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.annotations.ConfigEntry;
@@ -42,6 +44,7 @@ class ConfigConversionReasonWarningTest {
 
     @TempDir Path tempDir;
     private UltiToolsPlugin plugin;
+    private Values loaded;
 
     /** A module value type with its own converter. */
     public static final class Label {
@@ -85,9 +88,16 @@ class ConfigConversionReasonWarningTest {
     }
 
     private List<String> loadWarnings(String yaml) throws IOException {
+        // Supply every fixture key: missing-key insertion is unrelated to diagnostic rendering.
+        String completeYaml = yaml;
+        String[] defaults = {"title: default\n", "labels: {}\n", "limits: {}\n", "auth-label: hidden\n"};
+        for (String entry : defaults) {
+            String key = entry.substring(0, entry.indexOf(':') + 1);
+            if (!completeYaml.startsWith(key) && !completeYaml.contains("\n" + key)) { completeYaml += entry; }
+        }
         Path file = tempDir.resolve(PATH);
         Files.createDirectories(file.getParent());
-        Files.write(file, yaml.getBytes(StandardCharsets.UTF_8));
+        Files.write(file, completeYaml.getBytes(StandardCharsets.UTF_8));
         try (MockedStatic<PackageScanUtils> scanner = mockStatic(PackageScanUtils.class)) {
             scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(any(), anyString(), any()))
                     .thenAnswer(call -> {
@@ -98,7 +108,9 @@ class ConfigConversionReasonWarningTest {
             ConverterRegistry.prepareModule(plugin, new String[]{"fixture.reason"}, getClass().getClassLoader());
         }
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
-            new Values(PATH).init(plugin);
+            loaded = new Values(PATH);
+            loaded.init(plugin);
+            assertThat(Files.readAllBytes(file)).isEqualTo(completeYaml.getBytes(StandardCharsets.UTF_8));
             return warnings.messages();
         }
     }
@@ -133,6 +145,46 @@ class ConfigConversionReasonWarningTest {
         List<String> warnings = loadWarnings("auth-label:\n  leak: secret-specimen\n");
         assertThat(warnings).filteredOn(line -> line.contains("auth-label")).hasSize(1)
                 .allSatisfy(line -> assertThat(line).contains("<redacted>").doesNotContain("secret-specimen"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\\r", "\\n", "\\r\\n", "\\t", "\\0", "\\x7f", "\\N", "\\L", "\\P"})
+    @DisplayName("raw field and entry specimens use the reason's single-line policy (#593)")
+    void rawSpecimensStayOnOneLine(String yamlEscape) throws IOException {
+        String specimen = "\"first" + yamlEscape + "second\"";
+        List<String> warnings = loadWarnings("title: {nested: " + specimen + "}\n"
+                + "limits: {good: 1, bad: " + specimen + "}\n");
+        assertThat(warnings).filteredOn(line -> line.contains("'title'") || line.contains("limits.bad"))
+                .hasSize(2).allSatisfy(line -> {
+                    assertThat(line).contains(PATH, "first second", "(reason: ",
+                            "skipped or using the declared default");
+                    assertThat(line).doesNotContainPattern("[\\p{Cntrl}\\u0085\\u2028\\u2029]");
+                });
+        assertThat(loaded.title.text).isEqualTo("default");
+        assertThat(loaded.limits).containsEntry("good", 1).doesNotContainKey("bad");
+    }
+
+    @Test
+    @DisplayName("block scalar warnings are single-line without changing accepted values or file bytes")
+    void blockScalarIsOnlyNormalizedInWarnings() throws IOException {
+        List<String> warnings = loadWarnings("title: |-\n  first\n  second\n"
+                + "limits:\n  bad: |-\n    first\n    second\n");
+        assertThat(loaded.title.text).isEqualTo("first\nsecond");
+        assertThat(warnings).filteredOn(line -> line.contains("limits.bad")).hasSize(1)
+                .allSatisfy(line -> assertThat(line).contains("first second")
+                        .doesNotContainPattern("[\\p{Cntrl}\\u0085\\u2028\\u2029]"));
+    }
+
+    @Test
+    @DisplayName("multi-line secret keys and nested credentials remain fully redacted")
+    void multilineSecretsRemainRedacted() throws IOException {
+        List<String> warnings = loadWarnings("auth-label: {leak: \"secret-first\\nsecret-second\"}\n"
+                + "title: {password: \"nested-first\\n nested-second\"}\n");
+        assertThat(warnings).filteredOn(line -> line.contains("auth-label") || line.contains("'title'"))
+                .hasSize(2).allSatisfy(line -> assertThat(line).contains("<redacted>")
+                        .doesNotContain("secret-first", "secret-second", "nested-first", "nested-second")
+                        .doesNotContainPattern("[\\p{Cntrl}\\u0085\\u2028\\u2029]"));
+        assertThat(loaded.authLabel.text).isEqualTo("hidden");
     }
 
     @Test

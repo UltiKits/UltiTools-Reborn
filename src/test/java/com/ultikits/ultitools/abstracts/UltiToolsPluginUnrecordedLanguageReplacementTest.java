@@ -16,6 +16,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -255,6 +257,65 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
         assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder(), LANG)).isEmpty();
         assertThat(langListing()).containsExactly("en.json");
         assertThat(plugin.i18n("greeting")).isEqualTo("Hello from the 6.2 jar");
+    }
+
+    @Test
+    @DisplayName("#567 item 6: atomic move fails after staging: original retained, staging and unused backup removed")
+    void failureAfterStagingLeavesOriginalAndNoTemporaryFiles() throws Exception {
+        fixture.jarEntry(LANG, NEW).onDisk(LANG, OLD);
+        UltiToolsPlugin plugin = fixture.construct("6.3.0");
+        Path target = fixture.disk(LANG).toPath();
+        AtomicInteger injectedMoves = new AtomicInteger();
+        try (org.mockito.MockedStatic<Files> files = Mockito.mockStatic(Files.class, call -> {
+            if ("move".equals(call.getMethod().getName()) && target.equals(call.getArgument(1))) {
+                Path source = call.getArgument(0);
+                assertThat(Files.readAllBytes(source)).isEqualTo(utf8(NEW));
+                injectedMoves.incrementAndGet();
+                throw new IOException("injected failure after staging");
+            }
+            return call.callRealMethod();
+        })) {
+            plugin.commitLanguageProvenance();
+        }
+
+        assertThat(injectedMoves.get()).isPositive();
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk(LANG))).isEqualTo(utf8(OLD));
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder(), LANG)).isEmpty();
+        assertThat(langListing()).containsExactly("en.json");
+        assertThat(plugin.i18n("greeting")).isEqualTo("Hello from the 6.2 jar");
+    }
+
+    @Test
+    @DisplayName("#567 item 6: failed restore move retains the old bytes in the named backup and reports both paths")
+    void failureRestoringBackupRetainsBothCopiesAndReportsPaths() throws Exception {
+        fixture.jarEntry(LANG, NEW).onDisk(LANG, OLD);
+        UltiToolsPlugin plugin = fixture.construct("6.3.0");
+        File record = fixture.provenanceRecord();
+        Files.write(record.toPath(), utf8("{}"));
+        assertThat(record.setWritable(false)).isTrue();
+        Path backup = new File(langDir(), "en.json.bak").toPath();
+        AtomicInteger injectedMoves = new AtomicInteger();
+        try (org.mockito.MockedStatic<Files> files = Mockito.mockStatic(Files.class, call -> {
+            if ("move".equals(call.getMethod().getName()) && backup.equals(call.getArgument(0))) {
+                injectedMoves.incrementAndGet();
+                throw new IOException("injected restore move failure");
+            }
+            return call.callRealMethod();
+        })) {
+            plugin.commitLanguageProvenance();
+        } finally {
+            record.setWritable(true);
+        }
+
+        assertThat(injectedMoves.get()).isEqualTo(1);
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk(LANG))).isEqualTo(utf8(NEW));
+        assertThat(Files.readAllBytes(backup)).isEqualTo(utf8(OLD));
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder(), LANG)).isEmpty();
+        assertThat(langListing()).containsExactly("en.json", "en.json.bak");
+        verify(fixture.logger()).log(org.mockito.ArgumentMatchers.eq(java.util.logging.Level.SEVERE),
+                argThat((String message) -> message.contains("Could not restore language file")
+                        && message.contains(fixture.disk(LANG).getPath())
+                        && message.contains(backup.toString())), org.mockito.ArgumentMatchers.any(IOException.class));
     }
 
     @Test
