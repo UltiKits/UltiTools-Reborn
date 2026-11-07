@@ -200,8 +200,8 @@ class FixtureGitIsolationTests(unittest.TestCase):
 class MainOnlyWorkflowTests(unittest.TestCase):
     def test_main_job_always_reports_and_heavy_steps_are_gated(self):
         workflow = load_workflow(WORKFLOWS / "maven-ci.yml")
-        self.assertEqual(workflow["on"], {"push": {"branches": ["main"]},
-                                          "pull_request": {"branches": ["main"]}})
+        self.assertEqual(workflow["on"], {"push": {"branches": ["main", "release/**"]},
+                                          "pull_request": {"branches": ["main", "release/**"]}})
         job = workflow["jobs"]["test"]
         self.assertEqual(job["name"], "🧪 Test & Coverage")
         self.assertNotIn("if", job)
@@ -218,7 +218,7 @@ class MainOnlyWorkflowTests(unittest.TestCase):
         self.assertFalse(any("badge" in str(step) or "Coverage Gate Check" in str(step) for step in job["steps"]))
         codacy = step_named(job, "📤 Upload Coverage to Codacy")
         self.assertEqual(codacy["if"],
-                         "steps.changes.outputs.build == 'true' && env.CODACY_TOKEN_PRESENT == 'true' && "
+                         "steps.changes.outputs.build == 'true' && "
                          "github.event_name == 'push' && github.ref == 'refs/heads/main' || "
                          "steps.changes.outputs.build == 'true' && env.CODACY_TOKEN_PRESENT == 'true' && "
                          "github.event_name == 'pull_request' && "
@@ -248,16 +248,17 @@ class MainOnlyWorkflowTests(unittest.TestCase):
                                        "github": {"event_name": event, "ref": ref,
                                                   "repository": "UltiKits/UltiTools-Reborn",
                                                   "event": {"pull_request": {"head": {"repo": {"full_name": repository}}}}}}
-                            expected = build == "true" and token == "true" and (
+                            expected = build == "true" and (
                                 (event == "push" and ref == "refs/heads/main") or
-                                (event == "pull_request" and repository == "UltiKits/UltiTools-Reborn"))
+                                (event == "pull_request" and token == "true" and
+                                 repository == "UltiKits/UltiTools-Reborn"))
                             self.assertEqual(condition_holds(guard, context), expected)
         # Push events do not contain pull_request; short-circuit evaluation must still work.
         context = {"steps": {"changes": {"outputs": {"build": "true"}}}, "env": {"CODACY_TOKEN_PRESENT": "true"},
                    "github": {"event_name": "push", "ref": "refs/heads/main"}}
         self.assertTrue(condition_holds(guard, context))
 
-    def test_codacy_upload_is_skipped_without_a_token_for_every_actor(self):
+    def test_codacy_upload_requires_main_push_token_but_skips_secret_free_prs(self):
         workflow = load_workflow(WORKFLOWS / "maven-ci.yml")
         guard = step_named(workflow["jobs"]["test"], "📤 Upload Coverage to Codacy")["if"]
         same_repo = {"head": {"repo": {"full_name": "UltiKits/UltiTools-Reborn"}}}
@@ -265,6 +266,7 @@ class MainOnlyWorkflowTests(unittest.TestCase):
             ("same-repo PR, empty token", "pull_request", "refs/pull/725/merge", "dependabot-free-actor", "false", False),
             ("dependabot PR, empty token", "pull_request", "refs/pull/726/merge", "dependabot[bot]", "false", False),
             ("main push, token present", "push", "refs/heads/main", "maintainer", "true", True),
+            ("main push, empty token must reach validation", "push", "refs/heads/main", "maintainer", "false", True),
         )
         for label, event, ref, actor, token, expected in cases:
             with self.subTest(label):
@@ -274,6 +276,23 @@ class MainOnlyWorkflowTests(unittest.TestCase):
                                       "repository": "UltiKits/UltiTools-Reborn",
                                       "event": {"pull_request": same_repo}}}
                 self.assertEqual(condition_holds(guard, context), expected)
+
+    def test_codacy_empty_token_fails_before_downloading_reporter(self):
+        upload = step_named(load_workflow(WORKFLOWS / "maven-ci.yml")["jobs"]["test"],
+                            "📤 Upload Coverage to Codacy")
+        with tempfile.TemporaryDirectory(prefix="codacy-empty-token-") as folder:
+            root = Path(folder)
+            marker = root / "network-called"
+            curl = root / "curl"
+            curl.write_text("#!/bin/sh\nprintf called > \"$NETWORK_MARKER\"\nexit 97\n")
+            curl.chmod(0o700)
+            env = dict(os.environ, CODACY_API_TOKEN="", RUNNER_TEMP=folder,
+                       NETWORK_MARKER=str(marker), PATH=folder + os.pathsep + os.environ["PATH"])
+            process = subprocess.run(["bash", "-c", upload["run"]], env=env,
+                                     capture_output=True, text=True)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("::error::CODACY_API_TOKEN is required for coverage upload", process.stdout + process.stderr)
+            self.assertFalse(marker.exists(), "empty token must fail before a network request")
 
     def test_pr_concurrency_is_cancellable_but_each_push_has_its_own_group(self):
         concurrency = load_workflow(WORKFLOWS / "maven-ci.yml")["concurrency"]

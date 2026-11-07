@@ -109,13 +109,14 @@
 #
 #   --allowlist <path>     Path to the allowlist file (default: .github/cjk-allowlist.txt)
 #   --scope <path>         Repeatable. Overrides the three default scopes entirely when given.
-#   --report-only          Print violations, always exit 0 (for measurement/inspection).
-#   --max-violations <n>   Exit 0 while the violation count is at or below n (migration aid;
-#                           lets the gate be introduced before the conversion finishes). Default 0.
+#   --report-only          Print violations, exit 0 after a successful scan (errors still exit 2).
+#   --max-violations <n>   Non-negative decimal integer. Exit 0 while the violation count is at or
+#                           below n (migration aid). Default 0; invalid or missing values exit 2.
 #   --self-test             Run the fixture self-test (see .github/scripts/testdata/) and exit.
 #
 # Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
-#             2 = matcher/helper/read, file-enumeration or result-sort failure; 64 = usage error.
+#             2 = invalid threshold, matcher/helper/read, enumeration, sort, count or output failure;
+#             64 = unknown flag.
 #
 # Wired into maven-ci.yml (see the "CJK Comment/Javadoc Scope Gate" step, plan 08-18) — invoked
 # there with no threshold flag, so the zero-violation default applies. The migration aid
@@ -185,7 +186,16 @@ while [ $# -gt 0 ]; do
         --allowlist)      ALLOWLIST="$2"; shift 2 ;;
         --scope)          SCOPES+=("$2"); shift 2 ;;
         --report-only)    REPORT_ONLY=1; shift ;;
-        --max-violations) MAX_VIOLATIONS="$2"; shift 2 ;;
+        --max-violations)
+            if [ $# -lt 2 ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
+                echo "ERROR: --max-violations requires a non-negative decimal integer." >&2
+                exit 2
+            fi
+            # Canonical decimal text, not shell arithmetic: even very large limits are valid.
+            MAX_VIOLATIONS="${2#"${2%%[!0]*}"}"
+            MAX_VIOLATIONS="${MAX_VIOLATIONS:-0}"
+            shift 2
+            ;;
         --self-test)      SELF_TEST=1; shift ;;
         -h|--help)        usage; exit 0 ;;
         *)
@@ -619,19 +629,35 @@ if [ "$SORT_STATUS" -ne 0 ]; then
     exit 2
 fi
 
-TOTAL=$(wc -l < "$VIOLATIONS_SORTED" | tr -d ' ')
-FILES=$(cut -d: -f1 "$VIOLATIONS_SORTED" | sort -u | wc -l | tr -d ' ')
+TOTAL=$(wc -l < "$VIOLATIONS_SORTED" | tr -d ' ') || {
+    echo "ERROR: counting violations failed; the gate fails closed." >&2
+    exit 2
+}
+FILES=$(cut -d: -f1 "$VIOLATIONS_SORTED" | sort -u | wc -l | tr -d ' ') || {
+    echo "ERROR: counting violating files failed; the gate fails closed." >&2
+    exit 2
+}
 
 if [ "$TOTAL" -gt 0 ]; then
     # One GitHub Actions error annotation per violating FILE (not per line) so a large batch stays
     # readable, then the full sorted list to stdout for anyone reading the raw log.
     cut -d: -f1 "$VIOLATIONS_SORTED" | sort -u | while IFS= read -r vf; do
-        echo "::error file=${vf}::CJK character(s) found outside the allowed scope (see .github/cjk-allowlist.txt)"
-    done
-    cat "$VIOLATIONS_SORTED"
+        # This loop is in a checked pipeline, so do not rely on errexit inside its body.
+        echo "::error file=${vf}::CJK character(s) found outside the allowed scope (see .github/cjk-allowlist.txt)" || exit 2
+    done || {
+        echo "ERROR: emitting violation annotations failed; the gate fails closed." >&2
+        exit 2
+    }
+    cat "$VIOLATIONS_SORTED" || {
+        echo "ERROR: emitting the violation list failed; the gate fails closed." >&2
+        exit 2
+    }
 fi
 
-echo "SUMMARY: ${TOTAL} CJK violation(s) across ${FILES} file(s)."
+echo "SUMMARY: ${TOTAL} CJK violation(s) across ${FILES} file(s)." || {
+    echo "ERROR: emitting the summary failed; the gate fails closed." >&2
+    exit 2
+}
 
 rm -f "$VIOLATIONS_RAW" "$VIOLATIONS_SORTED"
 trap - EXIT
@@ -640,7 +666,9 @@ if [ "$REPORT_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-if [ "$TOTAL" -gt "$MAX_VIOLATIONS" ]; then
+# Compare canonical decimal strings to avoid machine-integer overflow for a large threshold.
+if [ "${#TOTAL}" -gt "${#MAX_VIOLATIONS}" ] ||
+        { [ "${#TOTAL}" -eq "${#MAX_VIOLATIONS}" ] && [[ "$TOTAL" > "$MAX_VIOLATIONS" ]]; }; then
     exit 1
 fi
 

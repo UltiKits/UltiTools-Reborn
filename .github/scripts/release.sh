@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 #
+# BEGIN USAGE
 # Release entrypoint for UltiTools-API. Run locally. It builds a release candidate once,
 # keeps the exact bytes it built, and later publishes those same bytes after independent
 # acceptance, without building again.
+#
+# WARNING: --prerelease only labels the GitHub release. It does not prevent
+# permanent Maven Central publication when enabled; published coordinates cannot be overwritten or deleted.
 #
 # Known limitations:
 # A failed `gh release view`, even for an error other than "not found", is treated as an
@@ -36,6 +40,7 @@
 #   --branch <name>           Release branch (default main).
 #   --yes                     Skip the interactive confirmation.
 #   -h, --help                Show this help.
+# END USAGE
 #
 # 发布入口。在本机跑：--prepare 只构建一次并保留当次产物，独立验收之后
 # --publish-approved 发布同一份字节，不再重新构建。
@@ -75,7 +80,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="${SCRIPT_DIR}/release_artifacts.py"
 
 usage() {
-    sed -n '3,30p' "${SCRIPT_DIR}/release.sh" | sed 's/^# \{0,1\}//'
+    sed -n '/^# BEGIN USAGE$/,/^# END USAGE$/p' "${SCRIPT_DIR}/release.sh" | sed '1d;$d;s/^# \{0,1\}//'
 }
 
 die() { echo "❌ $*" >&2; exit 1; }
@@ -277,14 +282,19 @@ resolve_notes() {
         NOTES="$(cat "$NOTES_FILE")"
     fi
     if [ -z "$NOTES" ]; then
+        local limit=10
         LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+        # Read one extra subject to detect truncation, without a head pipeline that
+        # can cause git to fail with SIGPIPE under pipefail. Keep the existing limits.
         if [ -n "$LAST_TAG" ]; then
-            # 用 git 自己的 -n 限制条数，不要 `git log | head -50`：
-            # head 读满就退出并关闭管道，git log 吃到 SIGPIPE 返回 141，
-            # set -o pipefail 会把它当成整条管道失败，于是提交多于 50 条时脚本必炸。
-            NOTES="$(git log "${LAST_TAG}..HEAD" -n 50 --pretty=format:'- %s (%h)')"
+            limit=50
+            NOTES="$(git log "${LAST_TAG}..HEAD" -n "$((limit + 1))" --pretty=format:'- %s (%h)')"
         else
-            NOTES="$(git log --pretty=format:'- %s (%h)' -10)"
+            NOTES="$(git log --pretty=format:'- %s (%h)' -n "$((limit + 1))")"
+        fi
+        if [ "$(printf '%s\n' "$NOTES" | wc -l)" -gt "$limit" ]; then
+            NOTES="${NOTES%$'\n'*}"
+            NOTES+=$'\n\n'"Release notes truncated to the most recent ${limit} commits; use --notes-file for complete release notes."
         fi
     fi
 }
