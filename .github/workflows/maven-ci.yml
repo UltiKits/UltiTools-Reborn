@@ -48,6 +48,10 @@ jobs:
       if: steps.changes.outputs.build == 'true'
       run: mvn -B clean verify
 
+    - name: Audit framework linkage against old Paper APIs
+      if: steps.changes.outputs.build == 'true'
+      run: python3 -I .github/scripts/audit_framework_linkage.py
+
     - name: Verify checkout remains clean
       if: steps.changes.outputs.build == 'true'
       run: |
