@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.stream.Stream;
 
@@ -14,13 +16,13 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * The layouts that make every gated write to a file refuse, whichever setting it changes, each named by the line the
- * operator has to fix (17-65 review R65-I1 and R3-I1, documented in {@code COMPATIBILITY.md} "Layouts the write gate
- * cannot keep"; orchestrator decision of 2026-10-05: keep refusing - the maintainer's rule forbids normalizing an
- * operator's layout - and name the offending line, never a value). The control cases are layouts the gate keeps byte
- * for byte, so a write to another key goes through.
+ * Pinning tests for the existing refused layouts documented in {@code COMPATIBILITY.md} "Layouts the write gate
+ * cannot keep". A refusal names the offending line when layout comparison can locate it, or gives the parse-back
+ * reason without a line number. The control cases are layouts the gate keeps byte for byte, so a write to another
+ * key goes through. No renderer behaviour is changed by these tests.
  * <p>
- * Each case writes the setting {@code a} (1 to 2, or inserts it) in a file whose layout elsewhere is the case's.
+ * Most cases write the setting {@code a} (1 to 2, or insert it). The list-comment cases write another key or own the
+ * list itself, including the exception where changing its length drops the item comment.
  */
 class OperatorFileWriterLayoutRefusalListTest {
 
@@ -110,6 +112,76 @@ class OperatorFileWriterLayoutRefusalListTest {
         assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.REFUSED);
         assertThat(result.reason()).contains("byte-order mark");
         assertThat(read(file)).isEqualTo("\uFEFF");
+    }
+
+    static Stream<Arguments> listItemComments() {
+        String line2 = "the file's layout outside the keys this write owns would change (line 2)";
+        String line3 = "the file's layout outside the keys this write owns would change (line 3)";
+        String line4 = "the file's layout outside the keys this write owns would change (line 4)";
+        String parseBack = "the rendered text would not parse back";
+        return Stream.of(
+                Arguments.of("before a plain item", "a:\n- x\n# n\n- y\nc: 1\n", line3),
+                Arguments.of("before a mapping item", "a:\n- x\n# n\n- k: v\nc: 1\n", line3),
+                Arguments.of("before the first plain item", "a:\n# n\n- x\nc: 1\n", line2),
+                Arguments.of("after a block scalar, before a plain item", "a:\n- |-\n  x\n# n\n- y\nc: 1\n", line4),
+                Arguments.of("before a flow sequence item", "a:\n- x\n# n\n- [1, 2]\nc: 1\n", parseBack),
+                Arguments.of("before a flow mapping item", "a:\n- x\n# n\n- {k: v}\nc: 1\n", parseBack),
+                Arguments.of("before the first flow item", "a:\n# n\n- [1, 2]\nc: 1\n", parseBack),
+                Arguments.of("after a block scalar, before a flow item",
+                        "a:\n- |-\n  x\n# n\n- [1, 2]\nc: 1\n", parseBack),
+                Arguments.of("after a flow item", "a:\n- [0]\n# n\n- [1, 2]\nc: 1\n", parseBack),
+                Arguments.of("nested flow item", "sec:\n  a:\n  - x\n  # n\n  - [1, 2]\nc: 1\n", parseBack));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("listItemComments")
+    void aCommentBeforeAListItemRefusesAnotherKeyWithBytesAndMtimeUnchanged(
+            String layout, String text, String reason) throws Exception {
+        Path file = write(text);
+        Files.setLastModifiedTime(file, FileTime.fromMillis(1000000000000L));
+        FileTime modified = Files.getLastModifiedTime(file);
+        byte[] bytes = Files.readAllBytes(file);
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(file,
+                OwnedPaths.builder().value(Collections.singletonList("c")).build(), null,
+                document -> document.set(Collections.singletonList("c"), 2));
+
+        assertThat(result.outcome()).as(layout).isEqualTo(OperatorFileWriter.Outcome.REFUSED);
+        assertThat(result.reason()).as(layout).isEqualTo(reason);
+        assertThat(Files.readAllBytes(file)).as("the file keeps its bytes").isEqualTo(bytes);
+        assertThat(Files.getLastModifiedTime(file)).as("the file keeps its mtime").isEqualTo(modified);
+    }
+
+    @org.junit.jupiter.api.Test
+    void owningACommentedListAtTheSameLengthStillRefuses() throws Exception {
+        String text = "a:\n- x\n# n\n- [1, 2]\nc: 1\n";
+        Path file = write(text);
+        Files.setLastModifiedTime(file, FileTime.fromMillis(1000000000000L));
+        FileTime modified = Files.getLastModifiedTime(file);
+        byte[] bytes = Files.readAllBytes(file);
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(file,
+                OwnedPaths.builder().value(Collections.singletonList("a")).build(), null,
+                document -> document.set(Collections.singletonList("a"),
+                        Arrays.asList("z", Arrays.asList(1, 2))));
+
+        assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.REFUSED);
+        assertThat(result.reason()).isEqualTo("the rendered text would not parse back");
+        assertThat(Files.readAllBytes(file)).isEqualTo(bytes);
+        assertThat(Files.getLastModifiedTime(file)).isEqualTo(modified);
+    }
+
+    @org.junit.jupiter.api.Test
+    void owningACommentedListAndChangingItsLengthWritesWithoutTheItemComment() throws Exception {
+        Path file = write("a:\n- x\n# n\n- [1, 2]\nc: 1\n");
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(file,
+                OwnedPaths.builder().value(Collections.singletonList("a")).build(), null,
+                document -> document.set(Collections.singletonList("a"), Collections.singletonList("z")));
+
+        assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.WRITTEN);
+        assertThat(result.reason()).isEmpty();
+        assertThat(read(file)).isEqualTo("a:\n- z\nc: 1\n");
     }
 
     private OperatorFileWriter.Result setA(Path file) throws Exception {
