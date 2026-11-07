@@ -2075,7 +2075,10 @@ This section governs the third kind.
   different file system from the server root the start refuses it, changes nothing, and names both
   folders in one SEVERE line; there is no copy fallback. `updatePlugin(String)` keeps its signature; its `true` now
   means "staged", and `PluginInstallUtils.stageUpdate(String)` (`@ApiStatus.Internal`) returns what
-  was staged or why nothing was. Nothing is staged, and `updatePlugin(String)` returns `false`, when
+  was staged or why nothing was. As of 6.3.2 (#692), if a downloaded JAR passes structural validation
+  but reading its metadata or hashing its content then fails, the staging refusal reports the read
+  error rather than claiming its identify-string or version is missing; staging is discarded and
+  the installed JAR is unchanged. Nothing is staged, and `updatePlugin(String)` returns `false`, when
   another JAR in the modules folder declares the module's `plugin.yml` `main:` and sorts before the
   new JAR's file name: that copy would load instead at the next start, so the update could only be
   rolled back; the reply names it (maintainer decision of 2026-09-30). Likewise when two loaded modules in
@@ -2083,7 +2086,11 @@ This section governs the third kind.
   string. The update only ever moves, replaces or deletes a file whose SHA-256 matches its record;
   when another actor has changed one, it does nothing, keeps the record as `NEEDS_OPERATOR` with one
   SEVERE line, and refuses `/upm update` and `/upm uninstall` of that module until the record and its
-  folder are deleted. Measured consumers: none of the fifteen module repositories or
+  folder are deleted. **An unreadable file enters this same hold, even when the read failure is
+  transient and nobody changed its bytes.** Later starts do not automatically retry the held update
+  after readability returns. Stop the server, check the named files and recover any JAR you need,
+  then follow the logged instructions to discard the transaction before requesting another update;
+  do not remove a record or its backup while the server runs. Measured consumers: none of the fifteen module repositories or
   UltiTools-External-Example call either method (their `origin/master`, searched for
   `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are module test and feature
   documents - `UAT-CHECKLIST.md`, and UltiSideBar's `FEATURES.md` - that name the `/upm` commands or the method in
@@ -2163,7 +2170,27 @@ This section governs the third kind.
   recorded, so the next start will not delete them. At the start that applies a record, a recorded
   JAR whose content cannot be read to confirm that it is still the recorded file is neither deleted
   nor dropped: it stays in the modules folder, keeps its entry in the record unchanged for the next
-  start, and is reported as one SEVERE line with the read error (#676).
+  start, and is reported as one SEVERE line with the read error (#676). As of 6.3.2 (#692), this
+  includes failures to read the JAR's size or modification time: a metadata error no longer silently
+  cancels the recorded deletion. An uninstall that cannot read those attributes cannot record a new
+  deletion and reports that failure instead of recording a zero size or timestamp.
+
+  **Module lifecycle known limitations (#692; documented, not changed):**
+  - Non-Paper launchers using `union:` code-source URLs are unsupported. If such a launcher also
+    places the server under a percent-escaped path, server-JAR discovery can truncate that path.
+    Use a supported Paper launcher rather than relying on the `union:` compatibility branch.
+  - If a start stops after moving the new JAR out of staging but before recording that step, and
+    a target-JAR read fails during resume but succeeds during the following safety check, the
+    failure diagnostic can say `<missing>` instead of naming the transient read error. Inspect the
+    named staged, target and backup paths with the server stopped; do not treat that word alone as
+    proof that a JAR was permanently lost. A persistently unreadable target is held for the operator
+    by the rule above, not silently replaced.
+  - If the retained backup is absent while the new target remains, and reading that target fails
+    only after a successful identity preflight, rollback can leave the target in place without its
+    usual no-backup warning and discard the transaction record. Keep framework-owned transaction
+    records and backups intact; when recovering a damaged transaction, stop the server and inspect
+    both target and backup before deciding which JAR to keep. Do not hand-edit transaction files
+    while the server runs.
 - The modules folder is computed in one place, `<plugin data folder>/plugins` (#517). Before 6.3.0
   the start-up scan read `System.getProperty("user.dir")` + `/plugins/UltiTools/plugins` while the
   module class loader, install, update and uninstall read the data folder; on a server whose JVM was
