@@ -1033,7 +1033,7 @@ public final class OperatorFileWriter {
                 return "a key this write owns cannot be located in the file";
             }
             int keyLine = tuple.getKeyNode().getStartMark().getLine();
-            int last = Math.max(lastLine(tuple.getKeyNode(), lines), lastLine(tuple.getValueNode(), lines));
+            int last = lastLine(tuple, lines);
             int first = keyLine - commentLines;
             if (!commentOrBlank(lines, first, keyLine)) {
                 return COMMENT_NOT_LOCATED;
@@ -1254,7 +1254,7 @@ public final class OperatorFileWriter {
         int last = node.getStartMark().getLine();
         if (node instanceof MappingNode) {
             for (NodeTuple tuple : ((MappingNode) node).getValue()) {
-                last = Math.max(last, Math.max(lastLine(tuple.getKeyNode(), lines), lastLine(tuple.getValueNode(), lines)));
+                last = Math.max(last, lastLine(tuple, lines));
             }
         } else if (node instanceof SequenceNode) {
             for (Node element : ((SequenceNode) node).getValue()) {
@@ -1262,6 +1262,17 @@ public final class OperatorFileWriter {
             }
         }
         return last;
+    }
+
+    /**
+     * A key with no value token ends on its key's line (#628). Its zero-text value's mark may sit on the next
+     * key after a comment; that mark is not operator content and must not extend this key or its parent mapping.
+     * The key itself still occupies its full span; explicit null tokens and collection entries are unchanged.
+     */
+    private static int lastLine(NodeTuple tuple, List<String> lines) {
+        int keyLast = lastLine(tuple.getKeyNode(), lines);
+        return ConfigDocument.writtenWithNoValue(tuple.getValueNode()) ? keyLast
+                : Math.max(keyLast, lastLine(tuple.getValueNode(), lines));
     }
 
     private static int withoutSeparatorLines(ScalarNode scalar, int start, int end, List<String> lines) {
@@ -1327,7 +1338,10 @@ public final class OperatorFileWriter {
                 List<Object> child = new ArrayList<>(path);
                 child.add(identity(tuple.getKeyNode()));
                 record(tuple.getKeyNode(), child, result, lines);
-                collect(tuple.getValueNode(), child, result, lines);
+                // #628: a missing value has no text on its mark's line; the key was recorded above.
+                if (!ConfigDocument.writtenWithNoValue(tuple.getValueNode())) {
+                    collect(tuple.getValueNode(), child, result, lines);
+                }
             }
         } else if (node instanceof SequenceNode) {
             List<Node> elements = ((SequenceNode) node).getValue();
