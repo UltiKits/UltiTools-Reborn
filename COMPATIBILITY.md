@@ -5,6 +5,14 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## SQLite lock waits under native profiling (planned for 6.3.2)
+
+The pending fix for [#645](https://github.com/UltiKits/UltiTools-Reborn/issues/645) measures SQLite busy waits with a monotonic elapsed-time budget. It preserves the 3000 ms default, DEFERRED transactions, and JDBC statement timeout selection; native profiler signals no longer consume the budget merely by interrupting requested sleeps. This change is intended for 6.3.2.
+
+Earlier builds can exhaust a nominal 3 s busy wait in about 0.4 s on the server thread under Paper's native spark background profiler. It requires an overlapping write lock on the same database file held by another thread or process. Servers with long-held SQLite write locks should use MySQL; keep SQLite transactions short and do not share or externally modify a live SQLite file.
+
+A read-before-write transaction can still fail immediately when upgrading its read lock would deadlock with another transaction. A busy handler does not remove that SQLite behavior: do not assume every SQLITE_BUSY waits for the full timeout, or retry an entire transaction blindly. The framework does not switch transactions to IMMEDIATE to hide it. Direct changes to SQLite-owned busy handlers or PRAGMA busy_timeout by module code are outside the framework-managed wait policy.
+
 ## Upgrade checklist: moving a module from 6.2.5 to 6.3.0
 
 What a module author has to do, in the order you would do it. Each item is one action and links to the section that
