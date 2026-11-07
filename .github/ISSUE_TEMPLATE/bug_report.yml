@@ -7,7 +7,7 @@ body:
       value: |
         Before reporting, follow the [troubleshooting guide](https://doc.ultikits.com/en/guide/essentials/troubleshoot) to check whether it resolves the problem.
         Reproduce the problem on the [latest release](https://github.com/UltiKits/UltiTools-Reborn/releases/latest) before reporting; state explicitly if you are testing an unreleased build.
-        请先参考自主排错指南并在最新正式版复现；测试未发布构建时请明确说明。5.x 的历史源码见[旧仓库](https://github.com/wisdommen/UltiTools)。
+        请先参考[自主排错指南](https://doc.ultikits.com/guide/essentials/troubleshoot)并在最新正式版复现；测试未发布构建时请明确说明。5.x 的历史源码见[旧仓库](https://github.com/wisdommen/UltiTools)。
   - type: textarea
     id: the-problem
     attributes:
