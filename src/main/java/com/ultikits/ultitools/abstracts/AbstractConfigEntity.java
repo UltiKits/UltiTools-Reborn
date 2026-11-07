@@ -2190,7 +2190,7 @@ public abstract class AbstractConfigEntity {
                 : raw instanceof String ? "text" : raw == null ? "null" : raw.getClass().getSimpleName();
         // Container values may hold nested credentials; redact the entire failed specimen.
         boolean redacted = secret || containsSecret(raw);
-        String value = redacted ? "<redacted>" : String.valueOf(raw);
+        String value = redacted ? "<redacted>" : singleLineDiagnostic(String.valueOf(raw));
         // #590: the converter is the only code that knows what is wrong; its reason may echo the
         // value, so it is redacted with it, and it is kept on one log line.
         String reason = conversionReason(failure);
@@ -2205,7 +2205,12 @@ public abstract class AbstractConfigEntity {
             reason = failure.getCause().getClass().getSimpleName();
         }
         if (reason == null || reason.trim().isEmpty()) { return null; }
-        return reason.replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ").trim();
+        return singleLineDiagnostic(reason).trim();
+    }
+
+    /** Normalizes diagnostic text only; configuration values and file bytes are untouched. */
+    private static String singleLineDiagnostic(String text) {
+        return text.replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ");
     }
 
     private boolean containsSecret(Object value) {
