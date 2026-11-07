@@ -120,7 +120,8 @@ public final class ModuleScanDiagnostics {
         String message = "Module '" + moduleName + "' skipped " + skipped.size()
                 + " class(es) that failed to load during startup and continued loading without "
                 + "them: " + String.join(", ", skipped) + ". This usually means the module was "
-                + OLDER_API_CAUSE + " -- " + COMPATIBILITY_POINTER + ".";
+                + OLDER_API_CAUSE + " or the server API is older than the module requires -- "
+                + COMPATIBILITY_POINTER + ".";
         DIAGNOSTICS_LOGGER.log(Level.SEVERE, message);
     }
 

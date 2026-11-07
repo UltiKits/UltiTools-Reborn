@@ -441,7 +441,7 @@ class NullIdRowsTest {
         private List<DataOperator<LegacyEntity>> operators() {
             return Arrays.asList(
                     new SQLiteDataOperator<>(dataSource, LegacyEntity.class),
-                    new SimpleJsonDataOperator<>(tempDir.toFile().getAbsolutePath(), LegacyEntity.class));
+                    new SimpleJsonDataOperator<>(tempDir.resolve("rows").toFile().getAbsolutePath(), LegacyEntity.class));
         }
 
         @Test
