@@ -65,14 +65,19 @@ def resolve_dependencies(pom: Path, directory: Path, scope: str) -> list[Depende
     return dependencies
 
 
-def paper_pom(project: element_tree.Element, directory: Path, version: str) -> Path:
-    """Resolve Paper independently, including descendants mediated out of our POM."""
+def paper_pom(project: element_tree.Element, directory: Path, version: str,
+              managed: bool = False) -> Path:
+    """Resolve Paper independently, including descendants mediated out of our POM.
+
+    The framework's dependencyManagement is copied only when managed is true (the
+    modern exclusion graph). Old-server POMs never get it: a managed version would
+    replace the old server's own transitive versions and hide old-version gaps."""
     directory.mkdir(parents=True, exist_ok=True)
     pom = element_tree.Element("project", xmlns=NAMESPACE["m"])
     for name, value in (("modelVersion", "4.0.0"), ("groupId", "linkage.audit"),
                         ("artifactId", "paper-api-classpath"), ("version", "1")):
         element_tree.SubElement(pom, name).text = value
-    for name in ("properties", "dependencyManagement", "repositories"):
+    for name in ("properties", "repositories") + (("dependencyManagement",) if managed else ()):
         element = project.find("m:" + name, NAMESPACE)
         if element is not None:
             cloned = copy.deepcopy(element)
@@ -129,7 +134,7 @@ def main():
                  if (required_text(dependency, "m:groupId"), required_text(dependency, "m:artifactId")) == PAPER)
     root = Path("target/linkage-audit").resolve()
     modern_directory = root / "modern-paper"
-    modern_pom = paper_pom(project, modern_directory, required_text(paper, "m:version"))
+    modern_pom = paper_pom(project, modern_directory, required_text(paper, "m:version"), managed=True)
     modern = resolve_dependencies(modern_pom, modern_directory, "runtime")
     # Maven's compile filter includes provided but not runtime; runtime includes
     # compile/runtime but not provided. The union excludes test/system dependencies.

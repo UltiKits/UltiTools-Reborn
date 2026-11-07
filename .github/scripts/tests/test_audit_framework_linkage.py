@@ -104,6 +104,21 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
         with self.assertRaises(EntitiesForbidden):
             AUDIT.parse_xml(hostile)
 
+    def test_old_paper_pom_never_copies_dependency_management(self):
+        project = parse_xml_string('''<project xmlns="http://maven.apache.org/POM/4.0.0">
+          <properties><paper.version>1.21.11-R0.1-SNAPSHOT</paper.version></properties>
+          <repositories><repository><id>paper</id><url>https://example.invalid/</url></repository></repositories>
+          <dependencyManagement><dependencies><dependency><groupId>net.kyori</groupId>
+          <artifactId>adventure-api</artifactId><version>4.26.1</version></dependency></dependencies>
+          </dependencyManagement></project>''')
+        old = parse_xml(AUDIT.paper_pom(project, self.root / "old", "1.19.2-R0.1-SNAPSHOT")).getroot()
+        self.assertIsNone(old.find("m:dependencyManagement", AUDIT.NAMESPACE))
+        self.assertIsNotNone(old.find("m:properties", AUDIT.NAMESPACE))
+        self.assertIsNotNone(old.find("m:repositories", AUDIT.NAMESPACE))
+        modern = parse_xml(AUDIT.paper_pom(project, self.root / "modern", "${paper.version}",
+                                           managed=True)).getroot()
+        self.assertIsNotNone(modern.find("m:dependencyManagement", AUDIT.NAMESPACE))
+
     def test_main_uses_old_graph_first_and_only_framework_as_subject(self):
         framework = self.jar("framework")
         supplemental = self.jar("sqlite-jdbc")
