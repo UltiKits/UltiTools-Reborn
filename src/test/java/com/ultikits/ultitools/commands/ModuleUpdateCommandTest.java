@@ -56,6 +56,7 @@ class ModuleUpdateCommandTest {
         MockBukkit.mock();
         UltiTools ultiTools = TestHelper.mockUltiToolsInstance();
         UpdateManager updateManager = mock(UpdateManager.class);
+        when(updateManager.isCheckComplete()).thenReturn(true);
         when(updateManager.getModuleUpdates()).thenReturn(updates);
         when(ultiTools.getUpdateManager()).thenReturn(updateManager);
         sender = mock(CommandSender.class);
@@ -158,6 +159,8 @@ class ModuleUpdateCommandTest {
                     .get(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE).getAsString();
         }
         UpdateManager manager = mock(UpdateManager.class);
+        // Staging runs only after the start-up check completed (#663), so the fixture models a completed check.
+        when(manager.isCheckComplete()).thenReturn(true);
         when(manager.getModuleUpdates()).thenReturn(updates);
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getUpdateManager()).thenReturn(manager);
