@@ -114,6 +114,9 @@ public abstract class AbstractConfigEntity {
     /** Set only while a reload validates the values it read, for the refusal's wording (#595). */
     @Getter(AccessLevel.NONE)
     private boolean validatingReload;
+    /** Scoped to edit validation under the entity monitor; never changes load/reload outcomes. */
+    @Getter(AccessLevel.NONE)
+    private boolean validatingEdit;
     @Getter(AccessLevel.NONE)
     private boolean deferInitialization;
     @Getter(AccessLevel.NONE)
@@ -1432,7 +1435,7 @@ public abstract class AbstractConfigEntity {
      */
     private static String failedLoadCause(ConfigLoadResult loaded) {
         if (loaded.state() == ConfigLoadResult.State.UNREADABLE) { return loaded.cause().getClass().getSimpleName(); }
-        if (loaded.state() == ConfigLoadResult.State.UNPARSEABLE) { return safeParserLocation(loaded.parserMessage()); }
+        if (loaded.state() == ConfigLoadResult.State.UNPARSEABLE) { return loaded.safeParserLocation(); }
         return null;
     }
 
@@ -1446,19 +1449,6 @@ public abstract class AbstractConfigEntity {
         return new ConfigurationException(unreadable ? ErrorCode.CONFIG_LOAD_FAILED : ErrorCode.CONFIG_PARSE_FAILED,
                 "Cannot reload " + configFilePath + ": " + cause + "; the file and the running values are unchanged",
                 unreadable ? loaded.cause() : null);
-    }
-
-    private static String safeParserLocation(String message) {
-        if (message != null) {
-            // The storage result discards the typed parser cause. Extract numeric metadata only,
-            // never the filename, parser reason, scalar snippet or throwable message.
-            java.util.regex.Matcher location = java.util.regex.Pattern.compile(
-                    "(?m)^ *in [^\\r\\n]*, line ([0-9]+), column ([0-9]+):? *$").matcher(message);
-            if (location.find()) {
-                return "invalid YAML at line " + location.group(1) + ", column " + location.group(2);
-            }
-        }
-        return "invalid YAML or UTF-8";
     }
 
     /**
@@ -1698,6 +1688,10 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Initializes the configuration entity.
+     * Each parsed, field-validated initialization read reports undeclared key/subtree roots at WARNING,
+     * without values. This describes annotation ownership only: a manual module reader may still use
+     * an undeclared key. The diagnostic writes nothing; existing gated default/comment writes are unchanged.
+     * Reloads, saves and reads do not repeat it, but a new initialization does.
      *
      * @param ultiToolsPlugin the plugin instance
      * @throws IOException if an I/O error occurs
@@ -1750,19 +1744,7 @@ public abstract class AbstractConfigEntity {
         lastLoadUnparseable = false;
         ConfigDocument next = loaded.state() == ConfigLoadResult.State.LOADED
                 ? loaded.document() : ConfigDocument.empty();
-        // One key semantics (#612): a declared setting held in two forms - a flat dotted key and nested keys, or two
-        // splits of its dots - is refused before any value is bound, naming the file and the setting, never a value.
-        List<String> heldTwice = new ArrayList<>();
-        for (Field field : configEntryFields()) {
-            if (heldTwice(next, field)) { heldTwice.add(heldTwiceReason(field)); }
-        }
-        if (!heldTwice.isEmpty()) {
-            // Not a value violation: the operator chooses which form stays (gate-1 R613-04).
-            throw new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
-                    "Module '" + ultiToolsPlugin.getPluginName() + "' refused to load: configuration file '" + configFilePath
-                            + "' writes a setting in two forms: " + String.join("; ", heldTwice)
-                            + ". The file was not modified - delete one of the two forms and restart.");
-        }
+        refuseDuplicateSettings(next);
         // Presence describes the load input, never defaults/comment writes or a later save read.
         Map<String, Object> loadedPresence = next.toPlain();
         Map<Field, Object> baseline = new LinkedHashMap<>(declaredDefaults);
@@ -1782,24 +1764,7 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             Object raw = next.get(keysIn(next, field));
-            try {
-                ConversionResult<Object> converted = registry().fromPlainResult(raw, declaredType(field),
-                        configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
-                ReflectionUtil.setFieldValue(this, field, converted.value());
-                for (ConversionFailure failure : converted.failures()) {
-                    warnConversion(field, failure.cause(), failure.raw(), raw);
-                }
-            } catch (ConversionException failure) {
-                warnConversion(field, failure, raw, raw);
-                // Restore the initially declared default, not a live unsaved value or the last load.
-                try {
-                    Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field),
-                            configFilePath, keys(field), field.getAnnotation(ConfigEntry.class)).value();
-                    ReflectionUtil.setFieldValue(this, field, value);
-                } catch (ConversionException invalidDefault) {
-                    throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
-                }
-            }
+            bindLoadedValue(field, raw);
             useDeclaredDefaultIfEmpty(field, raw);
             // Spelled like the file just read: the raw acknowledgement is refreshed only at the end of this load.
             Object theirs = plainValue(field, false, raw);
@@ -1815,6 +1780,7 @@ public abstract class AbstractConfigEntity {
             }
         }
         validateLoaded(initialize);
+        if (initialize && loaded.state() == ConfigLoadResult.State.LOADED) { warnUndeclaredKeys(loadedPresence); }
         document = next;
         // This load read the file as it is now; a write below that cannot be put back sets this again (#622).
         fileNotRestored = false;
@@ -1853,6 +1819,59 @@ public abstract class AbstractConfigEntity {
         // The bytes this entity bound or the gate wrote, never a fresh read: a later edit stays a change on disk.
         savedFileFingerprint = entityFingerprint(bound);
         for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
+    }
+
+    /**
+     * Reports annotation ownership against the original read, before any default/comment write (#499).
+     * A complete declared value owns its subtree, including converter-defined and dynamic container keys.
+     * Proper setting prefixes are structural even when the terminal setting is missing or unusable.
+     * This diagnostic never mutates the input or calls a writer, converter or module reader.
+     */
+    private void warnUndeclaredKeys(Map<String, Object> read) {
+        Set<List<String>> owned = new java.util.HashSet<>();
+        Set<List<String>> structural = new java.util.HashSet<>();
+        for (Field field : configEntryFields()) {
+            String[] parts = fieldPath(field).split("\\.", -1);
+            for (int size = 1; size <= parts.length; size++) {
+                String prefix = String.join(".", Arrays.copyOf(parts, size));
+                for (List<String> reading : ConfigDocument.readings(read, prefix)) {
+                    List<String> path = Collections.unmodifiableList(new ArrayList<>(reading));
+                    if (size == parts.length) { owned.add(path); }
+                    else { structural.add(path); }
+                    for (int depth = 1; depth < path.size(); depth++) {
+                        structural.add(Collections.unmodifiableList(new ArrayList<>(path.subList(0, depth))));
+                    }
+                }
+            }
+        }
+        List<List<String>> unknown = new ArrayList<>();
+        collectUndeclaredRoots(read, Collections.emptyList(), owned, structural, unknown);
+        for (List<String> path : unknown) {
+            // Dots are split conservatively for secret-key display only, never for ownership identity.
+            LOGGER.warning("Module '" + diagnosticLine(ultiToolsPlugin.getPluginName()) + "', file '"
+                    + diagnosticLine(configFilePath) + "', key " + diagnosticLine(describeUndeclared(String.join(".", path)))
+                    + ": no @ConfigEntry declaration for this key/subtree; left unchanged");
+        }
+    }
+
+    /** Traverses only structural maps, reporting an unowned subtree once without inspecting its descendants. */
+    private static void collectUndeclaredRoots(Map<?, ?> values, List<String> prefix, Set<List<String>> owned,
+            Set<List<String>> structural, List<List<String>> unknown) {
+        for (Map.Entry<?, ?> entry : values.entrySet()) {
+            List<String> path = new ArrayList<>(prefix);
+            path.add(String.valueOf(entry.getKey()));
+            if (owned.contains(path)) { continue; }
+            if (!structural.contains(path)) {
+                unknown.add(Collections.unmodifiableList(path));
+            } else if (entry.getValue() instanceof Map) {
+                collectUndeclaredRoots((Map<?, ?>) entry.getValue(), path, owned, structural, unknown);
+            }
+        }
+    }
+
+    /** Keeps identifiers on one physical log line, without including any configuration value. */
+    private static String diagnosticLine(String text) {
+        return String.valueOf(text).replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ");
     }
 
     /**
@@ -2096,18 +2115,7 @@ public abstract class AbstractConfigEntity {
         if (orderedEquals(mine, base)) { return theirs; }
         if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
         if (theirs instanceof Map && !((Map<?, ?>) theirs).containsKey("==") && splitsByEntry(declared, base, mine)) {
-            Type valueType = mapValueType(declared);
-            Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
-            Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
-            Map<String, Object> merged = new LinkedHashMap<>();
-            for (Object key : keys) {
-                List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
-                Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
-                        m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
-                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType, field, child, conflicts);
-                if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
-            }
-            return merged;
+            return mergeReloadMap(base, mine, theirs, declared, field, leaf, conflicts);
         }
         if (mine instanceof Map || mine instanceof List) {
             // A composite value or a list is replaced whole; its contents are not listed (they may hold anything;
@@ -2190,7 +2198,7 @@ public abstract class AbstractConfigEntity {
                 : raw instanceof String ? "text" : raw == null ? "null" : raw.getClass().getSimpleName();
         // Container values may hold nested credentials; redact the entire failed specimen.
         boolean redacted = secret || containsSecret(raw);
-        String value = redacted ? "<redacted>" : String.valueOf(raw);
+        String value = redacted ? "<redacted>" : singleLineDiagnostic(String.valueOf(raw));
         // #590: the converter is the only code that knows what is wrong; its reason may echo the
         // value, so it is redacted with it, and it is kept on one log line.
         String reason = conversionReason(failure);
@@ -2205,7 +2213,12 @@ public abstract class AbstractConfigEntity {
             reason = failure.getCause().getClass().getSimpleName();
         }
         if (reason == null || reason.trim().isEmpty()) { return null; }
-        return reason.replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ").trim();
+        return singleLineDiagnostic(reason).trim();
+    }
+
+    /** Normalizes diagnostic text only; configuration values and file bytes are untouched. */
+    private static String singleLineDiagnostic(String text) {
+        return text.replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ");
     }
 
     private boolean containsSecret(Object value) {
@@ -2276,7 +2289,9 @@ public abstract class AbstractConfigEntity {
      * #reload()} already use - before either document mutation or file persistence
      * runs. A violating value refuses with {@link ConfigurationException} instead of being
      * written: the operator's file is left byte-identical, and every field this call touched is
-     * restored to the value it held before the call, so memory never disagrees with disk (D-01,
+     * restored to the value it held before the call. Edit refusals name the declared configuration keys and
+     * ask the operator to correct the proposal, not to restart the running module (#598). Thus memory never
+     * disagrees with disk (D-01,
      * D-04). The entity keeps running after a refusal, so its in-memory state must not be left
      * holding a rejected value; {@link #reload()} follows the same all-or-nothing rule. The same
      * holds when the file replacement itself fails: every field and every piece of save
@@ -2486,14 +2501,7 @@ public abstract class AbstractConfigEntity {
             String path = edit.getKey();
             Object raw = jsonToPlain(edit.getValue());
             if (displayed.has(path) && PlainData.plainEquals(jsonToPlain(displayed.get(path)), raw)) { continue; }
-            Field owner = null;
-            for (Field field : configEntryFields()) {
-                String entry = fieldPath(field);
-                if (path.equals(entry)) { owner = field; break; }
-                if (path.startsWith(entry + ".") && (owner == null || entry.length() > fieldPath(owner).length())) {
-                    owner = field;
-                }
-            }
+            Field owner = panelOwner(path);
             if (owner == null) { refused.add(describeUndeclared(path) + ": no declared entry"); continue; }
             if (path.equals(fieldPath(owner))) {
                 proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
@@ -2556,6 +2564,96 @@ public abstract class AbstractConfigEntity {
             proposed.put(owner, tree);
             if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(match); }
         }
+        captureCompositeWrites(proposed);
+        Map<Field, Object> converted = convertPanelCandidates(proposed, refused);
+        if (!refused.isEmpty()) { throw new ConfigurationException("File " + configFilePath + ": " + String.join("; ", refused)); }
+        for (Map.Entry<Field, Object> entry : converted.entrySet()) {
+            Field field = entry.getKey(); field.setAccessible(true);
+            touchedFieldsOut.add(field); previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
+            ReflectionUtil.setFieldValue(this, field, entry.getValue());
+        }
+        boolean previousEdit = validatingEdit;
+        validatingEdit = true;
+        try {
+            validateFields();
+            validateBindingRanges(touchedFieldsOut);
+        } finally {
+            validatingEdit = previousEdit;
+        }
+        return leaves;
+    }
+
+    /** Checks ambiguous setting ownership before binding any value; the caller retains its entity monitor. */
+    private void refuseDuplicateSettings(ConfigDocument next) {
+        // One key semantics (#612): a declared setting held in two forms - a flat dotted key and nested keys, or two
+        // splits of its dots - is refused before any value is bound, naming the file and the setting, never a value.
+        List<String> heldTwice = new ArrayList<>();
+        for (Field field : configEntryFields()) {
+            if (heldTwice(next, field)) { heldTwice.add(heldTwiceReason(field)); }
+        }
+        if (!heldTwice.isEmpty()) {
+            // Not a value violation: the operator chooses which form stays (gate-1 R613-04).
+            throw new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Module '" + ultiToolsPlugin.getPluginName() + "' refused to load: configuration file '" + configFilePath
+                            + "' writes a setting in two forms: " + String.join("; ", heldTwice)
+                            + ". The file was not modified - delete one of the two forms and restart.");
+        }
+    }
+
+    /** Converts one loaded field, reporting omissions and falling back to its declared default without writing. */
+    private void bindLoadedValue(Field field, Object raw) {
+        try {
+            ConversionResult<Object> converted = registry().fromPlainResult(raw, declaredType(field),
+                    configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+            ReflectionUtil.setFieldValue(this, field, converted.value());
+            for (ConversionFailure failure : converted.failures()) {
+                warnConversion(field, failure.cause(), failure.raw(), raw);
+            }
+        } catch (ConversionException failure) {
+            warnConversion(field, failure, raw, raw);
+            // Restore the initially declared default, not a live unsaved value or the last load.
+            try {
+                Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field),
+                        configFilePath, keys(field), field.getAnnotation(ConfigEntry.class)).value();
+                ReflectionUtil.setFieldValue(this, field, value);
+            } catch (ConversionException invalidDefault) {
+                throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
+            }
+        }
+    }
+
+    /** Merges real map keys in file-first order; recursive conflicts still use the setting's redacted display rule. */
+    private Object mergeReloadMap(Object base, Object mine, Object theirs, Type declared, Field field, List<String> leaf,
+            List<String> conflicts) {
+        Type valueType = mapValueType(declared);
+        Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
+        Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
+        Map<String, Object> merged = new LinkedHashMap<>();
+        for (Object key : keys) {
+            List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
+            Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
+                    m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
+                    t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType, field, child, conflicts);
+            if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
+        }
+        return merged;
+    }
+
+    /** Finds the longest declared setting prefix for a panel path, with an exact setting taking precedence. */
+    private Field panelOwner(String path) {
+        Field owner = null;
+        for (Field field : configEntryFields()) {
+            String entry = fieldPath(field);
+            if (path.equals(entry)) { owner = field; break; }
+            if (path.startsWith(entry + ".") && (owner == null || entry.length() > fieldPath(owner).length())) {
+                owner = field;
+            }
+        }
+        return owner;
+    }
+
+    /** Captures edited whole composites before conversion; the caller owns the monitor and publication order. */
+    private void captureCompositeWrites(Map<Field, Object> proposed) {
         for (Map.Entry<Field, Map<List<String>, RawEntry>> reads : compositeReads.entrySet()) {
             Object proposal = proposed.get(reads.getKey());
             Map<List<String>, Object> wholes = new LinkedHashMap<>();
@@ -2565,6 +2663,10 @@ public abstract class AbstractConfigEntity {
             }
             compositeWrites.put(reads.getKey(), wholes);
         }
+    }
+
+    /** Converts all proposals before any field is published; failures accumulate as redacted panel reasons. */
+    private Map<Field, Object> convertPanelCandidates(Map<Field, Object> proposed, List<String> refused) {
         Map<Field, Object> converted = new LinkedHashMap<>();
         for (Map.Entry<Field, Object> proposal : proposed.entrySet()) {
             Field field = proposal.getKey();
@@ -2588,15 +2690,7 @@ public abstract class AbstractConfigEntity {
                         + typeName(failure.declaredType()));
             }
         }
-        if (!refused.isEmpty()) { throw new ConfigurationException("File " + configFilePath + ": " + String.join("; ", refused)); }
-        for (Map.Entry<Field, Object> entry : converted.entrySet()) {
-            Field field = entry.getKey(); field.setAccessible(true);
-            touchedFieldsOut.add(field); previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
-            ReflectionUtil.setFieldValue(this, field, entry.getValue());
-        }
-        validateFields();
-        validateBindingRanges(touchedFieldsOut);
-        return leaves;
+        return converted;
     }
 
     /**
@@ -2788,7 +2882,7 @@ public abstract class AbstractConfigEntity {
         }
         if (!violations.isEmpty()) {
             String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
-            throw ConfigurationException.validationFailed(moduleName, configFilePath, violations);
+            throw editValidationFailed(moduleName, violations);
         }
     }
 
@@ -2876,10 +2970,25 @@ public abstract class AbstractConfigEntity {
 
         if (!violations.isEmpty()) {
             String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
+            if (validatingEdit) { throw editValidationFailed(moduleName, violations); }
             throw validatingReload
                     ? ConfigurationException.reloadValidationFailed(moduleName, configFilePath, violations)
                     : ConfigurationException.validationFailed(moduleName, configFilePath, violations);
         }
+    }
+
+    /** Edit refusal, shared by annotation and binding-range checks; memory and file are restored by the caller. */
+    private ConfigurationException editValidationFailed(String moduleName, List<String> violations) {
+        return new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+                "Module '" + moduleName + "': configuration edit was not applied to file '" + configFilePath
+                        + "': " + String.join("; ", violations)
+                        + ". The file and running values are unchanged - correct the proposed value(s) and try again.");
+    }
+
+    /** The declared key for an edit, retaining the established Java-field diagnostics at load and reload. */
+    private String validationLocation(Field field) {
+        return validatingEdit ? "key " + describeKey(field, Collections.<String>emptyList())
+                : "field '" + field.getName() + "'";
     }
 
     /**
@@ -2934,23 +3043,24 @@ public abstract class AbstractConfigEntity {
         }
         if (isRangeViolation(field, value)) {
             Range range = field.getAnnotation(Range.class);
-            return String.format("field '%s' value %s is out of range [%s, %s]",
-                    field.getName(), value, range.min(), range.max());
+            return String.format("%s value %s is out of range [%s, %s]",
+                    validationLocation(field), value, range.min(), range.max());
         }
         if (isNotEmptyViolation(field, value)) {
-            return String.format("field '%s' must not be empty", field.getName());
+            return String.format("%s must not be empty", validationLocation(field));
         }
         if (isSizeViolation(field, value)) {
             Size size = field.getAnnotation(Size.class);
             int len = getValueLength(value);
-            return String.format("field '%s' size %d is out of bounds [%d, %d]",
-                    field.getName(), len, size.min(), size.max());
+            return String.format("%s size %d is out of bounds [%d, %d]",
+                    validationLocation(field), len, size.min(), size.max());
         }
         if (isPatternViolation(field, value)) {
             Pattern pattern = field.getAnnotation(Pattern.class);
-            String displayValue = isSecretShapedFieldName(field.getName()) ? "<redacted>" : "'" + value + "'";
-            return String.format("field '%s' value %s does not match pattern '%s'",
-                    field.getName(), displayValue, pattern.regex());
+            String displayValue = (isSecretShapedFieldName(field.getName()) || validatingEdit && secretSetting(field))
+                    ? "<redacted>" : "'" + value + "'";
+            return String.format("%s value %s does not match pattern '%s'",
+                    validationLocation(field), displayValue, pattern.regex());
         }
         return null;
     }
@@ -3004,8 +3114,8 @@ public abstract class AbstractConfigEntity {
         } else if (field.getAnnotation(NotEmpty.class) != null && !sized) {
             annotation = "@NotEmpty"; reason = "it applies to text, lists, sets, maps and arrays only";
         }
-        return annotation == null ? null : String.format("field '%s' holds a %s, which %s cannot read (%s)",
-                field.getName(), value.getClass().getSimpleName(), annotation, reason);
+        return annotation == null ? null : String.format("%s holds a %s, which %s cannot read (%s)",
+                validationLocation(field), value.getClass().getSimpleName(), annotation, reason);
     }
 
     private boolean isRangeViolation(Field field, Object value) {

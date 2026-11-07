@@ -154,8 +154,13 @@ class PluginManagerReloadIsolationTest {
         assertThat(joined).contains("PartialModule").contains("scoreboard service did not restart")
                 .doesNotContain("GoodModule").doesNotContain("%");
         assertThat(loggedMessages())
-                .anySatisfy(message -> assertThat(message).contains("PartialModule")
+                .as("the module logs its own partial detail; the manager must not repeat it")
+                .noneSatisfy(message -> assertThat(message).contains("PartialModule")
                         .contains("scoreboard service did not restart"));
+        assertThat(PluginManager.isLoggedPartialReloadLine(summary, 0)).isFalse();
+        assertThat(PluginManager.isLoggedPartialReloadLine(summary, 1)).isTrue();
+        assertThat(PluginManager.isLoggedPartialReloadLine(new ArrayList<>(summary), 1))
+                .as("unknown lists carry no metadata, so independent replies are never suppressed").isFalse();
     }
 
     @Test

@@ -135,7 +135,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * when the module's reload hook recorded parts that did not reload in its {@link ReloadReport}
      * (#529). Package-private for the same catalogue-coverage test as that key.
      */
-    static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module '%s' reloaded partially; not reloaded: %s";
+    static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module %s reloaded partially; not reloaded: %s";
     /**
      * The partial reason in the report {@link #reloadWithReport()} returns when the call was
      * refused because it was made off the server thread (#538). Not an i18n key: nothing
@@ -861,7 +861,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * turned into a {@link File} (16-05 / CodeQL {@code java/zipslip} alert #11, CWE-22). Neither
      * {@code baseDir} nor {@code candidate} needs to exist: {@link File#getCanonicalPath()} is
      * defined for a non-existent path too, normalizing {@code ..} segments lexically wherever the
-     * real filesystem does not need to be consulted (the same property {@code saveResources()}
+     * real filesystem does not need to be consulted (the same property {@code saveResources(boolean)}
      * already relies on for a file it is about to create).
      * <p>
      * Returns {@code false} (never throws) on any I/O failure resolving either canonical path,
@@ -924,7 +924,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param folderPath   the module's on-disk resource folder root
      * @param file         the on-disk language file, already confirmed to exist
      * @param resourcePath the extracted resource's path relative to the resource folder (e.g.
-     *                     {@code "lang/en.json"}), matching {@code saveResources()}'s own keys
+     *                     {@code "lang/en.json"}), matching {@code saveResources(boolean)}'s own keys
      * @param extension    the language file extension ({@code ".json"}, {@code ".yml"} or {@code
      *                     ".yaml"})
      * @return the language that {@link #loadLanguageFromDisk} should treat as "the disk language"
@@ -1198,7 +1198,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * <p>
      * Only records the new baseline and logs success once the write is CONFIRMED to have
      * landed -- re-hashes the bytes actually on disk afterward (mirroring {@code
-     * saveResources()}'s own pattern) rather than trusting the precomputed {@code jarHash}, so a
+     * saveResources(boolean)}'s own pattern) rather than trusting the precomputed {@code jarHash}, so a
      * partial/failed write can never be misreported as success (WR-01). Codex round 2, P2:
      * {@code record(...)} swallows its own {@link IOException} and returns {@code void}, so a
      * caller cannot otherwise tell a sidecar write failure from success -- the record is read
@@ -1263,7 +1263,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                             + "be treated as customised on the next start until this is resolved.");
                 }
             } catch (UncheckedIOException e) {
-                // Codex round 6, P1: the same gap fixed in saveResources() -- the file this
+                // Codex round 6, P1: the same gap fixed in saveResources(boolean) -- the file this
                 // branch just wrote could not be reopened for hashing immediately afterward
                 // (e.g. a write-only default ACL, or a transient filesystem error), and
                 // sha256(File)'s UncheckedIOException is not an IOException a plain IOException
@@ -2129,14 +2129,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private InputStream getInputStream() throws IOException {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
-        String path = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
-        try {
-            URL url = new java.net.URI("jar:file:" + path + "!/plugin.yml").toURL();
-            JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-            return jarConnection.getInputStream();
-        } catch (java.net.URISyntaxException e) {
-            throw new IOException("Invalid URL format", e);
-        }
+        URL fileUrl = CodeSourceLocations.toFile(jar).toURI().toURL();
+        URL url = new URL("jar:" + fileUrl.toExternalForm() + "!/plugin.yml");
+        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
+        return jarConnection.getInputStream();
     }
 
     /**
@@ -2150,9 +2146,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         try {
             CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
             if (src != null && src.getLocation() != null) {
-                String path = src.getLocation().getPath();
-                int slash = path.lastIndexOf('/');
-                return slash >= 0 ? path.substring(slash + 1) : path;
+                return CodeSourceLocations.toFile(src.getLocation()).getName();
             }
         } catch (Exception ignored) {
             // Best effort only - fall through to the class-name fallback below.
@@ -2281,7 +2275,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                         // IOException-only catch here does NOT catch -- so a resource that was
                         // successfully extracted but could not be reopened for hashing (e.g. a
                         // write-only default ACL, or a filesystem error on the second open) let
-                        // that exception escape saveResources() entirely and abort this whole
+                        // that exception escape saveResources(boolean) entirely and abort this whole
                         // module's construction, even though the file itself extracted fine.
                         UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
                     }

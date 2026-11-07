@@ -316,8 +316,10 @@ public void pay(@CmdSender Player sender, @CmdParam("player") String target, @Cm
 > `AbstractCommendExecutor` shim are removed in **6.3.0**. Extend
 > `abstracts.command.BaseCommandExecutor` and implement the abstract
 > `handleHelp(CommandSender)`. Step-by-step migration instructions are in
-> [`COMPATIBILITY.md`](COMPATIBILITY.md); the full 6.3.0 removal list is in
-> [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
+> [`COMPATIBILITY.md`](COMPATIBILITY.md). See the generated
+> [deprecation registry](compatibility/DEPRECATIONS.md) together with the
+> [6.3.0 removal and migration record](compatibility/records/6.3.0.md), which also covers
+> APIs removed without a deprecation period.
 
 ### IoC Container with `@Autowired`
 Spring-like dependency injection with three-level cache for circular dependency resolution.
@@ -372,7 +374,11 @@ public class InterestService {
 ```
 
 ### Config Validation
-Invalid values that violate declared constraints refuse the module load or configuration reload; operator-written configuration is never automatically reset or overwritten.
+Invalid values that violate declared constraints refuse the module load or configuration reload, with one exception:
+for a `@NotEmpty` list, set, map or array, an empty or null value at load or reload uses the declared default in memory
+and logs one warning per setting per load or reload. The declared default must be nonempty and satisfy any declared
+`@Size` constraint, or the module refuses to load. Empty text still refuses load or reload.
+Operator-written configuration is never automatically reset or overwritten; the fallback does not change the file.
 
 ```java
 @Getter @Setter

@@ -163,6 +163,8 @@ public final class DocumentStyle {
     private static final class Layout {
 
         private final String text;
+        /** Code-point-indexed UTF-16 offsets, needed only when the text contains surrogate pairs. */
+        private final int[] charOffsets;
         private int indent = -1;
         private int indicatorIndent = -1;
         private boolean escapes;
@@ -175,6 +177,19 @@ public final class DocumentStyle {
 
         Layout(String text) {
             this.text = text;
+            int codePoints = text.codePointCount(0, text.length());
+            if (codePoints == text.length()) {
+                // ASCII and BMP-only text already has identical code-point and UTF-16 offsets.
+                charOffsets = null;
+            } else {
+                charOffsets = new int[codePoints + 1];
+                int offset = 0;
+                for (int index = 0; index < codePoints; index++) {
+                    charOffsets[index] = offset;
+                    offset += Character.charCount(text.codePointAt(offset));
+                }
+                charOffsets[codePoints] = text.length();
+            }
         }
 
         void walk(MappingNode root) {
@@ -301,13 +316,13 @@ public final class DocumentStyle {
             return start >= 0 && end >= start ? text.substring(start, end) : "";
         }
 
-        /** Converts a SnakeYAML mark index (counted in code points) to a char offset in the text. */
+        /** Converts a SnakeYAML mark index in constant time, without rescanning any scalar's prefix. */
         private int offset(int codePointIndex) {
-            try {
-                return text.offsetByCodePoints(0, codePointIndex);
-            } catch (IndexOutOfBoundsException e) {
+            int codePoints = charOffsets == null ? text.length() : charOffsets.length - 1;
+            if (codePointIndex < 0 || codePointIndex > codePoints) {
                 return -1;
             }
+            return charOffsets == null ? codePointIndex : charOffsets[codePointIndex];
         }
 
         private static boolean isFlow(Node node) {
