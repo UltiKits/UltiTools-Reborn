@@ -1074,6 +1074,13 @@ signature; `reloadSelf()` is `final` as of 6.3.0 for a separate reason (see
 [Third occurrence: 6.2.5 → 6.3.0, a MINOR](#third-occurrence-625--630-a-minor)). Async third-party callers must
 schedule their reload on the server thread.
 
+Test fixtures that install a Mockito `Server` must provide a non-null `getLogger()` result, as
+Paper does, and explicitly stub `isPrimaryThread()` to match the scenario. An unstubbed server
+reports `false` and returns a null logger, so the off-thread refusal encounters a
+`NullPointerException` while logging instead of returning normally (#582). For ordinary synchronous
+configuration tests, return `true` from `isPrimaryThread()`; for refusal tests, return `false` and
+provide a logger. Do not use an incomplete server stub as evidence of a runtime writer failure.
+
 ### Reload merge rule
 
 As of 6.3.0, reload compares the last effective disk baseline, current serialized fields, and
