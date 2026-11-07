@@ -2,10 +2,21 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.io.PrintStream;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -40,16 +51,18 @@ class AuditReachesPluginLoggerTest {
     private MockedStatic<UltiTools> ultiToolsMock;
     private final List<LogRecord> atPluginLogger = Collections.synchronizedList(new ArrayList<>());
     private Logger pluginLogger;
+    private URLClassLoader isolated;
+    private Class<?> audit;
+    private Class<?> diagnostics;
+    private final List<LoggerState> originalLoggers = new ArrayList<>();
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws ReflectiveOperationException {
         atPluginLogger.clear();
         pluginLogger = Logger.getLogger(PLUGIN_LOGGER_NAME);
-        for (Handler stale : pluginLogger.getHandlers()) {
-            pluginLogger.removeHandler(stale);
-        }
+        originalLoggers.add(new LoggerState(pluginLogger));
         pluginLogger.setUseParentHandlers(false);
-        pluginLogger.setLevel(Level.ALL);
+        pluginLogger.setLevel(Level.INFO);
         pluginLogger.addHandler(new Handler() {
             @Override
             public void publish(LogRecord record) {
@@ -71,34 +84,118 @@ class AuditReachesPluginLoggerTest {
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(ultiTools);
 
-        // Both classes attach their bridge in a static initializer, once per JVM. Initialize them here,
-        // then restore the bridge if an earlier test in the same JVM stripped the logger's handlers
-        // (the handler list of a named JUL logger is global state; MockBukkit-based tests are known to
-        // leave it empty). That the initializers do attach a bridge is asserted on the source text in
-        // ClassloadAuditQuietStartTest, which does not depend on this state.
-        ClassloadFilterAudit.classify(null);
-        ModuleScanDiagnostics.emitSummary(null);
-        ensureBridge(Logger.getLogger(ClassloadFilterAudit.class.getName()), ClassloadFilterAudit.FORWARD_LEVEL);
-        ensureBridge(Logger.getLogger(ModuleScanDiagnostics.class.getName()), Level.ALL);
+        String prefix = "com.ultikits.ultitools.utils.";
+        originalLoggers.add(new LoggerState(Logger.getLogger(prefix + "ClassloadFilterAudit")));
+        originalLoggers.add(new LoggerState(Logger.getLogger(prefix + "ModuleScanDiagnostics")));
+        isolated = new DiagnosticLoader(new URL[]{UltiTools.class.getProtectionDomain().getCodeSource().getLocation()},
+                getClass().getClassLoader());
+        // Fresh production static initializers install the bridges. The fixture never installs a handler.
+        audit = Class.forName(prefix + "ClassloadFilterAudit", true, isolated);
+        diagnostics = Class.forName(prefix + "ModuleScanDiagnostics", true, isolated);
+        for (Class<?> type : new Class<?>[]{audit, diagnostics}) {
+            Logger logger = Logger.getLogger(type.getName());
+            assertThat(logger.getUseParentHandlers()).isFalse();
+            assertThat(logger.getHandlers()).hasSize(1);
+            assertThat(logger.getHandlers()[0].getClass().getName()).isEqualTo(prefix + "PluginLoggerBridge");
+            assertThat(logger.getHandlers()[0].getClass().getClassLoader()).isSameAs(isolated);
+        }
     }
 
-    private static void ensureBridge(Logger logger, Level level) {
-        logger.setLevel(Level.ALL);
-        logger.setUseParentHandlers(false);
-        for (Handler handler : logger.getHandlers()) {
-            if (handler instanceof PluginLoggerBridge) {
-                return;
+    private static final class DiagnosticLoader extends URLClassLoader {
+        DiagnosticLoader(URL[] urls, ClassLoader parent) {
+            super(urls, parent);
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            if (!name.startsWith("com.ultikits.ultitools.utils.ClassloadFilterAudit")
+                    && !name.startsWith("com.ultikits.ultitools.utils.ModuleScanDiagnostics")
+                    && !name.equals("com.ultikits.ultitools.utils.PluginLoggerBridge")) {
+                return super.loadClass(name, resolve);
+            }
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null) {
+                    loaded = findClass(name);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
             }
         }
-        logger.addHandler(new PluginLoggerBridge(level));
+    }
+
+    private static final class LoggerState {
+        private final Logger logger;
+        private final Handler[] handlers;
+        private final Level level;
+        private final boolean parents;
+
+        LoggerState(Logger logger) {
+            this.logger = logger;
+            handlers = logger.getHandlers();
+            level = logger.getLevel();
+            parents = logger.getUseParentHandlers();
+            for (Handler handler : handlers) {
+                logger.removeHandler(handler);
+            }
+        }
+
+        void restore() {
+            for (Handler handler : logger.getHandlers()) {
+                logger.removeHandler(handler);
+            }
+            logger.setLevel(level);
+            logger.setUseParentHandlers(parents);
+            for (Handler handler : handlers) {
+                logger.addHandler(handler);
+            }
+        }
     }
 
     @AfterEach
-    void tearDown() {
-        ultiToolsMock.close();
-        for (Handler handler : pluginLogger.getHandlers()) {
-            pluginLogger.removeHandler(handler);
+    void tearDown() throws IOException {
+        try {
+            for (LoggerState state : originalLoggers) {
+                state.restore();
+            }
+        } finally {
+            if (isolated != null) {
+                isolated.close();
+            }
+            if (ultiToolsMock != null) {
+                ultiToolsMock.close();
+            }
         }
+    }
+
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // package-private production class in an isolated loader
+    private static void invoke(Class<?> type, String name, Class<?>[] types, Object... args) {
+        try {
+            Method method = type.getDeclaredMethod(name, types);
+            method.setAccessible(true);
+            method.invoke(null, args);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Diagnostic call failed: " + name, e);
+        }
+    }
+
+    private void recordAudit(String module, String className) {
+        invoke(audit, "record", new Class<?>[]{String.class, String.class}, module, className);
+    }
+
+    private void recordSkipped(String module, String className, Throwable cause) {
+        invoke(diagnostics, "recordSkippedClass", new Class<?>[]{String.class, String.class, Throwable.class},
+                module, className, cause);
+    }
+
+    private void auditSummary(String module) {
+        invoke(audit, "emitSummary", new Class<?>[]{String.class}, module);
+    }
+
+    private void scanSummary(String module) {
+        invoke(diagnostics, "emitSummary", new Class<?>[]{String.class}, module);
     }
 
     private List<LogRecord> infoOrAbove() {
@@ -112,9 +209,9 @@ class AuditReachesPluginLoggerTest {
     @Test
     @DisplayName("a non-clean audit arrives at the plugin logger as one INFO line naming the module and the count")
     void nonCleanAuditIsOneInfoLineAtThePluginLogger() {
-        ClassloadFilterAudit.record("plain-words-module", "com.example.thirdparty.Foo");
-        ClassloadFilterAudit.record("plain-words-module", "com.example.thirdparty.Bar");
-        ClassloadFilterAudit.emitSummary("plain-words-module");
+        recordAudit("plain-words-module", "com.example.thirdparty.Foo");
+        recordAudit("plain-words-module", "com.example.thirdparty.Bar");
+        auditSummary("plain-words-module");
 
         List<LogRecord> info = infoOrAbove();
         assertThat(info).hasSize(1);
@@ -125,8 +222,8 @@ class AuditReachesPluginLoggerTest {
     @Test
     @DisplayName("a clean audit prints nothing at INFO or above at the plugin logger")
     void cleanAuditIsSilentAtInfo() {
-        ClassloadFilterAudit.record("quiet-module", "com.ultikits.ultitools.UltiTools");
-        ClassloadFilterAudit.emitSummary("quiet-module");
+        recordAudit("quiet-module", "com.ultikits.ultitools.UltiTools");
+        auditSummary("quiet-module");
 
         assertThat(infoOrAbove()).isEmpty();
     }
@@ -134,9 +231,9 @@ class AuditReachesPluginLoggerTest {
     @Test
     @DisplayName("a module that skipped classes is reported by one SEVERE line at the plugin logger, without a Throwable")
     void skippedClassesAreOneSevereLineWithoutAThrowable() {
-        ModuleScanDiagnostics.recordSkippedClass("skipping-module", "com.example.Gone",
+        recordSkipped("skipping-module", "com.example.Gone",
                 new NoClassDefFoundError("com/example/Missing"));
-        ModuleScanDiagnostics.emitSummary("skipping-module");
+        scanSummary("skipping-module");
 
         List<LogRecord> severe = infoOrAbove();
         assertThat(severe).hasSize(1);
@@ -152,11 +249,11 @@ class AuditReachesPluginLoggerTest {
     void forwardedLineCarriesThePluginLoggerName() {
         // Logger#log(LogRecord) does not stamp a logger name; Paper's console takes the bracketed prefix
         // from it, so a copy without one is printed as "[null] Module ...".
-        ClassloadFilterAudit.record("named-module", "com.example.thirdparty.Foo");
-        ClassloadFilterAudit.emitSummary("named-module");
-        ModuleScanDiagnostics.recordSkippedClass("named-module", "com.example.Gone",
+        recordAudit("named-module", "com.example.thirdparty.Foo");
+        auditSummary("named-module");
+        recordSkipped("named-module", "com.example.Gone",
                 new NoClassDefFoundError("com/example/Missing"));
-        ModuleScanDiagnostics.emitSummary("named-module");
+        scanSummary("named-module");
 
         List<LogRecord> info = infoOrAbove();
         assertThat(info).hasSize(2);
@@ -164,8 +261,116 @@ class AuditReachesPluginLoggerTest {
     }
 
     @Test
+    void defaultInfoLoggerFiltersPerClassDetailsButKeepsBothSummaries() {
+        recordAudit("default-info", "com.example.Foo");
+        recordSkipped("default-info", "com.example.Gone", new NoClassDefFoundError("missing"));
+        assertThat(atPluginLogger).as("neither per-class FINE record reaches the default INFO logger").isEmpty();
+        auditSummary("default-info");
+        scanSummary("default-info");
+        assertThat(atPluginLogger).extracting(LogRecord::getLevel).containsExactly(Level.INFO, Level.SEVERE);
+    }
+
+    @Test
+    void auditBridgeItselfRejectsFineEvenWhenPluginLoggingIsVerbose() {
+        pluginLogger.setLevel(Level.ALL);
+        recordAudit("verbose-audit", "com.example.Foo");
+        assertThat(atPluginLogger).as("the audit bridge, not the plugin threshold, rejects FINE").isEmpty();
+        recordSkipped("verbose-scan", "com.example.Gone", new NoClassDefFoundError("missing"));
+        assertThat(atPluginLogger).extracting(LogRecord::getLevel).containsExactly(Level.FINE);
+        auditSummary("verbose-audit");
+        scanSummary("verbose-scan");
+        assertThat(atPluginLogger).extracting(LogRecord::getLevel)
+                .containsExactly(Level.FINE, Level.INFO, Level.SEVERE);
+    }
+
+    @Test
     @DisplayName("a handler of the plugin logger that throws does not break the scan that emits the line")
     void throwingPluginLoggerHandlerDoesNotBreakTheCaller() {
+        addThrowingPluginLoggerHandler();
+        recordAudit("broken-handler-module", "com.example.thirdparty.Foo");
+
+        assertThatCode(() -> auditSummary("broken-handler-module"))
+                .doesNotThrowAnyException();
+        recordSkipped("broken-handler-module", "com.example.Gone",
+                new NoClassDefFoundError("com/example/Missing"));
+        assertThatCode(() -> scanSummary("broken-handler-module"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void throwingStderrFallbackDoesNotBreakTheCaller() {
+        addThrowingPluginLoggerHandler();
+        PluginLoggerBridge bridge = new PluginLoggerBridge(Level.ALL);
+        PrintStream originalStderr = System.err;
+        PrintStream failingStderr = mock(PrintStream.class);
+        doThrow(new IllegalStateException("stderr is re-logged through the broken handler"))
+                .when(failingStderr).println(anyString());
+        try {
+            System.setErr(failingStderr);
+
+            assertThatCode(() -> bridge.publish(new LogRecord(Level.WARNING, "diagnostic")))
+                    .doesNotThrowAnyException();
+            verify(failingStderr).println(anyString());
+        } finally {
+            System.setErr(originalStderr);
+        }
+    }
+
+    @Test
+    void stderrFallbackCannotReenterTheBridgeAndGuardIsReleasedAfterwards() {
+        addThrowingPluginLoggerHandler();
+        PluginLoggerBridge bridge = new PluginLoggerBridge(Level.ALL);
+        // A second bridge checks that the guard covers both diagnostics loggers on this thread.
+        PluginLoggerBridge reenteredBridge = new PluginLoggerBridge(Level.ALL);
+        PrintStream originalStderr = System.err;
+        PrintStream reLoggingStderr = mock(PrintStream.class);
+        AtomicInteger writes = new AtomicInteger();
+        doAnswer(invocation -> {
+            // Bound the pre-fix recursion, so a regression fails without exhausting the stack.
+            if (writes.incrementAndGet() <= 3) {
+                reenteredBridge.publish(new LogRecord(Level.WARNING, "re-logged stderr"));
+            }
+            return null;
+        }).when(reLoggingStderr).println(anyString());
+        try {
+            System.setErr(reLoggingStderr);
+
+            assertThatCode(() -> bridge.publish(new LogRecord(Level.WARNING, "first diagnostic")))
+                    .doesNotThrowAnyException();
+            assertThat(writes.get()).isEqualTo(1);
+            assertThat(atPluginLogger).hasSize(1);
+
+            bridge.publish(new LogRecord(Level.WARNING, "second diagnostic"));
+            assertThat(writes.get()).isEqualTo(2);
+            assertThat(atPluginLogger).hasSize(2);
+        } finally {
+            System.setErr(originalStderr);
+        }
+    }
+
+    @Test
+    void throwingStderrFallbackDoesNotLeaveTheBridgeGuardSet() {
+        addThrowingPluginLoggerHandler();
+        PluginLoggerBridge bridge = new PluginLoggerBridge(Level.ALL);
+        PrintStream originalStderr = System.err;
+        PrintStream failingStderr = mock(PrintStream.class);
+        doThrow(new IllegalStateException("broken stderr"))
+                .when(failingStderr).println(anyString());
+        try {
+            System.setErr(failingStderr);
+
+            assertThatCode(() -> bridge.publish(new LogRecord(Level.WARNING, "first diagnostic")))
+                    .doesNotThrowAnyException();
+            assertThatCode(() -> bridge.publish(new LogRecord(Level.WARNING, "second diagnostic")))
+                    .doesNotThrowAnyException();
+            verify(failingStderr, times(2)).println(anyString());
+            assertThat(atPluginLogger).hasSize(2);
+        } finally {
+            System.setErr(originalStderr);
+        }
+    }
+
+    private void addThrowingPluginLoggerHandler() {
         pluginLogger.addHandler(new Handler() {
             @Override
             public void publish(LogRecord record) {
@@ -182,13 +387,5 @@ class AuditReachesPluginLoggerTest {
                 // nothing to release
             }
         });
-        ClassloadFilterAudit.record("broken-handler-module", "com.example.thirdparty.Foo");
-
-        assertThatCode(() -> ClassloadFilterAudit.emitSummary("broken-handler-module"))
-                .doesNotThrowAnyException();
-        ModuleScanDiagnostics.recordSkippedClass("broken-handler-module", "com.example.Gone",
-                new NoClassDefFoundError("com/example/Missing"));
-        assertThatCode(() -> ModuleScanDiagnostics.emitSummary("broken-handler-module"))
-                .doesNotThrowAnyException();
     }
 }

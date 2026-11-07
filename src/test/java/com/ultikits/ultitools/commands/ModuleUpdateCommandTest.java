@@ -148,6 +148,34 @@ class ModuleUpdateCommandTest {
         assertThat(all()).contains("Demo 的更新未能暂存").contains("connection reset").contains("没有做任何改动");
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"en", "zh"})
+    void stagedReadFailureUsesTheShippedTranslation(String language) throws Exception {
+        String reason;
+        try (java.io.Reader reader = new java.io.InputStreamReader(
+                getClass().getResourceAsStream("/lang/" + language + ".json"), java.nio.charset.StandardCharsets.UTF_8)) {
+            reason = com.google.gson.JsonParser.parseReader(reader).getAsJsonObject()
+                    .get(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE).getAsString();
+        }
+        UpdateManager manager = mock(UpdateManager.class);
+        when(manager.getModuleUpdates()).thenReturn(updates);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getUpdateManager()).thenReturn(manager);
+            when(ultiTools.i18n(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE)).thenReturn(reason);
+        });
+        available("Demo", "demo", "1.0", "1.1");
+        ModuleFileTransactions.StageResult failure = result(ModuleFileTransactions.StageResult.Outcome.FAILED,
+                null, null, null);
+        when(failure.getReasonKey()).thenReturn(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE);
+        when(failure.getReasonArgs()).thenReturn(new Object[]{"demo-1.1.jar", "IOException: read failed"});
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(failure);
+
+        executor.updatePlugin(sender, "Demo");
+
+        assertThat(all()).contains(String.format(reason, "demo-1.1.jar", "IOException: read failed"))
+                .contains("没有做任何改动").doesNotContain("identify-string", "已暂存 Demo", "更新成功");
+    }
+
     @Test
     @DisplayName("update-all stages each module independently and reports each, then the counts")
     void updateAll_reportsEachModule() {

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -222,7 +223,8 @@ class GuiSchedulerTest {
             // Catching it here to report it must not make that console diagnostic disappear --
             // an unavailable/disabled collector would otherwise make the failure completely
             // silent, and even a working collector produced no server-console line at all.
-            verify(mockLogger).warning(contains("Error executing GUI frame task"));
+            verify(mockLogger).log(eq(Level.WARNING), contains("Error executing GUI frame task"),
+                    isA(RenderDepthExceededException.class));
         }
     }
 
@@ -337,7 +339,8 @@ class GuiSchedulerTest {
             assertEquals(1, collector.drainErrors(10).size(),
                     "a RenderDepthExceededException from a task executeFrame() rescheduled "
                             + "off-thread must also reach ErrorReportCollector");
-            verify(mockLogger).warning(contains("Error executing GUI frame task"));
+            verify(mockLogger).log(eq(Level.WARNING), contains("Error executing GUI frame task"),
+                    isA(RenderDepthExceededException.class));
         }
     }
 
@@ -382,6 +385,84 @@ class GuiSchedulerTest {
             assertEquals(frames,
                     drained.get(0).getAsJsonObject().get("occurrenceCount").getAsInt(),
                     "the single report must still track how many times it actually happened");
+        }
+    }
+
+    @Test
+    void frameFailureIsOneWarningWithOriginalThrowableAndNoStderrTrace() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            Logger logger = mock(Logger.class);
+            when(mockPlugin.getLogger()).thenReturn(logger);
+            IllegalStateException failure = spy(new IllegalStateException("frame failed"));
+            doNothing().when(failure).printStackTrace();
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
+
+            assertDoesNotThrow(() -> scheduler.scheduleFrame(() -> {
+                throw failure;
+            }));
+
+            verify(logger).log(Level.WARNING, "Error executing GUI frame task: frame failed", failure);
+            verifyNoMoreInteractions(logger);
+            verify(failure, never()).printStackTrace();
+        }
+    }
+
+    @Test
+    void frameFailureIsSafeWhenLoggerIsMissing() {
+        assertFrameFailureDoesNotStopLaterTask();
+    }
+
+    @Test
+    void frameFailureIsSafeWhenLoggerLookupThrows() {
+        when(mockPlugin.getLogger()).thenThrow(new IllegalStateException("logger unavailable"));
+        assertFrameFailureDoesNotStopLaterTask();
+    }
+
+    @Test
+    void frameFailureIsSafeWhenLoggerHandlerThrows() {
+        Logger logger = mock(Logger.class);
+        when(mockPlugin.getLogger()).thenReturn(logger);
+        // Both overloads fail, so the test exercises the logging failure before and after the fix.
+        doThrow(new IllegalStateException("broken handler")).when(logger).warning(anyString());
+        doThrow(new IllegalStateException("broken handler"))
+                .when(logger).log(any(Level.class), anyString(), any(Throwable.class));
+        assertFrameFailureDoesNotStopLaterTask();
+    }
+
+    private void assertFrameFailureDoesNotStopLaterTask() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
+            IllegalStateException failure = spy(new IllegalStateException("frame failed"));
+            doNothing().when(failure).printStackTrace();
+            AtomicBoolean laterTaskRan = new AtomicBoolean();
+
+            assertDoesNotThrow(() -> scheduler.scheduleFrame(() -> {
+                throw failure;
+            }));
+            scheduler.scheduleFrame(() -> laterTaskRan.set(true));
+
+            assertTrue(laterTaskRan.get(), "failed logging must not break the next frame");
+            verify(failure, never()).printStackTrace();
+        }
+    }
+
+    @Test
+    void failedLoggingDoesNotPreventRenderDepthReporting() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            when(mockPlugin.getLogger()).thenThrow(new IllegalStateException("logger unavailable"));
+            ErrorReportCollector collector = new ErrorReportCollector();
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                    when(ultiTools.getErrorReportCollector()).thenReturn(collector));
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
+
+            assertDoesNotThrow(() -> scheduler.scheduleFrame(() -> {
+                throw new RenderDepthExceededException("Element.mount", 65, RenderDepthGuard.MAX_DEPTH);
+            }));
+
+            assertEquals(1, collector.drainErrors(10).size());
         }
     }
 

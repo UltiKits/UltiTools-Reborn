@@ -209,11 +209,11 @@ public final class ConfigDocument {
         } catch (CharacterCodingException e) {
             return ConfigLoadResult.unparseable(file, "Config file is not valid UTF-8: " + e.getMessage());
         } catch (ConfigParseException e) {
-            return ConfigLoadResult.unparseable(file, e.getMessage());
+            return ConfigLoadResult.unparseable(file, e.getMessage(), e.getCause());
         } catch (StackOverflowError e) {
             return ConfigLoadResult.unparseable(file, "Config nesting depth exceeds " + NESTING_DEPTH_LIMIT);
         } catch (RuntimeException e) {
-            return ConfigLoadResult.unparseable(file, e.getClass().getName() + ": " + e.getMessage());
+            return ConfigLoadResult.unparseable(file, e.getClass().getName() + ": " + e.getMessage(), e);
         }
     }
 
