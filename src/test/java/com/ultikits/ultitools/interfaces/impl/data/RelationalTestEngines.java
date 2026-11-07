@@ -26,7 +26,7 @@ import com.zaxxer.hikari.HikariDataSource;
  *   <li>{@link #realMysql()} mirrors the {@code MysqlDataStore} Hikari block with the shipped
  *       {@code config.yml} defaults. It runs only when the system property
  *       {@value #MYSQL_URL_PROPERTY} names a throwaway local database (see
- *       {@link #isRealMysqlConfigured()}); CI sets no such property.</li>
+ *       {@link #isRealMysqlConfigured()}); the dedicated real-MySQL CI job supplies it.</li>
  * </ul>
  */
 public final class RelationalTestEngines {

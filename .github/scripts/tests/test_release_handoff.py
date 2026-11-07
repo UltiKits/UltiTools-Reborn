@@ -25,6 +25,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPTS.parent.parent
@@ -729,6 +730,115 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertFalse(self.retain.exists())
 
 
+class ReleaseDocumentationTests(unittest.TestCase):
+
+    def test_help_explains_prerelease_does_not_prevent_permanent_central_publication(self):
+        result = subprocess.run([cast(str, BASH), str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assertIn("--prerelease only labels the GitHub release", result.stdout.decode())
+        self.assertIn("permanent Maven Central publication", result.stdout.decode())
+
+    def test_help_lists_notes_file_and_prerelease_options(self):
+        result = subprocess.run([cast(str, BASH), str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+        output = result.stdout.decode()
+        self.assertEqual(result.returncode, 0, output)
+        for option in ("--notes-file <path>       Read release notes from a file.",
+                       "--prerelease              Mark the release as a prerelease."):
+            with self.subTest(option=option):
+                self.assertIn(option, output)
+
+    def test_release_documentation_explains_prerelease_and_automatic_notes_limits(self):
+        document = (REPO_ROOT / "PROJECT.md").read_text().split("## CI\n", 1)[1].split("## Scope Boundaries", 1)[0]
+        self.assertIn("`--prerelease` only labels the GitHub release", document)
+        self.assertIn("permanent Maven Central publication", document)
+        self.assertIn("most recent 50 commits", document)
+        self.assertIn("10 commits when no tag exists", document)
+        self.assertIn("`--notes-file`", document)
+
+
+class ReleaseNotesTests(HandoffTestCase):
+
+    def publish_history(self, count, tagged=True, *notes_options):
+        # The fixture already has one commit after its prior-release tag.
+        for index in range(1, count):
+            self.fx.git_raw("commit", "--allow-empty", "-qm", "change %d" % index)
+        if not tagged:
+            self.fx.git_raw("tag", "-d", "v" + PRIOR)
+            self.fx.git_raw("--git-dir", str(self.fx.origin), "tag", "-d", "v" + PRIOR)
+        self.fx.git_raw("push", "-q", "origin", "main")
+        # Compute the uncapped control before prepare/publication can create a tag.
+        log_range = ["v" + PRIOR + "..HEAD"] if tagged else []
+        history = self.fx.git_raw("log", *log_range, "--pretty=format:- %s (%h)").splitlines()
+        if not tagged:
+            # A retained release requires a prior formal tag. Exercise the existing no-tag
+            # notes fallback directly, without weakening that unrelated publication guard.
+            body = RELEASE_SH.read_text().split("resolve_notes() {", 1)[1].split("\n}\n", 1)[0]
+            command = "resolve_notes() {" + body + "\n}\nNOTES=''\nNOTES_FILE=''\nresolve_notes\nprintf '%s' \"$NOTES\""
+            result = subprocess.run([cast(str, BASH), "-ec", command], cwd=str(self.fx.work), env=self.fx.env,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assert_no_build()
+            self.assertEqual(self.fx.gh_writes(), [])
+            return result.stdout.decode(), history
+        manifest = self.prepared()
+        authority, uat = self.fx.write_receipts(manifest)
+        self.fx.log.write_text("")
+        # HandoffTestCase.publish injects --notes, so deliberately bypass it here.
+        result = self.fx.run_release("--publish-approved", str(manifest), "--authority-receipt", str(authority),
+                                     "--uat-receipt", str(uat), "--yes", *notes_options,
+                                     env={"FAKE_MVN_FORBID": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assert_no_build()
+        notes = self.fx.gh_state_data()["releases"][TAG]["notes"]
+        return notes, history
+
+    def test_automatic_notes_mark_truncation_after_fifty_commits(self):
+        notes, history = self.publish_history(51)
+        self.assertEqual(len(history), 51)
+        self.assertEqual([line for line in notes.splitlines() if line.startswith("- ")], history[:50])
+        self.assertIn("Release notes truncated to the most recent 50 commits", notes)
+        self.assertIn("use --notes-file for complete release notes", notes)
+        self.assertNotIn(history[50], notes)
+
+    def test_exactly_fifty_commits_are_not_marked_truncated(self):
+        notes, history = self.publish_history(50)
+        self.assertEqual(len(history), 50)
+        self.assertEqual(notes, "\n".join(history))
+
+    def test_short_history_is_not_marked_truncated(self):
+        notes, history = self.publish_history(3)
+        self.assertEqual(len(history), 3)
+        self.assertEqual(notes, "\n".join(history))
+
+    def test_untagged_history_marks_truncation_after_ten_commits(self):
+        notes, history = self.publish_history(10, False)
+        # Untagged history also includes the fixture's initial release commit.
+        self.assertEqual(len(history), 11)
+        self.assertEqual([line for line in notes.splitlines() if line.startswith("- ")], history[:10])
+        self.assertIn("Release notes truncated to the most recent 10 commits", notes)
+        self.assertIn("use --notes-file for complete release notes", notes)
+
+    def test_exactly_ten_untagged_commits_are_not_marked_truncated(self):
+        notes, history = self.publish_history(9, False)
+        self.assertEqual(len(history), 10)
+        self.assertEqual(notes, "\n".join(history))
+
+    def test_explicit_notes_are_not_changed_or_marked_truncated(self):
+        original = "Curated release notes.\n\n- Keep this exact formatting."
+        notes, _ = self.publish_history(51, True, "--notes", original)
+        self.assertEqual(notes, original)
+
+    def test_notes_file_is_not_changed_or_marked_truncated(self):
+        original = "Curated notes from a file.\n\n- Keep this exact formatting."
+        path = self.fx.root / "notes.txt"
+        path.write_text(original)
+        notes, _ = self.publish_history(51, True, "--notes-file", str(path))
+        self.assertEqual(notes, original)
+        self.assertEqual(path.read_text(), original)
+
+
 def rewrite_manifest(path, mutate):
     """Rewrite a retained manifest canonically after applying mutate(data)."""
     path = Path(path)
@@ -1119,6 +1229,87 @@ class EdgeHandoffTests(HandoffTestCase):
                     self.assertIn(error, result.stdout.decode())
                 else:
                     self.assertEqual(result.returncode, 0, result.stdout.decode())
+
+    def test_blocked_uat_rejects_noncanonical_row_statuses(self):
+        manifest, _, _ = self.approved()
+        for status in ("failed", "FAIL", None, "", "skipped", True, ["pass"]):
+            with self.subTest(status=status):
+                row = {"id": "row-other"}
+                if status is not None:
+                    row["status"] = status
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a"],
+                                            "rows": [{"id": "row-a", "status": "blocked"}, row]}})
+                result = self.validate_receipts(manifest, authority, uat)
+                self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                self.assertIn("uat_row_status_invalid", result.stdout.decode())
+
+    def test_blocked_uat_counts_must_match_complete_row_tally(self):
+        manifest, _, _ = self.approved()
+        rows = [{"id": "row-a", "status": "blocked"}, {"id": "row-pass", "status": "pass"}]
+        for counts in ({"pass": 0, "blocked": 1, "fail": 0},
+                       {"pass": 2, "blocked": 1, "fail": 0},
+                       {"blocked": 1}, {"pass": 1}, {}):
+            with self.subTest(counts=counts):
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a"],
+                                            "rows": rows, "counts": counts}})
+                result = self.validate_receipts(manifest, authority, uat)
+                self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                self.assertIn("uat_counts_mismatch", result.stdout.decode())
+
+    def test_blocked_uat_validates_pass_count_type(self):
+        manifest, _, _ = self.approved()
+        for count in (-1, True, "1", 1.0):
+            with self.subTest(count=count):
+                authority, uat = self.fx.write_receipts(
+                    manifest, scope_overrides={"accepted_blocked_uat_rows": ["row-a"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a"],
+                                            "counts": {"pass": count, "blocked": 1}}})
+                result = self.validate_receipts(manifest, authority, uat)
+                self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                self.assertIn("uat_counts_invalid", result.stdout.decode())
+
+    def test_accepted_rows_require_whole_tokens_in_retained_response(self):
+        manifest, _, _ = self.approved()
+        for mention, accepted in (("row-a; row-b", True), ("(row-a), [row-b].", True),
+                                  ("row-a\nrow-b", True), ("row-a1; row-b", False),
+                                  ("prefixrow-a; row-b", False), ("row-a-extra; row-b", False),
+                                  ("prefix-row-a; row-b", False), ("row-a_suffix; row-b", False),
+                                  ("αrow-a; row-b", False)):
+            with self.subTest(mention=mention):
+                authority, uat = self.fx.write_receipts(
+                    manifest, response_text="publish these exact five files; " + mention,
+                    scope_overrides={"accepted_blocked_uat_rows": ["row-a", "row-b"]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": ["row-a", "row-b"]}})
+                result = self.validate_receipts(manifest, authority, uat)
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn("accepted_row_not_in_response", result.stdout.decode())
+
+    def test_dotted_accepted_row_requires_its_own_token_in_retained_response(self):
+        manifest, _, _ = self.approved()
+        row = "ultitools.ul.reload"
+        for mention, accepted in ((row, True), (row + ".", True), ("(" + row + ")", True),
+                                  (row + ". Next sentence.", True), (row + ".\nNext sentence.", True),
+                                  (row + ".neg-x", False), (row + ".c", False),
+                                  ("x." + row, False), ("." + row, False),
+                                  ("ultitoolsXulXreload", False)):
+            with self.subTest(mention=mention):
+                authority, uat = self.fx.write_receipts(
+                    manifest, response_text="publish these exact five files; " + mention,
+                    scope_overrides={"accepted_blocked_uat_rows": [row]},
+                    gate_overrides={"uat": {"status": "blocked", "blocked_rows": [row]}})
+                result = self.validate_receipts(manifest, authority, uat)
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stdout.decode())
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+                    self.assertIn("accepted_row_not_in_response", result.stdout.decode())
 
     def test_passing_uat_does_not_report_stale_accepted_rows(self):
         manifest, _, _ = self.approved()

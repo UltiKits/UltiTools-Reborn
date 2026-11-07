@@ -11,14 +11,19 @@ import java.io.*;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.util.*;
+import java.util.logging.Handler;
 import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.config.document.AtomicConfigWriter;
 import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -376,6 +381,152 @@ class ServerPropertiesManagerTest {
             manager.handleServerProperties(setAllRequest(Collections.singletonMap("rcon.password", "hacked")));
 
             assertThat(captureMessage(socket).get("success").getAsBoolean()).isFalse();
+        }
+    }
+
+    @Nested
+    class LegacyWriteFailureLogging {
+        private final Logger capturedLogger = Logger.getLogger(ServerPropertiesManager.class.getName());
+        private final List<LogRecord> warnings = new ArrayList<>();
+        private final Handler capture = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                if (record.getLevel().intValue() >= Level.WARNING.intValue()) {
+                    warnings.add(record);
+                }
+            }
+
+            @Override
+            public void flush() {
+                // In-memory capture.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+
+        @BeforeEach
+        void captureBothSingleKeyAndBatchWarnings() {
+            capturedLogger.addHandler(capture);
+            TestHelper.mockUltiToolsInstance(plugin -> lenient().when(plugin.getLogger()).thenReturn(capturedLogger));
+        }
+
+        @AfterEach
+        void removeCapture() {
+            capturedLogger.removeHandler(capture);
+        }
+
+        @Test
+        void anIoFailureIsLoggedOnceButRemainsInTheBatchResultAndReply() throws IOException {
+            byte[] original = Files.readAllBytes(propsFile.toPath());
+            UltiPanelWebSocketClient socket = attachSocket();
+            JsonObject values = new JsonObject();
+            values.addProperty("motd", "unwritten-value-sentinel");
+            ServerPropertiesManager.SetAllResult result;
+
+            try (MockedStatic<AtomicConfigWriter> writer = failStaging()) {
+                result = manager.applySetAll(values);
+            }
+
+            assertThat(warnings).hasSize(1);
+            assertThat(warnings.get(0).getMessage()).contains("motd", "IOException")
+                    .doesNotContain("unwritten-value-sentinel");
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getFailed()).containsExactly("motd");
+            assertThat(result.getFailureReasons()).isEmpty();
+            assertThat(result.describeFailure()).contains("motd");
+            JsonObject reply = captureMessage(socket);
+            assertThat(reply.get("success").getAsBoolean()).isFalse();
+            assertThat(stringsOf(reply, "failed")).containsExactly("motd");
+            assertThat(reply.getAsJsonObject("failureReasons").size()).isZero();
+            assertThat(Files.readAllBytes(propsFile.toPath())).isEqualTo(original);
+        }
+
+        @Test
+        void aSingleKeyIoFailureStillLogsItsDiagnostic() throws IOException {
+            try (MockedStatic<AtomicConfigWriter> writer = failStaging()) {
+                assertThat(manager.setProperty("motd", "unwritten-value-sentinel")).isFalse();
+            }
+
+            assertThat(warnings).hasSize(1);
+            assertThat(warnings.get(0).getMessage()).contains("motd", "IOException")
+                    .doesNotContain("unwritten-value-sentinel");
+        }
+
+        @Test
+        void anUnreportedMissingFileFailureStillAppearsInTheBatchWarning() {
+            assertThat(propsFile.delete()).isTrue();
+            JsonObject values = new JsonObject();
+            values.addProperty("motd", "unwritten-value-sentinel");
+
+            ServerPropertiesManager.SetAllResult result = manager.applySetAll(values);
+
+            assertThat(result.getFailed()).containsExactly("motd");
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(warnings).hasSize(1);
+            assertThat(warnings.get(0).getMessage()).contains("motd").doesNotContain("unwritten-value-sentinel");
+        }
+
+        @Test
+        void anUnreportedReadFailureStillAppearsInTheBatchWarning() {
+            assertThat(propsFile.delete()).isTrue();
+            assertThat(propsFile.mkdir()).isTrue();
+            JsonObject values = new JsonObject();
+            values.addProperty("motd", "unwritten-value-sentinel");
+
+            ServerPropertiesManager.SetAllResult result = manager.applySetAll(values);
+
+            assertThat(result.getFailed()).containsExactly("motd");
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(warnings).hasSize(1);
+            assertThat(warnings.get(0).getMessage()).contains("motd").doesNotContain("unwritten-value-sentinel");
+        }
+
+        @Test
+        void aMixedBatchSummarizesOnlyTheFailuresNotAlreadyReportedPerKey() throws IOException {
+            Files.write(propsFile.toPath(), "pvp=false\n".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    java.nio.file.StandardOpenOption.APPEND);
+            byte[] original = Files.readAllBytes(propsFile.toPath());
+            UltiPanelWebSocketClient socket = attachSocket();
+            JsonObject values = new JsonObject();
+            values.addProperty("motd", "unwritten-value-sentinel");
+            values.addProperty("pvp", "false");
+            values.addProperty("max-players", "20");
+            values.addProperty("simulation-distance", "8");
+            values.addProperty("rcon.password", "unwritten-value-sentinel");
+            values.add("view-distance", new JsonObject());
+            ServerPropertiesManager.SetAllResult result;
+
+            try (MockedStatic<AtomicConfigWriter> writer = failStaging()) {
+                result = manager.applySetAll(values);
+            }
+
+            assertThat(result.getUpdated()).containsExactly("max-players");
+            assertThat(result.getFailed()).containsExactly("motd", "pvp");
+            assertThat(result.getFailureReasons()).containsOnlyKeys("pvp");
+            assertThat(result.getNotPresentOnServer()).containsExactly("simulation-distance");
+            assertThat(result.getRejected()).containsExactly("rcon.password");
+            assertThat(result.getMalformed()).containsExactly("view-distance");
+            assertThat(result.describeFailure()).contains("motd", "pvp", "simulation-distance", "rcon.password", "view-distance");
+            assertThat(warnings).hasSize(3);
+            assertThat(warnings.get(0).getMessage()).contains("motd", "IOException");
+            assertThat(warnings.get(1).getMessage()).contains("pvp", "more than one line");
+            assertThat(warnings.get(2).getMessage()).contains("simulation-distance", "rcon.password", "view-distance")
+                    .doesNotContain("motd", "pvp", "unwritten-value-sentinel");
+            JsonObject reply = captureMessage(socket);
+            assertThat(reply.get("success").getAsBoolean()).isFalse();
+            assertThat(reply.get("updated").getAsInt()).isEqualTo(1);
+            assertThat(stringsOf(reply, "failed")).containsExactly("motd", "pvp");
+            assertThat(Files.readAllBytes(propsFile.toPath())).isEqualTo(original);
+        }
+
+        private MockedStatic<AtomicConfigWriter> failStaging() throws IOException {
+            MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class);
+            writer.when(() -> AtomicConfigWriter.stage(eq(propsFile.toPath()), Mockito.any(byte[].class)))
+                    .thenThrow(new IOException("unwritten-value-sentinel"));
+            return writer;
         }
     }
 
