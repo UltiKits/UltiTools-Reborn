@@ -10,6 +10,8 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * GuiScheduler is responsible for ensuring every GUI operation runs on the Bukkit main thread.
@@ -258,16 +260,24 @@ public class GuiScheduler {
     }
 
     /**
-     * The console-visible half of a GUI frame task's failure -- a warning naming the task plus
-     * a full stack trace. Shared by every catch clause in {@link #drainFrameBudget(int)} so the
-     * two log lines cannot drift between the exception types that also do additional reporting
-     * ({@link RenderDepthExceededException}) and those that do not.
+     * The console-visible half of a GUI frame task's failure -- one warning with the original
+     * exception attached for its full stack trace. Shared by every catch clause in
+     * {@link #drainFrameBudget(int)}, including those that do additional reporting
+     * ({@link RenderDepthExceededException}). Logging failure must not interrupt the frame or
+     * prevent that additional reporting; no fallback re-enters the failed logging path.
      *
      * @param e the failure to log
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // A logger handler may throw any runtime exception.
     private void logFrameTaskError(Exception e) {
-        plugin.getLogger().warning("Error executing GUI frame task: " + e.getMessage());
-        e.printStackTrace();
+        try {
+            Logger logger = plugin.getLogger();
+            if (logger != null) {
+                logger.log(Level.WARNING, "Error executing GUI frame task: " + e.getMessage(), e);
+            }
+        } catch (RuntimeException ignored) {
+            // Never retry via stderr: Paper re-logs it through the same logging infrastructure.
+        }
     }
 
     /**

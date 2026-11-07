@@ -99,6 +99,47 @@ class ConfigLoadResultTest {
     }
 
     @Test
+    void typedProblemMarkTakesPrecedenceOverMessageMetadata() {
+        org.yaml.snakeyaml.error.Mark problem = new org.yaml.snakeyaml.error.Mark(
+                "secret-filename", 0, 3, 1, "secret-specimen".toCharArray(), 0);
+        org.yaml.snakeyaml.parser.ParserException failure = new org.yaml.snakeyaml.parser.ParserException(
+                "secret-context", null, "secret-reason", problem);
+        ConfigLoadResult result = ConfigLoadResult.unparseable(tempDir.resolve("config.yml"),
+                " in forged-token, line 99, column 88:\n", failure);
+
+        assertThat(result.safeParserLocation()).isEqualTo("invalid YAML at line 4, column 2");
+        assertThat(result.cause()).isNull();
+    }
+
+    @Test
+    void textOnlyFailureUsesTheLastNumericMarkWithoutSourceContent() {
+        String message = "while parsing secret-specimen\n in secret-file, line 1, column 1:\n"
+                + "expected a block end\n in secret-file, line 4, column 2:\n secret-specimen\n";
+        ConfigLoadResult result = ConfigLoadResult.unparseable(tempDir.resolve("config.yml"), message);
+
+        assertThat(result.safeParserLocation()).isEqualTo("invalid YAML at line 4, column 2");
+    }
+
+    @Test
+    void failureWithoutProblemMarkFallsBackToNumericMessageMetadata() {
+        org.yaml.snakeyaml.parser.ParserException failure = new org.yaml.snakeyaml.parser.ParserException(
+                "secret-context", null, "secret-reason", null);
+        ConfigLoadResult result = ConfigLoadResult.unparseable(tempDir.resolve("config.yml"),
+                " in secret-file, line 4, column 2:\n", failure);
+
+        assertThat(result.safeParserLocation()).isEqualTo("invalid YAML at line 4, column 2");
+    }
+
+    @Test
+    void failureWithoutNumericMetadataRemainsGeneric() {
+        Path file = tempDir.resolve("config.yml");
+        assertThat(ConfigLoadResult.unparseable(file, "secret-specimen").safeParserLocation())
+                .isEqualTo("invalid YAML or UTF-8");
+        assertThat(ConfigLoadResult.unparseable(file, null).safeParserLocation())
+                .isEqualTo("invalid YAML or UTF-8");
+    }
+
+    @Test
     @DisplayName("a global tag such as !!java.util.UUID is UNPARSEABLE (no class is ever constructed)")
     void globalTagIsUnparseable() throws IOException {
         ConfigLoadResult result = ConfigDocument.load(write("owner: !!java.util.UUID '00000000-0000-0000-0000-000000000001'\n"));

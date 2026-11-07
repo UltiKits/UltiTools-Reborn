@@ -202,6 +202,7 @@ public class SQLiteDataStore implements DataStore {
             config.setJdbcUrl("jdbc:sqlite://" + path);
             config.setDriverClassName("org.sqlite.JDBC");
             config.setMaximumPoolSize(10);
+            config.setDataSource(new SQLiteBusyDataSource(path));
             return new HikariDataSource(config);
         });
     }
