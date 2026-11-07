@@ -847,6 +847,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.isCheckComplete()).thenReturn(true);
         when(mockUpdateManager.hasAnyUpdates()).thenReturn(false);
         when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
 
@@ -864,6 +865,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.isCheckComplete()).thenReturn(true);
         when(mockUpdateManager.hasAnyUpdates()).thenReturn(true);
         UpdateInfo fwInfo = new UpdateInfo();
         fwInfo.setPluginName("UltiTools-API");
@@ -893,6 +895,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.isCheckComplete()).thenReturn(true);
         when(mockUpdateManager.hasAnyUpdates()).thenReturn(true);
         when(mockUpdateManager.getFrameworkUpdate()).thenReturn(null);
         Map<String, UpdateInfo> updates = new HashMap<>();
@@ -924,6 +927,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.isCheckComplete()).thenReturn(true);
         Map<String, UpdateInfo> updates = new HashMap<>();
         UpdateInfo info = new UpdateInfo();
         info.setPluginName("TestPlugin");
@@ -960,6 +964,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.isCheckComplete()).thenReturn(true);
         when(mockUpdateManager.getModuleUpdates()).thenReturn(new HashMap<>());
         when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
 
@@ -982,6 +987,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.isCheckComplete()).thenReturn(true);
         Map<String, UpdateInfo> updates = new HashMap<>();
         UpdateInfo info1 = new UpdateInfo();
         info1.setPluginName("Plugin1");
