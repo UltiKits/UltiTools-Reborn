@@ -212,6 +212,95 @@ class CjkScopeScriptTest {
     }
 
     @Test
+    void invalidThresholdFailsClosedBeforeReportingEvenInReportOnlyMode() throws Exception {
+        prepare("// 中文\n");
+        for (String value : Arrays.asList("not-a-number", "-1", "1.5", "", "1+1")) {
+            for (String[] args : Arrays.asList(new String[] {"--max-violations", value},
+                    new String[] {"--report-only", "--max-violations", value})) {
+                Result result = gate(args);
+                assertThat(result.exit).as(value + ": " + result.output).isEqualTo(2);
+                assertThat(result.output).contains("ERROR:", "--max-violations").doesNotContain("SUMMARY:");
+            }
+        }
+        Result missing = gate("--max-violations");
+        assertThat(missing.exit).as(missing.output).isEqualTo(2);
+        assertThat(missing.output).contains("ERROR:", "--max-violations").doesNotContain("SUMMARY:");
+    }
+
+    @Test
+    void decimalThresholdHandlesLeadingZerosAndArbitrarilyLargeValues() throws Exception {
+        prepare("// 中文\n");
+        for (String value : Arrays.asList("0", "0000")) {
+            assertThat(gate("--max-violations", value).exit).as(value).isEqualTo(1);
+        }
+        for (String value : Arrays.asList("1", "0001", "08", "999999999999999999999999999999")) {
+            Result result = gate("--max-violations", value);
+            assertThat(result.exit).as(value + ": " + result.output).isZero();
+            assertThat(result.output).contains(ONE_VIOLATION_SUMMARY).doesNotContain("integer expression expected");
+        }
+    }
+
+    @Test
+    void countingToolFailuresHaveErrorStatusAndNoSummary() throws Exception {
+        prepare("// 中文\n");
+        Result control = isolatedGate(false);
+        assertThat(control.exit).as(control.output).isEqualTo(1);
+        assertThat(control.output).contains(ONE_VIOLATION_SUMMARY);
+        for (String[] fault : Arrays.asList(new String[] {"cut", "-d:"}, new String[] {"sort", "-u"},
+                new String[] {"wc", "-l"}, new String[] {"tr", "-d"})) {
+            Path marker = installShim(fault[0], fault[1], 7, false);
+            for (String[] args : Arrays.asList(new String[0], new String[] {"--report-only"})) {
+                Result result = isolatedGate(true, args);
+                assertThat(marker).exists();
+                assertThat(result.exit).as(fault[0] + ": " + result.output).isEqualTo(2);
+                assertThat(result.output).contains("ERROR:", "counting").doesNotContain("SUMMARY:");
+                assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+            }
+            Files.delete(temp.resolve(FAULT_BIN).resolve(fault[0]));
+        }
+    }
+
+    @Test
+    void annotationWriteFailureHasErrorStatusAndNoSummary() throws Exception {
+        prepare("// 中文\n");
+        injectEchoFailure("::error*");
+        assertReportingFailure("annotations");
+    }
+
+    @Test
+    void violationListWriteFailureHasErrorStatusAndNoSummary() throws Exception {
+        prepare("// 中文\n");
+        Path script = temp.resolve(SCRIPT);
+        String source = new String(Files.readAllBytes(script), StandardCharsets.UTF_8);
+        assertThat(source).contains("cat \"$VIOLATIONS_SORTED\"");
+        write(SCRIPT, source.replace("cat \"$VIOLATIONS_SORTED\"", "false"));
+        assertReportingFailure("violation list");
+    }
+
+    @Test
+    void summaryWriteFailureHasErrorStatus() throws Exception {
+        prepare("// 中文\n");
+        injectEchoFailure("SUMMARY:*");
+        assertReportingFailure("summary");
+    }
+
+    private void injectEchoFailure(String pattern) throws IOException {
+        Path script = temp.resolve(SCRIPT);
+        String source = new String(Files.readAllBytes(script), StandardCharsets.UTF_8);
+        write(SCRIPT, source.replace("set -euo pipefail", "set -euo pipefail\n"
+                + "echo() { case \"$*\" in " + pattern + ") return 7 ;; esac; builtin echo \"$@\"; }"));
+    }
+
+    private void assertReportingFailure(String diagnostic) throws Exception {
+        for (String[] args : Arrays.asList(new String[0], new String[] {"--report-only"})) {
+            Result result = isolatedGate(false, args);
+            assertThat(result.exit).as(result.output).isEqualTo(2);
+            assertThat(result.output).contains("ERROR:", diagnostic).doesNotContain("SUMMARY:");
+            assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+        }
+    }
+
+    @Test
     void enumerationFailureDoesNotBecomeEmptySuccess() throws Exception {
         prepare("// 中文\n");
         Result control = isolatedGate(false);
