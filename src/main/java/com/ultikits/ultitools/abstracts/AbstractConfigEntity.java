@@ -1432,7 +1432,7 @@ public abstract class AbstractConfigEntity {
      */
     private static String failedLoadCause(ConfigLoadResult loaded) {
         if (loaded.state() == ConfigLoadResult.State.UNREADABLE) { return loaded.cause().getClass().getSimpleName(); }
-        if (loaded.state() == ConfigLoadResult.State.UNPARSEABLE) { return safeParserLocation(loaded.parserMessage()); }
+        if (loaded.state() == ConfigLoadResult.State.UNPARSEABLE) { return loaded.safeParserLocation(); }
         return null;
     }
 
@@ -1446,19 +1446,6 @@ public abstract class AbstractConfigEntity {
         return new ConfigurationException(unreadable ? ErrorCode.CONFIG_LOAD_FAILED : ErrorCode.CONFIG_PARSE_FAILED,
                 "Cannot reload " + configFilePath + ": " + cause + "; the file and the running values are unchanged",
                 unreadable ? loaded.cause() : null);
-    }
-
-    private static String safeParserLocation(String message) {
-        if (message != null) {
-            // The storage result discards the typed parser cause. Extract numeric metadata only,
-            // never the filename, parser reason, scalar snippet or throwable message.
-            java.util.regex.Matcher location = java.util.regex.Pattern.compile(
-                    "(?m)^ *in [^\\r\\n]*, line ([0-9]+), column ([0-9]+):? *$").matcher(message);
-            if (location.find()) {
-                return "invalid YAML at line " + location.group(1) + ", column " + location.group(2);
-            }
-        }
-        return "invalid YAML or UTF-8";
     }
 
     /**
@@ -1698,6 +1685,10 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Initializes the configuration entity.
+     * Each parsed, field-validated initialization read reports undeclared key/subtree roots at WARNING,
+     * without values. This describes annotation ownership only: a manual module reader may still use
+     * an undeclared key. The diagnostic writes nothing; existing gated default/comment writes are unchanged.
+     * Reloads, saves and reads do not repeat it, but a new initialization does.
      *
      * @param ultiToolsPlugin the plugin instance
      * @throws IOException if an I/O error occurs
@@ -1786,6 +1777,7 @@ public abstract class AbstractConfigEntity {
             }
         }
         validateLoaded(initialize);
+        if (initialize && loaded.state() == ConfigLoadResult.State.LOADED) { warnUndeclaredKeys(loadedPresence); }
         document = next;
         // This load read the file as it is now; a write below that cannot be put back sets this again (#622).
         fileNotRestored = false;
@@ -1824,6 +1816,59 @@ public abstract class AbstractConfigEntity {
         // The bytes this entity bound or the gate wrote, never a fresh read: a later edit stays a change on disk.
         savedFileFingerprint = entityFingerprint(bound);
         for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
+    }
+
+    /**
+     * Reports annotation ownership against the original read, before any default/comment write (#499).
+     * A complete declared value owns its subtree, including converter-defined and dynamic container keys.
+     * Proper setting prefixes are structural even when the terminal setting is missing or unusable.
+     * This diagnostic never mutates the input or calls a writer, converter or module reader.
+     */
+    private void warnUndeclaredKeys(Map<String, Object> read) {
+        Set<List<String>> owned = new java.util.HashSet<>();
+        Set<List<String>> structural = new java.util.HashSet<>();
+        for (Field field : configEntryFields()) {
+            String[] parts = fieldPath(field).split("\\.", -1);
+            for (int size = 1; size <= parts.length; size++) {
+                String prefix = String.join(".", Arrays.copyOf(parts, size));
+                for (List<String> reading : ConfigDocument.readings(read, prefix)) {
+                    List<String> path = Collections.unmodifiableList(new ArrayList<>(reading));
+                    if (size == parts.length) { owned.add(path); }
+                    else { structural.add(path); }
+                    for (int depth = 1; depth < path.size(); depth++) {
+                        structural.add(Collections.unmodifiableList(new ArrayList<>(path.subList(0, depth))));
+                    }
+                }
+            }
+        }
+        List<List<String>> unknown = new ArrayList<>();
+        collectUndeclaredRoots(read, Collections.emptyList(), owned, structural, unknown);
+        for (List<String> path : unknown) {
+            // Dots are split conservatively for secret-key display only, never for ownership identity.
+            LOGGER.warning("Module '" + diagnosticLine(ultiToolsPlugin.getPluginName()) + "', file '"
+                    + diagnosticLine(configFilePath) + "', key " + diagnosticLine(describeUndeclared(String.join(".", path)))
+                    + ": no @ConfigEntry declaration for this key/subtree; left unchanged");
+        }
+    }
+
+    /** Traverses only structural maps, reporting an unowned subtree once without inspecting its descendants. */
+    private static void collectUndeclaredRoots(Map<?, ?> values, List<String> prefix, Set<List<String>> owned,
+            Set<List<String>> structural, List<List<String>> unknown) {
+        for (Map.Entry<?, ?> entry : values.entrySet()) {
+            List<String> path = new ArrayList<>(prefix);
+            path.add(String.valueOf(entry.getKey()));
+            if (owned.contains(path)) { continue; }
+            if (!structural.contains(path)) {
+                unknown.add(Collections.unmodifiableList(path));
+            } else if (entry.getValue() instanceof Map) {
+                collectUndeclaredRoots((Map<?, ?>) entry.getValue(), path, owned, structural, unknown);
+            }
+        }
+    }
+
+    /** Keeps identifiers on one physical log line, without including any configuration value. */
+    private static String diagnosticLine(String text) {
+        return String.valueOf(text).replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ");
     }
 
     /**
@@ -2150,7 +2195,7 @@ public abstract class AbstractConfigEntity {
                 : raw instanceof String ? "text" : raw == null ? "null" : raw.getClass().getSimpleName();
         // Container values may hold nested credentials; redact the entire failed specimen.
         boolean redacted = secret || containsSecret(raw);
-        String value = redacted ? "<redacted>" : String.valueOf(raw);
+        String value = redacted ? "<redacted>" : singleLineDiagnostic(String.valueOf(raw));
         // #590: the converter is the only code that knows what is wrong; its reason may echo the
         // value, so it is redacted with it, and it is kept on one log line.
         String reason = conversionReason(failure);
@@ -2165,7 +2210,12 @@ public abstract class AbstractConfigEntity {
             reason = failure.getCause().getClass().getSimpleName();
         }
         if (reason == null || reason.trim().isEmpty()) { return null; }
-        return reason.replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ").trim();
+        return singleLineDiagnostic(reason).trim();
+    }
+
+    /** Normalizes diagnostic text only; configuration values and file bytes are untouched. */
+    private static String singleLineDiagnostic(String text) {
+        return text.replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ");
     }
 
     private boolean containsSecret(Object value) {

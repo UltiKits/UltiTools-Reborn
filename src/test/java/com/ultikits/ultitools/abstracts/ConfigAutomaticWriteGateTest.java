@@ -206,7 +206,8 @@ class ConfigAutomaticWriteGateTest {
 
     /**
      * #600 (inventory P5/A14): a file using anchors is never written automatically - not by the first-start
-     * insert - and is named once per server run however many entities and reloads touch it.
+     * insert - and its write refusal is named once per server run however many entities and reloads touch it.
+     * The unbound anchor helper keys also get their own startup-only annotation diagnostics (#499).
      */
     @Test
     void anchoredFileMissingAKeyIsNeverWrittenAndWarnedOncePerRun() throws Exception {
@@ -217,8 +218,10 @@ class ConfigAutomaticWriteGateTest {
         config.init(plugin);
         assertThat(bytes()).isEqualTo(before);
         assertThat(config.enabled).as("the declared default runs in memory").isTrue();
-        assertThat(warningsNamingTheFile()).hasSize(1);
-        assertThat(warningsNamingTheFile().get(0)).contains("anchors").contains("enabled");
+        assertThat(warningsNamingTheFile()).satisfiesExactly(
+                warning -> assertThat(warning).contains("key 'base'", "no @ConfigEntry declaration"),
+                warning -> assertThat(warning).contains("key 'copy'", "no @ConfigEntry declaration"),
+                warning -> assertThat(warning).contains("anchors", "enabled"));
 
         new Gate(PATH).init(plugin);
         for (int i = 0; i < 10; i++) {
@@ -226,7 +229,9 @@ class ConfigAutomaticWriteGateTest {
         }
         assertThat(bytes()).isEqualTo(before);
         assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
-        assertThat(warningsNamingTheFile()).as("one warning per file per server run").hasSize(1);
+        assertThat(warningsNamingTheFile()).as("two declarations per init and one write refusal per run").hasSize(5);
+        assertThat(warningsNamingTheFile()).filteredOn(warning -> warning.contains("no @ConfigEntry declaration")).hasSize(4);
+        assertThat(warningsNamingTheFile()).filteredOn(warning -> warning.contains("uses YAML anchors")).hasSize(1);
     }
 
     /**
@@ -248,8 +253,10 @@ class ConfigAutomaticWriteGateTest {
         config.reload();
         assertThat(bytes()).as("two reloads after a further switch").isEqualTo(before);
         assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
-        assertThat(warningsNamingTheFile()).hasSize(1);
-        assertThat(warningsNamingTheFile().get(0)).contains("anchors");
+        assertThat(warningsNamingTheFile()).satisfiesExactly(
+                warning -> assertThat(warning).contains("key 'base'", "no @ConfigEntry declaration"),
+                warning -> assertThat(warning).contains("key 'copy'", "no @ConfigEntry declaration"),
+                warning -> assertThat(warning).contains("anchors"));
     }
 
     /**
@@ -268,7 +275,8 @@ class ConfigAutomaticWriteGateTest {
         assertThat(new String(bytes(), StandardCharsets.UTF_8))
                 .isEqualTo(before + "\n# Whether the feature is enabled\nenabled: true");
         assertThat(config.enabled).isTrue();
-        assertThat(warningsNamingTheFile()).isEmpty();
+        assertThat(warningsNamingTheFile()).hasSize(1).allSatisfy(
+                warning -> assertThat(warning).contains("key 'motd'", "no @ConfigEntry declaration"));
     }
 
     /**
@@ -283,14 +291,18 @@ class ConfigAutomaticWriteGateTest {
         Gate config = new Gate(PATH);
         config.init(plugin);
         assertThat(bytes()).as("the insert").isEqualTo(before);
-        assertThat(warningsNamingTheFile()).hasSize(1);
+        assertThat(warningsNamingTheFile()).satisfiesExactly(
+                warning -> assertThat(warning).contains("key 'motto'", "no @ConfigEntry declaration"),
+                warning -> assertThat(warning).contains("key 'times'", "no @ConfigEntry declaration"),
+                warning -> assertThat(warning).contains("key 'extra'", "no @ConfigEntry declaration"),
+                warning -> assertThat(warning).contains("layout", "enabled"));
 
         language = ZH;
         config.reload();
         assertThat(bytes()).as("the comment-only write").isEqualTo(before);
         assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
-        assertThat(warningsNamingTheFile()).hasSize(2);
-        assertThat(warningsNamingTheFile().get(1)).contains("layout").contains("interval (comment)");
+        assertThat(warningsNamingTheFile()).hasSize(5);
+        assertThat(warningsNamingTheFile().get(4)).contains("layout").contains("interval (comment)");
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 

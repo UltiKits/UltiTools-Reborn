@@ -25,6 +25,9 @@ import com.ultikits.ultitools.UltiTools;
  */
 final class PluginLoggerBridge extends Handler {
 
+    // Shared by both diagnostics bridges: Paper can re-log stderr through either one on this thread.
+    private static final ThreadLocal<Boolean> WRITING_FALLBACK = new ThreadLocal<>();
+
     /**
      * @param level the least severe level to forward
      */
@@ -37,7 +40,7 @@ final class PluginLoggerBridge extends Handler {
     @Override
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void publish(LogRecord record) {
-        if (record == null || !isLoggable(record)) {
+        if (Boolean.TRUE.equals(WRITING_FALLBACK.get()) || record == null || !isLoggable(record)) {
             return;
         }
         UltiTools instance = UltiTools.getInstance();
@@ -57,8 +60,16 @@ final class PluginLoggerBridge extends Handler {
         try {
             target.log(copy);
         } catch (RuntimeException e) {
-            // Standard error, not a logger: the logger is what just failed.
-            System.err.println("[UltiTools] A diagnostic line could not be written: " + e);
+            // Paper re-logs stderr, so this best-effort fallback can reach the same broken handler.
+            // Suppress bridge re-entry and stop silently if that last output attempt also fails.
+            WRITING_FALLBACK.set(true);
+            try {
+                System.err.println("[UltiTools] A diagnostic line could not be written: " + e);
+            } catch (RuntimeException ignored) {
+                // No further logging: it would repeat the failure we are handling.
+            } finally {
+                WRITING_FALLBACK.remove();
+            }
         }
     }
 

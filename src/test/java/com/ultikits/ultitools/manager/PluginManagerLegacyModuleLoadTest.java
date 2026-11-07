@@ -122,7 +122,7 @@ class PluginManagerLegacyModuleLoadTest {
                 .contains(OLDER_API)
                 .contains("version 1.2.0")
                 .contains("api-version 620")
-                .contains("COMPATIBILITY.md")
+                .contains("https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md")
                 .contains("refusing to load")
                 .contains("overrides final method")
                 .contains("unregisterSelf");

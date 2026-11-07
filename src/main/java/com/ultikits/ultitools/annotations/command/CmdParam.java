@@ -39,6 +39,13 @@ public @interface CmdParam {
      * </ol>
      * {@code @} is not a legal Java identifier start, so a plain method name can never collide with the
      * {@code @key} notation -- every pre-existing {@code suggest()} site needs zero change.
+     * <p>
+     * Method providers accept {@code ()}, {@code (String)}, or a {@code Player} or
+     * {@code CommandSender} followed by either no arguments, {@code String} (the current input),
+     * or {@code Command, String[]}. Player-typed providers run only for player requests;
+     * CommandSender-typed and sender-independent providers also support non-player requests.
+     * Registered completers should use {@code TabCompletionContext.getSender()} and check
+     * {@code getPlayer()} for null before accessing player-specific state.
      *
      * @see CmdSuggest
      * @see com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager

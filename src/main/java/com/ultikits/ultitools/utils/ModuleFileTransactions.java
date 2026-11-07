@@ -71,9 +71,9 @@ import com.ultikits.ultitools.manager.ModuleApiLevels;
  * loads, if it is still that file (#518). Only a file confirmed to be the recorded one is deleted; one
  * confirmed to be a different file is left alone and its entry dropped; one whose content cannot be
  * read at that start stays recorded, unchanged, for the next start to try again -- a failure to read
- * the file's content never cancels an uninstall the operator asked for. (The size and modification-time
- * checks use {@code File.length()} and {@code File.lastModified()}, which report 0 on an I/O error, so a
- * failure to stat the file is not covered by this guarantee.)
+ * the file's content or metadata never cancels an uninstall the operator asked for. Size and
+ * modification-time checks use checked NIO reads: an I/O failure is unknown identity, not a different
+ * file. Recording also refuses an unreadable size or modification time rather than recording zero.
  *
  * <p><b>Where the records live.</b> Under the server root, beside the credential store
  * ({@link #transactionsFolder(File)}), not under {@code plugins/}: the panel's file interface can
@@ -638,9 +638,16 @@ public final class ModuleFileTransactions {
             discardStaging(work);
             return StageResult.failed(previousFailure, Keys.REASON_INVALID_JAR, targetName);
         }
-        String stagedVersion = declaredVersion(staged, record.key);
-        String stagedHash = sha256Of(staged);
-        if (stagedVersion == null || stagedHash == null) {
+        String stagedVersion;
+        String stagedHash;
+        try {
+            stagedVersion = declaredVersion(staged, record.key);
+            stagedHash = readSha256(staged);
+        } catch (IOException readError) {
+            discardStaging(work);
+            return StageResult.failed(previousFailure, Keys.REASON_STAGED_UNREADABLE, targetName, describe(readError));
+        }
+        if (stagedVersion == null) {
             discardStaging(work);
             return StageResult.failed(previousFailure, Keys.REASON_WRONG_IDENTITY, targetName, record.key);
         }
@@ -971,8 +978,8 @@ public final class ModuleFileTransactions {
                 }
                 Removal removal = new Removal();
                 removal.name = file.getName();
-                removal.size = file.length();
-                removal.lastModified = file.lastModified();
+                removal.size = Files.size(file.toPath());
+                removal.lastModified = Files.getLastModifiedTime(file.toPath()).toMillis();
                 removal.sha256 = hash;
                 record.removals.removeIf(r -> removal.name.equals(r.name));
                 record.removals.add(removal);
@@ -1721,8 +1728,9 @@ public final class ModuleFileTransactions {
      * Deletes the JARs an uninstall recorded, before any module loads: each only if it is confirmed
      * to still be the file that was recorded. One that still cannot be deleted stays recorded for the
      * next start and is reported; one confirmed to be a different file -- replaced since -- is left
-     * alone, reported, and its entry dropped. One whose content cannot be read to confirm it is not
-     * deleted either, and keeps its entry exactly as recorded, reported SEVERE with the read error:
+     * alone, reported, and its entry dropped. One whose content or metadata cannot be read to confirm
+     * its identity is not deleted either, and keeps its entry exactly as recorded, reported SEVERE
+     * with the read error:
      * whether it is still the recorded file is unknown, and dropping the entry would let a module the
      * operator uninstalled load at every later start.
      */
@@ -1777,17 +1785,23 @@ public final class ModuleFileTransactions {
     /**
      * Whether a file is still the one an uninstall recorded: same size, same modification time,
      * same content. A copy put back after the uninstall has a new timestamp even when its bytes are
-     * the same. Three outcomes, not two: a file whose content cannot be read is neither confirmed
-     * the same nor confirmed different.
+     * the same. Three outcomes, not two: a file whose content or metadata cannot be read is neither
+     * confirmed the same nor confirmed different.
      */
     private static RecordedIdentity recordedIdentity(Removal removal, File file) {
-        if (removal.sha256 == null || file.length() != removal.size || file.lastModified() != removal.lastModified) {
+        if (removal.sha256 == null) {
             return RecordedIdentity.DIFFERENT;
         }
         try {
+            if (Files.size(file.toPath()) != removal.size
+                    || Files.getLastModifiedTime(file.toPath()).toMillis() != removal.lastModified) {
+                return RecordedIdentity.DIFFERENT;
+            }
             return removal.sha256.equals(readSha256(file)) ? RecordedIdentity.SAME : RecordedIdentity.DIFFERENT;
         } catch (IOException e) {
             return new RecordedIdentity(false, e);
+        } catch (SecurityException e) {
+            return new RecordedIdentity(false, new IOException(file.getAbsolutePath() + ": access denied", e));
         }
     }
 
@@ -1800,7 +1814,7 @@ public final class ModuleFileTransactions {
         static final RecordedIdentity DIFFERENT = new RecordedIdentity(false, null);
 
         final boolean same;
-        /** Why the content could not be read; {@code null} when it was read. */
+        /** Why the content or metadata could not be read; {@code null} when the reads succeeded. */
         final IOException readError;
 
         RecordedIdentity(boolean same, IOException readError) {
@@ -2238,7 +2252,7 @@ public final class ModuleFileTransactions {
      * identify-string and a version -- identity and version only, read the same way
      * {@code UltiToolsPlugin} reads them, and nothing about whether its classes would load.
      */
-    private static String declaredVersion(File jar, String key) {
+    private static String declaredVersion(File jar, String key) throws IOException {
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(jar)) {
             java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
             if (entry == null) {
@@ -2255,9 +2269,11 @@ public final class ModuleFileTransactions {
                 }
                 return version;
             }
-        } catch (IOException | InvalidConfigurationException | SecurityException e) {
-            LOGGER.log(Level.FINE, "Could not read plugin.yml of " + jar, e);
+        } catch (InvalidConfigurationException e) {
+            LOGGER.log(Level.FINE, "Could not parse plugin.yml of " + jar, e);
             return null;
+        } catch (SecurityException e) {
+            throw new IOException(jar.getName() + ": plugin.yml access denied", e);
         }
     }
 
@@ -2696,6 +2712,8 @@ public final class ModuleFileTransactions {
         public static final String REASON_DOWNLOAD_FAILED = "下载失败：%s";
         public static final String REASON_INVALID_JAR = "下载的文件 %s 不是有效的模块 JAR";
         public static final String REASON_WRONG_IDENTITY = "下载的 %s 没有声明 identify-string %s 和版本号";
+        /** Args: the staged file name, the metadata or content read error. */
+        public static final String REASON_STAGED_UNREADABLE = "the downloaded %s could not be read (%s)";
         public static final String REASON_WRONG_VERSION = "下载的 %s 声明的版本是 %s，不是云端给出的最新版本 %s";
         public static final String REASON_CANCELLED_WHILE_DOWNLOADING = "下载期间该模块已被卸载，本次更新已取消";
         public static final String REASON_NEEDS_OPERATOR =
