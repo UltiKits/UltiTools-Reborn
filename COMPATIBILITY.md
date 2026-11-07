@@ -2372,7 +2372,11 @@ This section governs the third kind.
   registration filed under the module's name only is released by name (6.2.5 released only EventBus handlers, by name), except while
   another loaded copy shares that name, when it stays until the last copy of the name is unloaded. One visible consequence: a completer a module
   registers while it loads, including in `registerSelf()`, is now released when the module unloads; 6.2.5 released no
-  completer at unload. Added, all `@since 6.3.0`:
+  completer at unload. `TabCompletionManager#register(key, completer)` still replaces an existing
+  completer for that key; it does not keep a stack of previous registrants. If a loading module
+  overwrites another registrant's key and then fails, cleanup removes the failed module's completer
+  without restoring the overwritten one (#639). Use globally unique, module-prefixed custom keys
+  and do not overwrite another module's or a built-in completer's key. Added, all `@since 6.3.0`:
   `TabCompletionManager#beginRegistrationScope(String, UltiToolsPlugin)` and
   `#unregisterByOwnerInstance(UltiToolsPlugin)`; `EventBus#register(...)` and `EventBus#subscribe(...)`
   with an owner-instance parameter, `#beginRegistrationScope(UltiToolsPlugin)`,
@@ -2405,18 +2409,30 @@ This section governs the third kind.
   `PanelResponderRegistry#releaseForSupersede(UltiToolsPlugin)`, each returning the action that
   restores what it released. Known limitations, documented rather than defended because only code
   reaches this path: a responder or subscription registered by name before the registering copy's
-  load scope opens -- in a module's constructor, or in `@PostConstruct` code that runs when the
-  framework registers the module instance as a bean (the main class's own, and that of any bean it
-  injects), before the container refresh the scope covers -- belongs to the copy listed under that name at the time: no copy at
+  load scope opens -- in a module's constructor -- belongs to the copy listed under that name at the time: no copy at
   the module's first load, so it is not handed over and a newer copy registering the same type is
   still refused; or, while a newer copy is constructed and assembled, the older copy, so it is
   released with the older copy if the newer one loads and restored to the older copy, still running
   the newer copy's code, if the newer one fails. Register in `registerSelf()`, which always runs
-  inside the scope, or pass the instance. A subscription the older
+  inside the scope, or pass the instance. The scope now opens before component scanning and the
+  module's singleton registration, so `@PostConstruct` on the module and on beans it injects is
+  covered; the earlier limitation for those callbacks no longer applies. A subscription the older
   copy removes with `Subscription#unsubscribe()` from another thread while its handlers are released
   comes back if the newer copy then fails. When one newer copy supersedes two loaded copies at once
   (two copies of one version can both be listed) and then fails, both copies get their handlers
-  back, but handlers of the same priority may come back in a different order.
+  back, but handlers of the same priority may come back in a different order. Avoid loading multiple
+  copies of one module or relying on equal-priority ordering between copies; install updates by restart.
+  Two further boundaries of code-driven replacement are documented for #639:
+  - Configuration diagnostics for an outgoing copy (`ConfigManager#unsavedPaths`) run after the
+    registration handover has been discarded and before the outgoing copy's isolated unload. If
+    those diagnostics unexpectedly throw, the replacement can fail while the outgoing copy remains
+    listed without its released registrations; the handover can no longer restore them. Configuration
+    access is main-thread-only (ordinary off-thread assembly is refused earlier). Keep activation
+    callbacks on that thread; recover from such a failed replacement by restarting the server rather
+    than assuming the listed old copy still has its registrations.
+  - Between delisting the outgoing copy and listing the incoming copy, a registration made by name
+    on another thread has no listed owner to resolve and remains name-only. It is released by name
+    when the last copy of that name unloads. Pass the owning instance to avoid this attribution gap.
 
   中文补充：模块的新副本接管旧副本的登记；新副本加载失败时把登记还给旧副本（#562 第 2 项）。此前新副本的
   `registerSelf()` 在旧副本仍占有全部登记时运行，所以（在本周期较早的 6.3.0 快照中——面板响应器是 6.3.0 新增的）新副本若登记旧副本已占有的面板响应器类型，会被拒绝
@@ -2426,11 +2442,14 @@ This section governs the third kind.
   再把旧副本的登记原样放回（EventBus 处理器回到原来的位置），旧副本照常运行。任何加载失败现在都会释放失败副本在这三个登记表中的登记。
   释放期间被其它登记占用的类型或键归该登记所有，并记一条 WARNING。只有以新实例调用 `PluginManager#register(...)`
   的代码会走到这条路径，服主命令走不到。已知限制（只记录、不做防御，因为只有代码会走到这条路径）：在登记方副本的加载范围打开之前
-  （在模块构造器中，或在框架把模块实例注册为 Bean 时运行的 `@PostConstruct` 代码中，包括主类自身及其注入的 Bean 的，早于加载范围所覆盖的容器刷新）按名称登记的内容，
+  （在模块构造器中）按名称登记的内容，
   属于当时以该名称列出的副本：模块首次加载时没有这样的副本，于是不会被移交，新副本登记同一类型仍会被拒绝；新副本构造和装配期间则属于旧副本，
   新副本加载成功时随旧副本释放，加载失败时还给旧副本（其中仍是新副本的代码）。请在 `registerSelf()` 中登记
-  （它总在加载范围内运行），或传入实例。旧副本在登记被释放期间从其它线程调用 `Subscription#unsubscribe()` 取消的订阅，若新副本随后加载失败，会被恢复。
-  一个新副本同时替换两个已加载副本（同一版本的两个副本可同时被列出）后加载失败时，两者的处理器都会还回，但同优先级处理器的先后顺序可能改变。
+  （它总在加载范围内运行），或传入实例。加载范围现在在组件扫描与模块单例注册之前打开，因此模块主类及其注入的 Bean 的 `@PostConstruct` 已被覆盖，原有的回调限制不再适用。
+  旧副本在登记被释放期间从其它线程调用 `Subscription#unsubscribe()` 取消的订阅，若新副本随后加载失败，会被恢复。
+  一个新副本同时替换两个已加载副本（同一版本的两个副本可同时被列出）后加载失败时，两者的处理器都会还回，但同优先级处理器的先后顺序可能改变；避免同时加载多个副本或依赖副本之间同优先级的顺序，通过重启更新模块。
+  代码驱动替换还有两个边界（#639）：旧副本的配置诊断在登记移交记录丢弃之后、逐副本卸载保护之前运行，若意外抛出，旧副本可能仍列为已加载但其登记无法恢复。配置访问只允许主线程（普通异步装配会更早被拒绝），激活回调也应留在该线程；遇到这种替换失败请重启恢复，不要假定列出的旧副本仍持有登记。
+  旧副本除名、新副本尚未列出时，其它线程按名称登记的内容仍只按名称记录，在最后一个同名副本卸载时释放；传入所有者实例可避免此归属窗口。
 - A registration made after load through the name-only APIs belongs to a module instance (#562
   item 1). `PanelResponderRegistry#registerResponder(type, responder, ownerModule)` and the
   `EventBus` methods that take an `ownerModule` (`subscribe(..., ownerModule, consumer)` and the
