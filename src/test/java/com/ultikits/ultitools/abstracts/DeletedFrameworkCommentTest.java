@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 /**
@@ -36,9 +38,8 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
  * framework cannot identify as its own - even a bare {@code #} - is kept and nothing is written above it.
  * <p>
  * Each start is a real one: the module's own constructor from a real jar, {@code commitLanguageProvenance()}, then a
- * real {@link AbstractConfigEntity#init(UltiToolsPlugin)}. A reload runs the module's reload steps in their order
- * ({@code reload()}, the language rebuild, {@code refreshFrameworkComments()}), with the operator's deletion made
- * while the server runs.
+ * config registration through {@link ConfigManager}. A reload calls {@link UltiToolsPlugin#reloadWithReport()},
+ * with the server language already applied as by a full reload and the operator's deletion made while the server runs.
  */
 @DisplayName("17-77 characterisation: an operator deletes a framework-written comment line")
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
@@ -58,7 +59,7 @@ class DeletedFrameworkCommentTest {
 
     private BootLanguageFixture fixture;
     private UltiToolsPlugin plugin;
-    private DeletedConfig config;
+    private ConfigManager configManager;
 
     @SuppressWarnings("unused") // read reflectively by the binder
     @ConfigEntity(CONFIG_PATH)
@@ -78,7 +79,9 @@ class DeletedFrameworkCommentTest {
     void setUp() throws Exception {
         clearLeakedUltiToolsInstance();
         MockBukkitHelper.ensureCleanState();
-        fixture = BootLanguageFixture.create(tempDir);
+        configManager = new ConfigManager();
+        fixture = BootLanguageFixture.create(tempDir,
+                tools -> when(tools.getConfigManager()).thenReturn(configManager));
         fixture.jarEntry("lang/en.yml", "cfg_a: \"Setting A\"\ncfg_b: \"Setting B\"\n")
                 .jarEntry("lang/zh.yml", "cfg_a: \"设置 A\"\ncfg_b: \"设置 B\"\n")
                 .onDisk("lang/zh-myserver.yml", "cfg_a: \"本服：设置 A\"\n");
@@ -106,16 +109,13 @@ class DeletedFrameworkCommentTest {
         fixture.language(code);
         plugin = fixture.construct("6.3.0");
         plugin.commitLanguageProvenance();
-        config = new DeletedConfig(CONFIG_PATH);
-        config.init(plugin);
+        configManager.register(plugin, new DeletedConfig(CONFIG_PATH));
     }
 
-    /** {@code /ul reload} with {@code language} set to {@code code}: the module's reload steps, in their order. */
+    /** The full reload has applied the server language; drive the real module reload entry point. */
     private void reload(String code) throws Exception {
         fixture.language(code);
-        config.reload();
-        plugin.commitLanguageProvenance();
-        config.refreshFrameworkComments();
+        assertThat(plugin.reloadWithReport().isPartial()).isFalse();
     }
 
     private Path configFile() {
@@ -137,6 +137,22 @@ class DeletedFrameworkCommentTest {
         start(code);
         assertThat(text()).as("written").isEqualTo(expectedWritten);
         operatorSaves(ZH_COMMENT_DELETED);
+    }
+
+    @Test
+    @DisplayName("reload rebuilds a deleted comment from the jar without extracting a missing official catalogue")
+    void reloadDoesNotCommitMissingLanguageResources() throws Exception {
+        start("zh");
+        operatorSaves(ZH_COMMENT_DELETED);
+        Path english = fixture.disk("lang/en.yml").toPath();
+        Files.delete(english);
+        byte[] provenance = BootLanguageFixture.bytesOf(fixture.provenanceRecord());
+
+        reload("en");
+
+        assertThat(text()).isEqualTo(EN_FILE);
+        assertThat(english).doesNotExist();
+        assertThat(BootLanguageFixture.bytesOf(fixture.provenanceRecord())).isEqualTo(provenance);
     }
 
     @Test
