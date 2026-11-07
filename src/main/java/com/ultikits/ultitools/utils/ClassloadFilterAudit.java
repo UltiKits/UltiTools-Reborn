@@ -12,8 +12,8 @@ import java.util.logging.Logger;
 /**
  * GEN-07's observe-only classload filter audit (D-14): reproduces the exact matching semantics of
  * the three name-based filter layers {@link SecurityPolicy#isSafeClassName(String)} used to
- * enforce before D-12/D-13, and records what each removed layer WOULD have refused -- it refuses
- * nothing itself.
+ * enforce before D-12/D-13, including textual prefix matches, by design, and records what each
+ * removed layer WOULD have refused -- it refuses nothing itself.
  * <p>
  * <b>Package-private on purpose.</b> This class holds the four lists {@code SecurityPolicy} used
  * to own directly (moved here once {@link SecurityPolicy#addTrustedPackage(String)} and

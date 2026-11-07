@@ -218,9 +218,12 @@ class CapabilityConfigTest {
 
             assertThat(changed).isFalse();
             ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-            verify(logger, times(1)).log(org.mockito.ArgumentMatchers.eq(Level.SEVERE),
-                    messageCaptor.capture(), org.mockito.ArgumentMatchers.any(Throwable.class));
-            assertThat(messageCaptor.getValue()).contains("config.yml");
+            verify(logger, times(1)).log(org.mockito.ArgumentMatchers.eq(Level.SEVERE), messageCaptor.capture());
+            assertThat(messageCaptor.getValue()).contains(configFile.getAbsolutePath(), "invalid YAML")
+                    .doesNotContain("this is not a map", "broken");
+            org.mockito.Mockito.verifyNoMoreInteractions(logger);
+            assertThat(new String(Files.readAllBytes(configFile.toPath()), StandardCharsets.UTF_8))
+                    .isEqualTo("ultipanel: [this is not a map: broken\n");
         }
     }
 

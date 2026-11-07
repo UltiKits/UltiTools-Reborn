@@ -6,7 +6,10 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Context entry annotation.
+ * Declares a context connector that is constructed separately by reflection.
+ * The target class named by {@link #value()} must not also be registered as a
+ * scanned component: context-entry assembly constructs an additional instance,
+ * rather than reusing a scanned bean.
  *
  * @see <a href="https://dev.ultikits.com/en/guide/advanced/ioc-container.html">IOC Container</a>
  */
@@ -14,7 +17,7 @@ import java.lang.annotation.Target;
 @Target(ElementType.TYPE)
 public @interface ContextEntry {
     /**
-     * @return context entry class
+     * @return the separately constructed connector class, not a scanned component
      */
     Class<?> value();
 }

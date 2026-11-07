@@ -204,6 +204,105 @@ class ConverterDiscoveryTest {
         }
     }
 
+    @Test
+    void repeatedRegistrationScansEachSelectedPackageOnlyOnce() {
+        ClassLoader loader = getClass().getClassLoader();
+        try (MockedStatic<PackageScanUtils> scanner = scanner(null, PlainConfig.class)) {
+            ConfigManager manager = new ConfigManager();
+            manager.registerAll(plugin, new String[]{FIRST, SECOND}, loader);
+            manager.registerAll(plugin, new String[]{FIRST, SECOND}, loader);
+            assertThat(manager.getAllConfigEntities(plugin)).containsKey("config/plain.yml");
+            scanner.verify(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, loader),
+                    org.mockito.Mockito.times(1));
+            scanner.verify(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, SECOND, loader),
+                    org.mockito.Mockito.times(1));
+        }
+    }
+
+    @Test
+    void cachedSelectionsAreDefensiveAndSurviveConverterPackageExpansion() {
+        ClassLoader loader = getClass().getClassLoader();
+        try (MockedStatic<PackageScanUtils> scanner = scanner(null, PlainConfig.class)) {
+            Set<Class<?>> selected = ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, loader);
+            selected.clear();
+            ConverterRegistry.prepareModule(plugin, new String[]{FIRST, SECOND}, loader);
+            assertThat(ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, loader))
+                    .containsExactly(PlainConfig.class);
+            assertThat(ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{SECOND}, loader)).isEmpty();
+            assertThat(ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{SECOND}, loader)).isEmpty();
+            scanner.verify(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, loader),
+                    org.mockito.Mockito.times(1));
+            scanner.verify(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, SECOND, loader),
+                    org.mockito.Mockito.times(1));
+        }
+    }
+
+    @Test
+    void cachedInvalidEntityStillRefusesEverySelectedBatch() {
+        ClassLoader loader = getClass().getClassLoader();
+        try (MockedStatic<PackageScanUtils> scanner = scanner(null, BadConfig.class)) {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                assertThatThrownBy(() -> ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, loader))
+                        .isInstanceOf(ConfigurationException.class).hasMessageContaining(Value.class.getName());
+            }
+            assertThat(constructed).isFalse();
+            scanner.verify(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, loader),
+                    org.mockito.Mockito.times(1));
+        }
+    }
+
+    @Test
+    void cachedEntityIsRevalidatedAgainstExpandedConverterRegistry() {
+        ClassLoader loader = getClass().getClassLoader();
+        try (MockedStatic<PackageScanUtils> scanner = scanner(ValidConverter.class, BadConfig.class)) {
+            assertThatThrownBy(() -> ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, loader))
+                    .isInstanceOf(ConfigurationException.class).hasMessageContaining(Value.class.getName());
+            ConverterRegistry.prepareModule(plugin, new String[]{FIRST, SECOND}, loader);
+            assertThat(ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, loader))
+                    .containsExactly(BadConfig.class);
+            scanner.verify(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, loader),
+                    org.mockito.Mockito.times(1));
+        }
+    }
+
+    @Test
+    void selectedDiscoveryIsScopedToModuleAndLoader() {
+        ClassLoader firstLoader = getClass().getClassLoader();
+        ClassLoader secondLoader = new ClassLoader(firstLoader) { };
+        UltiToolsPlugin other = mock(UltiToolsPlugin.class);
+        org.mockito.Mockito.when(other.getPluginName()).thenReturn("OtherModule");
+        try (MockedStatic<PackageScanUtils> scanner = mockStatic(PackageScanUtils.class)) {
+            scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, firstLoader))
+                    .thenReturn(Collections.singleton(PlainConfig.class));
+            scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, secondLoader))
+                    .thenReturn(Collections.singleton(GoodConfig.class));
+            assertThat(ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, firstLoader))
+                    .containsExactly(PlainConfig.class);
+            assertThat(ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, secondLoader))
+                    .containsExactly(GoodConfig.class);
+            assertThat(ConverterRegistry.prepareSelectedConfigs(other, new String[]{FIRST}, firstLoader))
+                    .containsExactly(PlainConfig.class);
+            scanner.verify(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, firstLoader),
+                    org.mockito.Mockito.times(2));
+            scanner.verify(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, secondLoader),
+                    org.mockito.Mockito.times(1));
+        }
+    }
+
+    @Test
+    void failedSelectedScanCanBeRetried() {
+        ClassLoader loader = getClass().getClassLoader();
+        try (MockedStatic<PackageScanUtils> scanner = scanner(null, PlainConfig.class)) {
+            scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, FIRST, loader))
+                    .thenThrow(new IllegalStateException("scan failed"))
+                    .thenReturn(Collections.singleton(PlainConfig.class));
+            assertThatThrownBy(() -> ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, loader))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("scan failed");
+            assertThat(ConverterRegistry.prepareSelectedConfigs(plugin, new String[]{FIRST}, loader))
+                    .containsExactly(PlainConfig.class);
+        }
+    }
+
     private MockedStatic<PackageScanUtils> scanner(Class<?> converter, Class<?> entity) {
         MockedStatic<PackageScanUtils> scanner = mockStatic(PackageScanUtils.class);
         scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(any(), anyString(), any()))

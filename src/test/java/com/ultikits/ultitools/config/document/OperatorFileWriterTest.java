@@ -185,23 +185,39 @@ class OperatorFileWriterTest {
     @Test
     void anchoredDocumentIsRefusedBeforeTheEditAndWarnedOncePerPath() throws Exception {
         Path target = tempDir.resolve("anchored.yml");
-        String text = "base: &b {x: 1}\ncopy: *b\n";
+        String text = "# unchanged comment\nbase: &b {x: 1}\ncopy: *b\n";
         Files.write(target, text.getBytes(StandardCharsets.UTF_8));
         AtomicInteger edits = new AtomicInteger();
+        AtomicInteger renders = new AtomicInteger();
+        OperatorFileWriter.FAULT.set(step -> {
+            if (step == OperatorFileWriter.Step.RENDER) {
+                renders.incrementAndGet();
+            }
+        });
 
-        for (int i = 0; i < 3; i++) {
-            OperatorFileWriter.Result result = OperatorFileWriter.write(target,
-                    OwnedPaths.builder().value(Collections.singletonList("added")).build(), null, document -> {
-                        edits.incrementAndGet();
-                        document.set(Collections.singletonList("added"), 1);
-                    });
-            assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.REFUSED);
+        try {
+            for (int i = 0; i < 3; i++) {
+                OperatorFileWriter.Result result = OperatorFileWriter.write(target,
+                        OwnedPaths.builder().value(Collections.singletonList("added"))
+                                .comment(Collections.singletonList("base")).build(), null, document -> {
+                            edits.incrementAndGet();
+                            document.set(Collections.singletonList("added"), 1);
+                            document.setFrameworkComment(Collections.singletonList("base"),
+                                    Collections.singletonList("unchanged comment"));
+                        });
+                assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.REFUSED);
+            }
+        } finally {
+            OperatorFileWriter.FAULT.set(null);
         }
+        assertThat(renders.get()).as("the refusal never renders for diagnostics").isZero();
 
         assertThat(edits.get()).as("the edit never runs on an anchored document").isZero();
         assertThat(read(target)).isEqualTo(text);
         assertThat(warnings).hasSize(1);
-        assertThat(warnings.get(0).getMessage()).contains("anchors").contains("added");
+        assertThat(warnings.get(0).getMessage()).contains("anchors")
+                .contains("Keys this write owns: added, base (comment)")
+                .doesNotContain("would have changed").doesNotContain("unchanged comment");
     }
 
     /**
@@ -369,7 +385,9 @@ class OperatorFileWriterTest {
 
         assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.REFUSED);
         assertThat(read(target)).isEqualTo(text);
-        assertThat(warnings.get(0).getMessage()).contains("does not own").doesNotContain(": 5").doesNotContain(": 6");
+        assertThat(warnings.get(0).getMessage()).contains("does not own")
+                .contains("Keys this write would have changed: a.").doesNotContain("Keys this write owns:")
+                .doesNotContain(": 5").doesNotContain(": 6");
     }
 
     /**

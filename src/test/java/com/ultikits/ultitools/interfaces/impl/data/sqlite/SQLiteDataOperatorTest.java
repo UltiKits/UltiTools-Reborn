@@ -365,7 +365,7 @@ class SQLiteDataOperatorTest {
         @DisplayName("Test B: SQLite 与 SimpleJsonDataOperator 在同一个 GREATER 条件下返回同一行集")
         void greaterShouldAgreeAcrossSqliteAndJson(@TempDir Path jsonDir) {
             SimpleJsonDataOperator<TestEntity> json =
-                    new SimpleJsonDataOperator<>(jsonDir.toFile().getAbsolutePath(), TestEntity.class);
+                    new SimpleJsonDataOperator<>(jsonDir.resolve("rows").toFile().getAbsolutePath(), TestEntity.class);
             insertNumericInto(json, "json-cmp-1", 1);
             insertNumericInto(json, "json-cmp-5", 5);
             insertNumericInto(json, "json-cmp-9", 9);

@@ -636,9 +636,11 @@ public final class OperatorFileWriter {
             named = owned.isWholeFile() ? Collections.singletonList("the whole file")
                     : describe(owned.values(), owned.comments());
         }
+        // Before an edit/render succeeds only ownership is known, not which keys would change.
+        String label = keys.isEmpty() ? ". Keys this write owns: " : ". Keys this write would have changed: ";
         // Values are deliberately omitted: any key may hold a credential.
         LOGGER.warning("Configuration file " + absolute + " was not written: " + reason
-                + ". Keys this write would have changed: " + String.join(", ", named)
+                + label + String.join(", ", named)
                 + ". The values in memory are used; the file is unchanged.");
     }
 

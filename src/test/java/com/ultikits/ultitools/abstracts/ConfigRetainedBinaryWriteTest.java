@@ -180,7 +180,8 @@ class ConfigRetainedBinaryWriteTest {
 
         kit.save();
 
-        assertThat(warnings).as("refusal reasons").extracting(LogRecord::getMessage).isEmpty();
+        assertThat(warnings).as("only the startup diagnostic, no write refusal").extracting(LogRecord::getMessage)
+                .singleElement().asString().contains("key 'blob'", "no @ConfigEntry declaration").doesNotContain("YWI=");
         assertThat(entityText()).isEqualTo(ENTITY_TEXT.replace("motd: old", "motd: new"));
         assertThat(kit.isModifiedSinceSnapshot()).as("the change is saved").isFalse();
     }
@@ -193,7 +194,8 @@ class ConfigRetainedBinaryWriteTest {
 
         assertThatCode(() -> kit.saveOperatorChange("title")).doesNotThrowAnyException();
 
-        assertThat(warnings).as("refusal reasons").extracting(LogRecord::getMessage).isEmpty();
+        assertThat(warnings).as("only the startup diagnostic, no write refusal").extracting(LogRecord::getMessage)
+                .singleElement().asString().contains("key 'blob'", "no @ConfigEntry declaration").doesNotContain("YWI=");
         assertThat(entityText()).isEqualTo(ENTITY_TEXT.replace("title: first", "title: second"));
     }
 
@@ -226,7 +228,8 @@ class ConfigRetainedBinaryWriteTest {
             assertThatCode(() -> manager.loadFromJson(payload.toString())).doesNotThrowAnyException();
         }
 
-        assertThat(warnings).as("refusal reasons").extracting(LogRecord::getMessage).isEmpty();
+        assertThat(warnings).as("only the startup diagnostic, no write refusal").extracting(LogRecord::getMessage)
+                .singleElement().asString().contains("key 'blob'", "no @ConfigEntry declaration").doesNotContain("YWI=");
         assertThat(entityText()).isEqualTo(ENTITY_TEXT.replace("motd: old", "motd: panel"));
         assertThat(atCommit).as("entity value while the file is committed").containsExactly("old");
         assertThat(kit.motd).isEqualTo("panel");
