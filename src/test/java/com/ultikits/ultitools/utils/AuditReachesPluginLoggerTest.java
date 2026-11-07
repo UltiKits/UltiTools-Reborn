@@ -2,6 +2,11 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -10,6 +15,8 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.io.PrintStream;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -279,6 +286,91 @@ class AuditReachesPluginLoggerTest {
     @Test
     @DisplayName("a handler of the plugin logger that throws does not break the scan that emits the line")
     void throwingPluginLoggerHandlerDoesNotBreakTheCaller() {
+        addThrowingPluginLoggerHandler();
+        recordAudit("broken-handler-module", "com.example.thirdparty.Foo");
+
+        assertThatCode(() -> auditSummary("broken-handler-module"))
+                .doesNotThrowAnyException();
+        recordSkipped("broken-handler-module", "com.example.Gone",
+                new NoClassDefFoundError("com/example/Missing"));
+        assertThatCode(() -> scanSummary("broken-handler-module"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void throwingStderrFallbackDoesNotBreakTheCaller() {
+        addThrowingPluginLoggerHandler();
+        PluginLoggerBridge bridge = new PluginLoggerBridge(Level.ALL);
+        PrintStream originalStderr = System.err;
+        PrintStream failingStderr = mock(PrintStream.class);
+        doThrow(new IllegalStateException("stderr is re-logged through the broken handler"))
+                .when(failingStderr).println(anyString());
+        try {
+            System.setErr(failingStderr);
+
+            assertThatCode(() -> bridge.publish(new LogRecord(Level.WARNING, "diagnostic")))
+                    .doesNotThrowAnyException();
+            verify(failingStderr).println(anyString());
+        } finally {
+            System.setErr(originalStderr);
+        }
+    }
+
+    @Test
+    void stderrFallbackCannotReenterTheBridgeAndGuardIsReleasedAfterwards() {
+        addThrowingPluginLoggerHandler();
+        PluginLoggerBridge bridge = new PluginLoggerBridge(Level.ALL);
+        // A second bridge checks that the guard covers both diagnostics loggers on this thread.
+        PluginLoggerBridge reenteredBridge = new PluginLoggerBridge(Level.ALL);
+        PrintStream originalStderr = System.err;
+        PrintStream reLoggingStderr = mock(PrintStream.class);
+        AtomicInteger writes = new AtomicInteger();
+        doAnswer(invocation -> {
+            // Bound the pre-fix recursion, so a regression fails without exhausting the stack.
+            if (writes.incrementAndGet() <= 3) {
+                reenteredBridge.publish(new LogRecord(Level.WARNING, "re-logged stderr"));
+            }
+            return null;
+        }).when(reLoggingStderr).println(anyString());
+        try {
+            System.setErr(reLoggingStderr);
+
+            assertThatCode(() -> bridge.publish(new LogRecord(Level.WARNING, "first diagnostic")))
+                    .doesNotThrowAnyException();
+            assertThat(writes.get()).isEqualTo(1);
+            assertThat(atPluginLogger).hasSize(1);
+
+            bridge.publish(new LogRecord(Level.WARNING, "second diagnostic"));
+            assertThat(writes.get()).isEqualTo(2);
+            assertThat(atPluginLogger).hasSize(2);
+        } finally {
+            System.setErr(originalStderr);
+        }
+    }
+
+    @Test
+    void throwingStderrFallbackDoesNotLeaveTheBridgeGuardSet() {
+        addThrowingPluginLoggerHandler();
+        PluginLoggerBridge bridge = new PluginLoggerBridge(Level.ALL);
+        PrintStream originalStderr = System.err;
+        PrintStream failingStderr = mock(PrintStream.class);
+        doThrow(new IllegalStateException("broken stderr"))
+                .when(failingStderr).println(anyString());
+        try {
+            System.setErr(failingStderr);
+
+            assertThatCode(() -> bridge.publish(new LogRecord(Level.WARNING, "first diagnostic")))
+                    .doesNotThrowAnyException();
+            assertThatCode(() -> bridge.publish(new LogRecord(Level.WARNING, "second diagnostic")))
+                    .doesNotThrowAnyException();
+            verify(failingStderr, times(2)).println(anyString());
+            assertThat(atPluginLogger).hasSize(2);
+        } finally {
+            System.setErr(originalStderr);
+        }
+    }
+
+    private void addThrowingPluginLoggerHandler() {
         pluginLogger.addHandler(new Handler() {
             @Override
             public void publish(LogRecord record) {
@@ -295,13 +387,5 @@ class AuditReachesPluginLoggerTest {
                 // nothing to release
             }
         });
-        recordAudit("broken-handler-module", "com.example.thirdparty.Foo");
-
-        assertThatCode(() -> auditSummary("broken-handler-module"))
-                .doesNotThrowAnyException();
-        recordSkipped("broken-handler-module", "com.example.Gone",
-                new NoClassDefFoundError("com/example/Missing"));
-        assertThatCode(() -> scanSummary("broken-handler-module"))
-                .doesNotThrowAnyException();
     }
 }
