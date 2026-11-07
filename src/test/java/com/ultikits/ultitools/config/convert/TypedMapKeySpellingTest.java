@@ -104,6 +104,45 @@ class TypedMapKeySpellingTest {
     }
 
     @Test
+    @DisplayName("a child lookup without an exact text key keeps the first same-text entry in either map order")
+    void nonCanonicalChildLookupKeepsFirstSameTextEntry() throws Exception {
+        Map<Integer, Map<Integer, String>> value = Collections.singletonMap(1, Collections.singletonMap(1, "a"));
+        Map<Object, Object> file = new LinkedHashMap<>();
+        file.put(1, plain("01", "first"));
+        file.put(1L, plain("001", "second"));
+        assertThat(file).hasSize(2).doesNotContainKey("1");
+
+        ConversionResult<Object> forward = write(value, "typedOuter", file);
+
+        assertThat(forward.value()).isEqualTo(plain("1", plain("01", "a")));
+        assertThat(forward.failures()).isEmpty();
+
+        file.clear();
+        file.put(1L, plain("001", "second"));
+        file.put(1, plain("01", "first"));
+        assertThat(file).hasSize(2).doesNotContainKey("1");
+
+        ConversionResult<Object> reversed = write(value, "typedOuter", file);
+
+        assertThat(reversed.value()).isEqualTo(plain("1", plain("001", "a")));
+        assertThat(reversed.failures()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an exact text key takes precedence over an earlier entry with the same key text")
+    void exactChildKeyPrecedesSameTextEntry() throws Exception {
+        Map<Integer, Map<Integer, String>> value = Collections.singletonMap(1, Collections.singletonMap(1, "a"));
+        Map<Object, Object> file = new LinkedHashMap<>();
+        file.put(1, plain("01", "fallback"));
+        file.put("1", plain("001", "exact"));
+
+        ConversionResult<Object> bound = write(value, "typedOuter", file);
+
+        assertThat(bound.value()).isEqualTo(plain("1", plain("001", "a")));
+        assertThat(bound.failures()).isEmpty();
+    }
+
+    @Test
     @DisplayName("file keys that do not read as the key type are skipped and add no failure")
     void probeReadsAddNothing() throws Exception {
         ConversionResult<Object> bound = write(Collections.singletonMap(1, "a"), "integers",

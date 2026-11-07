@@ -67,8 +67,8 @@ class SimpleJsonDataOperatorTest {
     }
 
     @BeforeEach
-    void setUp() {
-        storeDir = tempDir.toFile();
+    void setUp() throws java.io.IOException {
+        storeDir = Files.createDirectories(tempDir.resolve("rows")).toFile();
         operator = new SimpleJsonDataOperator<>(storeDir.getAbsolutePath(), TestData.class);
     }
 
