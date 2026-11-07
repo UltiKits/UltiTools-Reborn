@@ -273,6 +273,160 @@ class PluginDependencyResolverTest {
         @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
 
+    public static class NamingFixture extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+    }
+
+    @PluginDependency(depends = {"AlphaModule"})
+    public static class BeforeMain extends NamingFixture { }
+
+    @PluginDependency(softDepends = {"AlphaModule"})
+    public static class BeforeMainSoft extends NamingFixture { }
+
+    @PluginDependency(loadBefore = {"AlphaModule"})
+    public static class ZBeforeMain extends NamingFixture { }
+
+    @PluginDependency(depends = {"Main"})
+    public static class ConsumerOfMain extends NamingFixture { }
+
+    @PluginDependency(depends = {"Shared"})
+    public static class ConsumerOfShared extends NamingFixture { }
+
+    @PluginDependency(depends = {"com.ultikits.testfixtures.sameclassname.alpha.Main"})
+    public static class ConsumerOfFullName extends NamingFixture { }
+
+    public static class MissingNamespace {
+        @PluginDependency(depends = {"NotInstalled"})
+        public static class Main extends NamingFixture { }
+    }
+
+    public static class CycleNamespace {
+        @PluginDependency(depends = {"CyclePeer"})
+        public static class Main extends NamingFixture { }
+    }
+
+    @PluginDependency(depends = {"Main"})
+    public static class CyclePeer extends NamingFixture { }
+
+    public static class EarlyPackage {
+        public static class Zulu extends NamingFixture { }
+    }
+
+    public static class LatePackage {
+        public static class Alpha extends NamingFixture { }
+    }
+
+    @Nested
+    @DisplayName("Distinct full main classes with the same simple name (#752)")
+    class SameSimpleNameTests {
+        private Class<? extends UltiToolsPlugin> alpha;
+        private Class<? extends UltiToolsPlugin> beta;
+
+        @BeforeEach
+        void loadDistinctMains() throws Exception {
+            alpha = loadJarBackedFixture("alpha-main.jar",
+                    com.ultikits.testfixtures.sameclassname.alpha.Main.class, "name: AlphaModule\n");
+            beta = loadJarBackedFixture("beta-main.jar",
+                    com.ultikits.testfixtures.sameclassname.beta.Main.class, "name: BetaModule\n");
+        }
+
+        @Test
+        void sameSimpleNameRetainsBothClassesInEitherInputOrder() throws Exception {
+            assertEquals(Arrays.asList(alpha, beta), resolver.resolve(Arrays.asList(alpha, beta)));
+            assertEquals(Arrays.asList(alpha, beta), resolver.resolve(Arrays.asList(beta, alpha)));
+        }
+
+        @Test
+        void declaredNameHardDependencyTargetsTheRecoveredNode() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                    Arrays.asList(alpha, beta, BeforeMain.class));
+            assertEquals(3, result.size());
+            assertTrue(result.indexOf(alpha) < result.indexOf(BeforeMain.class));
+        }
+
+        @Test
+        void declaredNameSoftDependencyTargetsTheRecoveredNode() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                    Arrays.asList(alpha, beta, BeforeMainSoft.class));
+            assertEquals(3, result.size());
+            assertTrue(result.indexOf(alpha) < result.indexOf(BeforeMainSoft.class));
+        }
+
+        @Test
+        void declaredNameLoadBeforeTargetsTheRecoveredNode() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                    Arrays.asList(alpha, beta, ZBeforeMain.class));
+            assertEquals(3, result.size());
+            assertTrue(result.indexOf(ZBeforeMain.class) < result.indexOf(alpha));
+        }
+
+        @Test
+        void declaredNameLoadAfterTargetsTheRecoveredNode() throws Exception {
+            Class<? extends UltiToolsPlugin> before = loadJarBackedFixture("before-main.jar",
+                    JarModuleWithLoadAfter.class, "name: Before\nloadAfter: [AlphaModule]\n");
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(Arrays.asList(alpha, beta, before));
+            assertEquals(3, result.size());
+            assertTrue(result.indexOf(alpha) < result.indexOf(before));
+        }
+
+        @Test
+        void simpleAliasKeepsItsPreviousLastDiscoveredTarget() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                    Arrays.asList(alpha, beta, ConsumerOfMain.class));
+            assertEquals(3, result.size());
+            assertTrue(result.indexOf(beta) < result.indexOf(ConsumerOfMain.class));
+        }
+
+        @Test
+        void recoveredNodeCannotStealAnEstablishedDeclaredAlias() throws Exception {
+            Class<? extends UltiToolsPlugin> recovered = loadJarBackedFixture("recovered.jar",
+                    com.ultikits.testfixtures.sameclassname.alpha.Main.class, "name: Shared\n");
+            Class<? extends UltiToolsPlugin> existing = loadJarBackedFixture("existing.jar",
+                    JarModuleTarget.class, "name: Shared\n");
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                    Arrays.asList(recovered, existing, beta, ConsumerOfShared.class));
+            assertEquals(4, result.size());
+            assertTrue(result.indexOf(existing) < result.indexOf(ConsumerOfShared.class),
+                    "the previously successful Shared dependency must keep its target");
+            assertTrue(result.indexOf(ConsumerOfShared.class) < result.indexOf(recovered),
+                    "the recovered Main must not steal Shared and become this consumer's dependency");
+        }
+
+        @Test
+        void fullInternalKeyDoesNotBecomeNewDependencySyntax() {
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                    () -> resolver.resolve(Arrays.asList(alpha, beta, ConsumerOfFullName.class)));
+            assertTrue(ex.getRefusedPlugins().contains("ConsumerOfFullName"));
+            assertEquals(Arrays.asList(alpha, beta), ex.getSortedPrefix());
+        }
+
+        @Test
+        void missingDependencyRefusesOnlyTheActualMainAndItsHardDependents() {
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                    () -> resolver.resolve(Arrays.asList(alpha, MissingNamespace.Main.class, ConsumerOfMain.class)));
+            assertEquals(Collections.singletonList(alpha), ex.getSortedPrefix());
+            assertEquals(new HashSet<>(Arrays.asList(MissingNamespace.Main.class.getName(), "ConsumerOfMain")),
+                    ex.getRefusedPlugins());
+            assertTrue(ex.getMessage().contains(MissingNamespace.Main.class.getName()));
+        }
+
+        @Test
+        void cyclePartitionRetainsTheUnrelatedSameNamedMain() {
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                    () -> resolver.resolve(Arrays.asList(alpha, CycleNamespace.Main.class, CyclePeer.class)));
+            assertEquals(Collections.singletonList(alpha), ex.getSortedPrefix());
+            assertEquals(new HashSet<>(Arrays.asList(CycleNamespace.Main.class.getName(), "CyclePeer")),
+                    ex.getRefusedPlugins());
+            assertTrue(ex.getCyclePaths().get(0).contains(CycleNamespace.Main.class.getName()));
+        }
+
+        @Test
+        void uniqueSimpleNameOrderDoesNotBecomeFullNameOrder() throws Exception {
+            assertEquals(Arrays.asList(LatePackage.Alpha.class, EarlyPackage.Zulu.class),
+                    resolver.resolve(Arrays.asList(EarlyPackage.Zulu.class, LatePackage.Alpha.class)));
+        }
+    }
+
     @Nested
     @DisplayName("Empty and Null Input Tests")
     class EmptyInputTests {

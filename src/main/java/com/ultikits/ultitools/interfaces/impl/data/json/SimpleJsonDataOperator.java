@@ -573,6 +573,15 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         return results;
     }
 
+    /** Rejects null non-EQUAL values without changing EQUAL-null or empty-condition semantics. */
+    private void requireNonNullComparisonValue(WhereCondition condition) {
+        Comparison comparison = condition.getComparison();
+        if (comparison != null && comparison != Comparison.EQUAL && condition.getValue() == null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "JSON comparison " + comparison + " has no null value meaning for store '" + type.getName() + "'.");
+        }
+    }
+
     private List<T> getAllRaw(WhereCondition... whereConditions) {
         // An empty condition means "apply no filter" -- strip it out up front so it can't cause
         // a mid-loop return of the full set if it shows up in a later position.
@@ -593,6 +602,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         boolean firstCondition = true;
         for (WhereCondition condition : effective) {
+            requireNonNullComparisonValue(condition);
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- this
                 // is a query-condition validation failure.
@@ -790,6 +800,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         boolean firstCondition = true;
         for (WhereCondition condition : whereConditions) {
+            requireNonNullComparisonValue(condition);
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- this
                 // is a query-condition validation failure, same as getAll's identical check.
