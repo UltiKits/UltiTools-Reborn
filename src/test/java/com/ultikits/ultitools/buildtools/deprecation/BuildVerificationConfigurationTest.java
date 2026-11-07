@@ -309,7 +309,7 @@ class BuildVerificationConfigurationTest {
                     "branches", java.util.Arrays.asList("main", "release/**")));
         }
         Map<String, Map<String, Object>> jobs = (Map<String, Map<String, Object>>) workflow.get("jobs");
-        assertThat(jobs).containsOnlyKeys("test", "release-tooling");
+        assertThat(jobs).containsOnlyKeys("test", "release-tooling", "real-mysql");
         for (Map<String, Object> job : jobs.values()) {
             assertThat(job.get("permissions")).isEqualTo(java.util.Collections.singletonMap("contents", "read"));
             assertThat(job.get("runs-on")).isEqualTo("ubuntu-latest");
@@ -327,6 +327,47 @@ class BuildVerificationConfigurationTest {
                 "bash .github/scripts/test-buildtool-lifecycle.sh --self-test");
         assertThat(runs).doesNotContain("--matrix", "check-comment-only-diff.sh --self-test",
                 "setup-pinned-maven.sh", "unittest discover");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void realMysqlLaneUsesDisposableServiceAndRejectsSkippedReports() throws IOException {
+        Map<String, Map<String, Object>> jobs = (Map<String, Map<String, Object>>)
+                yaml(Paths.get(".github/workflows/maven-ci.yml")).get("jobs");
+        Map<String, Object> job = jobs.get("real-mysql");
+        assertThat(job).containsEntry("name", "Real MySQL comparison contracts")
+                .doesNotContainKeys("if", "needs", "continue-on-error");
+        Map<String, Map<String, Object>> services = (Map<String, Map<String, Object>>) job.get("services");
+        assertThat(services).containsOnlyKeys("mysql");
+        Map<String, Object> mysql = services.get("mysql");
+        assertThat(mysql).containsEntry("image", "mysql:9.1.0");
+        assertThat((List<String>) mysql.get("ports")).containsExactly("3306:3306");
+        Map<String, String> serviceEnv = (Map<String, String>) mysql.get("env");
+        assertThat(serviceEnv).containsOnlyKeys("MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD")
+                .containsEntry("MYSQL_DATABASE", "ultitools_it_ci").containsEntry("MYSQL_USER", "ultitools_it");
+        Map<String, String> environment = (Map<String, String>) job.get("env");
+        assertThat(environment).containsOnlyKeys("ULTITOOLS_TEST_MYSQL_PASSWORD")
+                .containsEntry("ULTITOOLS_TEST_MYSQL_PASSWORD", serviceEnv.get("MYSQL_PASSWORD"));
+        assertThat((String) mysql.get("options")).contains("mysqladmin ping", "--host=127.0.0.1",
+                "--health-retries=12");
+        List<Map<String, Object>> steps = (List<Map<String, Object>>) job.get("steps");
+        for (Map<String, Object> step : steps) {
+            assertThat(step).doesNotContainKeys("if", "continue-on-error");
+        }
+        assertThat(calls(workflowRuns("maven-ci.yml", "real-mysql"))).hasSize(1)
+                .allSatisfy(call -> assertThat(call).startsWith("-B clean test ")
+                        .contains("-Dtest=RelationalLiteralMatchTest,RelationalOrderingContractTest",
+                                "-Dultitools.test.mysql.url='jdbc:mysql://127.0.0.1:3306/ultitools_it_ci?",
+                                "-Dultitools.test.mysql.user=ultitools_it")
+                        .doesNotContain("skipTests", "maven.test.skip", "deploy", "install", "|| true"));
+        Map<String, Object> audit = steps.get(steps.size() - 1);
+        assertThat(audit).containsEntry("name", "Require both real MySQL lanes to execute without skips");
+        assertThat((String) audit.get("run")).contains("python3 -I -", "$RealMysql",
+                "\"RelationalLiteralMatchTest\", \"RelationalOrderingContractTest\"",
+                "Path(\"target/surefire-reports\").glob(\"TEST-*.xml\")",
+                "if case.get(\"classname\") in required:", "if not cases or any(",
+                "for case in cases for tag in (\"skipped\", \"failure\", \"error\")",
+                "raise SystemExit(");
     }
 
     @Test

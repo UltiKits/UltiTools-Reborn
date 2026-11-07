@@ -106,6 +106,25 @@ class ModuleScanDiagnosticsTest {
     }
 
     @Test
+    void missingServerApiNamesBothPossibleCausesWithoutChangingSkipPolicy() {
+        String moduleName = "server-api-module-" + System.nanoTime();
+        String className = "com.example.NewServerListener";
+        ModuleScanDiagnostics.recordSkippedClass(moduleName, className,
+                new NoClassDefFoundError("org/bukkit/event/player/PlayerInputEvent"));
+        ModuleScanDiagnostics.emitSummary(moduleName);
+
+        List<LogRecord> severe = withLevel(Level.SEVERE);
+        assertEquals(1, severe.size());
+        String message = severe.get(0).getMessage();
+        assertTrue(message.contains(className), message);
+        assertTrue(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE), message);
+        assertTrue(message.contains("the server API is older than the module requires"), message);
+        assertTrue(message.contains("continued loading without them"), message);
+        assertTrue(message.contains("COMPATIBILITY.md"), message);
+        assertTrue(severe.get(0).getThrown() == null, "summary must not submit a throwable");
+    }
+
+    @Test
     @DisplayName("Test 3 (many): fifty skipped classes still produce exactly ONE SEVERE record, not fifty")
     void manySkippedClassesStillProduceOneSevereRecord() {
         String moduleName = "many-module-" + System.nanoTime();
