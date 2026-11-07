@@ -1,8 +1,8 @@
 package com.ultikits.ultitools.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.*;
 
 import java.io.File;
@@ -25,6 +25,7 @@ import com.ultikits.testfixtures.externalplugininjection.JavaPluginInjectingServ
 import com.ultikits.testfixtures.externalplugininjection.UltiToolsPluginInjectingService;
 import com.ultikits.testfixtures.wr01contractgap.broken.ConnectorPluginFixtureBroken;
 import com.ultikits.testfixtures.wr01contractgap.ok.ConnectorPluginFixtureOk;
+import com.ultikits.testfixtures.wr01contractgap.ok.EnforceableExternalCommandExecutor;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -344,16 +345,12 @@ public class ExternalPluginAdapterTest {
      * everything".
      * <p>
      * Uses the SAME MockBukkit-backed {@code registerExternal(...)} path as {@link
-     * ChildContainerInjectionTests}, not a hand-mocked {@code JavaPlugin}: a bare Mockito mock
-     * cannot reach far enough into {@code CommandManager.registerAllExternal} to exercise the
-     * bean lookup this fix's placement depends on. The satisfied-contract test stops short of
-     * asserting the FULL Bukkit {@code CommandMap} registration succeeds -- {@code
-     * CommandManager.getCommandMap()}'s reflective {@code instanceof SimplePluginManager} check
-     * returns {@code null} under MockBukkit's own {@code PluginManagerMock} regardless of this
-     * fix (see {@code CommandManagerTest.GetCommandMapSimplePluginManagerTests}, a pre-existing,
-     * documented environment limitation, not a WR-01 regression) -- and instead asserts the two
-     * facts WR-01 actually claims: no {@code PluginModuleException} was thrown, and the
-     * executor bean was constructed into the adapter's container.
+     * ChildContainerInjectionTests}, not a hand-mocked {@code JavaPlugin}. The satisfied-contract
+     * case mocks only command registration: CommandManager's reflective CommandMap lookup cannot
+     * resolve MockBukkit's PluginManagerMock. Scanning, container refresh, contract validation and
+     * listener registration stay real. A successful call must reach command registration and retain
+     * the concrete compliant executor. A failure is not a successful registration: since #567 it
+     * correctly releases the adapter's container instead of retaining it as this test once assumed.
      */
     @Nested
     @DisplayName("WR-01: registerExternal contract enforcement (post-review gap closure)")
@@ -430,19 +427,16 @@ public class ExternalPluginAdapterTest {
             assertThat(adapter.getScanPackage())
                     .isEqualTo("com.ultikits.testfixtures.wr01contractgap.ok");
 
-            // See this class's javadoc: registerExternal(...) reaches WR-01's validation and
-            // MUST NOT refuse a satisfied contract -- but the LATER Bukkit CommandMap step
-            // throws a pre-existing, environment-specific NullPointerException under MockBukkit
-            // regardless of this fix, so a bare doesNotThrowAnyException() would be too strict.
-            Throwable thrown = catchThrowable(() -> pm.registerExternal(adapter));
-            assertThat(thrown).isNotInstanceOf(PluginModuleException.class);
+            // Isolate MockBukkit's unsupported CommandMap lookup, not the real load-time checks.
+            CommandManager commands = mock(CommandManager.class);
+            when(UltiTools.getInstance().getCommandManager()).thenReturn(commands);
 
-            // The container is assembled, refresh()'d, and validated (WR-01) BEFORE the Bukkit
-            // registration step that throws -- so its presence, with the executor bean inside,
-            // proves construction and validation both succeeded.
+            assertThatCode(() -> pm.registerExternal(adapter)).doesNotThrowAnyException();
+
             assertThat(adapter.getContext()).isNotNull();
-            assertThat(adapter.getContext().getBeanNamesForType(org.bukkit.command.CommandExecutor.class))
-                    .isNotEmpty();
+            assertThat(adapter.getContext().getBean(EnforceableExternalCommandExecutor.class)).isNotNull();
+            verify(commands).registerAllExternal(adapter);
+            pm.unregisterExternal(adapter);
         }
     }
 }

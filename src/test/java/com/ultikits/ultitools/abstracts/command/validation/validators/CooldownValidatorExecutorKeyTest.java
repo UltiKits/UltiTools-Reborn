@@ -11,7 +11,10 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.Map;
 import java.util.UUID;
 
 import org.bukkit.command.Command;
@@ -136,27 +139,39 @@ class CooldownValidatorExecutorKeyTest {
     }
 
     @Test
-    @DisplayName("an active cooldown does not keep an unloaded executor reachable")
-    @SuppressWarnings("PMD.DoNotCallGarbageCollectionExplicitly") // the only way to observe a weak key
-    void activeCooldownDoesNotPinTheExecutor() throws InterruptedException {
+    @DisplayName("an active cooldown holds only a weak executor reference and sweeps it when cleared")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // inspect the real key, not a parallel test reference
+    void activeCooldownDoesNotPinTheExecutor() throws ReflectiveOperationException {
         CooldownValidator shared = new CooldownValidator();
-        WeakReference<SharedExecutorFixture> ref = applyCooldownThroughAThrowawayExecutor(shared);
-
-        for (int i = 0; i < 50 && ref.get() != null; i++) {
-            System.gc();
-            Thread.sleep(20);
-        }
-
-        assertNull(ref.get(), "the validator must not hold the executor strongly while its cooldown runs");
-        shared.cleanupExpired();
-        assertEquals(0L, shared.getRemainingCooldown(playerId, mapping.toString()),
-                "a cooldown whose executor is gone is dropped by the sweep");
-    }
-
-    private WeakReference<SharedExecutorFixture> applyCooldownThroughAThrowawayExecutor(CooldownValidator shared) {
         SharedExecutorFixture executor = new SharedExecutorFixture();
         shared.onComplete(contextFor(executor), true);
-        assertTrue(shared.getRemainingCooldown(playerId, executor, mapping.toString()) > 0);
-        return new WeakReference<>(executor);
+        Field cooldownsField = CooldownValidator.class.getDeclaredField("cooldowns");
+        cooldownsField.setAccessible(true);
+        Map<?, ?> cooldowns = (Map<?, ?>) cooldownsField.get(shared);
+        Map<?, ?> methods = (Map<?, ?>) cooldowns.get(playerId);
+        assertEquals(1, methods.size(), "control: an active entry exists before reference clearing");
+        Object key = methods.keySet().iterator().next();
+        Field executorField = key.getClass().getDeclaredField("executor");
+        executorField.setAccessible(true);
+        assertTrue(executorField.get(key) instanceof WeakReference,
+                "the production key itself must hold the executor weakly");
+        WeakReference<?> reference = (WeakReference<?>) executorField.get(key);
+        assertTrue(reference.get() == executor, "control: this is the actual executor reference");
+        for (Field field : key.getClass().getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers())) {
+                assertTrue(field.getType().isPrimitive() || field.getType() == String.class
+                                || field.getType() == WeakReference.class,
+                        "no extra strong reference may pin an executor or its class loader: " + field);
+            }
+        }
+        shared.cleanupExpired();
+        assertEquals(1, methods.size(), "a live unexpired cooldown survives a sweep");
+        // Simulate the JVM clearing the actual weak key. No GC scheduling or one-second deadline.
+        reference.clear();
+        assertNull(reference.get());
+        shared.cleanupExpired();
+        assertTrue(methods.isEmpty(), "the dead key itself must be removed, not just ignored by getters");
+        assertTrue(cooldowns.isEmpty(), "the empty player's bucket is also removed");
+        assertEquals(0L, shared.getRemainingCooldown(playerId, mapping.toString()));
     }
 }

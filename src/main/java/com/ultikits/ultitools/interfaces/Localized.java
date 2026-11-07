@@ -176,7 +176,7 @@ public interface Localized {
      * Enumerates the {@code lang/*} language resources at the given code-source location, handling
      * both a packaged JAR and an exploded directory (development workspace) layout. Reuses the
      * {@code getProtectionDomain().getCodeSource()} -&gt; {@code JarFile} idiom
-     * {@code UltiToolsPlugin.saveResources()} already uses, so this is correct on a module's
+     * {@code UltiToolsPlugin.saveResources(boolean)} already uses, so this is correct on a module's
      * first-ever startup, before its embedded resources have been extracted to disk. The location is
      * resolved through {@link CodeSourceLocations#toFile(URL)}, the same resolver the dictionary
      * reader uses, so a module installed under a path with a space or a non-ASCII character still

@@ -103,7 +103,7 @@ class BackendIdContractTest {
              Statement stmt = conn.createStatement()) {
             stmt.execute("DROP TABLE IF EXISTS id_contract_entity");
         }
-        json = new SimpleJsonDataOperator<>(tempDir.toFile().getAbsolutePath(), ContractEntity.class);
+        json = new SimpleJsonDataOperator<>(tempDir.resolve("rows").toFile().getAbsolutePath(), ContractEntity.class);
         sqlite = new SQLiteDataOperator<>(dataSource, ContractEntity.class);
     }
 
