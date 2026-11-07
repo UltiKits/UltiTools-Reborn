@@ -185,7 +185,7 @@ class ReleaseValidationTests(unittest.TestCase):
                     if str(step.get("uses", "")).startswith("actions/checkout@"):
                         checkouts += 1
                         self.assertEqual((step.get("with") or {}).get("persist-credentials"), "false", path.name)
-        self.assertEqual(checkouts, 6)
+        self.assertEqual(checkouts, 7)
 
     def test_setup_java_uses_canonical_credential_inputs(self):
         expected = {"server-username-env-var": "SONATYPE_USERNAME",
