@@ -1843,11 +1843,15 @@ This section governs the third kind.
     highest required argument position; the guard cannot infer the unused argument's type, so formatting
     can still fail. Official texts should use every supplied position, and custom texts should not add
     conversions at positions the official text leaves unused (#637);
-  - **choose a name no module ships.** A module that does not ship the configured official code
-    treats it as a custom name: with `language: en`, a module shipping only `zh` reads a `lang/en.*`
-    left in its folder by an older release. And if a later release starts shipping a code you used as
-    a custom name, that file becomes an official file and is restored (with a backup) like any other.
-    A server-specific suffix such as `zh-myserver` avoids both;
+  - **Known limitation: language codes are not globally reserved (#615).** Official names are local to
+    the module's shipped languages: with `language: ja_jp`, a module that ships no Japanese reads an
+    existing custom `lang/ja_jp.yml`, with missing messages from its official fallback. Likewise, with
+    `language: en`, a module shipping only `zh` reads an existing `lang/en.*`. If an upgrade starts
+    shipping the name used by a custom file, it becomes official: a differing file is backed up and
+    restored to the bundled bytes, with the ordinary restoration WARNING naming the file and backup,
+    not a separate custom-to-official notice. Choose a server-specific suffix such as `zh-myserver`
+    that no module ships. If a file becomes official, copy its backup to such a name and select that
+    name instead; do not keep editing or restoring the newly official filename;
   - **configuration comments follow language switches** (as of 6.3.0, #615). While a custom
     language is selected, a comment the framework writes above a setting comes from your custom
     file's text for it. Such a comment is recognised as the framework's — its text equals your
@@ -2344,7 +2348,13 @@ This section governs the third kind.
   column and also in a column declared `REAL`, which earlier 6.3.0 snapshots compared exactly. Pass a
   `float` value for a `float` field. On SQLite a NaN comparison value is bound as NULL, so a condition
   holding it matches no row and an `updateIf` with it never applies; do not retry `updateIf` on a NaN
-  threshold. A numeric field's column that holds non-numeric text,
+  threshold. **Known limitation retained (#696): Infinity and NaN are not portable query values.**
+  SQLite/MySQL and JSON do not share a non-finite-value contract: depending on the backend and operation,
+  a call can complete (including matching no row) or throw, and exception types differ. JSON's
+  `IllegalArgumentException` is not normalised to `DataAccessException`; a missing-row `updateIf`
+  returns `false` before evaluating its condition. Module authors must use finite query values,
+  including for `EQUAL` and `updateIf`, rather than rely on a common rejection type or retry a
+  non-finite threshold. A numeric field's column that holds non-numeric text,
   written by hand or by another program, compares on SQLite as its leading number (`'abc'` as 0,
   `'12abc'` as 12), while JSON compares that row as text. See `ultitools.storage.where-comparisons`
   in `FEATURES.md`.
@@ -2710,6 +2720,11 @@ This section governs the third kind.
   list written as an explicit `null` (`key: ~`) runs the declared default in memory with the warning and the file is
   not written (6.2.5 reset it to the default and wrote the default into the file under the same constructor condition;
   earlier 6.3.0 snapshots refused the module).
+  **Known limitation retained (#635): the empty-container fallback uses the declared field type.**
+  An `@NotEmpty Object` holding an empty list, map or array is refused, not replaced by its declared
+  default, even when that default is a non-empty container. Declare the setting as a collection,
+  map or array type when you need the in-memory default substitution; declaring it as `Object`
+  does not make it a container setting. Refusal still leaves the operator's file unchanged.
 
   中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（字段名、某一级键名，或值与默认值中的映射键像机密时，两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。面板显示的是文件中的值（`[]`），而模块运行的是默认值。面板写入会让该值变空时，与其他违规一样被拒绝，什么都不写。服主命令用 `saveOperatorChange` 写这个设置时，写入的是运行中的值（默认值加上服主的改动），替换掉 `[]`：这是服主对该键的明确要求。声明的默认值本身必须满足该字段的约束——非空，并且若字段带 `@Size` 则在其范围内（UltiSideBar 的 `lines` 是 `@NotEmpty @Size(min = 1, max = 15)`）：不满足时属于声明错误，无论文件里写的是什么，加载时都会拒绝该模块并写明字段和约束。文本上的 `@NotEmpty` 与 6.3.0 中其他约束违规一样，拒绝加载并指明字段（6.2.5 在满足上一条的构造器条件时，会把值重置为默认值并保存文件）。写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表在内存中改用声明的默认值并给出同一条警告，文件不写（6.2.5 在满足同一构造器条件时，会重置为默认值并把默认值写进文件；本周期较早的 6.3.0 快照则拒绝模块）。
 - **`@Range` refuses NaN** ([#625](https://github.com/UltiKits/UltiTools-Reborn/issues/625), as of v6.3.0). The check
@@ -2733,6 +2748,14 @@ This section governs the third kind.
   number under `@Pattern`, `@Size` or `@NotEmpty`) is a violation, with that annotation's usual outcome: refused at
   load, and at `/ul reload` the reload is refused and the running values are kept; before 6.3.0 it passed silently. The
   rules for such a field:
+  - **Known limitation retained (#635): constraints are combined, not alternatives selected by value
+    kind.** On an `Object` setting, `@Range` plus `@Pattern` refuses every ordinary non-null number
+    or text value: a number cannot satisfy the text constraint, and text cannot satisfy the numeric
+    constraint. The kind checks and `@Range`, `@Pattern` and `@Size` checks skip `null`, so `null`
+    still loads under `@Range` plus `@Pattern` or `@Range` plus `@Size`; adding `@NotEmpty` refuses
+    that null. Do not use these combinations as a numeric-or-text rule or assume they reject null.
+    Declare the intended type and compatible constraints, add `@NotEmpty` when null must be refused,
+    and validate any alternative-kind rule in the module's converter.
   - `@Size` counts a map's entries and an array's length (a violation refuses the module like any `@Size` violation).
     Text is a `String` or a `char` for `@NotEmpty`, `@Size` and `@Pattern`.
   - A declared type that can never hold a checkable value is a declaration error: it refuses the module at load, before
@@ -2923,6 +2946,13 @@ Each corrects behaviour that contradicted the documentation or left state held b
   before the removal. The framework does not retry the save; a module that must not lose the data
   retries or persists it itself, inside `savePlayerData`. In 6.2.5 the entry stayed in memory, where a
   module's own later code (a shutdown flush, for example) could still write it; it no longer does.
+  **Known limitation retained from 6.3.0 (#647): the callback runs once per save-marked field,
+  not once per bean.** A bean with N `@PlayerCache(saveBeforeRemove = true)` fields receives N
+  callbacks on one quit, even if a previous callback failed; this per-field count is pinned by the
+  regression tests. Each callback precedes its own field's removal, so later calls may see earlier
+  fields already cleaned. These are separate field callbacks, not framework retries of a failed
+  save. Keep a bean-wide saver safe to call repeatedly, and use only one save-marked field if that
+  callback already persists all of the bean's caches; do not rely on a failed save preserving entries.
   The periodic expiry sweep (`PlayerCacheManager.ExpiringPlayerCache`)
   also contains an `Error` from one bean, so the beans after it are still swept. None of the fifteen
   UltiKits modules uses `saveBeforeRemove`. No signature changes. See
@@ -3237,19 +3267,26 @@ one `@Table`, one folder of `<id>.json` files.
   before the exception is thrown, so catching the exception does not save the transaction: its outermost commit
   rolls back everything it wrote and throws `UnexpectedRollbackException`. The transaction keeps its table locks
   until it ends. Plain writes outside a transaction follow the same wait rule; such a write that fails just fails.
+  **Retained diagnostic limitation (#694):** a locking read uses the same `JSON write failed` prefix
+  (and the timeout's `The write was not applied` wording) even though the attempted operation was a read.
+  Diagnose it as that read's lock-wait/deadlock failure; do not infer an attempted write from the message.
 - **Read-only.** `readOnly = true` rejects writes. The refusal does not mark the transaction: catching it leaves the
   transaction committable, as a failed statement does on SQLite and MySQL.
 - **Timeout.** `@Transactional(timeout = ...)` sets a deadline. Every data operation inside the transaction checks it
   first, and an operation started after it has passed fails with a `DataAccessException` whose message starts
   `JSON transaction timeout`. That failure marks the transaction rollback-only before it is thrown, as Spring does
   when a transaction's deadline has passed, so catching it does not save the transaction: the outermost commit rolls
-  back and throws `UnexpectedRollbackException`.
+  back and throws `UnexpectedRollbackException`. **Retained backend difference (#694):** SQLite/MySQL instead
+  give each JDBC statement the remaining query-timeout budget, floored at 1 second even after the deadline.
+  They do not implement JSON's pre-operation deadline refusal. Neither backend interrupts arbitrary method-body
+  work. Do not use `timeout` as a portable wall-clock limit or depend on identical post-deadline outcomes.
 - **Propagation as on SQLite and MySQL.** `REQUIRES_NEW` and `NOT_SUPPORTED` suspend the active transaction,
   including its staged writes and table locks, and resume it afterwards. One difference: such a method runs on the
   same thread as the caller it suspended, and table locks belong to the thread, so it does not wait for the locks
   its caller holds. If it writes a key its caller already staged, the caller's later commit is the value that
   stays. (On the JDBC backends the inner call would wait for its own caller's row lock until the lock-wait
-  timeout.)
+  timeout.) This thread-owned locking is retained (#694), not isolation between the suspended and inner
+  transactions. Avoid writing the same key in both scopes when the inner value must survive the outer commit.
 - **Joined methods.** On SQLite, MySQL and JSON alike, a `@Transactional` method that joins an active transaction
   (`REQUIRED`, or `SUPPORTS` or `MANDATORY` inside one) and throws an exception its `rollbackFor`/`noRollbackFor`
   rules accept marks the whole transaction rollback-only even when the caller catches it, and the outermost
@@ -3301,7 +3338,9 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   Catching the error inside the transaction does not save it: the commit rolls back and throws
   `UnexpectedRollbackException`.
 - A commit that changed something writes and forces one journal record before it returns, so it waits for the
-  disk on the committing thread, which is often the server's main thread.
+  disk on the committing thread, which is often the server's main thread. This synchronous latency is retained
+  (#694): world autosaves or other disk contention can extend a tick. Keep main-thread transactions short,
+  budget for disk latency, and do not assume commit is queued asynchronously.
 - A read inside `DataOperator#transaction(...)` can wait for another transaction's table lock, for at most 5
   seconds, as a 6.2.5 `transaction(...)` callback waited for its operator's lock.
 - In a `@Transactional` method, read-modify-write code uses `updateIf` or `REPEATABLE_READ` (see above); at the
@@ -3325,14 +3364,25 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   `plugins/UltiTools/data/<plugin name>/.ultitools-journal`; for a plain Bukkit plugin that uses the External
   Plugin API it is `<that plugin's data folder>/data/.ultitools-journal`; for an operator built directly over a
   table folder it is `<table folder>.ultitools-journal`, a sibling of that folder. A module that lists a plugin's
-  data folder must skip it.
+  data folder must skip it. **Retained identity limitation (#694):** separately constructed operators
+  have separate identities, transaction managers and locks even when their table folders share a parent;
+  a common parent does not group their commits. Use framework-managed operators for a plugin-wide
+  transaction and do not construct multiple independent operators over the same table folder.
+- **No versioned portable filename format (#694).** The store still uses raw `<id>.json` names, not
+  a reversible cross-platform encoding or automatic migration. Choose portable ids before writing data,
+  and check existing ids and filesystem rules before moving a data folder. The device-name guard above
+  deliberately covers `COM1`–`COM9` and `LPT1`–`LPT9` (plus the stated superscripts), not `COM0` or
+  `LPT0`; their acceptance on Linux is not a Windows/tool portability guarantee. Avoid device-like names,
+  including `COM0`/`LPT0`, for portable ids; UUIDs avoid these naming issues. Do not rename stored files
+  independently of their entity ids.
 
-**Durability by platform.**
+**Durability by platform (known limitations retained, #694).**
 
 - "Durable once `commit` returns" holds fully on Linux. On Windows and macOS it holds against a server crash, but
   a power loss or operating-system crash can lose the last whole commits: Windows does not force a rename or its
   directory to disk, and macOS's file force is not a full flush to the platter. A lost commit is lost whole,
-  never half.
+  never half. Keep backups that include the journal; if the last acknowledged commit must survive
+  power loss, do not rely on the Windows/macOS JSON guarantee as equivalent to Linux's.
 - On Windows, a journal file move that another program (an antivirus scanner, an indexer, a backup tool) briefly
   holds is retried for at most 150 ms before the commit fails.
 - A directory that cannot be forced to disk because of a real I/O error is logged at `WARNING` (`Could not force
@@ -3360,16 +3410,24 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   and restart the server.
 - One entity file that keeps failing to move (for example, a file another program keeps locked) stops every flush
   of that plugin from emptying the journal: records accumulate, start-up recovery takes longer, and each failed
-  flush is reported in the server log. Journal deletions are not retried on Windows; a held file fails that flush
-  and the next flush tries again.
+  flush is reported in the server log. Unlike moves, entity-file and journal-file deletions have no
+  bounded Windows retry (#694); even a brief scanner/indexer hold can fail that flush, and the next
+  flush tries again. Release the external hold and check that flushing resumes; do not delete the
+  journal to suppress the warning.
 - Known limitation: a file system that lets the server open a directory but refuses to force it makes every flush
   of the plugin fail; the journal grows and, after a restart, the plugin's data stays closed until recovery can
   succeed. No common setup is known to do this (ext4, xfs, NFS, NTFS and APFS are fine).
-- A JSON data folder whose ids contain `<`, `>`, `:`, `"`, `|`, `?` or `*` (UltiRemoteBag's edit claims use `:`)
-  cannot be copied from Linux to Windows: Windows cannot create those files. Data whose ids differ only in letter
-  case cannot be moved to Windows or to a default macOS volume either: the files collide. If a journal record
-  holding such an id reaches a Windows server, start-up keeps that plugin's JSON data closed and names the record:
-  apply it on the Linux server that wrote it, or move it out of the journal folder and lose its changes.
+- A JSON data folder whose ids contain `<`, `>`, `:`, `"`, `|`, `?` or `*` cannot be copied from Linux to
+  Windows: Windows cannot create those files; new ids with these characters are refused there. This raw-name
+  portability limitation is retained (#694), not fixed by copying only the table files or renaming them.
+  UltiRemoteBag's persisted edit-claim rows use `<player uuid>:<page>` ids. They are data, not disposable
+  framework scratch files: do not delete or rewrite claim rows/separators to work around Windows without a
+  module-specific migration plan that accounts for existing claims and any shared database.
+  Data whose ids differ only in letter case cannot be moved to Windows or to a default macOS volume either:
+  the files collide and can overwrite each other, with no case-collision registry. Choose ids that remain
+  distinct ignoring case before writing data. If a journal record holding an unnameable id reaches a Windows
+  server, start-up keeps that plugin's JSON data closed and names the record: apply it on the Linux server
+  that wrote it, or move it out of the journal folder and lose its changes.
 
 中文补充：JSON 事务（6.3.0）——暂存、原子、持久。在 `datasource.type: json` 下，`DataOperator#transaction(...)` 的保证变得更强，
 `@Transactional` 也像在 SQLite、MySQL 上一样生效。事务调用不会被拒绝：6.2.5 中调用 JSON `transaction(...)` 的模块无需修改；特别是，读写同一张表的两个 `transaction(...)` 回调
