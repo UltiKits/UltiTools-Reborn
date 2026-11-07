@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -15,17 +16,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.UpdateManager;
+import com.ultikits.ultitools.utils.PluginInstallUtils;
 
 /**
  * {@code /upm check} and {@code /upm update} read the start-up check's result. When a lookup in
@@ -41,6 +47,7 @@ class UpmIncompleteCheckTest {
 
     private static final String NONE = "没有可用的更新。";
     private static final String INCOMPLETE = "更新检查未完成：无法确认 %s 的最新版本。";
+    private static final String PENDING = "更新检查仍在进行，请稍后重试。";
 
     private MockedStatic<UltiTools> ultiMock;
     private MockedStatic<org.bukkit.Bukkit> bukkitMock;
@@ -57,6 +64,7 @@ class UpmIncompleteCheckTest {
         when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         ultiMock.when(UltiTools::getInstance).thenReturn(instance);
         updateManager = mock(UpdateManager.class);
+        when(updateManager.isCheckComplete()).thenReturn(true);
         when(instance.getUpdateManager()).thenReturn(updateManager);
         when(updateManager.getModuleUpdates()).thenReturn(new HashMap<>());
         sender = mock(CommandSender.class);
@@ -71,6 +79,88 @@ class UpmIncompleteCheckTest {
 
     private String all() {
         return String.join("\n", said);
+    }
+
+    private void runCommand(String target) {
+        PluginInstallCommands commands = new PluginInstallCommands();
+        if ("check".equals(target)) {
+            commands.checkUpdates(sender);
+        } else {
+            commands.updatePlugin(sender, target);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"check", "Demo", "all"})
+    @DisplayName("#663: every result-reading command waits before the update manager exists")
+    void commandBeforeManagerExists(String target) {
+        when(UltiTools.getInstance().getUpdateManager()).thenReturn(null);
+
+        runCommand(target);
+
+        assertThat(said).containsExactly(ChatColor.YELLOW + PENDING);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"check", "Demo", "all"})
+    @DisplayName("#663: empty startup results are pending, not no updates")
+    void commandBeforeCheckCompletes(String target) {
+        when(updateManager.isCheckComplete()).thenReturn(false);
+
+        runCommand(target);
+
+        assertThat(said).containsExactly(ChatColor.YELLOW + PENDING);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"check", "Demo", "all"})
+    @DisplayName("#663: a partial startup result is neither listed nor staged")
+    void commandDoesNotConsumePartialResults(String target) {
+        when(updateManager.isCheckComplete()).thenReturn(false);
+        UpdateInfo info = new UpdateInfo();
+        info.setPluginName("Demo");
+        info.setIdentifyString("demo");
+        info.setCurrentVersion("1.0");
+        info.setLatestVersion("1.1");
+        when(updateManager.hasAnyUpdates()).thenReturn(true);
+        when(updateManager.getFrameworkUpdate()).thenReturn(info);
+        when(updateManager.getModuleUpdates()).thenReturn(Collections.singletonMap("Demo", info));
+        try (MockedStatic<PluginInstallUtils> utils = mockStatic(PluginInstallUtils.class)) {
+            utils.when(() -> PluginInstallUtils.stageUpdate("demo"))
+                    .thenThrow(new AssertionError("An unfinished startup result must not be staged"));
+
+            assertThatCode(() -> runCommand(target)).doesNotThrowAnyException();
+
+            assertThat(said).containsExactly(ChatColor.YELLOW + PENDING);
+            utils.verifyNoInteractions();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"check", "Demo", "all"})
+    @DisplayName("#663: the same command reads the completed scan after initially waiting")
+    void commandReadsResultsAfterCompletion(String target) {
+        when(updateManager.isCheckComplete()).thenReturn(false);
+        runCommand(target);
+        assertThat(said).containsExactly(ChatColor.YELLOW + PENDING);
+        said.clear();
+        when(updateManager.isCheckComplete()).thenReturn(true);
+
+        runCommand(target);
+
+        assertThat(all()).contains(NONE).doesNotContain(PENDING);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    @DisplayName("#663: both shipped language catalogues contain the pending message")
+    void pendingMessageIsLocalized(String language) throws Exception {
+        try (java.io.InputStream in = getClass().getClassLoader()
+                .getResourceAsStream("lang/" + language + ".json")) {
+            String expected = "en".equals(language)
+                    ? "Update check still running; try again in a few seconds." : PENDING;
+            assertThat(new ObjectMapper().readTree(in).path(PENDING).asText()).isEqualTo(expected);
+        }
     }
 
     @Test

@@ -122,7 +122,7 @@ class BeanCopyUtilPrimitiveFieldsTest {
 
         private FlagEntity storedAndReloaded() {
             SimpleJsonDataOperator<FlagEntity> store =
-                    new SimpleJsonDataOperator<>(storeDir.toFile().getAbsolutePath(), FlagEntity.class);
+                    new SimpleJsonDataOperator<>(storeDir.resolve("rows").toFile().getAbsolutePath(), FlagEntity.class);
             FlagEntity original = new FlagEntity();
             original.setActive(true);
             original.setGrade('A');
@@ -142,7 +142,7 @@ class BeanCopyUtilPrimitiveFieldsTest {
         }
 
         private FlagEntity freshLoad(String id) {
-            return new SimpleJsonDataOperator<>(storeDir.toFile().getAbsolutePath(), FlagEntity.class).getById(id);
+            return new SimpleJsonDataOperator<>(storeDir.resolve("rows").toFile().getAbsolutePath(), FlagEntity.class).getById(id);
         }
 
         @Test
@@ -150,7 +150,7 @@ class BeanCopyUtilPrimitiveFieldsTest {
         void booleanChangeOnDetachedCopyPersists() {
             FlagEntity original = storedAndReloaded();
             SimpleJsonDataOperator<FlagEntity> store =
-                    new SimpleJsonDataOperator<>(storeDir.toFile().getAbsolutePath(), FlagEntity.class);
+                    new SimpleJsonDataOperator<>(storeDir.resolve("rows").toFile().getAbsolutePath(), FlagEntity.class);
 
             FlagEntity copy = detachedCopyOf(original);
             copy.setActive(false);
@@ -167,7 +167,7 @@ class BeanCopyUtilPrimitiveFieldsTest {
         void charChangesOnDetachedCopyPersist() {
             FlagEntity original = storedAndReloaded();
             SimpleJsonDataOperator<FlagEntity> store =
-                    new SimpleJsonDataOperator<>(storeDir.toFile().getAbsolutePath(), FlagEntity.class);
+                    new SimpleJsonDataOperator<>(storeDir.resolve("rows").toFile().getAbsolutePath(), FlagEntity.class);
 
             FlagEntity copy = detachedCopyOf(original);
             copy.setGrade('C');

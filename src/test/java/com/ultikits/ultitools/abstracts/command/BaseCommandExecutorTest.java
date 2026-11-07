@@ -274,23 +274,23 @@ class BaseCommandExecutorTest {
         }
         
         @Test
-        @DisplayName("Should return null for console sender")
-        void shouldReturnNullForConsoleSender() {
+        @DisplayName("Should return mapped literals for console sender")
+        void shouldReturnMappedLiteralsForConsoleSender() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
             List<String> suggestions = executor.onTabComplete(mockSender, mockCommand, "test", new String[]{"a"});
             
-            assertNull(suggestions);
+            assertTrue(suggestions.contains("action"));
         }
         
         @Test
-        @DisplayName("Should return null for console-only command with player")
-        void shouldReturnNullForConsoleOnlyCommand() {
+        @DisplayName("Should return no suggestions for console-only command with player")
+        void shouldReturnNoSuggestionsForConsoleOnlyCommand() {
             ConsoleOnlyExecutor executor = new ConsoleOnlyExecutor();
             
             List<String> suggestions = executor.onTabComplete(mockPlayer, mockCommand, "consoleonly", new String[]{"r"});
             
-            assertNull(suggestions);
+            assertTrue(suggestions.isEmpty());
         }
         
         @Test
@@ -986,13 +986,13 @@ class BaseCommandExecutorTest {
         }
         
         @Test
-        @DisplayName("Should return null for console sender")
-        void shouldReturnNullForConsoleSender() {
+        @DisplayName("Should return mapped literals for console sender")
+        void shouldReturnMappedLiteralsForConsoleSender() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
             List<String> suggestions = executor.onTabComplete(mockSender, mockCommand, "test", new String[]{"action"});
             
-            assertNull(suggestions);
+            assertTrue(suggestions.contains("action"));
         }
     }
 

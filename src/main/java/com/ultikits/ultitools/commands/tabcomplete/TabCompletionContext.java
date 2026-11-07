@@ -3,8 +3,11 @@ package com.ultikits.ultitools.commands.tabcomplete;
 import java.lang.reflect.Method;
 
 import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import lombok.AccessLevel;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -18,12 +21,45 @@ import lombok.Getter;
  */
 @Getter
 @Builder
+@AllArgsConstructor(access = AccessLevel.PACKAGE)
 public class TabCompletionContext {
-    
+
     /**
-     * The player requesting completion.
+     * The requesting sender. Legacy player-only builders may leave this unset.
+     */
+    private final CommandSender sender;
+
+    /**
+     * The player supplied by legacy callers; null for non-player requests.
      */
     private final Player player;
+
+    /**
+     * Returns the requesting sender, including contexts built with the legacy player setter.
+     * An explicit sender takes precedence if both builder fields are supplied.
+     *
+     * @return the sender, or null if neither sender nor player was supplied
+     */
+    public CommandSender getSender() {
+        return sender == null ? player : sender;
+    }
+
+    /**
+     * Returns the requesting player, or null for a non-player sender.
+     *
+     * @return the requesting player, when applicable
+     */
+    public Player getPlayer() {
+        CommandSender requester = getSender();
+        return requester instanceof Player ? (Player) requester : null;
+    }
+
+    // Preserve the constructor descriptor used by existing package-local callers.
+    TabCompletionContext(Player player, Command command, String[] args, int currentArgIndex,
+            String partialArg, Method matchedMethod, String parameterName, Object executorInstance) {
+        this(null, player, command, args, currentArgIndex, partialArg, matchedMethod, parameterName,
+                executorInstance);
+    }
     
     /**
      * The command being completed.
@@ -92,11 +128,23 @@ public class TabCompletionContext {
      * @return a new context
      */
     public static TabCompletionContext of(Player player, Command command, String[] args) {
+        return of((CommandSender) player, command, args);
+    }
+
+    /**
+     * Creates a completion context for any Bukkit command sender.
+     *
+     * @param sender the requesting sender
+     * @param command the command
+     * @param args the arguments
+     * @return a new sender-aware context
+     */
+    public static TabCompletionContext of(CommandSender sender, Command command, String[] args) {
         int currentIndex = args.length > 0 ? args.length - 1 : 0;
         String partial = args.length > 0 ? args[args.length - 1] : "";
         
         return TabCompletionContext.builder()
-                .player(player)
+                .sender(sender)
                 .command(command)
                 .args(args)
                 .currentArgIndex(currentIndex)

@@ -535,7 +535,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     @CmdMapping(format = "check")
     public void checkUpdates(@CmdSender CommandSender sender) {
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
-        if (updateManager == null || !updateManager.hasAnyUpdates()) {
+        if (sendPendingIfAny(sender, updateManager)) {
+            return;
+        }
+        if (!updateManager.hasAnyUpdates()) {
             if (!sendIncompleteIfAny(sender, unconfirmed(updateManager))) {
                 sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
             }
@@ -555,6 +558,20 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 info.getPluginName(), info.getCurrentVersion(), info.getLatestVersion()));
         }
         sendIncompleteIfAny(sender, unconfirmed(updateManager));
+    }
+
+    /**
+     * Commands, like the join listener, read results only after the startup check publishes its
+     * completion flag. Before then, even a non-empty result is only a partial scan (#663).
+     *
+     * @return whether the pending reply was sent instead of consuming unfinished results
+     */
+    private static boolean sendPendingIfAny(CommandSender sender, UpdateManager updateManager) {
+        if (updateManager != null && updateManager.isCheckComplete()) {
+            return false;
+        }
+        sendStringMessage(sender, ChatColor.YELLOW + UltiTools.getInstance().i18n("更新检查仍在进行，请稍后重试。"));
+        return true;
     }
 
     /**
@@ -591,13 +608,12 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     @CmdMapping(format = "update <plugin>")
     @RunAsync
     public void updatePlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String pluginName) {
-        if ("all".equalsIgnoreCase(pluginName)) {
-            updateAllPlugins(sender);
+        UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
+        if (sendPendingIfAny(sender, updateManager)) {
             return;
         }
-        UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
-        if (updateManager == null) {
-            sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+        if ("all".equalsIgnoreCase(pluginName)) {
+            updateAllPlugins(sender);
             return;
         }
         UpdateInfo info = updateManager.getModuleUpdates().get(pluginName);
