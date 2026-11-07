@@ -130,7 +130,7 @@ class JsonQuerySemanticsTest {
 
     @BeforeEach
     void setUp() {
-        json = new SimpleJsonDataOperator<>(tempDir.toFile().getAbsolutePath(), PlayerRecord.class);
+        json = new SimpleJsonDataOperator<>(tempDir.resolve("rows").toFile().getAbsolutePath(), PlayerRecord.class);
     }
 
     private static WhereCondition eq(String column, Object value) {
@@ -383,7 +383,7 @@ class JsonQuerySemanticsTest {
                 Locale.setDefault(Locale.forLanguageTag(TURKISH));
                 // 映射在构造期建立，因此必须在切换 locale 之后才 new
                 SimpleJsonDataOperator<PlayerRecord> operator =
-                        new SimpleJsonDataOperator<>(tempDir.toFile().getAbsolutePath(), PlayerRecord.class);
+                        new SimpleJsonDataOperator<>(tempDir.resolve("rows").toFile().getAbsolutePath(), PlayerRecord.class);
                 operator.insert(new PlayerRecord("1", "uuid-aaa", "Alice", 3));
 
                 assertThat(operator.getAll(eq("PLAYER_UUID", "uuid-aaa")))

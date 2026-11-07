@@ -26,6 +26,7 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.utils.CodeSourceLocations;
 import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
 
 import org.jetbrains.annotations.ApiStatus;
@@ -127,7 +128,7 @@ public class ComponentScanner {
                 String protocol = resource.getProtocol();
                 if ("file".equals(protocol)) {
                     // Classes on disk (development mode)
-                    File directory = new File(resource.getFile());
+                    File directory = CodeSourceLocations.toFile(resource);
                     if (directory.exists()) {
                         scanDirectory(directory, basePackage, classLoader, basePackage, configurationClasses);
                     }
@@ -162,7 +163,7 @@ public class ComponentScanner {
      * @return whether the entry is in the requested scan scope
      */
     public static boolean matchesPackage(String entryName, String basePackage) {
-        return entryName.startsWith(basePackage.replace('.', '/'));
+        return entryName.startsWith(basePackage.replace('.', '/') + "/");
     }
 
     /**

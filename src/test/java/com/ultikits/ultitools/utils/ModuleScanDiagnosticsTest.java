@@ -136,8 +136,28 @@ class ModuleScanDiagnosticsTest {
         String message = severe.get(0).getMessage();
         assertTrue(message.contains(moduleName), "the SEVERE message must name the module: " + message);
         assertTrue(message.contains(className), "the SEVERE message must name the skipped class: " + message);
-        assertTrue(message.contains("COMPATIBILITY.md"),
-                "the SEVERE message must point at COMPATIBILITY.md: " + message);
+        assertTrue(message.contains("https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md"),
+                "the SEVERE message must point at a resolvable compatibility URL: " + message);
+    }
+
+    @Test
+    void missingServerApiNamesTheMissingTypeWithoutChangingSkipPolicy() {
+        String moduleName = "server-api-module-" + System.nanoTime();
+        String className = "com.example.NewServerListener";
+        ModuleScanDiagnostics.recordSkippedClass(moduleName, className,
+                new NoClassDefFoundError("org/bukkit/event/player/PlayerInputEvent"));
+        ModuleScanDiagnostics.emitSummary(moduleName);
+
+        List<LogRecord> severe = withLevel(Level.SEVERE);
+        assertEquals(1, severe.size());
+        String message = severe.get(0).getMessage();
+        assertTrue(message.contains(className), message);
+        assertFalse(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE), message);
+        assertTrue(message.contains("missing server class org.bukkit.event.player.PlayerInputEvent"), message);
+        assertTrue(message.contains("handlers/signatures requiring this class are unavailable on this server"), message);
+        assertTrue(message.contains("continued loading without them"), message);
+        assertTrue(message.contains("https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md"), message);
+        assertTrue(severe.get(0).getThrown() == null, "summary must not submit a throwable");
     }
 
     @Test

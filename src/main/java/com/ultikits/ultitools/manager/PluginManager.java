@@ -139,6 +139,27 @@ public class PluginManager {
     static final String RELOAD_PARTIAL_LINE_KEY = "Module %s reloaded partially; not reloaded: %s";
 
     /**
+     * Whether an unmodified reload summary's indexed line is a per-module detail already logged
+     * by that module. Internal command-output metadata, not a module API. Unknown lists keep all
+     * their replies; localized message text is never parsed to decide whether to suppress output.
+     *
+     * @param summary the list returned by {@link #reloadAllAndReport()}
+     * @param index the line being sent
+     * @return whether this line is already logged as a module's partial-reload summary
+     */
+    @ApiStatus.Internal
+    public static boolean isLoggedPartialReloadLine(List<String> summary, int index) {
+        return summary instanceof ReloadSummary
+                && index >= ((ReloadSummary) summary).headlineCount && index < summary.size();
+    }
+
+    /** Retains normal List behavior while carrying the boundary between headlines and details. */
+    private static final class ReloadSummary extends ArrayList<String> {
+        private static final long serialVersionUID = 1L;
+        private int headlineCount;
+    }
+
+    /**
      * Framework i18n key for the one line logged when a module cannot load because a plugin its
      * {@code plugin.yml} lists under {@code depend:} is not installed or not enabled (#554).
      * Arguments: the module, the missing plugins joined by {@code ", "}. Package-private so a test
@@ -1189,9 +1210,8 @@ public class PluginManager {
         try {
             half.run();
         } catch (RuntimeException e) {
-            Bukkit.getLogger().log(Level.WARNING, String.format(
-                    "[UltiTools-API] %s: applying reloaded config-bound %s values failed: %s; the running values "
-                            + "are kept", plugin.getPluginName(), what, e.getMessage()), e);
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + plugin.getPluginName() + ": "
+                    + String.format(ConfigBindings.BINDING_STEP_FAILED_KEY, what, e.getMessage()), e);
             String cause = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             report.partial(ConfigBindings.reloadReason(ConfigBindings.BINDING_STEP_FAILED_KEY, what, cause));
         }
@@ -1231,12 +1251,13 @@ public class PluginManager {
         try {
             seconds = source.get();
         } catch (ConfigBindings.ReloadFailedException failed) {
-            keepRunning(plugin, report, bindingKey, before, next, reported, failed.getMessage());
+            keepRunning(plugin, report, bindingKey, before, next, reported, failed.reportReason());
             return;
         }
         if (!ConfigBindings.isValidCooldownSeconds(seconds)) {
             keepRunning(plugin, report, bindingKey, before, next, reported,
-                    "it has value " + seconds + " after the reload; " + ConfigBindings.COOLDOWN_RULE);
+                    ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_INVALID_KEY, seconds,
+                            ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_RULE_KEY, Integer.MAX_VALUE)));
             return;
         }
         int value = seconds.intValue();
@@ -1249,17 +1270,17 @@ public class PluginManager {
     }
 
     private static void keepRunning(UltiToolsPlugin plugin, ReloadReport report, String bindingKey, Integer before,
-                                    Map<String, Integer> next, Set<String> reported, String why) {
+                                    Map<String, Integer> next, Set<String> reported, String reportWhy) {
         if (before != null) {
             next.put(bindingKey, before);
         }
         if (reported.add(bindingKey)) {
-            Bukkit.getLogger().log(Level.WARNING, String.format(
-                    "[UltiTools-API] %s: @CmdCD bound to %s is not updated: %s; keeping %ds",
-                    plugin.getPluginName(), describeBindingKey(bindingKey), why, before));
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + ConfigBindings.reloadReason(
+                    ConfigBindings.COOLDOWN_NOT_UPDATED_WARNING_KEY,
+                    plugin.getPluginName(), describeBindingKey(bindingKey), reportWhy, before));
             // #595: one reason per binding key, like the warning.
             report.partial(ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_KEPT_KEY,
-                    describeBindingKey(bindingKey), why, before));
+                    describeBindingKey(bindingKey), reportWhy, before));
         }
     }
 
@@ -1458,8 +1479,9 @@ public class PluginManager {
     }
 
     /**
-     * Reloads every loaded module, each isolated from the others' failures, then logs a summary
-     * and returns it (#509). {@code /ul reload} sends the returned lines to its sender. The summary
+     * Reloads every loaded module, each isolated from the others' failures, then logs the summary
+     * headlines and returns the complete summary (#509). Each partial module logs its own detail
+     * once; {@code /ul reload} also sends that detail to independent senders. The summary
      * also lists every module whose reload hook reported parts that did not reload, with those
      * parts (#529).
      * <p>
@@ -1468,7 +1490,7 @@ public class PluginManager {
      * every {@code Exception} or {@code Error} one module throws is that module's failure, including
      * a {@code StackOverflowError} from a recursive hook.
      *
-     * @return the summary lines, already localized, in the order they were logged
+     * @return the complete localized summary, headlines first and partial module details after them
      * @since 6.3.0
      */
     @ApiStatus.Internal
@@ -1491,7 +1513,7 @@ public class PluginManager {
                 failed.add(plugin.getPluginName());
             }
         }
-        List<String> summary = new ArrayList<>();
+        ReloadSummary summary = new ReloadSummary();
         if (!failed.isEmpty()) {
             summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_FAILED_KEY),
                     failed.size(), modules.size(), String.join(", ", failed)));
@@ -1505,7 +1527,7 @@ public class PluginManager {
         } else {
             summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_ALL_KEY), modules.size()));
         }
-        summary.addAll(partialLines);
+        summary.headlineCount = summary.size();
         Level summaryLevel = failed.isEmpty() && partialLines.isEmpty() ? Level.INFO : Level.WARNING;
         for (String line : summary) {
             Bukkit.getLogger().log(summaryLevel, "[UltiTools-API] " + line);
@@ -1514,6 +1536,8 @@ public class PluginManager {
                 Level.WARNING,
                 "[UltiTools-API] This operation is only used for reloading plugin configuration. If (un)installing, please restart the server!"
         );
+        // Keep every detail for callers, without logging the module's partial summary again (#665).
+        summary.addAll(partialLines);
         return summary;
     }
 
@@ -3533,7 +3557,8 @@ public class PluginManager {
                 + suggestMethod.getDeclaringClass().getName() + "#" + suggestMethod.getName()
                 + formatParameterTypes(suggestMethod.getParameterTypes()) + "' has a signature the "
                 + "tab-completion invoker cannot call. Supported signatures: (), (Player), (String), "
-                + "(Player, String), (Player, Command, String[]).";
+                + "(Player, String), (Player, Command, String[]), (CommandSender), "
+                + "(CommandSender, String), (CommandSender, Command, String[]).";
     }
 
     /**
@@ -3849,38 +3874,71 @@ public class PluginManager {
             throw refused;
         }
 
+        try {
+            registerExternalResources(adapter, context);
+        } catch (RuntimeException | Error failed) {
+            unwindRefusedExternal(adapter, context, scope, ownershipAdded);
+            throw failed;
+        }
+
         String pluginName = adapter.getPluginName();
-
-        // 4. Register @Scheduled tasks
-        if (taskManager != null) {
-            for (Object bean : context.getSingletonValues()) {
-                taskManager.registerScheduledMethodsExternal(pluginName, bean);
-            }
-        }
-
-        // 5. Register @PlayerCache beans
-        if (playerCacheManager != null) {
-            for (Object bean : context.getSingletonValues()) {
-                playerCacheManager.registerBean(bean);
-            }
-        }
-
-        // 6. Register @ModuleEventHandler with EventBus
-        EventBus eventBus = UltiTools.getInstance().getEventBus();
-        if (eventBus != null) {
-            for (Object bean : context.getSingletonValues()) {
-                registerModuleEventHandlersExternal(eventBus, pluginName, bean);
-            }
-        }
-
-        // 7. Register commands and listeners
-        UltiTools.getInstance().getCommandManager().registerAllExternal(adapter);
-        UltiTools.getInstance().getListenerManager().registerAllExternal(adapter);
-
         connectedExternalScanPackages.put(pluginName, adapter.getScanPackage());
 
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
+    }
+
+    /**
+     * Registers Bukkit-facing resources only after container validation. Each inverse is recorded
+     * before its registration starts, so a partially completed failing stage is undone as well.
+     * Cleanup runs in reverse order, before the caller closes the container and releases ownership.
+     * A cleanup failure is attached to the original exception rather than hiding it or skipping
+     * the remaining inverses. No configuration or language file is written by this path.
+     */
+    private void registerExternalResources(ExternalPluginAdapter adapter, SimpleContainer context) {
+        String pluginName = adapter.getPluginName();
+        List<Runnable> rollback = new ArrayList<>();
+        try {
+            if (taskManager != null) {
+                rollback.add(() -> taskManager.cancelAllExternal(pluginName));
+                for (Object bean : context.getSingletonValues()) {
+                    taskManager.registerScheduledMethodsExternal(pluginName, bean);
+                }
+            }
+
+            if (playerCacheManager != null) {
+                for (Object bean : context.getSingletonValues()) {
+                    rollback.add(() -> playerCacheManager.unregisterBean(bean));
+                    playerCacheManager.registerBean(bean);
+                }
+            }
+
+            EventBus eventBus = UltiTools.getInstance().getEventBus();
+            if (eventBus != null) {
+                rollback.add(() -> eventBus.unregisterAll(pluginName));
+                for (Object bean : context.getSingletonValues()) {
+                    registerModuleEventHandlersExternal(eventBus, pluginName, bean);
+                }
+            }
+
+            CommandManager commands = UltiTools.getInstance().getCommandManager();
+            rollback.add(() -> commands.unregisterAllExternal(pluginName));
+            commands.registerAllExternal(adapter);
+            ListenerManager listeners = UltiTools.getInstance().getListenerManager();
+            rollback.add(() -> listeners.unregisterAllExternal(pluginName));
+            listeners.registerAllExternal(adapter);
+        } catch (RuntimeException | Error failed) {
+            for (int index = rollback.size() - 1; index >= 0; index--) {
+                try {
+                    rollback.get(index).run();
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (cleanupFailure != failed) {
+                        failed.addSuppressed(cleanupFailure);
+                    }
+                }
+            }
+            throw failed;
+        }
     }
 
     /**

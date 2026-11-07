@@ -174,6 +174,7 @@ class CatalogueClientPagingTest {
         }).when(sender).sendMessage(anyString());
         entries.get(10).addProperty("isLatest", true);
         UpdateManager updates = mock(UpdateManager.class);
+        when(updates.isCheckComplete()).thenReturn(true);
         UpdateInfo info = new UpdateInfo();
         info.setPluginName("Demo");
         info.setIdentifyString(MODULE);

@@ -123,6 +123,65 @@ class ConfigDocumentStyleTest {
         }
     }
 
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> unicodePrefixInventory() {
+        return java.util.stream.Stream.of("ascii", "\u4E2D\u6587", "\uD83D\uDE80", "\\u4E2D\\U0001F680")
+                .flatMap(prefix -> java.util.stream.Stream.of(false, true)
+                        .map(bom -> org.junit.jupiter.params.provider.Arguments.of(prefix, bom)));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "Unicode prefix {0}, BOM {1}")
+    @org.junit.jupiter.params.provider.MethodSource("unicodePrefixInventory")
+    void unicodeMarkOffsetsKeepQuotesEscapesAndLayout(String prefix, boolean bom) throws Exception {
+        String text = (bom ? "\uFEFF" : "") + "prefix: \"" + prefix + "\"\nsettings:\n"
+                + "    single: '" + prefix + "'\n    double: \"" + prefix + " \\u263A\"\n"
+                + "    list:\n        - '" + prefix + "'\n";
+        org.yaml.snakeyaml.nodes.MappingNode root = (org.yaml.snakeyaml.nodes.MappingNode)
+                new org.yaml.snakeyaml.Yaml(ConfigDocument.loaderOptions()).compose(new java.io.StringReader(text));
+        DocumentStyle style = DocumentStyle.detect(text, root);
+        boolean rawUnicode = prefix.codePoints().anyMatch(codePoint -> codePoint > 0x7F);
+
+        assertThat(style.dumperOptions().isAllowUnicode()).isEqualTo(rawUnicode);
+        assertThat(style.upperCaseHex()).isTrue();
+        assertThat(style.latin1AsUnicodeEscape()).isTrue();
+        assertThat(style.dumperOptions().getIndent()).isEqualTo(4);
+        assertThat(style.dumperOptions().getIndicatorIndent()).isEqualTo(4);
+        assertThat(style.byteOrderMark()).isEqualTo(bom);
+
+        ConfigDocument document = ConfigDocument.parse(text);
+        document.set(path("settings", "added"), "\u263B");
+        String rendered = document.render();
+        assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(document.toPlain());
+        assertThat(rendered.startsWith("\uFEFF")).isEqualTo(bom);
+        assertThat(rendered).contains("    single: '", "    double: \"", "        - '");
+        assertThat(rendered).contains(rawUnicode ? "    added: \u263B\n" : "    added: \"\\u263B\"\n");
+    }
+
+    @Test
+    @DisplayName("#578: detecting a large Unicode document does not repeatedly scan scalar prefixes")
+    void largeUnicodeStyleDetectionAvoidsRepeatedPrefixScans() {
+        java.lang.management.ThreadMXBean clock = java.lang.management.ManagementFactory.getThreadMXBean();
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                clock.isCurrentThreadCpuTimeSupported() && clock.isThreadCpuTimeEnabled(),
+                "The performance regression guard requires an enabled current-thread CPU clock");
+        StringBuilder source = new StringBuilder();
+        for (int row = 0; row < 40000; row++) {
+            source.append('k').append(row).append(": \u4E2D\u6587\n");
+        }
+        String text = source.toString();
+        org.yaml.snakeyaml.nodes.MappingNode root = (org.yaml.snakeyaml.nodes.MappingNode)
+                new org.yaml.snakeyaml.Yaml(ConfigDocument.loaderOptions()).compose(new java.io.StringReader(text));
+        // Only detection is timed: parsing and host scheduling pauses are outside this CPU-time budget.
+        // A linear pass has ample headroom under one second; the old repeated scans consume several seconds.
+        long start = clock.getCurrentThreadCpuTime();
+        DocumentStyle style = DocumentStyle.detect(text, root);
+        long cpuNanos = clock.getCurrentThreadCpuTime() - start;
+        System.out.printf("#578 style detection: 40000 BMP rows, current-thread CPU %.3f ms%n", cpuNanos / 1e6);
+
+        assertThat(style.dumperOptions().isAllowUnicode()).isTrue();
+        assertThat(cpuNanos).as("40,000 scalar rows must not repeatedly scan their entire prefixes")
+                .isLessThan(java.util.concurrent.TimeUnit.SECONDS.toNanos(1));
+    }
+
     @Test
     void emitterIndentClampMatchesStrictBytecodeBounds() throws Exception {
         for (int indent : new int[]{1, 10}) {
