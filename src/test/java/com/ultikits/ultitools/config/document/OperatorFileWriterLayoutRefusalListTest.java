@@ -14,6 +14,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Pinning tests for the existing refused layouts documented in {@code COMPATIBILITY.md} "Layouts the write gate
@@ -112,6 +113,41 @@ class OperatorFileWriterLayoutRefusalListTest {
         assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.REFUSED);
         assertThat(result.reason()).contains("byte-order mark");
         assertThat(read(file)).isEqualTo("\uFEFF");
+    }
+
+    @ParameterizedTest(name = "unowned plain key of {0} characters")
+    @ValueSource(ints = {122, 123, 128, 129})
+    void plainKeyLengthLimitRefusesOnlyWhenItsRewrittenLayoutIsOutsideTheOwnedPaths(int length) throws Exception {
+        String key = String.join("", Collections.nCopies(length, "k"));
+        String text = key + ": keep\na: 1\n";
+        Path file = write(text);
+
+        OperatorFileWriter.Result result = setA(file);
+
+        // SnakeYAML counts the five-character !!str tag too and requires the total to be below 128.
+        if (length >= 123) {
+            assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.REFUSED);
+            assertThat(result.reason()).contains("layout").endsWith("(line 1)");
+            assertThat(read(file)).isEqualTo(text);
+        } else {
+            assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.WRITTEN);
+            assertThat(read(file)).isEqualTo(text.replace("a: 1", "a: 2"));
+        }
+    }
+
+    @ParameterizedTest(name = "owned plain key of {0} characters")
+    @ValueSource(ints = {122, 123, 128, 129})
+    void owningTheLongKeyCanPermitItsExplicitKeyRendering(int length) throws Exception {
+        String key = String.join("", Collections.nCopies(length, "k"));
+        Path file = write(key + ": before\na: 1\n");
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(file,
+                OwnedPaths.builder().value(Collections.singletonList(key)).build(), null,
+                document -> document.set(Collections.singletonList(key), "after"));
+
+        assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.WRITTEN);
+        assertThat(ConfigDocument.parse(read(file)).toPlain()).containsEntry(key, "after").containsEntry("a", 1);
+        assertThat(read(file)).endsWith("a: 1\n");
     }
 
     static Stream<Arguments> listItemComments() {

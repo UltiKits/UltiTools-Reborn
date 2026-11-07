@@ -1432,7 +1432,7 @@ public abstract class AbstractConfigEntity {
      */
     private static String failedLoadCause(ConfigLoadResult loaded) {
         if (loaded.state() == ConfigLoadResult.State.UNREADABLE) { return loaded.cause().getClass().getSimpleName(); }
-        if (loaded.state() == ConfigLoadResult.State.UNPARSEABLE) { return safeParserLocation(loaded.parserMessage()); }
+        if (loaded.state() == ConfigLoadResult.State.UNPARSEABLE) { return loaded.safeParserLocation(); }
         return null;
     }
 
@@ -1446,19 +1446,6 @@ public abstract class AbstractConfigEntity {
         return new ConfigurationException(unreadable ? ErrorCode.CONFIG_LOAD_FAILED : ErrorCode.CONFIG_PARSE_FAILED,
                 "Cannot reload " + configFilePath + ": " + cause + "; the file and the running values are unchanged",
                 unreadable ? loaded.cause() : null);
-    }
-
-    private static String safeParserLocation(String message) {
-        if (message != null) {
-            // The storage result discards the typed parser cause. Extract numeric metadata only,
-            // never the filename, parser reason, scalar snippet or throwable message.
-            java.util.regex.Matcher location = java.util.regex.Pattern.compile(
-                    "(?m)^ *in [^\\r\\n]*, line ([0-9]+), column ([0-9]+):? *$").matcher(message);
-            if (location.find()) {
-                return "invalid YAML at line " + location.group(1) + ", column " + location.group(2);
-            }
-        }
-        return "invalid YAML or UTF-8";
     }
 
     /**

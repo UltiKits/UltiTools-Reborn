@@ -562,7 +562,8 @@ preservation guarantee. The storage API signatures are unchanged.
 
 The renderer writes a document back in one canonical layout. If a changed write would alter any byte outside the keys
 it owns, the gate refuses it - a first-start insert, a comment rewrite, a save, an operator change or a panel edit.
-A no-op returns unchanged without rendering. Refusing layout changes is deliberate: the rule forbids normalizing an
+A no-op returns unchanged without rendering. Ownership matters: a layout change wholly inside an owned path can pass if
+every other gate check succeeds. Refusing layout changes is deliberate: the rule forbids normalizing an
 operator's layout to make a write pass (orchestrator decision of 2026-10-05 under the maintainer's delegation). The file
 keeps its bytes, the declared or in-memory values run, and the warning names the keys and the reason. When the layout
 comparison identifies a line to fix, it reports `the file's layout outside the keys this write owns would change (line N)`,
@@ -609,6 +610,16 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
   ([#628](https://github.com/UltiKits/UltiTools-Reborn/issues/628), open). To leave a text setting blank, write
   `key: ''` - that shape is kept and does not refuse.
 
+Ordinary plain string keys longer than 128 characters are another ownership-dependent refusal
+([#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 1): SnakeYAML emits the key in explicit `? key` form.
+A write to another setting is refused at that line because the long key's bytes are outside its owned paths; the original
+file remains unchanged. The effective boundary can be shorter than 128 characters because the emitter also counts tag
+text: with the current SnakeYAML 2.2 options, the regression's plain ASCII string key keeps its layout at 122 characters,
+but changes to explicit form at 123, 128 and 129 characters. If the write owns the long key itself, that rendering can pass
+when every other check succeeds; long keys do **not** imply that all writes are refused. Use shorter keys to keep the simple
+`key: value` layout; the framework does not raise the emitter's simple-key limit. These cases are pinned by
+`OperatorFileWriterLayoutRefusalListTest`.
+
 Kept byte for byte (a write elsewhere goes through): one space before an inline comment, a block scalar without a blank
 line after it (including a comment line right after it attached to the next key, exactly as after a plain value -
 [#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592)), flow maps and flow lists without inner spaces, quoted
@@ -646,6 +657,20 @@ reading the file included, is refused the same way. An explicit write (`saveOper
 No runtime exception from the library reaches the caller, so a module that rolls back on the documented `IOException` stays
 in step with the file. Any other unchecked failure at start-up
 never refuses the module: one warning names the file and the failure's class, and the declared defaults run in memory.
+
+#### Known limitations: shared directories and reserved map keys
+
+- **Separate writable configuration directories per server process.** Do not point two running servers at the same
+  writable configuration directory. Stale-temporary cleanup protects staged files only within its own JVM; another JVM's
+  load can delete a temporary file between staging and commit, failing that write with an `IOException`. A failed
+  initialization flush can leave the entity protected until reload. Use independent writable directories rather than
+  sharing live files; the framework provides no cross-process staging or cleanup coordination
+  ([#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 3).
+- **Do not use the literal `==` as an ordinary map key.** Bukkit reserves it as the serialization marker. A plain map
+  containing that key is treated as one serialized value for save and reload, not merged or saved entry by entry. If a
+  module changes one entry while an operator changes another, the module's change can remain unsaved or be replaced by the
+  file's whole-map value on reload. Use a different ordinary key name; actual Bukkit serialized objects continue to use
+  their marker normally ([#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 7).
 
 #### Layouts the reader cannot read
 
