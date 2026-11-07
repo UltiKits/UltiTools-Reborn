@@ -108,7 +108,7 @@ class QueryDeleteCountTest {
     }
 
     private SimpleJsonDataOperator<DeleteEntity> json() {
-        return new SimpleJsonDataOperator<>(tempDir.toFile().getAbsolutePath(), DeleteEntity.class);
+        return new SimpleJsonDataOperator<>(tempDir.resolve("rows").toFile().getAbsolutePath(), DeleteEntity.class);
     }
 
     private static void seed(DataOperator<DeleteEntity> operator) {
@@ -151,7 +151,7 @@ class QueryDeleteCountTest {
         @DisplayName("JSON: a matched row removed by someone else before delete() runs is not counted")
         void jsonDoesNotCountARowItDidNotRemove() {
             SimpleJsonDataOperator<DeleteEntity> operator =
-                    new SimpleJsonDataOperator<DeleteEntity>(tempDir.toFile().getAbsolutePath(), DeleteEntity.class) {
+                    new SimpleJsonDataOperator<DeleteEntity>(tempDir.resolve("rows").toFile().getAbsolutePath(), DeleteEntity.class) {
                         @Override
                         public List<DeleteEntity> getAll() {
                             List<DeleteEntity> all = super.getAll();
@@ -241,7 +241,7 @@ class QueryDeleteCountTest {
     class NullIdRow {
 
         private void writeRowWithoutId(String fileName) throws IOException {
-            File file = new File(tempDir.toFile(), fileName + ".json");
+            File file = new File(Files.createDirectories(tempDir.resolve("rows")).toFile(), fileName + ".json");
             Files.write(file.toPath(), "{\"name\":\"no-id\",\"score\":1}".getBytes(StandardCharsets.UTF_8));
         }
 

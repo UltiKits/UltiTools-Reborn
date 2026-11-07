@@ -126,7 +126,7 @@ class ConditionalUpdateTest {
 
     private List<Backend> backends() {
         List<Backend> backends = new ArrayList<>();
-        String jsonDir = tempDir.toFile().getAbsolutePath();
+        String jsonDir = tempDir.resolve("rows").toFile().getAbsolutePath();
         backends.add(new Backend("json", () -> new SimpleJsonDataOperator<>(jsonDir, Account.class)));
         backends.add(new Backend("sqlite", () -> new SQLiteDataOperator<>(dataSource, Account.class)));
         backends.add(new Backend("mysql", () -> new MysqlDataOperator<>(dataSource, Account.class)));
