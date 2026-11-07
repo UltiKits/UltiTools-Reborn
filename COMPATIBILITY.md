@@ -687,8 +687,14 @@ If putting the target back fails too, one SEVERE names the file and the backup, 
 load deletes it. The configuration that wrote the file then treats it as changed since it was read, until a reload reads
 it again: `isFileModifiedSinceSnapshot()` is true; an operator change or a panel edit is refused with
 `ConfigWriteRefusedException` ("the file changed since it was read: …"); and `save()` writes nothing, with one WARNING
-naming the keys. To resolve it, compare the file with the backup, copy the backup over the file if needed, then reload. A
-backup that served a successful in-place write is removed only after the next successful strict UTF-8 storage load, and
+naming the keys. After this double I/O failure ([#626](https://github.com/UltiKits/UltiTools-Reborn/issues/626)), compare
+the file with the kept backup, which holds exactly what the file held before the failed write, and copy the backup over
+the file if needed before reloading or restarting.
+A torn prefix can still be valid YAML: a successful reload clears the write protection, and a restart can insert declared
+defaults for keys lost from the file. A successful reload also puts the declared default in memory for each lost key whose
+setting the module had not changed, with one warning naming each key. Successful parsing does not prove the configuration
+is complete; do not use reload or restart as a substitute for comparing and recovering it first.
+A backup that served a successful in-place write is removed only after the next successful strict UTF-8 storage load, and
 only while its bytes still match what the writer recorded; unreadable or unparseable files keep it. A file of the backup pattern that this server run did not write, or whose bytes changed
 after it was written, is kept and named once at INFO; delete it yourself once it is no longer needed. Backup cleanup is best
 effort and cannot turn a successful load into a failure. Apart from putting back the write that just failed, no restoration
