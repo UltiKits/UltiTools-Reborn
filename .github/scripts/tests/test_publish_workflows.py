@@ -240,7 +240,7 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(build["run"], "mvn -B clean verify")
         self.assertIn("git status --porcelain", test_steps[test_steps.index(build) + 1]["run"])
         installer = (SCRIPTS / "setup-pinned-maven.sh").read_text(encoding="ascii")
-        for value in ("MAVEN_VERSION=3.9.16", "sha512sum --check --strict", "archive.apache.org",
+        for value in ("MAVEN_VERSION=3.9.16", "sha512sum --check --strict", "repo1.maven.org/maven2/org/apache/maven/apache-maven", "archive.apache.org",
                       "--retry 3 --retry-all-errors --connect-timeout 30 --max-time 300", '"$GITHUB_PATH"'):
             self.assertIn(value, installer)
 
@@ -2154,7 +2154,7 @@ digest = "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb83388
 with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(json.dumps({"tool": name, "argv": args}) + "\n")
 if name == "curl":
-    url = "https://archive.apache.org/dist/maven/maven-3/%s/binaries/apache-maven-%s-bin.tar.gz" % (version, version)
+    url = "https://repo1.maven.org/maven2/org/apache/maven/apache-maven/%s/apache-maven-%s-bin.tar.gz" % (version, version)
     assert args == ["--fail", "--location", "--silent", "--show-error", "--retry", "3", "--retry-all-errors",
                     "--connect-timeout", "30", "--max-time", "300", url, "--output", args[-1]], args
     Path(args[-1]).write_bytes(b"hermetic Maven archive fixture")
