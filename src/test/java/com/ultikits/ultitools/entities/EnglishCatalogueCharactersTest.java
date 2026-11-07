@@ -28,7 +28,9 @@ import com.google.gson.JsonParser;
  * The keys are the Chinese source strings by this framework's convention, so only values are
  * checked. The character contract is the one the framework's CJK gate and the module language
  * guards use (Han script including its extensions and compatibility ideographs, CJK symbols and
- * punctuation U+3000-U+303F, full-width forms U+FF00-U+FFEF; kana is not part of it).
+ * punctuation U+3000-U+303F, Halfwidth and Fullwidth Forms U+FF00-U+FFEF). Hiragana U+3040-U+309F
+ * and Katakana U+30A0-U+30FF are excluded, but halfwidth punctuation U+FF61-U+FF64 and halfwidth
+ * katakana U+FF65-U+FF9F are included. The Unicode version for Script=Han follows the JDK.
  */
 @DisplayName("lang/en.json values carry no CJK or full-width characters (#555)")
 class EnglishCatalogueCharactersTest {
@@ -62,15 +64,22 @@ class EnglishCatalogueCharactersTest {
     }
 
     @Test
-    @DisplayName("control: the detector sees each range of the contract and ignores kana")
-    void detectorSeesEveryRangeAndIgnoresKana() {
+    @DisplayName("control: the detector sees each range and excludes U+3040-U+30FF kana only")
+    void detectorSeesEveryRangeAndExcludesFullwidthKana() {
         assertTrue(containsCjkOrFullWidth("中"), "CJK Unified Ideographs");
         assertTrue(containsCjkOrFullWidth("㐀"), "Extension A");
         assertTrue(containsCjkOrFullWidth(new String(Character.toChars(0x20000))), "a supplementary ideograph");
         assertTrue(containsCjkOrFullWidth("豈"), "a compatibility ideograph");
         assertTrue(containsCjkOrFullWidth("Install Command："), "a full-width colon");
         assertTrue(containsCjkOrFullWidth("。"), "CJK punctuation");
-        assertFalse(containsCjkOrFullWidth("あア"), "kana is outside the contract");
+        for (int cp = 0x3040; cp <= 0x30FF; cp++) {
+            assertFalse(containsCjkOrFullWidth(new String(Character.toChars(cp))),
+                    "Hiragana/Katakana U+" + Integer.toHexString(cp) + " is outside the contract");
+        }
+        for (int cp = 0xFF61; cp <= 0xFF9F; cp++) {
+            assertTrue(containsCjkOrFullWidth(new String(Character.toChars(cp))),
+                    "halfwidth punctuation/katakana U+" + Integer.toHexString(cp) + " is inside the contract");
+        }
         assertFalse(containsCjkOrFullWidth("Install Command: /upm install "), "plain ASCII");
     }
 }
