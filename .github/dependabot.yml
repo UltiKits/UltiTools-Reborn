@@ -33,7 +33,7 @@ updates:
         versions: [">=6"]
       # Paper 26.x moves beyond the JDK 21 / Paper 1.21 compile-time baseline.
       - dependency-name: "io.papermc.paper:paper-api"
-        versions: ["<1.21", ">=1.22"]
+        versions: [">=1.22"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

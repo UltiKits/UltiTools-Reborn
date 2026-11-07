@@ -66,8 +66,20 @@ class JsonTransactionTest {
 
     @BeforeEach
     void setUp() {
-        File storeDir = tempDir.toFile();
+        File storeDir = tempDir.resolve("rows").toFile();
         operator = new SimpleJsonDataOperator<>(storeDir.getAbsolutePath(), TestData.class);
+    }
+
+    @Test
+    void standaloneFixtureKeepsItsJournalInsideTheTemporaryRoot() {
+        Path journal = operator.transactionManager().journalIdentity().journal().directory();
+        assertThat(journal.startsWith(tempDir.toAbsolutePath().normalize()))
+                .as("JUnit must own the standalone fixture's sibling journal")
+                .isTrue();
+        operator.transaction(() -> operator.insert(new TestData("boundary", "kept", 1)));
+        operator.flush();
+        assertThat(journal).isDirectory();
+        assertThat(tempDir.resolve("rows").resolve("boundary.json")).exists();
     }
 
     // ===== Test Entity =====
