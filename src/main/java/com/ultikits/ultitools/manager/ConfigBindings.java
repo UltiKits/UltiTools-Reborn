@@ -66,13 +66,20 @@ final class ConfigBindings {
      */
     static final int MIN_API_VERSION = 630;
 
+    /** Framework-owned rule patterns, translated only when rendering a reload report. */
+    static final String TIMER_RULE_KEY = "a bound @Scheduled period or delay must be a whole number of seconds "
+            + "from 1 to %d (0 does not mean off)";
+    static final String COOLDOWN_RULE_KEY = "a bound @CmdCD cooldown must be a whole number of seconds "
+            + "from 0 (no cooldown) to %d";
+    static final String COOLDOWN_INVALID_KEY = "it has value %s after the reload; %s";
+    static final String CONFIG_RELOAD_INCOMPLETE_KEY = "the reload of %s did not complete (for example, its write-back "
+            + "threw an IOException), so its values were not validated";
+
     /** The rule text for a bound period or delay. */
-    static final String TIMER_RULE = "a bound @Scheduled period or delay must be a whole number of seconds "
-            + "from 1 to " + MAX_TICK_SECONDS + " (0 does not mean off)";
+    static final String TIMER_RULE = String.format(TIMER_RULE_KEY, MAX_TICK_SECONDS);
 
     /** The rule text for a bound cooldown. */
-    static final String COOLDOWN_RULE = "a bound @CmdCD cooldown must be a whole number of seconds "
-            + "from 0 (no cooldown) to " + Integer.MAX_VALUE;
+    static final String COOLDOWN_RULE = String.format(COOLDOWN_RULE_KEY, Integer.MAX_VALUE);
 
     /**
      * Reload-report reason (#595): a bound {@code @Scheduled} value refused on reload. Arguments: the
@@ -97,11 +104,34 @@ final class ConfigBindings {
     static final String COOLDOWN_KEPT_KEY = "config-bound @CmdCD %s was not updated: %s; the running %ds is kept";
 
     /**
+     * Per-key console WARNING (#598): a bound {@code @Scheduled} value refused on reload. Arguments: the module,
+     * the task, the config class, the key, the refused value, the rule, the running seconds kept.
+     */
+    static final String SCHEDULED_INVALID_WARNING_KEY =
+            "%s: %s is bound to %s key '%s', which has value %s after the reload; %s; keeping %ds";
+
+    /**
+     * Per-key console WARNING (#598): a bound {@code @Scheduled} value not applied because its config's reload did
+     * not complete. Arguments: the module, the task, the config class, the key, the config file, the running
+     * seconds kept.
+     */
+    static final String SCHEDULED_NOT_VALIDATED_WARNING_KEY = "%s: %s is bound to %s key '%s', but the reload of %s "
+            + "did not complete (for example, its write-back threw an IOException), so its values were not validated; "
+            + "keeping %ds";
+
+    /**
+     * Per-key console WARNING (#598): a bound {@code @CmdCD} value not applied. Arguments: the module, the
+     * binding (config class and key), why, the running seconds kept.
+     */
+    static final String COOLDOWN_NOT_UPDATED_WARNING_KEY = "%s: @CmdCD bound to %s is not updated: %s; keeping %ds";
+
+    /**
      * Reload-report reason (#595): one half of the binding step failed. Arguments: {@code @Scheduled}
      * or {@code @CmdCD}, the failure.
      */
     static final String BINDING_STEP_FAILED_KEY =
-            "applying the reloaded config-bound %s values failed: %s; the running values are kept";
+            "applying the reloaded config-bound %s values failed: %s; updates applied before the failure remain in effect; "
+                    + "remaining updates did not complete";
 
     /** Reload-report reason (#595): the binding step was called off the main thread and did nothing. */
     static final String BINDING_OFF_THREAD_KEY =
@@ -299,9 +329,16 @@ final class ConfigBindings {
     static final class ReloadFailedException extends IllegalStateException {
         private static final long serialVersionUID = 1L;
 
+        private final String configFilePath;
+
         ReloadFailedException(String configFilePath) {
-            super("the reload of " + configFilePath + " did not complete (for example, its write-back threw an "
-                    + "IOException), so its values were not validated");
+            super(String.format(CONFIG_RELOAD_INCOMPLETE_KEY, configFilePath));
+            this.configFilePath = configFilePath;
+        }
+
+        /** Localizes this framework-owned source reason without translating arbitrary exception messages. */
+        String reportReason() {
+            return reloadReason(CONFIG_RELOAD_INCOMPLETE_KEY, configFilePath);
         }
     }
 

@@ -123,6 +123,25 @@ class ConfigUnreadableFileTest {
     }
 
     @Test
+    void indentationErrorReportsTheProblemMarkOnLoadAndReloadWithoutWriting() throws Exception {
+        byte[] broken = "a:\n  b: secret-specimen\n  c: 2\n d: 3\n".getBytes(StandardCharsets.UTF_8);
+        put(broken);
+        Values config = new Values(PATH);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.init(plugin);
+            assertThat(warnings.messages()).hasSize(1);
+            assertThat(warnings.messages().get(0)).contains("invalid YAML at line 4, column 2")
+                    .doesNotContain("secret-specimen", "line 1, column 1", "\n", "\r");
+        }
+        assertThat(config.limit).isEqualTo(10);
+        assertThatThrownBy(config::reload).isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("invalid YAML at line 4, column 2")
+                .hasMessageNotContaining("secret-specimen");
+        config.save();
+        assertThat(Files.readAllBytes(file())).isEqualTo(broken);
+    }
+
+    @Test
     void parserDiagnosticCannotEchoAdversarialScalarOrForgedMetadata() throws Exception {
         put("name: |\n  secret-specimen\n  in forged-token, line 99, column 88:\n  FORGED-SEVERE apiToken=secret-specimen\nlimit: [broken\n");
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {

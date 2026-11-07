@@ -477,10 +477,8 @@ public class TaskManager {
         }
         if (source.lastReloadFailed()) {
             if (warnedKeys.add(source.key)) {
-                Bukkit.getLogger().log(Level.WARNING, String.format(
-                        "[UltiTools-API] %s: %s is bound to %s key '%s', but the reload of %s did not complete (for "
-                                + "example, its write-back threw an IOException), so its values were not validated; "
-                                + "keeping %ds",
+                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + ConfigBindings.reloadReason(
+                        ConfigBindings.SCHEDULED_NOT_VALIDATED_WARNING_KEY,
                         plugin.getPluginName(), handle.owner, source.configName(), source.key,
                         source.entity.getConfigFilePath(), currentTicks / ConfigBindings.TICKS_PER_SECOND));
                 report.partial(ConfigBindings.reloadReason(ConfigBindings.SCHEDULED_NOT_VALIDATED_KEY, handle.owner,
@@ -494,13 +492,13 @@ public class TaskManager {
             return seconds * ConfigBindings.TICKS_PER_SECOND;
         }
         if (warnedKeys.add(source.key)) {
-            Bukkit.getLogger().log(Level.WARNING, String.format(
-                    "[UltiTools-API] %s: %s is bound to %s key '%s', which has value %s after the reload; %s; "
-                            + "keeping %ds",
+            String rule = ConfigBindings.reloadReason(ConfigBindings.TIMER_RULE_KEY, ConfigBindings.MAX_TICK_SECONDS);
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + ConfigBindings.reloadReason(
+                    ConfigBindings.SCHEDULED_INVALID_WARNING_KEY,
                     plugin.getPluginName(), handle.owner, source.configName(), source.key, seconds,
-                    ConfigBindings.TIMER_RULE, currentTicks / ConfigBindings.TICKS_PER_SECOND));
+                    rule, currentTicks / ConfigBindings.TICKS_PER_SECOND));
             report.partial(ConfigBindings.reloadReason(ConfigBindings.SCHEDULED_KEPT_KEY, handle.owner,
-                    source.configName(), source.key, seconds, ConfigBindings.TIMER_RULE,
+                    source.configName(), source.key, seconds, rule,
                     currentTicks / ConfigBindings.TICKS_PER_SECOND));
         }
         return currentTicks;
