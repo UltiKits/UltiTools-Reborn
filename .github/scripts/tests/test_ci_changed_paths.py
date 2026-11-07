@@ -200,8 +200,8 @@ class FixtureGitIsolationTests(unittest.TestCase):
 class MainOnlyWorkflowTests(unittest.TestCase):
     def test_main_job_always_reports_and_heavy_steps_are_gated(self):
         workflow = load_workflow(WORKFLOWS / "maven-ci.yml")
-        self.assertEqual(workflow["on"], {"push": {"branches": ["main"]},
-                                          "pull_request": {"branches": ["main"]}})
+        self.assertEqual(workflow["on"], {"push": {"branches": ["main", "release/**"]},
+                                          "pull_request": {"branches": ["main", "release/**"]}})
         job = workflow["jobs"]["test"]
         self.assertEqual(job["name"], "🧪 Test & Coverage")
         self.assertNotIn("if", job)

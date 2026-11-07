@@ -306,7 +306,7 @@ class BuildVerificationConfigurationTest {
         assertThat(triggers).containsOnlyKeys("push", "pull_request");
         for (String event : java.util.Arrays.asList("push", "pull_request")) {
             assertThat(triggers.get(event)).isEqualTo(java.util.Collections.singletonMap(
-                    "branches", java.util.Collections.singletonList("main")));
+                    "branches", java.util.Arrays.asList("main", "release/**")));
         }
         Map<String, Map<String, Object>> jobs = (Map<String, Map<String, Object>>) workflow.get("jobs");
         assertThat(jobs).containsOnlyKeys("test", "release-tooling");
