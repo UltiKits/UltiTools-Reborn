@@ -1279,9 +1279,11 @@ are different: accepted initialization files persist independently, while the pa
 touched files with in-process rollback.
 
 Known limits remain explicit, not guaranteed away: [#578](https://github.com/UltiKits/UltiTools-Reborn/issues/578)
-records out-of-threat-model storage findings; two still apply - temporary-file identity through a symlink followed by
-`..`, and quadratic style detection in Unicode-heavy files. Its anchored-container and alias-comment items cannot occur,
-because no write path writes a file that uses anchors, aliases or merge keys. A valid block anchor with a comment before
+records a remaining temporary-file identity limit through a symlink followed by `..`. Avoid that path combination and
+use the same resolved real path when staging and loading configuration files. Its quadratic style-detection finding is
+fixed: scalar mark offsets no longer rescan the text from the beginning for each scalar. Its anchored-container and
+alias-comment items cannot occur, because no write path writes a file that uses anchors, aliases or merge keys.
+A valid block anchor with a comment before
 its first child key cannot be read and the file is protected as unparseable
 ([#580](https://github.com/UltiKits/UltiTools-Reborn/issues/580), closed by documenting it; see "Layouts the reader
 cannot read"). A file that uses anchors, aliases or merge keys is never written; one warning per file per run names it.
