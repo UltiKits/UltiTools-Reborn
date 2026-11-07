@@ -104,6 +104,28 @@ final class ConfigBindings {
     static final String COOLDOWN_KEPT_KEY = "config-bound @CmdCD %s was not updated: %s; the running %ds is kept";
 
     /**
+     * Per-key console WARNING (#598): a bound {@code @Scheduled} value refused on reload. Arguments: the module,
+     * the task, the config class, the key, the refused value, the rule, the running seconds kept.
+     */
+    static final String SCHEDULED_INVALID_WARNING_KEY =
+            "%s: %s is bound to %s key '%s', which has value %s after the reload; %s; keeping %ds";
+
+    /**
+     * Per-key console WARNING (#598): a bound {@code @Scheduled} value not applied because its config's reload did
+     * not complete. Arguments: the module, the task, the config class, the key, the config file, the running
+     * seconds kept.
+     */
+    static final String SCHEDULED_NOT_VALIDATED_WARNING_KEY = "%s: %s is bound to %s key '%s', but the reload of %s "
+            + "did not complete (for example, its write-back threw an IOException), so its values were not validated; "
+            + "keeping %ds";
+
+    /**
+     * Per-key console WARNING (#598): a bound {@code @CmdCD} value not applied. Arguments: the module, the
+     * binding (config class and key), why, the running seconds kept.
+     */
+    static final String COOLDOWN_NOT_UPDATED_WARNING_KEY = "%s: @CmdCD bound to %s is not updated: %s; keeping %ds";
+
+    /**
      * Reload-report reason (#595): one half of the binding step failed. Arguments: {@code @Scheduled}
      * or {@code @CmdCD}, the failure.
      */

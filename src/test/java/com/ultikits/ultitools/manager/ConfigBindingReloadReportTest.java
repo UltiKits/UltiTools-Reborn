@@ -11,6 +11,11 @@ import java.util.Collections;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -276,6 +281,95 @@ class ConfigBindingReloadReportTest {
                 .contains("config/timing.yml").contains("60").contains("未完成")
                 .doesNotContain("the reload of").doesNotContain("did not complete")
                 .doesNotContain("were not validated");
+    }
+
+    /** Collects every WARNING the framework writes to the Bukkit logger while {@code action} runs. */
+    private static List<String> warningsDuring(Runnable action) {
+        List<String> warnings = new CopyOnWriteArrayList<>();
+        Handler handler = new Handler() {
+            @Override
+            public void publish(LogRecord logRecord) {
+                if (logRecord.getLevel() == Level.WARNING) {
+                    warnings.add(logRecord.getMessage());
+                }
+            }
+
+            @Override
+            public void flush() {
+                // Nothing buffered.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+        Bukkit.getLogger().addHandler(handler);
+        try {
+            action.run();
+        } finally {
+            Bukkit.getLogger().removeHandler(handler);
+        }
+        return warnings;
+    }
+
+    @Test
+    @DisplayName("Chinese: the per-key console WARNING for a refused @Scheduled value carries no English framework text")
+    void chineseTimerRefusalWarningIsTranslated() throws Exception {
+        useCatalogue("zh");
+        loadScheduledTask();
+        config.setPeriodSeconds(0);
+        List<String> warnings = warningsDuring(module::reloadWithReport);
+        assertThat(warnings).filteredOn(w -> w.contains("timer.period")).isNotEmpty()
+                .allSatisfy(w -> assertThat(w).contains("整数秒").contains("5")
+                        .doesNotContain("after the reload").doesNotContain("a bound @Scheduled period or delay")
+                        .doesNotContain("is bound to").doesNotContain("keeping"));
+    }
+
+    @Test
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // exercise the real source's incomplete-load signal
+    @DisplayName("Chinese: the per-key console WARNING for an unvalidated @Scheduled value carries no English framework text")
+    void chineseTimerNotValidatedWarningIsTranslated() throws Exception {
+        useCatalogue("zh");
+        loadScheduledTask();
+        Field incomplete = AbstractConfigEntity.class.getDeclaredField("lastInitIncomplete");
+        incomplete.setAccessible(true);
+        incomplete.setBoolean(config, true);
+        List<String> warnings = warningsDuring(module::reloadWithReport);
+        assertThat(warnings).filteredOn(w -> w.contains("timer.period")).isNotEmpty()
+                .allSatisfy(w -> assertThat(w).contains("未完成")
+                        .doesNotContain("did not complete").doesNotContain("were not validated")
+                        .doesNotContain("is bound to").doesNotContain("keeping"));
+    }
+
+    @Test
+    @DisplayName("Chinese: the per-key console WARNING for a refused @CmdCD value carries no English framework text")
+    void chineseCooldownRefusalWarningIsTranslated() throws Exception {
+        useCatalogue("zh");
+        loadCooldownExecutor();
+        config.setWildCooldown(-1);
+        List<String> warnings = warningsDuring(module::reloadWithReport);
+        assertThat(warnings).filteredOn(w -> w.contains("cooldown.wild")).isNotEmpty()
+                .allSatisfy(w -> assertThat(w).contains("整数秒").contains("60")
+                        .doesNotContain("it has value").doesNotContain("after the reload").doesNotContain("a bound")
+                        .doesNotContain("is not updated").doesNotContain("keeping"));
+    }
+
+    @Test
+    @DisplayName("English: the per-key console WARNINGs keep their existing wording")
+    void englishPerKeyWarningsAreUnchanged() throws Exception {
+        useCatalogue("en");
+        loadScheduledTask();
+        loadCooldownExecutor();
+        config.setPeriodSeconds(0);
+        config.setWildCooldown(-1);
+        List<String> warnings = warningsDuring(module::reloadWithReport);
+        assertThat(warnings).anySatisfy(w -> assertThat(w).startsWith("[UltiTools-API] TimingModule: ")
+                .endsWith(" is bound to BindingTimingConfig key 'timer.period', which has value 0 after the reload; "
+                        + ConfigBindings.TIMER_RULE + "; keeping 5s"));
+        assertThat(warnings).contains("[UltiTools-API] TimingModule: @CmdCD bound to BindingTimingConfig key "
+                + "'cooldown.wild' is not updated: it has value -1 after the reload; " + ConfigBindings.COOLDOWN_RULE
+                + "; keeping 60s");
     }
 
     @Test
