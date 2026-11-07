@@ -278,6 +278,16 @@ final class LinkageAudit {
             }
             return new MethodVisitor(Opcodes.ASM9) {
                 private int line;
+                private final Map<Label, Set<Label>> fieldGuardStarts = new HashMap<>();
+                private final Set<Label> activeFieldGuardEnds = new HashSet<>();
+
+                @Override
+                public void visitLabel(Label label) {
+                    // JVM try ranges include their start and exclude their end. ASM visits the
+                    // exception table before code labels, so no bytecode-offset approximation is needed.
+                    activeFieldGuardEnds.remove(label);
+                    activeFieldGuardEnds.addAll(fieldGuardStarts.getOrDefault(label, Collections.emptySet()));
+                }
 
                 @Override
                 public void visitLineNumber(int number, Label start) {
@@ -293,7 +303,8 @@ final class LinkageAudit {
 
                 @Override
                 public void visitFieldInsn(int opcode, String owner, String field, String desc) {
-                    check(new ServerApiReference(ServerApiReference.Kind.FIELD, owner, field, desc, opcode, false), member, line);
+                    check(new ServerApiReference(ServerApiReference.Kind.FIELD, owner, field, desc, opcode, false),
+                            member, line, !activeFieldGuardEnds.isEmpty());
                     descriptor(desc, member, line);
                 }
 
@@ -310,6 +321,9 @@ final class LinkageAudit {
                 @Override
                 public void visitTryCatchBlock(Label start, Label end, Label handler, String exception) {
                     type(exception, ServerApiReference.Kind.TYPE, member, line);
+                    if (catchesMissingField(exception)) {
+                        fieldGuardStarts.computeIfAbsent(start, ignored -> new HashSet<>()).add(end);
+                    }
                 }
 
                 @Override
@@ -373,7 +387,20 @@ final class LinkageAudit {
             check(new ServerApiReference(kind, owner, null, null, -1, kind == ServerApiReference.Kind.INTERFACE), member, line);
         }
 
+        private static boolean catchesMissingField(String exception) {
+            // A null catch type is a finally/catch-all entry, not an intentional linkage guard.
+            return "java/lang/NoSuchFieldError".equals(exception)
+                    || "java/lang/IncompatibleClassChangeError".equals(exception)
+                    || "java/lang/LinkageError".equals(exception)
+                    || "java/lang/Error".equals(exception)
+                    || "java/lang/Throwable".equals(exception);
+        }
+
         private void check(ServerApiReference reference, String member, int line) {
+            check(reference, member, line, false);
+        }
+
+        private void check(ServerApiReference reference, String member, int line, boolean fieldGuarded) {
             String owner = reference.getOwner();
             if (!apiOwner(owner)) {
                 return;
@@ -402,7 +429,9 @@ final class LinkageAudit {
                         break;
                     case FIELD:
                     case FIELD_HANDLE:
-                        if (!index.hasField(owner, reference.getName(), reference.getDescriptor())) {
+                        if (!index.hasField(owner, reference.getName(), reference.getDescriptor())
+                                && !(fieldGuarded && reference.getKind() == ServerApiReference.Kind.FIELD
+                                        && reference.getOpcode() == Opcodes.GETSTATIC)) {
                             problems.add("MISSING-FIELD");
                         }
                         break;
