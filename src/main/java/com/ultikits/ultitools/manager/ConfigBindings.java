@@ -149,9 +149,9 @@ final class ConfigBindings {
 
     /**
      * Refuses a {@link Scheduled} binding whose elements contradict each other: a key without a
-     * config class, a config class without any key, {@code async = true} (a bound task must be
-     * sync, so that its runs are observed on the main thread where a reload reschedules it -- #531
-     * gate-1 round 2), or a literal set alongside the key that replaces it.
+     * config class, a config class without any key, or a literal set alongside the key that
+     * replaces it. Async bindings use a synchronous trigger to observe each fire before dispatching
+     * the body, so they obey the same shape rules as sync bindings (#535).
      *
      * @param owner     {@code Class.method}, for the message
      * @param scheduled the bound annotation
@@ -163,7 +163,7 @@ final class ConfigBindings {
         checkLiteralHalfWithinCeiling(owner, scheduled);
     }
 
-    /** A key without a config class, a config class without a key, or {@code async = true}. */
+    /** A key without a config class, or a config class without a key. */
     private static void checkNamesABinding(String owner, Scheduled scheduled) {
         if (scheduled.config() == AbstractConfigEntity.class) {
             throw shapeError(owner, "@Scheduled names periodKey/delayKey but no config class; "
@@ -172,10 +172,6 @@ final class ConfigBindings {
         if (scheduled.periodKey().isEmpty() && scheduled.delayKey().isEmpty()) {
             throw shapeError(owner, "@Scheduled names config class " + scheduled.config().getSimpleName()
                     + " but neither periodKey nor delayKey");
-        }
-        if (scheduled.async()) {
-            throw shapeError(owner, "a config-bound @Scheduled cannot be async = true; bind a sync task and hand "
-                    + "the heavy work to Bukkit.getScheduler().runTaskAsynchronously(...) from its body");
         }
     }
 
