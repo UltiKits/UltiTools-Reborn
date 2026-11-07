@@ -68,7 +68,7 @@ public final class ModuleScanDiagnostics {
 
     /** The pointer to the compatibility record that follows {@link #OLDER_API_CAUSE} in both places. */
     public static final String COMPATIBILITY_POINTER =
-            "see COMPATIBILITY.md for the list of APIs removed or changed in this release";
+            "see https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md for the list of APIs removed or changed in this release";
 
     /** One accumulator entry per module currently being scanned; cleared as each is emitted. */
     private static final Map<String, List<String>> SKIPPED_CLASSES_BY_MODULE = new ConcurrentHashMap<>();
@@ -120,7 +120,8 @@ public final class ModuleScanDiagnostics {
         String message = "Module '" + moduleName + "' skipped " + skipped.size()
                 + " class(es) that failed to load during startup and continued loading without "
                 + "them: " + String.join(", ", skipped) + ". This usually means the module was "
-                + OLDER_API_CAUSE + " -- " + COMPATIBILITY_POINTER + ".";
+                + OLDER_API_CAUSE + " or the server API is older than the module requires -- "
+                + COMPATIBILITY_POINTER + ".";
         DIAGNOSTICS_LOGGER.log(Level.SEVERE, message);
     }
 

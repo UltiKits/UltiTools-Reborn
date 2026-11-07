@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -105,6 +106,11 @@ public class PluginDependencyResolver {
             return pluginName;
         }
 
+        /** Unique graph identity, not an additional dependency-name syntax. */
+        private String getId() {
+            return pluginClass.getName();
+        }
+
         public Set<String> getHardDependencies() {
             return hardDependencies;
         }
@@ -161,7 +167,7 @@ public class PluginDependencyResolver {
          *
          * @param availablePlugins the plugin names present in this resolve
          * @param aliasMap         maps a declared name (simple class name or plugin.yml name) to
-         *                         the canonical node name (always a simple class name)
+         *                         the canonical node key (independent of its display name)
          * @return the combined hard + resolvable-soft dependency set, by raw declared name
          * @since 6.3.0
          */
@@ -205,20 +211,22 @@ public class PluginDependencyResolver {
             return new ArrayList<>();
         }
 
-        // Build plugin nodes
+        // #752: aliases are not identities. Keep every distinct main class in the one graph.
         Map<String, PluginNode> nodes = new LinkedHashMap<>();
-        Set<String> availablePlugins = new HashSet<>();
-
         for (Class<? extends UltiToolsPlugin> pluginClass : pluginClasses) {
             PluginNode node = new PluginNode(pluginClass);
-            nodes.put(node.getPluginName(), node);
-            availablePlugins.add(node.getPluginName());
+            nodes.put(node.getId(), node);
         }
+        Set<String> availablePlugins = nodes.keySet();
+        Map<String, String> displayNames = buildDisplayNames(nodes);
+        Comparator<String> loadOrder = Comparator
+                .comparing((String id) -> nodes.get(id).getPluginName())
+                .thenComparing(Comparator.naturalOrder());
 
         // D-12: build the alias map before touching the adjacency list, so every depends/
         // softDepends/loadBefore/loadAfter entry resolves against both a node's simple class name
         // and its plugin.yml name: - the two naming conventions this framework already mixes.
-        Map<String, String> aliasMap = buildAliasMap(nodes);
+        Map<String, String> aliasMap = buildAliasMap(nodes, displayNames);
 
         // Build the adjacency list once, over the full node set and every edge kind (depends,
         // present softDepends, loadBefore, plugin.yml loadAfter). It decides load ORDER only. A
@@ -244,32 +252,33 @@ public class PluginDependencyResolver {
 
             Map<String, Set<String>> survivorAdjacency = restrictAdjacency(adjacencyList, survivorNames);
             Map<String, Integer> survivorInDegree = calculateInDegrees(survivorNames, survivorAdjacency);
-            List<String> survivorSorted = kahnSort(survivorNames, survivorAdjacency, survivorInDegree);
+            List<String> survivorSorted = kahnSort(survivorNames, survivorAdjacency, survivorInDegree, loadOrder);
 
             // An independent cycle among the survivors (#676): every survivor the sort cannot
             // place is refused by the same rule the pure-cycle path below uses, and its cycles
             // are diagnosed, so the prefix and the refused set together cover every input.
-            String message = buildMissingDependencyMessage(missingDependenciesByNode);
+            String message = buildMissingDependencyMessage(missingDependenciesByNode, displayNames);
             List<List<String>> cyclePaths = Collections.emptyList();
             if (survivorSorted.size() != survivorNames.size()) {
                 Set<String> cycleBlocked = new TreeSet<>(survivorNames);
                 cycleBlocked.removeAll(survivorSorted);
                 cyclePaths = findCyclePaths(cycleBlocked, survivorAdjacency);
                 refused.addAll(cycleBlocked);
-                message = message + ". " + CIRCULAR_DEPENDENCY_MESSAGE_PREFIX + cycleBlocked;
+                message = message + ". " + CIRCULAR_DEPENDENCY_MESSAGE_PREFIX
+                        + displaySet(cycleBlocked, displayNames);
             }
 
             throw new MissingDependencyException(
                 message,
                 toClassList(survivorSorted, nodes),
-                refused,
-                cyclePaths
+                displaySet(refused, displayNames),
+                displayCycles(cyclePaths, displayNames)
             );
         }
 
         // Kahn's algorithm over the full graph.
         Map<String, Integer> inDegree = calculateInDegrees(nodes.keySet(), adjacencyList);
-        List<String> sortedNames = kahnSort(nodes.keySet(), adjacencyList, inDegree);
+        List<String> sortedNames = kahnSort(nodes.keySet(), adjacencyList, inDegree, loadOrder);
 
         // Check for circular dependency
         if (sortedNames.size() != nodes.size()) {
@@ -280,10 +289,10 @@ public class PluginDependencyResolver {
             List<List<String>> cyclePaths = findCyclePaths(remaining, adjacencyList);
 
             throw new CircularDependencyException(
-                CIRCULAR_DEPENDENCY_MESSAGE_PREFIX + remaining,
+                CIRCULAR_DEPENDENCY_MESSAGE_PREFIX + displaySet(remaining, displayNames),
                 sortedPrefix,
-                remaining,
-                cyclePaths
+                displaySet(remaining, displayNames),
+                displayCycles(cyclePaths, displayNames)
             );
         }
 
@@ -302,36 +311,63 @@ public class PluginDependencyResolver {
     }
 
     /**
-     * Builds the alias map every dependency-graph edge resolves through (D-12): each node's own
-     * simple class name maps to itself first (guaranteed unique, so it always takes priority),
-     * then each node's {@code plugin.yml} {@code name:} - when present and not already claimed by
-     * some other node's simple class name - also maps to that node's canonical (simple class)
-     * name. A dependency entry that does not appear in this map at all resolves to itself
-     * unchanged, exactly as it did before this map existed.
+     * Derives aliases from the complete graph without losing nodes. Simple names keep their
+     * historical last-discovered target and take priority over plugin.yml names. LinkedHashMap
+     * replacement retains the first insertion position, matching the old graph's alias order.
+     * Previously established plugin.yml aliases are filled first; recovered nodes only add names
+     * that were unavailable before. This index chooses names, never which classes can load.
      */
-    private Map<String, String> buildAliasMap(Map<String, PluginNode> nodes) {
-        Map<String, String> aliasMap = new HashMap<>();
-        for (String simpleName : nodes.keySet()) {
-            aliasMap.put(simpleName, simpleName);
-        }
-        warnOnDuplicatePluginYmlNames(nodes);
+    private Map<String, String> buildAliasMap(Map<String, PluginNode> nodes,
+            Map<String, String> displayNames) {
+        Map<String, String> simpleAliases = new LinkedHashMap<>();
         for (PluginNode node : nodes.values()) {
-            String ymlName = node.getPluginYmlName();
-            if (ymlName != null && !ymlName.isEmpty() && !aliasMap.containsKey(ymlName)) {
-                aliasMap.put(ymlName, node.getPluginName());
+            simpleAliases.put(node.getPluginName(), node.getId());
+        }
+        Map<String, String> aliasMap = new HashMap<>(simpleAliases);
+        Set<String> aliasOrder = new LinkedHashSet<>(simpleAliases.values());
+        aliasOrder.addAll(nodes.keySet());
+        for (String id : aliasOrder) {
+            String ymlName = nodes.get(id).getPluginYmlName();
+            if (ymlName != null && !ymlName.isEmpty()) {
+                aliasMap.putIfAbsent(ymlName, id);
             }
         }
+        warnOnDuplicatePluginYmlNames(nodes, aliasMap, displayNames);
         return aliasMap;
+    }
+
+    /** Keep existing diagnostic names, qualifying only colliding simple names. */
+    private Map<String, String> buildDisplayNames(Map<String, PluginNode> nodes) {
+        Map<String, Integer> counts = new HashMap<>();
+        for (PluginNode node : nodes.values()) {
+            counts.merge(node.getPluginName(), 1, Integer::sum);
+        }
+        Map<String, String> displayNames = new HashMap<>();
+        for (PluginNode node : nodes.values()) {
+            displayNames.put(node.getId(), counts.get(node.getPluginName()) > 1
+                    ? node.getId() : node.getPluginName());
+        }
+        return displayNames;
+    }
+
+    private Set<String> displaySet(Set<String> ids, Map<String, String> displayNames) {
+        return ids.stream().map(displayNames::get)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private List<List<String>> displayCycles(List<List<String>> cycles, Map<String, String> displayNames) {
+        return cycles.stream().map(path -> path.stream().map(displayNames::get)
+                .collect(Collectors.toList())).collect(Collectors.toList());
     }
 
     /**
      * Detects two or more nodes declaring the same {@code plugin.yml} {@code name:} and logs one
      * WARNING per colliding name, naming every module that declared it (#361).
      * <p>
-     * This does not change which module wins the alias - that is still whichever comes first in
-     * {@code nodes} iteration order (discovery order), exactly as before. It only makes the
-     * operator aware that a pick happened, instead of the dependency graph silently depending on
-     * discovery order with nothing logged.
+     * This does not refuse either module or change the alias selection. The existing winners
+     * retain priority, and recovered nodes only supply previously unavailable aliases. The
+     * warning makes the operator aware that a pick happened instead of silently choosing a target.
+     * Ordinary, unique-simple-name inputs still use the first declarer in discovery order.
      * <p>
      * <b>IN-01 (gate-1 review, 16-REVIEW-residue.md):</b> "discovery order" here is deterministic
      * GIVEN a deterministic {@code nodes} iteration order. As of 6.3.0 (#476) this class's only
@@ -341,46 +377,47 @@ public class PluginDependencyResolver {
      * on ext4 -- so this WARNING names the same "winner" for the same folder on every file
      * system.
      * <p>
-     * <b>Gate-2 Codex finding, PR #478 round 1:</b> the naive "first plugin.yml declarer wins"
-     * answer is wrong whenever the colliding name ALSO equals some other node's own simple class
-     * name - {@link #buildAliasMap}'s FIRST loop claims every simple class name as its own alias
-     * before any {@code plugin.yml} {@code name:} is considered at all, so that OTHER node wins
-     * outright and none of the {@code plugin.yml} declarers do, regardless of their discovery
-     * order among themselves. This method now checks {@code nodes.containsKey(ymlName)} (keyed
-     * by simple class name) before falling back to "first declarer", so the reported winner
-     * always matches what {@link #buildAliasMap} actually produces.
+     * The actual winner is read from the completed alias index, not inferred from graph keys:
+     * simple-name aliases take priority (#478), and recovered same-simple-name nodes must not
+     * steal an established plugin.yml alias (#752). Diagnostics and graph edges therefore use
+     * the same authoritative alias selection.
      */
-    private void warnOnDuplicatePluginYmlNames(Map<String, PluginNode> nodes) {
+    private void warnOnDuplicatePluginYmlNames(Map<String, PluginNode> nodes,
+            Map<String, String> aliasMap, Map<String, String> displayNames) {
         Map<String, List<String>> declaringModulesByYmlName = new LinkedHashMap<>();
         for (PluginNode node : nodes.values()) {
             String ymlName = node.getPluginYmlName();
             if (ymlName != null && !ymlName.isEmpty()) {
                 declaringModulesByYmlName
                     .computeIfAbsent(ymlName, k -> new ArrayList<>())
-                    .add(node.getPluginName());
+                    .add(node.getId());
             }
         }
         for (Map.Entry<String, List<String>> entry : declaringModulesByYmlName.entrySet()) {
             List<String> declaringModules = entry.getValue();
             if (declaringModules.size() > 1) {
                 String ymlName = entry.getKey();
-                boolean claimedBySimpleClassName = nodes.containsKey(ymlName);
-                String winner = claimedBySimpleClassName ? ymlName : declaringModules.get(0);
+                String winnerId = aliasMap.get(ymlName);
+                boolean claimedBySimpleClassName = nodes.get(winnerId).getPluginName().equals(ymlName);
+                String winner = displayNames.get(winnerId);
                 String winnerReason = claimedBySimpleClassName
                     ? "a module class literally named '" + ymlName + "', which always claims "
                         + "this alias before any plugin.yml name: is considered"
-                    : "the module discovered first";
+                    : winnerId.equals(declaringModules.get(0)) ? "the module discovered first"
+                        : "the established alias winner, before aliases from recovered modules";
                 logger.warning(String.format(
                     "[UltiTools-API] Multiple modules declare the same plugin.yml name '%s': "
                         + "%s. Dependency resolution will resolve this name to '%s' (%s); rename "
                         + "one module's plugin.yml name: to remove the ambiguity.",
-                    ymlName, declaringModules, winner, winnerReason));
+                    ymlName, declaringModules.stream().map(displayNames::get).collect(Collectors.toList()),
+                    winner, winnerReason));
             }
         }
     }
 
     private String resolveAlias(String rawName, Map<String, String> aliasMap) {
-        return aliasMap.getOrDefault(rawName, rawName);
+        // Do not let an unrecognized raw name match a full-name internal key (#752).
+        return aliasMap.get(rawName);
     }
 
     /**
@@ -402,7 +439,7 @@ public class PluginDependencyResolver {
                 }
             }
             if (!missingForNode.isEmpty()) {
-                missing.put(node.getPluginName(), missingForNode);
+                missing.put(node.getId(), missingForNode);
             }
         }
         return missing;
@@ -416,7 +453,8 @@ public class PluginDependencyResolver {
      * ({@code "requires dependencies 'X', 'Y' which are not available"}) so the single-element
      * case never reads as a degenerate list.
      */
-    private String buildMissingDependencyMessage(Map<String, List<String>> missingDependenciesByNode) {
+    private String buildMissingDependencyMessage(Map<String, List<String>> missingDependenciesByNode,
+            Map<String, String> displayNames) {
         StringBuilder message = new StringBuilder();
         for (Map.Entry<String, List<String>> entry : missingDependenciesByNode.entrySet()) {
             if (message.length() > 0) {
@@ -429,11 +467,11 @@ public class PluginDependencyResolver {
             if (missingDeps.size() == 1) {
                 message.append(String.format(
                     "Plugin '%s' requires dependency %s which is not available",
-                    entry.getKey(), quotedDeps));
+                    displayNames.get(entry.getKey()), quotedDeps));
             } else {
                 message.append(String.format(
                     "Plugin '%s' requires dependencies %s which are not available",
-                    entry.getKey(), quotedDeps));
+                    displayNames.get(entry.getKey()), quotedDeps));
             }
         }
         return message.toString();
@@ -550,7 +588,7 @@ public class PluginDependencyResolver {
         }
 
         for (PluginNode node : nodes.values()) {
-            String pluginName = node.getPluginName();
+            String pluginName = node.getId();
 
             // For each dependency, add edge: dependency -> this plugin. Each raw declared name is
             // resolved through the alias map first (D-12), so it may name either a simple class
@@ -603,7 +641,7 @@ public class PluginDependencyResolver {
             for (String dep : node.getHardDependencies()) {
                 Set<String> dependents = hardAdjacency.get(resolveAlias(dep, aliasMap));
                 if (dependents != null) {
-                    dependents.add(node.getPluginName());
+                    dependents.add(node.getId());
                 }
             }
         }
@@ -642,13 +680,14 @@ public class PluginDependencyResolver {
     private List<String> kahnSort(
             Set<String> nodes,
             Map<String, Set<String>> adjacencyList,
-            Map<String, Integer> inDegree) {
+            Map<String, Integer> inDegree,
+            Comparator<String> loadOrder) {
 
         List<String> sorted = new ArrayList<>();
 
         // Queue of nodes with no incoming edges
-        // Use PriorityQueue for deterministic ordering (alphabetical)
-        Queue<String> queue = new PriorityQueue<>(nodes.size() > 0 ? nodes.size() : 1);
+        // Preserve historical simple-name order; only newly representable ties use full names.
+        Queue<String> queue = new PriorityQueue<>(loadOrder);
 
         // Add all nodes with in-degree 0
         for (String node : nodes) {

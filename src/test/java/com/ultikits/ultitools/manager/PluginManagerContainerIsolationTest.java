@@ -99,7 +99,11 @@ class PluginManagerContainerIsolationTest {
         private final String isolatedPrefix;
 
         FixtureJarClassLoader(URL jarUrl, ClassLoader parent, String isolatedPrefix) {
-            super(new URL[]{jarUrl}, parent);
+            this(new URL[]{jarUrl}, parent, isolatedPrefix);
+        }
+
+        FixtureJarClassLoader(URL[] jarUrls, ClassLoader parent, String isolatedPrefix) {
+            super(jarUrls, parent);
             this.isolatedPrefix = isolatedPrefix;
         }
 
@@ -197,6 +201,45 @@ class PluginManagerContainerIsolationTest {
 
     private List<String> beanNames(SimpleContainer container) {
         return Arrays.asList(container.getBeanDefinitionNames());
+    }
+
+    @Test
+    void sameSimpleNameModulesResolveAndAssembleInIndependentContainers() throws Exception {
+        Class<?> alphaFixture = com.ultikits.testfixtures.sameclassname.alpha.Main.class;
+        Class<?> betaFixture = com.ultikits.testfixtures.sameclassname.beta.Main.class;
+        File alphaJar = buildFixtureJar("same-alpha.jar", "AlphaModule", alphaFixture);
+        File betaJar = buildFixtureJar("same-beta.jar", "BetaModule", betaFixture);
+        try (FixtureJarClassLoader loader = new FixtureJarClassLoader(
+                new URL[]{alphaJar.toURI().toURL(), betaJar.toURI().toURL()},
+                getClass().getClassLoader(), "com.ultikits.testfixtures.sameclassname.")) {
+            Class<? extends UltiToolsPlugin> alpha = loader.loadClass(alphaFixture.getName())
+                    .asSubclass(UltiToolsPlugin.class);
+            Class<? extends UltiToolsPlugin> beta = loader.loadClass(betaFixture.getName())
+                    .asSubclass(UltiToolsPlugin.class);
+            List<Class<? extends UltiToolsPlugin>> sorted = new PluginDependencyResolver(
+                    Logger.getLogger("sameSimpleNameAssembly")).resolve(Arrays.asList(beta, alpha));
+            assertThat(sorted).containsExactly(alpha, beta);
+            UltiTools mockUltiTools = newMockUltiTools();
+            try (MockedStatic<UltiTools> statics = mockStatic(UltiTools.class, CALLS_REAL_METHODS)) {
+                statics.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+                statics.when(UltiTools::getPluginVersion).thenReturn(Integer.MAX_VALUE);
+                PluginManager manager = newPluginManagerWithLoader(loader);
+                UltiToolsPlugin first = (UltiToolsPlugin) invokeInitializePlugin(manager, loader, sorted.get(0));
+                UltiToolsPlugin second = (UltiToolsPlugin) invokeInitializePlugin(manager, loader, sorted.get(1));
+                assertThat(first).isNotNull();
+                assertThat(second).isNotNull();
+                try {
+                    assertThat(first.getContext()).isNotSameAs(second.getContext());
+                    assertThat(first.getContext().getBean("Main")).isSameAs(first);
+                    assertThat(second.getContext().getBean("Main")).isSameAs(second);
+                    assertThat(first.getContext().getBean(beta)).isNull();
+                    assertThat(second.getContext().getBean(alpha)).isNull();
+                } finally {
+                    first.getContext().close();
+                    second.getContext().close();
+                }
+            }
+        }
     }
 
     // ===== UAT-03: concurrent assembly of the SAME class through BOTH entry points =====

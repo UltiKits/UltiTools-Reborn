@@ -249,6 +249,18 @@ class PluginManagerLoadSummaryTest {
         assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 1, Failed 2.");
     }
 
+    @Test
+    void distinctPackagesWithTheSameMainNameAreAllRegistered() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            String mainSuffix = "fixture" + i + ".Main";
+            moduleJar("same-name-" + i + ".jar", mainSuffix, module(mainSuffix), "630");
+        }
+
+        start();
+
+        assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 5, Failed 0.");
+    }
+
     // ---------------------------------------------------------------- fixtures
 
     private File moduleJar(String fileName, String simpleName, byte[] classBytes, String apiVersion)
