@@ -92,12 +92,36 @@ All jobs run on JDK 21 (temurin). **Workflow files change more often than this c
 
 Maven Central publishing goes through `central-publishing-maven-plugin` with server id `ultikits-sonatype`.
 
+### CI recovery and limitations
+
+- If a product push's SNAPSHOT publication fails (for example, Central returns a server error), later
+  documentation-only pushes do not retry it. After resolving the failure, manually dispatch
+  `snapshot-publish.yml` on `main` (`gh workflow run snapshot-publish.yml --ref main`). The dispatch
+  checks the current `main` version: it publishes only a well-formed `-SNAPSHOT`, never a formal release.
+  Do not add a plain concurrency group: replacing pending runs can discard product-change ranges.
+- Do not force-push `main`; preserve its history and keep branch protection enabled. If the push's
+  `before` commit is unreadable, changed-path classification fails closed and both main-push workflows
+  fail rather than guessing which checks or publication to skip.
+- Built `main` pushes require `CODACY_API_TOKEN` for coverage upload and fail visibly if it is empty.
+  Restore the repository secret before rerunning the failed CI job. Pull requests without a token
+  (including Dependabot) skip that upload; fork pull requests never receive the token.
+- Maven minor/patch updates remain one monthly Dependabot group. If an incompatible bump blocks the
+  group, split it for review then; do not treat the grouping as proof that every bump is compatible.
+
 Releases require an explicit maintainer instruction. `.github/scripts/release.sh --prepare <new-dir>`
 checks the checkout, builds once and retains the exact candidate files and manifest without publishing.
 After independent acceptance and the maintainer's decision, `--publish-approved <manifest>` requires
 `--authority-receipt <file>` and `--uat-receipt <file>` and publishes those retained bytes without
 rebuilding. `publish-packages.yml` consumes the attached assets on `release: published`; it does not
 compile a replacement artifact. There is no `workflow_dispatch` release workflow.
+
+**Warning: `--prerelease` only labels the GitHub release. It does not prevent permanent Maven Central publication
+when Central publishing is enabled. Published coordinates cannot be overwritten or deleted; this is not a dry run.**
+
+Without explicit notes, the script uses the most recent 50 commits since the nearest tag, or
+10 commits when no tag exists, and marks the notes when that limit truncates the history.
+Use `--notes-file` for complete, curated release notes. Explicit `--notes` and `--notes-file`
+content does not receive an automatic truncation notice.
 
 The framework release retains accepted bytes — **get maintainer sign-off before
 changing `publish-packages.yml` or `.github/scripts/release.sh`.** Verification-only changes to
