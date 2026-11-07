@@ -609,6 +609,18 @@ class FrameworkTextCatalogueInvariantTest {
     // ---- controls for the scanner itself ----
 
     @Test
+    void characterContractDistinguishesFullwidthAndHalfwidthKana() {
+        for (int cp = 0x3040; cp <= 0x30FF; cp++) {
+            assertThat(JavaLiteralScanner.containsCjkOrFullWidth(new String(Character.toChars(cp))))
+                    .as("Hiragana/Katakana U+%04X is outside the contract", cp).isFalse();
+        }
+        for (int cp = 0xFF61; cp <= 0xFF9F; cp++) {
+            assertThat(JavaLiteralScanner.containsCjkOrFullWidth(new String(Character.toChars(cp))))
+                    .as("halfwidth punctuation/katakana U+%04X is inside the contract", cp).isTrue();
+        }
+    }
+
+    @Test
     @DisplayName("control: the scanner sees a literal in a multi-line call and in a concatenation, and ignores comments")
     void scannerControl() {
         String source = String.join("\n",

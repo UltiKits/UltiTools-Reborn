@@ -43,7 +43,12 @@ final class JavaLiteralScanner {
         this.source = source;
     }
 
-    /** Whether {@code text} holds Han (extensions included), CJK symbols/punctuation or full-width forms. */
+    /**
+     * Whether {@code text} holds Script=Han (as known to this JDK), CJK symbols/punctuation
+     * U+3000-U+303F or Halfwidth and Fullwidth Forms U+FF00-U+FFEF. Hiragana U+3040-U+309F and
+     * Katakana U+30A0-U+30FF are excluded; halfwidth punctuation U+FF61-U+FF64 and halfwidth
+     * katakana U+FF65-U+FF9F are included by the forms range.
+     */
     static boolean containsCjkOrFullWidth(String text) {
         return text.codePoints().anyMatch(cp -> Character.UnicodeScript.HAN.equals(Character.UnicodeScript.of(cp))
                 || (cp >= 0x3000 && cp <= 0x303F)
