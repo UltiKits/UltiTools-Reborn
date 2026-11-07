@@ -102,6 +102,44 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    void stagedHashReadFailureReportsTheCause() throws IOException {
+        Map<String, String> before = snapshot();
+        ModuleFileTransactions.StageResult result;
+        try (org.mockito.MockedStatic<ResourceHashSidecar> hashes = org.mockito.Mockito.mockStatic(
+                ResourceHashSidecar.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            hashes.when(() -> ResourceHashSidecar.sha256(org.mockito.ArgumentMatchers.any(File.class)))
+                    .thenAnswer(invocation -> {
+                        File file = invocation.getArgument(0);
+                        if (file.getName().equals("demo-1.1.jar")) {
+                            throw new java.io.UncheckedIOException(new IOException("hash read failed"));
+                        }
+                        return invocation.callRealMethod();
+                    });
+            result = stage(downloading("Demo", "1.1", "demo"));
+        }
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(result.getReasonKey()).isEqualTo("the downloaded %s could not be read (%s)");
+        assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "IOException: hash read failed");
+        assertThat(snapshot()).isEqualTo(before);
+    }
+
+    @Test
+    void stagedMetadataReadFailureReportsTheCause() throws IOException {
+        Map<String, String> before = snapshot();
+        ModuleFileTransactions.StageResult result;
+        try (org.mockito.MockedConstruction<org.bukkit.configuration.file.YamlConfiguration> yaml =
+                org.mockito.Mockito.mockConstruction(org.bukkit.configuration.file.YamlConfiguration.class,
+                        (config, context) -> org.mockito.Mockito.doThrow(new IOException("metadata read failed"))
+                                .when(config).load(org.mockito.ArgumentMatchers.any(java.io.Reader.class)))) {
+            result = stage(downloading("Demo", "1.1", "demo"));
+        }
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(result.getReasonKey()).isEqualTo("the downloaded %s could not be read (%s)");
+        assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "IOException: metadata read failed");
+        assertThat(snapshot()).isEqualTo(before);
+    }
+
+    @Test
     @DisplayName("a download declaring a version other than the catalogue's latest is refused and leaves nothing behind (Codex round 6)")
     void downloadOfAnotherVersion_changesNothing() throws IOException {
         Map<String, String> before = snapshot();

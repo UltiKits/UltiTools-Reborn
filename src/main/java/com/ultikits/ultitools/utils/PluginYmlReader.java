@@ -6,7 +6,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.net.JarURLConnection;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -64,7 +63,7 @@ public final class PluginYmlReader {
                 return PluginYmlInfo.EMPTY;
             }
             URL location = src.getLocation();
-            File locationFile = toFile(location);
+            File locationFile = CodeSourceLocations.toFile(location);
             if (locationFile != null && locationFile.isDirectory()) {
                 return readFromDirectory(locationFile);
             }
@@ -129,14 +128,6 @@ public final class PluginYmlReader {
         }
     }
 
-    private static File toFile(URL location) {
-        try {
-            return new File(location.toURI());
-        } catch (URISyntaxException | IllegalArgumentException e) {
-            return new File(location.getPath());
-        }
-    }
-
     private static PluginYmlInfo readFromDirectory(File directory) {
         File ymlFile = new File(directory, PLUGIN_YML_ENTRY);
         if (!ymlFile.isFile()) {
@@ -153,10 +144,9 @@ public final class PluginYmlReader {
     }
 
     private static PluginYmlInfo readFromJar(URL jarLocation) {
-        String path = jarLocation.getPath().startsWith("/")
-            ? jarLocation.getPath() : "/" + jarLocation.getPath();
         try {
-            URL entryUrl = new java.net.URI("jar:file:" + path + "!/" + PLUGIN_YML_ENTRY).toURL();
+            URL fileUrl = CodeSourceLocations.toFile(jarLocation).toURI().toURL();
+            URL entryUrl = new URL("jar:" + fileUrl.toExternalForm() + "!/" + PLUGIN_YML_ENTRY);
             JarURLConnection jarConnection = (JarURLConnection) entryUrl.openConnection();
             try (InputStream inputStream = jarConnection.getInputStream()) {
                 return parse(inputStream);

@@ -629,7 +629,7 @@ public class ServerPropertiesManager {
             } catch (IOException e) {
                 LOGGER.log(Level.WARNING, "server.properties " + path.toAbsolutePath() + " was not written for key "
                         + key + ": " + e.getClass().getSimpleName());
-                return WriteResult.of(WriteOutcome.FAILED);
+                return new WriteResult(WriteOutcome.FAILED, null, true);
             }
             return WriteResult.of(WriteOutcome.WRITTEN);
         }
@@ -650,14 +650,20 @@ public class ServerPropertiesManager {
         return String.join(", ", numbers);
     }
 
-    /** An outcome, and for a refusal the reason (no value). */
+    /** An outcome, its refusal reason (no value), and whether its diagnostic was already logged. */
     private static final class WriteResult {
         private final WriteOutcome outcome;
         private final String reason;
+        private final boolean reported;
 
         private WriteResult(WriteOutcome outcome, String reason) {
+            this(outcome, reason, reason != null);
+        }
+
+        private WriteResult(WriteOutcome outcome, String reason, boolean reported) {
             this.outcome = outcome;
             this.reason = reason;
+            this.reported = reported;
         }
 
         static WriteResult of(WriteOutcome outcome) {
@@ -1146,23 +1152,26 @@ public class ServerPropertiesManager {
          * which is the failure mode this whole change exists to remove.
          */
         public String describeFailure() {
-            return describe(true);
+            return describe(true, Collections.<String>emptySet());
         }
 
         /**
-         * As {@link #describeFailure()}, but without the failed keys that carry a refusal reason: the manager has
-         * already logged each of those once, with its reason, when it refused the key (17-66 review R66-I1), so the
-         * batch summary line names only what nothing else has reported. Returns {@code null} when nothing is left.
+         * As {@link #describeFailure()}, but without failed keys already reported individually: refusals with a
+         * reason and I/O failures logged by the write path. Unreported failures, including missing/unreadable files,
+         * still appear in the batch summary. Returns {@code null} when nothing is left.
          */
-        String describeUnreportedFailure() {
-            return describe(false);
+        String describeUnreportedFailure(Set<String> reportedFailures) {
+            return describe(false, reportedFailures);
         }
 
         @SuppressWarnings("PMD.NPathComplexity") // Four independent outcome lists, each named only when non-empty.
-        private String describe(boolean includeRefusedWithReason) {
+        private String describe(boolean includeRefusedWithReason, Set<String> reportedFailures) {
             if (isSuccess()) return null;
             List<String> named = new ArrayList<>();
             for (String key : failed) {
+                if (!includeRefusedWithReason && reportedFailures.contains(key)) {
+                    continue;
+                }
                 String reason = failureReasons.get(key);
                 if (reason == null) {
                     named.add(key);
@@ -1274,6 +1283,7 @@ public class ServerPropertiesManager {
         List<String> malformed = new ArrayList<>();
         List<String> notPresentOnServer = new ArrayList<>();
         Map<String, String> failureReasons = new LinkedHashMap<>();
+        Set<String> reportedFailures = new HashSet<>();
 
         for (String key : values.keySet()) {
             JsonElement value = values.get(key);
@@ -1295,6 +1305,9 @@ public class ServerPropertiesManager {
                 continue;
             }
             WriteResult written = writeProperty(key, value.getAsString());
+            if (written.reported) {
+                reportedFailures.add(key);
+            }
             switch (written.outcome) {
                 case WRITTEN:
                     updated.add(key);
@@ -1321,7 +1334,7 @@ public class ServerPropertiesManager {
 
         SetAllResult result = new SetAllResult(updated, rejected, failed, skipped, malformed, notPresentOnServer,
                 failureReasons);
-        warnIfIncomplete(result);
+        warnIfIncomplete(result, reportedFailures);
         sendResponse(buildSetAllResponse(result));
         return result;
     }
@@ -1362,9 +1375,9 @@ public class ServerPropertiesManager {
      * Both are needed: someone changing a setting that silently does not apply otherwise
      * finds nothing on either side.
      */
-    private void warnIfIncomplete(SetAllResult result) {
-        // A key refused with a reason was already logged once by refuse(); this line names only the rest.
-        String failure = result.describeUnreportedFailure();
+    private void warnIfIncomplete(SetAllResult result, Set<String> reportedFailures) {
+        // Refusals and write I/O failures already have a per-key diagnostic; name only the unreported failures.
+        String failure = result.describeUnreportedFailure(reportedFailures);
         if (failure == null) return;
         // This manager is constructed by initWebSocketManagers() in onEnable, so in
         // production the singleton is always ready by the time this runs; the null check

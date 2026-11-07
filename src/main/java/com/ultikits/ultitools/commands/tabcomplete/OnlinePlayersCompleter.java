@@ -49,8 +49,9 @@ public class OnlinePlayersCompleter implements TabCompleter {
                 continue;
             }
             
-            // Skip vanished players unless configured to show
-            if (!vanishedVisible && !requester.canSee(player)) {
+            // A non-player sender has no player-specific visibility restrictions.
+            // Skip vanished players for player requesters unless configured to show
+            if (!vanishedVisible && requester != null && !requester.canSee(player)) {
                 continue;
             }
             

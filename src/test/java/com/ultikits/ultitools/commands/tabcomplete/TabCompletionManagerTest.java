@@ -815,6 +815,7 @@ class TabCompletionManagerTest {
             MethodFallbackFixture fixture = new MethodFallbackFixture();
             Method fixtureMethod = MethodFallbackFixture.class.getDeclaredMethod("mapping", String.class);
             TabCompletionContext context = TabCompletionContext.builder()
+                    .player(mockPlayer)
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .partialArg("")
@@ -834,6 +835,7 @@ class TabCompletionManagerTest {
             MethodFallbackFixture fixture = new MethodFallbackFixture();
             Method fixtureMethod = MethodFallbackFixture.class.getDeclaredMethod("mapping", String.class);
             TabCompletionContext context = TabCompletionContext.builder()
+                    .player(mockPlayer)
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .partialArg("")

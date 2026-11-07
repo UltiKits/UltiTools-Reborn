@@ -37,7 +37,7 @@ import com.google.gson.reflect.TypeToken;
  * The sidecar file is named {@value #SIDECAR_FILE_NAME}. It lives directly under the module's
  * resource folder root -- never under {@code lang/}, {@code res/} or {@code config/} -- and its
  * name is dot-prefixed and starts with none of those three strings, so it can never collide with a
- * real extracted resource: {@code saveResources()} only ever extracts jar entries whose name
+ * real extracted resource: {@code saveResources(boolean)} only ever extracts jar entries whose name
  * starts with {@code "res"}, {@code "lang"} or {@code "config"}.
  * <p>
  * A missing or unparsable sidecar degrades to "no record" rather than throwing (T-16-04-03): an
@@ -73,7 +73,7 @@ public final class ResourceHashSidecar {
      * Files#readAllBytes} -- the previous implementation allocated a byte array as large as the
      * entire file, so a sufficiently large bundled resource (a module's web dashboard assets,
      * audio, etc.) could exhaust the server heap and abort module initialization, even though the
-     * extraction path that produced the file ({@code saveResources()}) already streams with a
+     * extraction path that produced the file ({@code saveResources(boolean)}) already streams with a
      * fixed-size buffer. Streaming here keeps peak memory bounded regardless of file size.
      *
      * @param file the file to hash; must exist and be readable
@@ -164,7 +164,7 @@ public final class ResourceHashSidecar {
     /**
      * Records every {@code resourcePath -> hash} pair in {@code newEntries} in ONE
      * read-modify-write cycle, instead of the one-cycle-per-entry cost calling {@link #record}
-     * once per entry in a loop would pay (Codex round 4, P2): {@code saveResources()} extracts
+     * once per entry in a loop would pay (Codex round 4, P2): {@code saveResources(boolean)} extracts
      * every jar entry across a single pass, so collecting that pass's hashes and persisting them
      * together avoids parsing and atomically rewriting an increasingly large sidecar once per
      * extracted file -- quadratic for a module bundling many resources (e.g. thousands of web
