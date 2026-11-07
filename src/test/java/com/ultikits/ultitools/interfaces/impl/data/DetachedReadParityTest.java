@@ -128,7 +128,7 @@ class DetachedReadParityTest {
         }
         backends.clear();
         backends.add(new Backend("json",
-                new SimpleJsonDataOperator<>(tempDir.toFile().getAbsolutePath(), ReadEntity.class)));
+                new SimpleJsonDataOperator<>(tempDir.resolve("rows").toFile().getAbsolutePath(), ReadEntity.class)));
         backends.add(new Backend("sqlite", new SQLiteDataOperator<>(dataSource, ReadEntity.class)));
     }
 

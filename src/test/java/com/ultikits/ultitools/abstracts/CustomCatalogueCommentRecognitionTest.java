@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 /**
@@ -41,7 +43,8 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
  * and no record of rendered texts is stored to recognise it.
  * <p>
  * Every start is a real one: the module's own constructor from a real jar, {@code commitLanguageProvenance()}, then a
- * real {@link AbstractConfigEntity#init(UltiToolsPlugin)} over the module's folder in a temporary directory.
+ * config registration through {@link ConfigManager} over the module's folder in a temporary directory.
+ * Reloads call {@link UltiToolsPlugin#reloadWithReport()} after applying the server language, as a full reload does.
  */
 @DisplayName("#615 item 1: a comment written from a custom language file follows language switches; one from an earlier custom text is the operator's")
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
@@ -63,7 +66,7 @@ class CustomCatalogueCommentRecognitionTest {
 
     private BootLanguageFixture fixture;
     private UltiToolsPlugin plugin;
-    private RecognitionConfig config;
+    private ConfigManager configManager;
 
     @SuppressWarnings("unused") // read reflectively by the binder
     @ConfigEntity(CONFIG_PATH)
@@ -83,7 +86,9 @@ class CustomCatalogueCommentRecognitionTest {
     void setUp() throws Exception {
         clearLeakedUltiToolsInstance();
         MockBukkitHelper.ensureCleanState();
-        fixture = BootLanguageFixture.create(tempDir);
+        configManager = new ConfigManager();
+        fixture = BootLanguageFixture.create(tempDir,
+                tools -> when(tools.getConfigManager()).thenReturn(configManager));
         fixture.jarEntry("lang/en.yml", "cfg_a: \"" + EN_A + "\"\n")
                 .jarEntry("lang/zh.yml", "cfg_a: \"" + ZH_A + "\"\n")
                 .onDisk("lang/zh-myserver.yml", "cfg_a: \"" + MYSERVER_A + "\"\n");
@@ -111,16 +116,13 @@ class CustomCatalogueCommentRecognitionTest {
         fixture.language(code);
         plugin = fixture.construct("6.3.0");
         plugin.commitLanguageProvenance();
-        config = new RecognitionConfig(CONFIG_PATH);
-        config.init(plugin);
+        configManager.register(plugin, new RecognitionConfig(CONFIG_PATH));
     }
 
-    /** {@code /ul reload} with {@code language} set to {@code code}: the module's reload steps, in their order. */
+    /** The full reload has applied the server language; drive the real module reload entry point. */
     private void reload(String code) throws Exception {
         fixture.language(code);
-        config.reload();
-        plugin.commitLanguageProvenance();
-        config.refreshFrameworkComments();
+        assertThat(plugin.reloadWithReport().isPartial()).isFalse();
     }
 
     private Path configFile() {
@@ -165,6 +167,24 @@ class CustomCatalogueCommentRecognitionTest {
     private String provenanceRecord() throws IOException {
         File record = fixture.provenanceRecord();
         return record.isFile() ? new String(Files.readAllBytes(record.toPath()), StandardCharsets.UTF_8) : "";
+    }
+
+    @Test
+    @DisplayName("reload switches a custom comment using a missing official catalogue without extracting it")
+    void reloadDoesNotCommitMissingLanguageResources() throws Exception {
+        putConfig(file(MYSERVER_A));
+        start("zh-myserver");
+        Path english = fixture.disk("lang/en.yml").toPath();
+        Files.delete(english);
+        Map<String, String> customBefore = customFileState();
+        byte[] provenance = BootLanguageFixture.bytesOf(fixture.provenanceRecord());
+
+        reload("en");
+
+        assertThat(text()).isEqualTo(file(EN_A));
+        assertThat(english).doesNotExist();
+        assertThat(customFileState()).isEqualTo(customBefore);
+        assertThat(BootLanguageFixture.bytesOf(fixture.provenanceRecord())).isEqualTo(provenance);
     }
 
     @Test

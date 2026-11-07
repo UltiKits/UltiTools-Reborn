@@ -5,7 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 
+import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.ReloadReport;
@@ -18,6 +20,7 @@ import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.exceptions.CommandException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.manager.PluginManager;
 
 /**
  * The command that reloads UltiTools-API.
@@ -67,8 +70,12 @@ public class UltiToolsCommands extends BaseCommandExecutor {
         } catch (IOException e) {
             throw new CommandException(ErrorCode.COMMAND_EXECUTION_FAILED, "Failed to reload plugins", e);
         }
-        for (String line : summary) {
-            sender.sendMessage(line);
+        for (int index = 0; index < summary.size(); index++) {
+            // Only the real console already received these module details through logging (#665).
+            // A capturing sender may have console permissions but owns a separate feedback channel.
+            if (!isNativeConsole(sender) || !PluginManager.isLoggedPartialReloadLine(summary, index)) {
+                sender.sendMessage(summary.get(index));
+            }
         }
     }
 
@@ -93,8 +100,10 @@ public class UltiToolsCommands extends BaseCommandExecutor {
                 }
                 // #529: a reload the module reported as partial is not answered with success.
                 if (report.isPartial()) {
-                    sender.sendMessage(String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_REPLY_KEY),
-                            plugin.getPluginName(), String.join("; ", report.getPartialReasons())));
+                    if (!isNativeConsole(sender)) {
+                        sender.sendMessage(String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_REPLY_KEY),
+                                plugin.getPluginName(), String.join("; ", report.getPartialReasons())));
+                    }
                     return;
                 }
                 sender.sendMessage(String.format(
@@ -104,6 +113,11 @@ public class UltiToolsCommands extends BaseCommandExecutor {
         }
         sender.sendMessage(String.format(
                 UltiTools.getInstance().i18n("模块 %s 不存在，请使用 /ul list 查看已加载的模块"), name));
+    }
+
+    /** Only a console sender can be the native console; ordinary feedback needs no server lookup. */
+    private static boolean isNativeConsole(CommandSender sender) {
+        return sender instanceof ConsoleCommandSender && sender == Bukkit.getConsoleSender();
     }
 
     /**
