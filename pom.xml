@@ -515,21 +515,28 @@
                              its entry here together with its ledger record. 6.4.0: the removals
                              announced for 6.4.0 (COMPATIBILITY.md, "Removal list for 6.4.0"). -->
                         <excludes>
+                            <exclude>com.ultikits.ultitools.annotations.ConfigEntry#parser()</exclude>
+                            <exclude>com.ultikits.ultitools.config.convert.LegacyParserAdapter</exclude>
                             <exclude>com.ultikits.ultitools.entities.ApiResponse</exclude>
                             <exclude>com.ultikits.ultitools.entities.TokenEntity</exclude>
                             <exclude>com.ultikits.ultitools.entities.vo.ServerEntityVO</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.DataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.Class)</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.DataStore#getOperator(java.io.File, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.ObjectConfigSerializer</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.Parser</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#getConnection()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setIsolationLevel(int)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setReadOnly(boolean)</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener()</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener(java.lang.Class, com.ultikits.ultitools.interfaces.TempEventHandler)</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener(java.lang.Class, com.ultikits.ultitools.interfaces.TempEventHandler, java.util.function.Function)</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener(java.lang.Class, com.ultikits.ultitools.interfaces.TempEventHandler, org.bukkit.event.EventPriority)</exclude>
-                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#getConnection()</exclude>
-                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setIsolationLevel(int)</exclude>
-                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setReadOnly(boolean)</exclude>
-                            <exclude>com.ultikits.ultitools.manager.CommandExecutionManager$CommandResult</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser</exclude>
                             <exclude>com.ultikits.ultitools.manager.CommandExecutionManager#executeCommand(com.google.gson.JsonObject)</exclude>
                             <exclude>com.ultikits.ultitools.manager.CommandExecutionManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandExecutionManager$CommandResult</exclude>
                             <exclude>com.ultikits.ultitools.manager.FileOperationManager#handleFileOperation(com.google.gson.JsonObject)</exclude>
                             <exclude>com.ultikits.ultitools.manager.FileOperationManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
                             <exclude>com.ultikits.ultitools.manager.LogStreamManager#getLogTransmitter()</exclude>
@@ -563,13 +570,20 @@
                             <exclude>com.ultikits.ultitools.manager.ServerPropertiesManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
                             <exclude>com.ultikits.ultitools.manager.UltiPanelLogTransmitter#UltiPanelLogTransmitter(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient, java.lang.String)</exclude>
                             <exclude>com.ultikits.ultitools.utils.AnnotationUtils#findAnnotation(java.lang.Class, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#login(java.lang.Runnable, java.util.function.Consumer, java.lang.Runnable, java.util.function.Consumer, java.util.function.Consumer)</exclude>
                             <exclude>com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus#getExpirationDate()</exclude>
                             <exclude>com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus#getUserName()</exclude>
-                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#login(java.lang.Runnable, java.util.function.Consumer, java.lang.Runnable, java.util.function.Consumer, java.util.function.Consumer)</exclude>
                             <exclude>com.ultikits.ultitools.utils.HttpRequestUtils#getServerByUUID(java.lang.String, com.ultikits.ultitools.entities.TokenEntity)</exclude>
                             <exclude>com.ultikits.ultitools.utils.HttpRequestUtils#registerServer(java.lang.String, java.lang.String, int, java.lang.String, boolean, com.ultikits.ultitools.entities.TokenEntity)</exclude>
                             <exclude>com.ultikits.ultitools.utils.HttpRequestUtils#updateServer(java.lang.String, int, java.lang.String, boolean, com.ultikits.ultitools.entities.TokenEntity)</exclude>
                             <exclude>com.ultikits.ultitools.utils.PluginInitiationUtils#startTokenRefreshScheduler()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.SimpleHttpClient</exclude>
+                            <exclude>com.ultikits.ultitools.utils.SimpleHttpClient$Response</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests#get(java.lang.String, java.util.Map)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests#post(java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests$Outcome</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests$Result</exclude>
                             <exclude>com.ultikits.ultitools.websocket.ExponentialBackoffStrategy</exclude>
                             <exclude>com.ultikits.ultitools.websocket.ExponentialBackoffStrategy$Builder</exclude>
                             <exclude>com.ultikits.ultitools.websocket.ReconnectStrategy</exclude>
