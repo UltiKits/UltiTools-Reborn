@@ -437,4 +437,34 @@ class AgentProtocolTest {
         assertThat(protocol.acceptedCapabilities()).containsExactly("telemetry");
         assertThat(logs).noneMatch(line -> line.startsWith(Level.SEVERE.getName()));
     }
+
+    // ------------------------------------------------------------------ not-accepted notice (#753)
+
+    @Test
+    @DisplayName("#753: one INFO line per connect names the offered capabilities the cloud did not accept")
+    void notAcceptedCapabilitiesAreLoggedOncePerConnect() {
+        HandshakeEndToEndTest.FakeAttempt attempt = open();
+        JsonObject welcome = welcome(attempt, SERVER_ID);
+        com.google.gson.JsonArray accepted = new com.google.gson.JsonArray();
+        accepted.add("telemetry");
+        accepted.add("logs");
+        welcome.getAsJsonObject("payload").add("accepted", accepted);
+        attempt.text(welcome.toString());
+
+        String line = "INFO UltiCloud: the cloud did not accept these offered capabilities:"
+                + " events:players, events:commands.";
+        assertThat(logs.stream().filter(line::equals)).hasSize(1);
+        assertThat(logs.stream().filter(logged -> logged.contains("did not accept"))).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("#753: no not-accepted line when the cloud accepted everything the server offered")
+    void noNoticeWhenEverythingIsAccepted() {
+        HandshakeEndToEndTest.FakeAttempt attempt = open();
+        attempt.text(welcome(attempt, SERVER_ID).toString());
+
+        assertThat(protocol.acceptedCapabilities()).containsExactlyElementsOf(capabilities);
+        assertThat(logs).as("control: the connect itself was logged").contains("INFO UltiCloud: connected.");
+        assertThat(logs).noneMatch(line -> line.contains("did not accept"));
+    }
 }
