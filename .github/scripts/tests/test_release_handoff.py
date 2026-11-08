@@ -537,6 +537,28 @@ class ReleaseFixture(object):
         shutil.rmtree(str(self.root), ignore_errors=True)
 
 
+SHELL_TOP_LEVEL_MARKER = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*\(\) \{|# -{3,})", re.M)
+
+
+def shell_function(text, name):
+    """Return the complete top-level definition of the shell function ``name`` in ``text``.
+
+    The definition runs from its ``name() {`` line to the next explicit top-level marker (another
+    function definition or a ``# ---`` section rule), not to the first column-0 ``}``, so a brace at
+    column 0 inside the body (a here-document line, for example) cannot silently truncate it. The
+    extracted text must end with the function's own closing ``}``; anything else between the
+    function and the next marker (a stray top-level command) fails loudly instead of being run.
+    """
+    start = re.search(r"^%s\(\) \{$" % re.escape(name), text, re.M)
+    if start is None:
+        raise AssertionError("no top-level definition of %s()" % name)
+    end = SHELL_TOP_LEVEL_MARKER.search(text, start.end())
+    chunk = text[start.start():end.start() if end else len(text)].rstrip()
+    if not chunk.endswith("\n}"):
+        raise AssertionError("%s() is not followed directly by a top-level marker" % name)
+    return chunk + "\n"
+
+
 class HandoffTestCase(unittest.TestCase):
 
     def setUp(self):
@@ -774,8 +796,8 @@ class ReleaseNotesTests(HandoffTestCase):
         if not tagged:
             # A retained release requires a prior formal tag. Exercise the existing no-tag
             # notes fallback directly, without weakening that unrelated publication guard.
-            body = RELEASE_SH.read_text().split("resolve_notes() {", 1)[1].split("\n}\n", 1)[0]
-            command = "resolve_notes() {" + body + "\n}\nNOTES=''\nNOTES_FILE=''\nresolve_notes\nprintf '%s' \"$NOTES\""
+            command = (shell_function(RELEASE_SH.read_text(), "resolve_notes")
+                       + "NOTES=''\nNOTES_FILE=''\nresolve_notes\nprintf '%s' \"$NOTES\"")
             result = subprocess.run([cast(str, BASH), "-ec", command], cwd=str(self.fx.work), env=self.fx.env,
                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -793,6 +815,19 @@ class ReleaseNotesTests(HandoffTestCase):
         self.assert_no_build()
         notes = self.fx.gh_state_data()["releases"][TAG]["notes"]
         return notes, history
+
+    def test_function_extraction_keeps_a_column_zero_brace_inside_the_body(self):
+        script = ("first() {\n    cat <<'EOF'\n}\nEOF\n    echo tail-of-first\n}\n\n"
+                  "# ---------------------------------------------------------------- next\n\nsecond() {\n    :\n}\n")
+        extracted = shell_function(script, "first")
+        self.assertIn("echo tail-of-first", extracted)
+        self.assertNotIn("second", extracted)
+        result = subprocess.run([cast(str, BASH), "-ec", extracted + "first"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout.decode(), "}\ntail-of-first\n")
+        with self.assertRaises(AssertionError):
+            shell_function("first() {\n    :\n}\nstray_top_level_command\n", "first")
 
     def test_automatic_notes_mark_truncation_after_fifty_commits(self):
         notes, history = self.publish_history(51)

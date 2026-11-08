@@ -821,6 +821,9 @@ class ConfigTypedMapKeyTest {
         // To this parser '02' is -2, a key neither the module nor the file holds: the line '2' is not its spelling.
         config.padded.remove(2);
         byte[] beforeNoOp = Files.readAllBytes(file().toPath());
+        // Back-dated like the other no-op checks in this class: with one-second timestamps, a
+        // rewrite in the same second as the previous write would otherwise keep the same value (#818).
+        assertThat(file().setLastModified(file().lastModified() - 10_000L)).isTrue();
         long modified = file().lastModified();
 
         assertThatCode(() -> config.saveOperatorMapEntry("padded", "02")).doesNotThrowAnyException();

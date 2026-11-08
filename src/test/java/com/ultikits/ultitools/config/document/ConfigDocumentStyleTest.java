@@ -175,10 +175,10 @@ class ConfigDocumentStyleTest {
         long start = clock.getCurrentThreadCpuTime();
         DocumentStyle style = DocumentStyle.detect(text, root);
         long cpuNanos = clock.getCurrentThreadCpuTime() - start;
-        System.out.printf("#578 style detection: 40000 BMP rows, current-thread CPU %.3f ms%n", cpuNanos / 1e6);
 
         assertThat(style.dumperOptions().isAllowUnicode()).isTrue();
-        assertThat(cpuNanos).as("40,000 scalar rows must not repeatedly scan their entire prefixes")
+        assertThat(cpuNanos).as("40,000 scalar rows must not repeatedly scan their entire prefixes (measured %.3f ms CPU)",
+                        cpuNanos / 1e6)
                 .isLessThan(java.util.concurrent.TimeUnit.SECONDS.toNanos(1));
     }
 
