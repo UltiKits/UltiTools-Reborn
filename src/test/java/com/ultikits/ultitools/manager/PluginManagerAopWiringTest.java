@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.annotation.Annotation;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Answers;
 import org.mockito.MockedStatic;
 
@@ -86,14 +88,21 @@ class PluginManagerAopWiringTest {
         timedH2DataSource = new HikariDataSource(config);
     }
 
+    // Per-test directory: a fixed directory under target/ would restore the previous run's
+    // committed rows and let the commit assertion pass without this run having committed anything.
+    @TempDir
+    Path tempDir;
+    private File jsonDataFolder;
+
     @BeforeEach
     void setUpDataStore() {
+        jsonDataFolder = tempDir.toFile();
         UltiTools mockUltiTools = mock(UltiTools.class);
-        jsonStore = new JsonStore("target/test-wireaop-json");
+        jsonStore = new JsonStore(jsonDataFolder.getPath());
         when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-        scope = DataScope.forExternal("PluginManagerAopWiringTest", new File("target/test-wireaop-json"),
+        scope = DataScope.forExternal("PluginManagerAopWiringTest", jsonDataFolder,
                 Collections.emptySet());
     }
 
@@ -115,7 +124,7 @@ class PluginManagerAopWiringTest {
      * examine that set); a separate scope carries the ownership these two tests specifically need.
      */
     private void stubJsonTestFolderOwnership() {
-        File dataFolder = new File("target/test-wireaop-json");
+        File dataFolder = jsonDataFolder;
         DataScope entityScope = DataScope.forExternal("PluginManagerAopWiringTest", dataFolder,
                 Collections.singleton(JsonTestEntity.class));
         PluginManager pluginManager = mock(PluginManager.class);
@@ -272,7 +281,7 @@ class PluginManagerAopWiringTest {
     void shouldRollBackOnJsonBackendWhenTransactionalMethodThrows() {
         stubJsonTestFolderOwnership();
         DataOperator<JsonTestEntity> operator =
-                jsonStore.getOperator(new File("target/test-wireaop-json"), JsonTestEntity.class);
+                jsonStore.getOperator(jsonDataFolder, JsonTestEntity.class);
 
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, scope);
@@ -292,7 +301,7 @@ class PluginManagerAopWiringTest {
     void shouldCommitOnJsonBackendWhenTransactionalMethodSucceeds() {
         stubJsonTestFolderOwnership();
         DataOperator<JsonTestEntity> operator =
-                jsonStore.getOperator(new File("target/test-wireaop-json"), JsonTestEntity.class);
+                jsonStore.getOperator(jsonDataFolder, JsonTestEntity.class);
 
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, scope);
@@ -301,6 +310,9 @@ class PluginManagerAopWiringTest {
         context.refresh();
 
         JsonTransactionally bean = context.getBean(JsonTransactionally.class);
+
+        assertNull(operator.getById("json-tx-success"),
+                "the target ID must be absent before this run commits, so the assertion below proves this run's commit");
 
         bean.writeThenSucceed();
         assertNotNull(operator.getById("json-tx-success"), "the insert must have been committed");
