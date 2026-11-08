@@ -712,25 +712,23 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * catalogue's own display name) with plain string equality -- correct only when the two
      * strings genuinely agree, which they do not for every module.
      * <p>
-     * <b>Preferred key, but inert today: {@code identifyString}.</b> This is the field {@link
+     * <b>Preferred key: {@code identifyString}.</b> This is the field {@link
      * PluginInstallUtils} and {@link com.ultikits.ultitools.manager.UpdateManager} already treat
      * as this framework's stable module identity for install/update/version lookups, and the one
      * field {@link PluginEntity} and {@link UltiToolsPlugin} both carry under the same name.
      * Compared only when BOTH sides carry a non-blank value -- two identify-string-less entries
      * are never treated as a match on that basis alone, or every such module would appear
      * installed against every such catalogue entry, which is worse than the bug being fixed.
-     * <b>Measured as of 6.3.0 (WR-01, `16-REVIEW-command.md`): zero of the seventeen module
-     * directories under {@code Modules/} declare {@code identify-string:} in {@code plugin.yml}</b>
-     * (verified: {@code grep -rl "identify-string:" Modules/*&#47;src/main/resources/plugin.yml}
-     * returns nothing), so {@code installedPlugin.getIdentifyString()} is {@code null} for every
-     * module that exists today, including both modules #439 names, and this branch does not fire
-     * for any of them. It exists so a module that DOES declare one -- and any future migration
-     * toward {@code identify-string:}-based identity -- is matched correctly without this method
-     * needing to change again; today it is aspirational, not load-bearing.
+     * <b>This branch is load-bearing (corrected for 6.4.0, UltiTools-Reborn#658):</b> all fifteen
+     * active modules now declare {@code identify-string:} in their {@code plugin.yml}, and the
+     * catalogue carries the same identifier, so for every first-party module the installed-state
+     * match ({@code /upm list}) is decided here. (When #439 was fixed, as of 6.3.0, none of them
+     * declared one and this branch was dormant; the earlier wording of this javadoc said so.)
      * <p>
-     * <b>What actually fires today: exact name equality, plus one fixed, deterministic prefix
-     * strip.</b> Measured (WR-01): only 4 of the 15 active modules declare a Bukkit {@code
-     * name:} carrying the literal {@code "UltiTools-"} prefix -- {@code UltiTools-Chat}
+     * <b>The fallback when either identifier is blank: exact name equality, plus one fixed,
+     * deterministic prefix strip.</b> It still decides third-party modules without an
+     * {@code identify-string:} and catalogue entries without one. Measured (WR-01): only 4 of the
+     * 15 active modules declare a Bukkit {@code name:} carrying the literal {@code "UltiTools-"} prefix -- {@code UltiTools-Chat}
      * ({@code Modules/UltiChat/src/main/resources/plugin.yml:1}), {@code UltiTools-Economy}
      * ({@code Modules/UltiEconomy/.../plugin.yml:1}), {@code UltiTools-Kits}
      * ({@code Modules/UltiKits/.../plugin.yml:1}), and {@code UltiTools-Menu}
@@ -762,13 +760,13 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * <p>
      * <b>Residual collision risk (WR-01), disclosed rather than papered over:</b> the risk above
      * is closed whenever BOTH sides carry an identifier. It remains open only when at least one
-     * side's {@code identifyString} is blank -- true for every module today (0/17) -- in which
-     * case a THIRD-PARTY module that names itself {@code UltiTools-Foo} in its own {@code
+     * side's {@code identifyString} is blank -- no longer the case for any first-party module, but
+     * possible for a third-party one -- in which case a THIRD-PARTY module that names itself {@code UltiTools-Foo} in its own {@code
      * plugin.yml} would still be reported installed against a different, unrelated author's
      * unaffiliated catalogue entry literally named {@code Foo}, since neither {@code
      * UltiToolsPlugin} nor {@code PluginEntity} exposes anything else (a developer/author ID) this
      * method could cross-check in that case. Still strictly better than the defect being fixed:
-     * today, EVERY module whose name doesn't already match its catalogue display name
+     * before #439, EVERY module whose name doesn't already match its catalogue display name
      * byte-for-byte is unconditionally reported not installed, a guaranteed false negative for
      * real, correctly-loaded modules. Closing the remaining gap needs a stable identifier
      * populated on both sides (#474), not a looser name heuristic.
