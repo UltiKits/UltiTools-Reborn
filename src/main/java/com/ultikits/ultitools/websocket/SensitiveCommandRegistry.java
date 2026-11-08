@@ -55,6 +55,13 @@ public final class SensitiveCommandRegistry {
     /** What replaces a registered command's arguments. */
     private static final String REDACTED = " ***";
 
+    /**
+     * The framework's own secret-carrying commands: {@code ulticloud}, whose {@code login <code>} form carries the
+     * single-use re-pair code of the panel's "Revoke and re-pair" action (issue #869). Its other subcommands carry
+     * no arguments, so redacting the whole command loses nothing.
+     */
+    static final String[] FRAMEWORK_COMMANDS = {"ulticloud"};
+
     /** The registered names, normalised by {@link #normalize(String)}. */
     private final Set<String> names = ConcurrentHashMap.newKeySet();
 
@@ -62,15 +69,8 @@ public final class SensitiveCommandRegistry {
      * Creates an empty registry.
      */
     public SensitiveCommandRegistry() {
-        // Starts empty by design: the framework registers no command of its own.
+        // Starts empty by design; the framework's own registry comes from withFrameworkCommands().
     }
-
-    /**
-     * The framework's own secret-carrying commands: {@code ulticloud}, whose {@code login <code>} form carries the
-     * single-use re-pair code of the panel's "Revoke and re-pair" action (issue #869). Its other subcommands carry
-     * no arguments, so redacting the whole command loses nothing.
-     */
-    static final String[] FRAMEWORK_COMMANDS = {"ulticloud"};
 
     /**
      * Creates the framework's registry: a new registry with {@link #FRAMEWORK_COMMANDS} registered, so a player who
