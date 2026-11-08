@@ -304,7 +304,7 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("/upm install demo 2.0.0, whose metadata names apiLevel 640: refused as 'this version cannot be"
+    @DisplayName("/upm install demo 2.0.0, whose metadata names an apiLevel above the framework's: refused as 'this version cannot be"
             + " installed', nothing downloaded")
     void namedVersionAboveTheLevel_isRefusedWithoutDownload() {
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
@@ -319,9 +319,23 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
+    @DisplayName("on a 6.4.0 framework (level 640) the stub's 2.0.0 is still above the level: the UAT stub rows stay"
+            + " 'cannot be installed' as the framework's own level rises")
+    void stubLicensedVersion_staysAboveA640Framework() {
+        frameworkAt(640);
+
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+                StubCatalogue.LICENSED_VERSION);
+
+        assertThat(result.isInstalled()).isFalse();
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE);
+        assertThat(downloadedAnything()).isFalse();
+    }
+
+    @Test
     @DisplayName("a version whose download is license_required is 'not available', refused before any download, with one catalogue line")
     void licensedVersion_isRefusedWithoutDownloading() {
-        frameworkAt(640);
+        frameworkAt(StubCatalogue.LICENSED_API_LEVEL);
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
                 StubCatalogue.LICENSED_VERSION);
