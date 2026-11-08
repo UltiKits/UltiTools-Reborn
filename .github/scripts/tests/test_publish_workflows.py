@@ -53,6 +53,8 @@ REPO_ROOT = SCRIPTS.parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SNAPSHOT_WORKFLOW = WORKFLOWS / "snapshot-publish.yml"
 PUBLISH_WORKFLOW = WORKFLOWS / "publish-packages.yml"
+# The GitHub Packages upload names its plugin version instead of taking whatever the runner image resolves.
+DEPLOY_FILE_GOAL = "org.apache.maven.plugins:maven-deploy-plugin:3.1.4:deploy-file"
 HELPER = SCRIPTS / "release_artifacts.py"
 REGISTRAR_DIR = SCRIPTS / "maven"
 REGISTRAR_SOURCE = REGISTRAR_DIR / "RetainedArtifactsParticipant.java"
@@ -168,12 +170,94 @@ class ReleaseValidationTests(unittest.TestCase):
                 if key == ("maven-ci.yml", "release-tooling"):
                     self.assertEqual(steps[pins[0]]["if"], "steps.changes.outputs.tooling == 'true'")
                 else:
-                    self.assertNotIn("if", steps[pins[0]], key)
+                    # A re-run that finds the exact bytes already on Central publishes nothing, so it must
+                    # not depend on downloading Maven either.
+                    self.assertEqual(steps[pins[0]]["if"], "steps.central-state.outputs.publish == 'true'", key)
                 self.assertNotIn("continue-on-error", steps[pins[0]], key)
                 for call in calls:
                     with self.subTest(workflow=path.name, job=name, step=steps[call].get("name")):
                         self.assertLess(pins[0], call, "pin must precede every Maven run in the job")
         self.assertEqual(found, required | exempt)
+
+    def test_only_known_maven_free_steps_precede_the_maven_pin(self):
+        # Counting direct `mvn` in a step's run text misses scripts and suites that call Maven indirectly, so
+        # the steps allowed before the pin are listed by name: anything new placed before it fails here.
+        allowed = {
+            ("maven-ci.yml", "release-tooling"): [
+                "📥 Checkout code", "Classify changed paths", "☕ Set up JDK 21"],
+            ("publish-packages.yml", "publish-central"): [
+                "📥 Checkout code", "☕ Set up JDK 21 with Sonatype credentials", "🔑 Check GPG key expiry",
+                "📥 Download and verify the retained release files", "🔍 Check Maven Central for this coordinate"],
+        }
+        for (workflow, job_name), names in allowed.items():
+            with self.subTest(workflow=workflow, job=job_name):
+                steps = load_workflow(WORKFLOWS / workflow)["jobs"][job_name]["steps"]
+                pin = steps.index(step_named({"steps": steps}, "Set up pinned Maven for Central staging"))
+                self.assertEqual([step.get("name") for step in steps[:pin]], names)
+                for step in steps[:pin]:
+                    self.assertNotRegex(step.get("run", ""), r"\bmvn\b|setup-pinned-maven|unittest", step.get("name"))
+
+    def test_github_packages_deploy_names_its_plugin_version(self):
+        job = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-github"]
+        scripts = "\n".join(step.get("run", "") for step in job["steps"])
+        self.assertIn("mvn -B " + DEPLOY_FILE_GOAL + " ", scripts)
+        self.assertNotRegex(scripts, r"(?<![:\w])deploy:deploy-file")
+
+    def _run_pinned_maven_setup(self, curl_source):
+        work = Path(tempfile.mkdtemp(prefix="pinned-maven-"))
+        try:
+            fake_bin, runner_temp = work / "bin", work / "runner-temp"
+            fake_bin.mkdir()
+            runner_temp.mkdir()
+            curl = fake_bin / "curl"
+            curl.write_text("#!%s -I\n%s" % (sys.executable, textwrap.dedent(curl_source)))
+            curl.chmod(0o755)
+            github_path = work / "github-path"
+            github_path.write_text("")
+            calls = work / "curl-calls"
+            env = {"PATH": os.pathsep.join([str(fake_bin), "/usr/bin", "/bin"]), "RUNNER_TEMP": str(runner_temp),
+                   "GITHUB_PATH": str(github_path), "CURL_CALLS": str(calls), "LANG": "C.UTF-8"}
+            result = subprocess.run(["bash", str(SCRIPTS / "setup-pinned-maven.sh")], env=env,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    timeout=60)
+            tried = calls.read_text().splitlines() if calls.exists() else []
+            return result, github_path.read_text(), tried
+        finally:
+            shutil.rmtree(str(work), ignore_errors=True)
+
+    def test_pinned_maven_setup_refuses_wrong_bytes_and_failed_downloads(self):
+        record = '''
+            import os, sys
+            argv = sys.argv[1:]
+            url = [a for a in argv if a.startswith("https://")][0]
+            with open(os.environ["CURL_CALLS"], "a") as fh:
+                fh.write(url + "\\n")
+        '''
+        cases = {
+            # A well-formed archive with the expected layout, so only the checksum can stop it.
+            "wrong bytes": record + '''
+            import io, tarfile
+            with tarfile.open(argv[argv.index("--output") + 1], "w:gz") as archive:
+                entry = tarfile.TarInfo("apache-maven-3.9.16/bin/mvn")
+                body = b"#!/bin/sh\\n"
+                entry.size = len(body)
+                archive.addfile(entry, io.BytesIO(body))
+            sys.exit(0)
+            ''',
+            "HTTP failure": record + '''
+            sys.exit(22)
+            ''',
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                result, github_path, tried = self._run_pinned_maven_setup(source)
+                self.assertNotEqual(result.returncode, 0, result.stdout.decode("utf-8", "replace"))
+                self.assertEqual(github_path, "", "nothing may be put on PATH")
+                if label == "HTTP failure":
+                    self.assertEqual(len(tried), 2, "both sources are tried before giving up")
+                    self.assertIn("Could not download Maven", result.stdout.decode("utf-8", "replace"))
+                else:
+                    self.assertEqual(len(tried), 1, "the first source answered; the checksum refuses it")
 
     def test_checkout_never_persists_credentials(self):
         checkouts = 0
@@ -2023,7 +2107,7 @@ while rest:
         props[key] = value
     elif not item.startswith("-"):
         goals.append(item)
-if goals == ["deploy:deploy-file"]:
+if goals == ["org.apache.maven.plugins:maven-deploy-plugin:3.1.4:deploy-file"]:
     store = state / "ghp"
     store.mkdir(exist_ok=True)
     stem = "%s-%s" % (props["artifactId"], props["version"])
@@ -2387,7 +2471,7 @@ class PublishWorkflowTests(unittest.TestCase):
                 results = fixture.run_release()
                 self.assertEqual(results["publish-central"].status, "failure", results["publish-central"].log)
                 self.assertEqual(results["publish-github"].status, "skipped", results["publish-github"].log)
-                self.assertEqual(fixture.mvn_goal_calls("deploy:deploy-file"), [])
+                self.assertEqual(fixture.mvn_goal_calls(DEPLOY_FILE_GOAL), [])
                 self.assertFalse((fixture.state / "ghp").exists())
                 self.assertFalse((fixture.state / "central-published").exists())
                 self.assert_no_lifecycle_build()
@@ -2399,7 +2483,7 @@ class PublishWorkflowTests(unittest.TestCase):
             self.assertEqual(results[name].status, "success", results[name].log)
         calls = self.fixture.entries("mvn")
         central = self.fixture.mvn_goal_calls("org.sonatype.central:central-publishing-maven-plugin:0.9.0:publish")
-        github = self.fixture.mvn_goal_calls("deploy:deploy-file")
+        github = self.fixture.mvn_goal_calls(DEPLOY_FILE_GOAL)
         self.assertEqual(len(central), 1)
         self.assertEqual(len(github), 1)
         self.assertLess(calls.index(central[0]), calls.index(github[0]))
@@ -2418,7 +2502,7 @@ class PublishWorkflowTests(unittest.TestCase):
                 self.assertEqual(results["validate"].status, "success")
                 self.assertEqual(results["publish-central"].status, "skipped")
                 self.assertEqual(results["publish-github"].status, "success", results["publish-github"].log)
-                self.assertEqual(len(fixture.mvn_goal_calls("deploy:deploy-file")), 1)
+                self.assertEqual(len(fixture.mvn_goal_calls(DEPLOY_FILE_GOAL)), 1)
                 self.assertFalse((fixture.state / "central-published").exists())
                 self.assertEqual(fixture.entries("real-mvn"), [])
                 self.assert_no_lifecycle_build()
@@ -2450,6 +2534,20 @@ class PublishWorkflowTests(unittest.TestCase):
                 self.assertEqual(result.status, "skipped", result.log)
                 self.assertEqual(fixture.entries("mvn"), [])
                 kill_agent(fixture.gnupg)
+
+    def test_central_job_outlasts_the_publishers_own_wait(self):
+        # The 6.3.1 run was cancelled by the job timeout (20 minutes) while the publisher was still
+        # waiting for Central to report "published"; the re-check step never ran (issue #813). The
+        # publisher's wait bound is explicit and the job timeout leaves room for it and the other steps.
+        job = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-central"]
+        publish = step_named(job, "📤 Publish the retained files to Maven Central")
+        match = re.search(r"-DwaitMaxTime=(\d+)(?:\s|$)", publish["run"])
+        self.assertIsNotNone(match, "the publisher's wait bound is not explicit")
+        wait_minutes = int(match.group(1)) / 60.0
+        self.assertGreaterEqual(wait_minutes, 45)
+        self.assertGreaterEqual(int(job["timeout-minutes"]), wait_minutes + 20)
+        recheck = step_named(job, "🔁 Re-check the retained files after publication")
+        self.assertNotIn("timeout-minutes", recheck)
 
     def test_github_job_explicitly_depends_on_central(self):
         job = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-github"]
@@ -2498,7 +2596,7 @@ class PublishWorkflowTests(unittest.TestCase):
         self.assertFalse((self.fixture.root / "home" / ".gnupg").exists())
         self.assertEqual(self.fixture.entries("gpg-connect-agent"), [])
 
-        deploys = self.fixture.mvn_goal_calls("deploy:deploy-file")
+        deploys = self.fixture.mvn_goal_calls(DEPLOY_FILE_GOAL)
         self.assertEqual(len(deploys), 1, github.log)
         gh_inputs = github.runner / "retained-inputs"
         argv = deploys[0]["argv"]
@@ -2584,7 +2682,7 @@ class PublishWorkflowTests(unittest.TestCase):
                     self.assertEqual(result.status, "failure", result.log)
                     self.assertEqual(self.failed_step(result), "📥 Download and verify the retained release files",
                                      result.log)
-                self.assertEqual(fixture.mvn_goal_calls("deploy:deploy-file"), [])
+                self.assertEqual(fixture.mvn_goal_calls(DEPLOY_FILE_GOAL), [])
                 self.assertEqual(fixture.entries("real-mvn"), [])
                 self.assertFalse((fixture.state / "ghp").exists())
                 self.assert_no_lifecycle_build()
@@ -2597,7 +2695,7 @@ class PublishWorkflowTests(unittest.TestCase):
             self.assertEqual(result.status, "failure", result.log)
             self.assertEqual(self.failed_step(result), "📥 Download and verify the retained release files")
             self.assertIn("source_head_mismatch", result.log)
-        self.assertEqual(self.fixture.mvn_goal_calls("deploy:deploy-file"), [])
+        self.assertEqual(self.fixture.mvn_goal_calls(DEPLOY_FILE_GOAL), [])
         self.assertEqual(self.fixture.entries("real-mvn"), [])
 
     def test_identical_remotes_are_reconciled_and_different_or_unreadable_remotes_refused(self):
@@ -2607,7 +2705,7 @@ class PublishWorkflowTests(unittest.TestCase):
         shutil.copyfile(str(self.release.retained / GHP_POM), str(ghp / ("ultitools-api-%s.pom" % VERSION)))
         github = self.fixture.run("publish-github")
         self.assertEqual(github.status, "success", github.log)
-        self.assertEqual(self.fixture.mvn_goal_calls("deploy:deploy-file"), [])
+        self.assertEqual(self.fixture.mvn_goal_calls(DEPLOY_FILE_GOAL), [])
         for name in (PAYLOADS["primary"], PAYLOADS["pom"]):
             shutil.copyfile(str(self.release.retained / name), str(self.fixture.state / "central" / name))
         central = self.fixture.run("publish-central")
@@ -2624,7 +2722,7 @@ class PublishWorkflowTests(unittest.TestCase):
             result = different.run(job)
             self.assertEqual(result.status, "failure", result.log)
             self.assertIn("remote_", result.log)
-        self.assertEqual(different.mvn_goal_calls("deploy:deploy-file"), [])
+        self.assertEqual(different.mvn_goal_calls(DEPLOY_FILE_GOAL), [])
         self.assertEqual(different.entries("real-mvn"), [])
         kill_agent(different.gnupg)
 

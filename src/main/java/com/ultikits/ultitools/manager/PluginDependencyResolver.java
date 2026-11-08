@@ -165,9 +165,16 @@ public class PluginDependencyResolver {
          * soft-dependency entry through {@code aliasMap} before checking availability so it may
          * name either a simple class name or a {@code plugin.yml} name (D-12).
          *
-         * @param availablePlugins the plugin names present in this resolve
+         * @param availablePlugins the plugin names present in this resolve, as the keys
+         *                         {@code aliasMap} maps to; the resolver passes its internal node
+         *                         keys (fully qualified class names)
          * @param aliasMap         maps a declared name (simple class name or plugin.yml name) to
-         *                         the canonical node key (independent of its display name)
+         *                         the canonical node key (independent of its display name). An
+         *                         entry missing from it is looked up in {@code availablePlugins}
+         *                         verbatim, so with the resolver's own inputs a soft dependency
+         *                         spelled as a fully qualified class name counts as available but
+         *                         adds no ordering edge, because the resolver itself resolves only
+         *                         declared names (#841)
          * @return the combined hard + resolvable-soft dependency set, by raw declared name
          * @since 6.3.0
          */
@@ -333,7 +340,41 @@ public class PluginDependencyResolver {
             }
         }
         warnOnDuplicatePluginYmlNames(nodes, aliasMap, displayNames);
+        warnOnAmbiguousReferencedSimpleNames(nodes, aliasMap);
         return aliasMap;
+    }
+
+    /**
+     * Logs one WARNING per main-class simple name that two or more modules share and that some
+     * module actually names in {@code depends}, {@code softDepends}, {@code loadBefore} or a
+     * plugin.yml {@code loadAfter} (#841). Such a name resolves to the last-discovered module
+     * (historical behaviour, unchanged); the warning lists every fully qualified class and the
+     * winner, as {@link #warnOnDuplicatePluginYmlNames} does for plugin.yml names. A shared simple
+     * name that nothing references is not reported: it decides nothing.
+     */
+    private void warnOnAmbiguousReferencedSimpleNames(Map<String, PluginNode> nodes, Map<String, String> aliasMap) {
+        Map<String, List<String>> classesBySimpleName = new LinkedHashMap<>();
+        for (PluginNode node : nodes.values()) {
+            classesBySimpleName.computeIfAbsent(node.getPluginName(), k -> new ArrayList<>()).add(node.getId());
+        }
+        Set<String> referenced = new HashSet<>();
+        for (PluginNode node : nodes.values()) {
+            referenced.addAll(node.getHardDependencies());
+            referenced.addAll(node.getSoftDependencies());
+            referenced.addAll(node.getLoadBefore());
+            referenced.addAll(node.getLoadAfter());
+        }
+        for (Map.Entry<String, List<String>> entry : classesBySimpleName.entrySet()) {
+            String simpleName = entry.getKey();
+            if (entry.getValue().size() > 1 && referenced.contains(simpleName)) {
+                logger.warning(String.format(
+                    "[UltiTools-API] Multiple modules share the main class simple name '%s': %s. "
+                        + "Dependency resolution will resolve this name to '%s' (the module discovered "
+                        + "last); name the intended module by its plugin.yml name: instead to remove "
+                        + "the ambiguity.",
+                    simpleName, entry.getValue(), aliasMap.get(simpleName)));
+            }
+        }
     }
 
     /** Keep existing diagnostic names, qualifying only colliding simple names. */

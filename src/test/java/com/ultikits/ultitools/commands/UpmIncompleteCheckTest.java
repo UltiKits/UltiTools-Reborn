@@ -48,6 +48,7 @@ class UpmIncompleteCheckTest {
     private static final String NONE = "没有可用的更新。";
     private static final String INCOMPLETE = "更新检查未完成：无法确认 %s 的最新版本。";
     private static final String PENDING = "更新检查仍在进行，请稍后重试。";
+    private static final String FAILED = "更新检查失败，详情见控制台；重启服务器后会再次检查。";
 
     private MockedStatic<UltiTools> ultiMock;
     private MockedStatic<org.bukkit.Bukkit> bukkitMock;
@@ -149,6 +150,30 @@ class UpmIncompleteCheckTest {
         runCommand(target);
 
         assertThat(all()).contains(NONE).doesNotContain(PENDING);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"check", "Demo", "all"})
+    @DisplayName("#838: a start-up check that failed is reported as failed, not as still running")
+    void commandAfterTheCheckFailed(String target) {
+        when(updateManager.isCheckComplete()).thenReturn(false);
+        when(updateManager.isCheckFailed()).thenReturn(true);
+
+        runCommand(target);
+
+        assertThat(said).containsExactly(ChatColor.YELLOW + FAILED);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    @DisplayName("#838: both shipped language catalogues contain the failed message")
+    void failedMessageIsLocalized(String language) throws Exception {
+        try (java.io.InputStream in = getClass().getClassLoader()
+                .getResourceAsStream("lang/" + language + ".json")) {
+            String expected = "en".equals(language)
+                    ? "Update check failed; see the console. It runs again at the next server start." : FAILED;
+            assertThat(new ObjectMapper().readTree(in).path(FAILED).asText()).isEqualTo(expected);
+        }
     }
 
     @ParameterizedTest
