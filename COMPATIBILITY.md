@@ -13,6 +13,8 @@ Earlier builds can exhaust a nominal 3 s busy wait in about 0.4 s on the server 
 
 A read-before-write transaction can still fail immediately when upgrading its read lock would deadlock with another transaction. A busy handler does not remove that SQLite behavior: do not assume every SQLITE_BUSY waits for the full timeout, or retry an entire transaction blindly. The framework does not switch transactions to IMMEDIATE to hide it. Direct changes to SQLite-owned busy handlers or PRAGMA busy_timeout by module code are outside the framework-managed wait policy.
 
+The elapsed-time busy handler is built for the SQLite JDBC driver UltiTools ships (#823). If another plugin or a fork places a different `org.sqlite` driver where UltiTools' classes resolve it, the wait budget can behave differently without a warning. Do not replace or shadow the shipped SQLite driver.
+
 ## Upgrade checklist: moving a module from 6.2.5 to 6.3.0
 
 What a module author has to do, in the order you would do it. Each item is one action and links to the section that
@@ -2473,7 +2475,11 @@ This section governs the third kind.
   `IllegalArgumentException` is not normalised to `DataAccessException`; a missing-row `updateIf`
   returns `false` before evaluating its condition. Module authors must use finite query values,
   including for `EQUAL` and `updateIf`, rather than rely on a common rejection type or retry a
-  non-finite threshold. A numeric field's column that holds non-numeric text,
+  non-finite threshold. **Known limitation (#815): a null comparison value is not portable either.** JSON refuses a
+  non-`EQUAL` condition whose value is null with `DataAccessException` (`DATA_ENTITY_INVALID`), while SQLite and MySQL
+  compare it with the text `null`; on JSON an `EQUAL` condition whose value is null, and `del(WhereCondition.empty())`,
+  throw `NullPointerException`. Module authors must not pass a null comparison value or an empty condition to `del`.
+  A numeric field's column that holds non-numeric text,
   written by hand or by another program, compares on SQLite as its leading number (`'abc'` as 0,
   `'12abc'` as 12), while JSON compares that row as text. See `ultitools.storage.where-comparisons`
   in `FEATURES.md`.
