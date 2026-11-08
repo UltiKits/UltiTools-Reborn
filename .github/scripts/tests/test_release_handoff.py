@@ -185,6 +185,14 @@ if argv[:2] == ["auth", "status"]:
     sys.exit(0)
 if len(argv) < 3 or argv[0] != "release":
     fail("unexpected gh call %r" % argv, 96)
+# Every release call must name the repository explicitly: gh's own default repository (gh repo set-default)
+# may point at a fork, while the git checks use origin.
+if argv.count("--repo") != 1 or argv.index("--repo") + 1 >= len(argv):
+    fail("release call without exactly one --repo %r" % argv, 95)
+repo_at = argv.index("--repo")
+if argv[repo_at + 1] != os.environ.get("FAKE_GH_REPO", "UltiKits/UltiTools-Reborn"):
+    fail("release call for the wrong repository %r" % argv, 95)
+argv = argv[:repo_at] + argv[repo_at + 2:]
 verb, tag, rest = argv[1], argv[2], argv[3:]
 if "--clobber" in rest:
     fail("--clobber is forbidden", 98)
@@ -270,8 +278,14 @@ if verb == "download":
 if verb == "edit":
     if rel is None:
         fail("release not found")
-    values, _ = parse(rest, (), ())
-    if values == {"--draft": "false"}:
+    values, _ = parse(rest, ("--notes",), ())
+    if values.get("--draft") == "false" and set(values) <= {"--draft", "--notes", "--prerelease"}:
+        if "--notes" in values:
+            rel["notes"] = values["--notes"]
+        if "--prerelease" in values:
+            if values["--prerelease"] not in ("true", "false"):
+                fail("--prerelease takes true or false", 96)
+            rel["prerelease"] = values["--prerelease"] == "true"
         rel["draft"] = False
         save()
         tag_origin(tag, rel["target"])
@@ -441,9 +455,20 @@ class ReleaseFixture(object):
 
     # ----------------------------------------------------------------------- calls
 
-    def calls(self, tool=None):
+    def calls(self, tool=None, raw=False):
+        """The logged argument lists. Unless raw, gh's ``--repo <owner/name>`` pair (which the fake gh requires
+        on every release call) is dropped, so positional checks read the call itself."""
         entries = [json.loads(line) for line in self.log.read_text().splitlines() if line.strip()]
-        return [e["argv"] for e in entries if tool is None or e["tool"] == tool]
+        result = []
+        for e in entries:
+            if tool is not None and e["tool"] != tool:
+                continue
+            argv = list(e["argv"])
+            if not raw and e["tool"] == "gh" and "--repo" in argv:
+                at = argv.index("--repo")
+                del argv[at:at + 2]
+            result.append(argv)
+        return result
 
     def gh_writes(self):
         return [argv for argv in self.calls("gh")
@@ -647,8 +672,12 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertFalse(self.retain.exists())
 
     def test_prepare_then_publish_same_checkout_with_real_test_store_path(self):
+        # The test that wrote this store under target/ now uses a per-test @TempDir (#698), so it leaves nothing
+        # in the checkout; the release must still tolerate test output under the ignored target/ directory.
         source = (REPO_ROOT / "src/test/java/com/ultikits/ultitools/manager/PluginManagerAopWiringTest.java")
-        store = re.search(r'new JsonStore\("([^"]+)"\)', source.read_text()).group(1)
+        self.assertIsNone(re.search(r'new JsonStore\("', source.read_text()),
+                          "a JsonStore at a fixed checkout path would restore a previous run's data")
+        store = "target/test-wireaop-json"
         result = self.prepare(env={"FAKE_MVN_VARIANT": "test-store-output", "FAKE_TEST_STORE": store})
         self.assertEqual(result.returncode, 0, result.stdout.decode())
         manifest = self.retain / MANIFEST
@@ -1454,6 +1483,32 @@ class EdgeHandoffTests(HandoffTestCase):
         self.assertEqual(self.fx.git_raw("--git-dir", str(self.fx.origin), "rev-parse", TAG + "^{commit}",
                                          cwd=self.fx.root), self.fx.head())
         self.assertFalse(any("--clobber" in a for a in gh))
+
+    def test_completing_a_draft_applies_the_requested_notes_and_prerelease(self):
+        manifest, authority, uat = self.approved()
+        first = self.publish(manifest, authority, uat, env={"FAKE_GH_FAIL_AFTER_ASSETS": "2"})
+        self.assertNotEqual(first.returncode, 0)
+        rel = self.fx.gh_state_data()["releases"][TAG]
+        self.assertTrue(rel["draft"])
+        self.assertFalse(rel["prerelease"])
+        second = self.publish(manifest, authority, uat, "--notes", "Corrected notes.", "--prerelease")
+        self.assertEqual(second.returncode, 0, second.stdout.decode())
+        rel = self.fx.gh_state_data()["releases"][TAG]
+        self.assertFalse(rel["draft"])
+        self.assertEqual(rel["notes"], "Corrected notes.", "the completed draft carries this run's notes")
+        self.assertTrue(rel["prerelease"], "the completed draft carries this run's --prerelease")
+
+    def test_every_release_call_names_the_origin_repository(self):
+        manifest, authority, uat = self.approved()
+        self.fx.log.write_text("")
+        result = self.publish(manifest, authority, uat)
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        release_calls = [argv for argv in self.fx.calls("gh", raw=True) if argv[:1] == ["release"]]
+        self.assertTrue(release_calls)
+        for argv in release_calls:
+            with self.subTest(argv=argv):
+                self.assertEqual(argv.count("--repo"), 1)
+                self.assertEqual(argv[argv.index("--repo") + 1], REPO)
 
     def test_repeat_after_success_changes_nothing(self):
         manifest, authority, uat = self.approved()
