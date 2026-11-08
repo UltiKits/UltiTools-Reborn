@@ -731,9 +731,10 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * {@link #appendConditions(StringBuilder, List, WhereCondition[], boolean)}, with the switch only
      * {@link #updateIf} turns on (#640): with {@code nullMeansIsNull} a condition with the default
      * {@link Comparison#EQUAL} and a {@code null} value renders {@code <column> IS NULL} and binds
-     * nothing for it. Off -- the four read and delete builders -- rendering and binding are exactly
-     * as before ({@code <column> = ?} bound to {@code null}, which matches no row). The caller has
-     * already refused a {@code null} value under any other comparison.
+     * nothing for it. Off -- the four read and delete builders -- a {@code null} value is refused like
+     * any other {@code null} or non-finite value ({@link ConditionValues#requireComparable}, as of
+     * 6.4.0; before, {@code <column> = ?} was bound to {@code null} and matched no row). The caller
+     * has already refused a {@code null} value under any other comparison.
      *
      * @param sql             the SQL being built
      * @param params          the parameter list to append bound values to, in SQL order
@@ -760,6 +761,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 sql.append(condition.getColumn()).append(" IS NULL");
                 continue;
             }
+            // A null or non-finite value has no comparison meaning shared with the other backends
+            // (#815, #696): refused with the same typed exception JSON throws, before any SQL runs.
+            ConditionValues.requireComparable(condition, tableName);
             Comparison comparison = condition.getComparison();
             if (comparison == Comparison.GREATER || comparison == Comparison.LESS) {
                 Class<?> fieldType = columnTypes.get(condition.getColumn());
@@ -776,6 +780,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public boolean exist(T object) {
+        // No row has a null id, and a null value is not a comparable condition value (#815), so
+        // answer without building one -- as the JSON backend does.
+        if (object.getId() == null) {
+            return false;
+        }
         return exist(WhereCondition.builder().column("id").value(object.getId()).build());
     }
 
@@ -1060,7 +1069,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * bound as parameters. A {@code null} expected value under the default {@link Comparison#EQUAL}
      * renders {@code <column> IS NULL} and binds nothing (#640); this meaning belongs to this method
      * alone -- {@link #getAll(WhereCondition...)}, {@link #exist(WhereCondition...)},
-     * {@link #del(WhereCondition...)} and {@link #page(int, int, WhereCondition...)} are unchanged.
+     * {@link #del(WhereCondition...)} and {@link #page(int, int, WhereCondition...)} refuse a
+     * {@code null} value under every comparison (as of 6.4.0, #815). A non-finite number is refused
+     * here too ({@link ConditionValues}).
      */
     @Override
     public boolean updateIf(T entity, WhereCondition... expected) {

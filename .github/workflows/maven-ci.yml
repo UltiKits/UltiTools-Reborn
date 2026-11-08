@@ -153,8 +153,8 @@ jobs:
         distribution: 'temurin'
         cache: maven
     - name: Run real MySQL comparison contracts with fresh reports
-      run: mvn -B clean test -Dtest=RelationalLiteralMatchTest,RelationalOrderingContractTest -Dultitools.test.mysql.url='jdbc:mysql://127.0.0.1:3306/ultitools_it_ci?allowPublicKeyRetrieval=true&useSSL=false' -Dultitools.test.mysql.user=ultitools_it
-    - name: Require both real MySQL lanes to execute without skips
+      run: mvn -B clean test -Dtest=RelationalLiteralMatchTest,RelationalOrderingContractTest,ConditionValueParityTest -Dultitools.test.mysql.url='jdbc:mysql://127.0.0.1:3306/ultitools_it_ci?allowPublicKeyRetrieval=true&useSSL=false' -Dultitools.test.mysql.user=ultitools_it
+    - name: Require every real MySQL lane to execute without skips
       run: |
         python3 -I - <<'PYTHON'
         from pathlib import Path
@@ -162,7 +162,7 @@ jobs:
 
         package = "com.ultikits.ultitools.interfaces.impl.data."
         required = {package + name + "$RealMysql": [] for name in (
-            "RelationalLiteralMatchTest", "RelationalOrderingContractTest")}
+            "RelationalLiteralMatchTest", "RelationalOrderingContractTest", "ConditionValueParityTest")}
         for report in Path("target/surefire-reports").glob("TEST-*.xml"):
             root = ET.parse(report).getroot()
             for case in root.iter("testcase"):
