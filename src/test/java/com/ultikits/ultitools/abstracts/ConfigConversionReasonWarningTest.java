@@ -164,6 +164,19 @@ class ConfigConversionReasonWarningTest {
         assertThat(loaded.limits).containsEntry("good", 1).doesNotContainKey("bad");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"\\r", "\\n", "\\r\\n", "\\t", "\\0", "\\x7f", "\\N", "\\L", "\\P"})
+    @DisplayName("an escaped map key in the displayed key also stays on one line (#825)")
+    void escapedMapKeysStayOnOneLine(String yamlEscape) throws IOException {
+        List<String> warnings = loadWarnings("limits: {good: 1, \"first" + yamlEscape + "second\": lots}\n");
+        assertThat(warnings).filteredOn(line -> line.contains("limits.first"))
+                .singleElement().satisfies(line -> {
+                    assertThat(line).contains(PATH, "limits.first second", "skipped or using the declared default");
+                    assertThat(line).doesNotContainPattern("[\\p{Cntrl}\\u0085\\u2028\\u2029]");
+                });
+        assertThat(loaded.limits).containsEntry("good", 1).hasSize(1);
+    }
+
     @Test
     @DisplayName("block scalar warnings are single-line without changing accepted values or file bytes")
     void blockScalarIsOnlyNormalizedInWarnings() throws IOException {
