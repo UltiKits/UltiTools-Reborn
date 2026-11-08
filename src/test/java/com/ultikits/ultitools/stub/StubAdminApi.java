@@ -7,8 +7,10 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -193,11 +195,11 @@ public final class StubAdminApi {
                 stub.gateway().overrideNextWelcomeServerId(optionalString(body, "serverId"));
                 break;
             case "refuse":
-                java.util.Set<String> refused = new java.util.LinkedHashSet<>();
+                Set<String> refused = new LinkedHashSet<>();
                 if (!body.has("capabilities") || !body.get("capabilities").isJsonArray()) {
                     throw new IllegalArgumentException("capabilities must be an array of names");
                 }
-                for (com.google.gson.JsonElement name : body.getAsJsonArray("capabilities")) {
+                for (JsonElement name : body.getAsJsonArray("capabilities")) {
                     if (!name.isJsonPrimitive() || !name.getAsJsonPrimitive().isString()) {
                         throw new IllegalArgumentException("capabilities must be an array of names");
                     }
