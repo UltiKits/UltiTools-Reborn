@@ -1112,6 +1112,7 @@ public class SimpleContainer {
             // recordSkippedClass call below now fires exactly once per distinct poisoned bean
             // name rather than once per encounter.
             unresolvableBeans.put(name, e);
+            SkippedBeanDiagnostics.warn(displayName, definition.getBeanClass(), e, LOGGER);
             ModuleScanDiagnostics.recordSkippedClass(displayName, definition.getBeanClass().getName(), e);
             LOGGER.log(Level.WARNING, "Skipping bean '" + name + "' -- its class references a "
                     + "symbol absent from the classpath", e);

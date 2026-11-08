@@ -1,11 +1,14 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.context.ComponentScanner;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.JarURLConnection;
 import java.net.URL;
+import java.net.URISyntaxException;
 import java.net.URLClassLoader;
 import java.net.URLConnection;
 import java.security.CodeSigner;
@@ -47,6 +50,9 @@ final class ModuleClassLoader extends URLClassLoader {
     private final BiConsumer<String, byte[]> definitionObserver;
     private final ConcurrentMap<String, Object> packageLocks = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Package> ownPackages = new ConcurrentHashMap<>();
+    private final Set<URL> auditedModules = ConcurrentHashMap.newKeySet();
+    private final ConcurrentMap<URL, LinkageAudit.Audit> moduleAudits = new ConcurrentHashMap<>();
+    private final Set<URL> reportedModules = ConcurrentHashMap.newKeySet();
     // This monitor guards handle creation and closing, never class rewriting or definition.
     private final Map<URL, JarFile> moduleJarFiles = new HashMap<>();
     private boolean closed;
@@ -72,6 +78,50 @@ final class ModuleClassLoader extends URLClassLoader {
         }
         this.rules = Collections.unmodifiableList(snapshot);
         this.definitionObserver = definitionObserver;
+    }
+
+    /** Uses exactly the rule snapshot that class definition uses, also for the offline entry point. */
+    List<LinkageAudit.Finding> audit(File module) throws IOException {
+        return LinkageAudit.scan(module, getParent(), rules);
+    }
+
+    LinkageAudit.Audit inspect(File module) throws IOException {
+        return LinkageAudit.inspect(module, getParent(), rules);
+    }
+
+    /** Emits a cached audit only when normal assembly has obtained the module's real scan roots. */
+    void reportModule(Class<?> mainClass, String[] roots, Logger logger) {
+        CodeSource codeSource = mainClass.getProtectionDomain().getCodeSource();
+        if (codeSource == null) {
+            return;
+        }
+        URL source = codeSource.getLocation();
+        LinkageAudit.Audit audit = moduleAudits.get(source);
+        if (audit != null && reportedModules.add(source)) {
+            audit.report(audit.moduleName, caller -> Arrays.stream(roots).anyMatch(root ->
+                    ComponentScanner.matchesPackage(caller, root)),
+                    logger::warning, logger::info);
+        }
+    }
+
+    /** Pre-scans each explicit module once; classification waits for normal container assembly. */
+    void auditModules(Logger logger) {
+        for (URL source : getURLs()) {
+            if (!moduleJars.contains(source) || !auditedModules.add(source)) {
+                continue;
+            }
+            try {
+                File module = new File(source.toURI());
+                if (module.isDirectory()) {
+                    continue;
+                }
+                moduleAudits.put(source, inspect(module));
+            } catch (IOException | URISyntaxException | RuntimeException failure) {
+                // Audit is diagnostic only: the original loader still decides whether a module loads.
+                logger.log(java.util.logging.Level.WARNING,
+                        "Could not audit module '" + source + "'; continuing module loading", failure);
+            }
+        }
     }
 
     @Override
