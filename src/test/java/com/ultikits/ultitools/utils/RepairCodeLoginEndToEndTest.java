@@ -86,8 +86,12 @@ class RepairCodeLoginEndToEndTest {
         logger.setLevel(Level.ALL);
         logger.addHandler(new Handler() {
             @Override public void publish(LogRecord record) { records.add(record); }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() {
+                // Nothing buffered.
+            }
+            @Override public void close() {
+                // Nothing to release.
+            }
         });
         TestHelper.mockUltiToolsInstance(plugin -> {
             lenient().when(plugin.getLogger()).thenReturn(logger);
@@ -257,7 +261,7 @@ class RepairCodeLoginEndToEndTest {
     private List<String> messages(Level level) {
         List<String> messages = new ArrayList<>();
         for (LogRecord record : records) {
-            if (record.getLevel() == level) {
+            if (level.equals(record.getLevel())) {
                 messages.add(record.getMessage());
             }
         }

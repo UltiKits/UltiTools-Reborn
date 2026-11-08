@@ -25,8 +25,12 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
 - The 4401/401 warning now names both ways back (see "Connection outcomes an operator sees" below). No protocol,
   REST contract or configuration change; on 6.3.x the panel's two-step fallback (run `/ulticloud login`, then
   attach the server to the existing record on the confirmation page) still works.
+- The framework's sensitive-command registry now holds `ulticloud`: a line such as `Steve issued server command:
+  /ulticloud login <code>` (a player typing the console-only command by mistake) reaches UltiCloud's console
+  stream as `/ulticloud ***`. The local console and log files are unchanged.
 - New internal entry points (`CloudAuthManager#loginWithCode`, `#isWellFormedRepairCode`, both
-  `@ApiStatus.Internal` like the rest of the class) are additive; no existing signature changed.
+  `@ApiStatus.Internal` like the rest of the class) and `SensitiveCommandRegistry#withFrameworkCommands()` are
+  additive; no existing signature changed.
 
 中文补充：面板的“撤销并重新配对”会撤销该服务器的全部凭据、以 4401 断开连接，并给出一次性代码（10 分钟内有效，绑定同一服务器记录）。在服务器控制台运行 `/ulticloud login <code>` 即可换取新凭据并重连，服务器 ID、名称和历史保持不变；控制台不会显示代码本身。代码已使用、未知或过期时会提示到面板重新生成，或直接运行不带参数的 `/ulticloud login`。
 
@@ -149,7 +153,7 @@ Login, Panel Integration, Player Link) explain each part in prose.
 
 | API | Since | Purpose |
 |---|---|---|
-| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged. The table starts empty, matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
+| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged. The table starts empty (as of 6.4.0 the framework's own registry holds `ulticloud`, whose `login <code>` form carries a re-pair code), matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
 | `websocket.CloudPlayerLinks`, `UltiTools#getCloudPlayerLinks()` | 6.3.1 | The player-link API that replaces the magic-link calls: `create(...)` returns a one-time link valid for 600 seconds; one module-owned `LinkEventHandler` receives completions and expiries on a framework worker thread; the framework persists each result before it answers the gateway, so a completion redelivered after a restart is answered without calling the module again. `getCloudPlayerLinks()` returns `null` only before the framework has enabled. |
 | `PanelResponderRegistry#ownerModuleOf(String)`, `#ownerModules()` | 6.3.1 | Read-only views of responder ownership. |
 | `websocket.CloudChannel`, `CloudRequest`, `CloudRequestHandler`, `CloudLimits` | 6.3.1, `@ApiStatus.Internal` | The framework's internal request and reply seam. Public only because handlers live in two packages; not for module use, and they may change without notice. |

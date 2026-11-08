@@ -62,6 +62,9 @@ class CloudLoginCommandTest {
         ChatColor.GRAY + "The code expires in 10 minutes. Waiting for confirmation...",
     };
 
+    /** A well-formed re-pair code: 43 characters of the contract's device-code alphabet. */
+    private static final String REPAIR_CODE = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE";
+
     private Logger logger;
 
     @BeforeEach
@@ -200,9 +203,6 @@ class CloudLoginCommandTest {
             verify(logger).log(Level.INFO, "Failed to get a device code: UltiCloud could not be reached");
         }
     }
-
-    /** A well-formed re-pair code: 43 characters of the contract's device-code alphabet. */
-    private static final String REPAIR_CODE = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE";
 
     /** Runs {@code login(sender, code)} with {@code outcome} applied to the listener the command passes. */
     private static void loginWithCode(CommandSender sender, String code,
