@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Date;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -316,7 +317,7 @@ public class CloudAuthManager {
     /**
      * Stops the captured session synchronously, then revokes and deletes its credential on a Bukkit
      * asynchronous task. The callback runs on that task, or inline when no credential is held.
-     * A local storage failure is propagated or reported by the scheduler, never reported as deletion.
+     * A local storage failure is reported as {@link LogoutOutcome#LOCAL_DELETE_FAILED}, never as deletion.
      *
      * @param onDone receives the completed outcome
      * @since 6.3.1
@@ -349,7 +350,10 @@ public class CloudAuthManager {
             Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
                 CloudHttp.Response response = CloudHttp.postJson("/v1/agent/credential/revoke", null,
                         credential.bearerValue());
-                owner.completeCredentialLogout(credential);
+                if (!deleteLocally(owner, credential)) {
+                    onDone.accept(LogoutOutcome.LOCAL_DELETE_FAILED);
+                    return;
+                }
                 onDone.accept(response.outcome() == CloudHttp.Outcome.OK
                         && (response.status() == 200 || response.status() == 401)
                         ? LogoutOutcome.REVOKED : LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
@@ -358,9 +362,31 @@ public class CloudAuthManager {
         return hadAnything;
     }
 
-    /** Completed unlink outcomes; none contains a credential. @since 6.3.1 */
+    /**
+     * Deletes the retired credential from the local store. A storage failure is logged with its
+     * cause class only and reported as {@link LogoutOutcome#LOCAL_DELETE_FAILED}; the session no
+     * longer holds the credential either way, so running logout again retries the delete.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static boolean deleteLocally(CloudSession owner, ServerCredential credential) {
+        try {
+            owner.completeCredentialLogout(credential);
+            return true;
+        } catch (RuntimeException failure) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING, "UltiCloud: the server credential could not be "
+                    + "deleted from the local credentials file (" + failure.getClass().getSimpleName() + ").");
+            return false;
+        }
+    }
+
+    /**
+     * Completed unlink outcomes; none contains a credential.
+     * {@link #LOCAL_DELETE_FAILED} (since 6.4.0): the local credentials file could not be updated, so
+     * the credential is still on disk; whether the revoke reached UltiCloud is not reported.
+     * @since 6.3.1
+     */
     public enum LogoutOutcome {
-        NOT_LINKED, REVOKED, DELETED_LOCALLY_REVOKE_FAILED, CANCELLED_PENDING
+        NOT_LINKED, REVOKED, DELETED_LOCALLY_REVOKE_FAILED, CANCELLED_PENDING, LOCAL_DELETE_FAILED
     }
 
     /**

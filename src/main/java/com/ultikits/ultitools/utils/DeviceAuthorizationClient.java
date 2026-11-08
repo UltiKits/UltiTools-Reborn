@@ -23,9 +23,15 @@ class DeviceAuthorizationClient {
     static final String TOKEN_PATH = "/v1/device/token";
     /** The protocol major version this framework speaks. */
     static final int PROTOCOL_VERSION = 2;
-    /** RFC 8628 §3.2: the poll interval to use when the response names none. */
+    /**
+     * The poll interval this client always uses, in seconds (RFC 8628 §3.2's default). The
+     * contract fixes {@code interval} at 5, so the response's value is never read.
+     */
     static final long DEFAULT_INTERVAL_SECONDS = 5;
-    /** The device code lifetime to assume when the response names none. */
+    /**
+     * The device code lifetime this client always assumes, in seconds. The contract fixes
+     * {@code expiresIn} at 600, so the response's value is never read.
+     */
     static final long DEFAULT_EXPIRES_IN_SECONDS = 600;
     /** The longest backend-supplied text (message, reason) this class passes on, in characters. */
     static final int MAX_BACKEND_TEXT = 200;
@@ -91,8 +97,8 @@ class DeviceAuthorizationClient {
             return AuthorizeResult.failed("UltiCloud sent an incomplete device-code response", -1);
         }
         String complete = string(data, "verificationUriComplete");
-        // The contract fixes expiresIn/interval at 600/5. Unreadable or out-of-contract timing
-        // uses those same defaults, so no numeric conversion (and no truncation) is needed.
+        // The contract fixes expiresIn/interval at 600/5, so the response's values are not read
+        // and no numeric conversion (and no truncation) is needed.
         long expiresIn = DEFAULT_EXPIRES_IN_SECONDS;
         long interval = DEFAULT_INTERVAL_SECONDS;
         // The three presentable values go to the console verbatim; strip control characters so a

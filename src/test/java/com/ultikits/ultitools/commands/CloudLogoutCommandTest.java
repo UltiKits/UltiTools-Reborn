@@ -85,6 +85,11 @@ class CloudLogoutCommandTest {
                 case CANCELLED_PENDING:
                     expected.add(ChatColor.GREEN + "Cancelled the pending UltiCloud link request. Cloud features are stopped.");
                     break;
+                case LOCAL_DELETE_FAILED:
+                    expected.add(ChatColor.RED + "Could not delete this server's UltiCloud credential from the local "
+                            + "credentials file. Check the server log, then run /ulticloud logout again.");
+                    expected.add(ChatColor.GRAY + "Cloud features have been stopped regardless.");
+                    break;
                 default:
                     expected.add(ChatColor.YELLOW + "This server is not linked to UltiCloud.");
                     expected.add(ChatColor.GRAY + "Cloud features have been stopped regardless.");

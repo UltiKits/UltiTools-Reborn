@@ -7,6 +7,7 @@
   "Cancelled the pending UltiCloud link request. Cloud features are stopped.": "已取消等待中的 UltiCloud 绑定请求。云功能已停止。",
   "This server is not linked to UltiCloud.": "此服务器尚未绑定 UltiCloud。",
   "Cloud features have been stopped regardless.": "云功能仍已停止。",
+  "Could not delete this server's UltiCloud credential from the local credentials file. Check the server log, then run /ulticloud logout again.": "无法从本地凭据文件中删除此服务器的 UltiCloud 凭据。请查看服务器日志，然后再次执行 /ulticloud logout。",
   "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.": "早期 UltiTools 版本保存的账号登录已不再使用，已从 %s 删除。请执行 /ulticloud login 接回此服务器。",
   "Reconnecting to UltiCloud now.": "正在重新连接 UltiCloud。",
   "Use /ulticloud status to see the result.": "使用 /ulticloud status 查看结果。",

@@ -240,7 +240,28 @@ final class AgentTelemetry implements CloudRequestHandler {
     public void handle(CloudRequest request, CloudChannel channel) {
         final List<String> targets = requestedTargets(request);
         final String replyTo = request.id();
-        mainThread.execute(() -> sendRequested(replyTo, targets, channel));
+        mainThread.execute(() -> sendRequestedOrFail(replyTo, targets, channel));
+    }
+
+    /**
+     * Runs {@link #sendRequested} on the main thread. The router's catch covers only the
+     * dispatching thread, so a failure here is answered once with {@code internal_error}; the
+     * snapshots already pushed stay pushed. The exception text never reaches the wire.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void sendRequestedOrFail(String replyTo, List<String> targets, CloudChannel channel) {
+        try {
+            sendRequested(replyTo, targets, channel);
+        } catch (RuntimeException failure) {
+            LOGGER.log(Level.WARNING, "UltiCloud: a snapshot request failed (exception={0}); answering "
+                    + "internal_error.", failure.getClass().getName());
+            try {
+                channel.replyError(replyTo, SNAPSHOT_REQUEST_RESULT, "internal_error",
+                        "The request could not be processed.", null);
+            } catch (RuntimeException channelRefused) {
+                LOGGER.log(Level.FINE, "UltiCloud: the connection refused the snapshot.request.result.");
+            }
+        }
     }
 
     /**

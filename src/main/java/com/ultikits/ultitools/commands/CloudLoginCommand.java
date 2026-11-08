@@ -38,6 +38,8 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     static final String CANCELLED_KEY = "Cancelled the pending UltiCloud link request. Cloud features are stopped.";
     static final String NOT_LINKED_KEY = "This server is not linked to UltiCloud.";
     static final String STOPPED_KEY = "Cloud features have been stopped regardless.";
+    static final String LOCAL_DELETE_FAILED_KEY = "Could not delete this server's UltiCloud credential from the local "
+        + "credentials file. Check the server log, then run /ulticloud logout again.";
     static final String RECONNECT_STARTED_KEY = "Reconnecting to UltiCloud now.";
     static final String RECONNECT_STATUS_KEY = "Use /ulticloud status to see the result.";
     static final String ALREADY_CONNECTED_KEY = "This server is already connected to UltiCloud.";
@@ -91,6 +93,10 @@ public class CloudLoginCommand extends BaseCommandExecutor {
                     break;
                 case CANCELLED_PENDING:
                     say(sender, ChatColor.GREEN, CANCELLED_KEY);
+                    break;
+                case LOCAL_DELETE_FAILED:
+                    say(sender, ChatColor.RED, LOCAL_DELETE_FAILED_KEY);
+                    say(sender, ChatColor.GRAY, STOPPED_KEY);
                     break;
                 case NOT_LINKED:
                 default:
