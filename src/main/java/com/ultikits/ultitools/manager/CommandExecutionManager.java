@@ -33,6 +33,7 @@ import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -359,6 +360,10 @@ public class CommandExecutionManager {
      * 6.3.0 printed every panel command's output there; the log stream carries it from there,
      * redacted like every other console line (see {@link CapturedFeedback}).
      * This method only reads operator configuration and never rewrites it.
+     * <p>
+     * As of 6.4.0 the echo line, the refusal line and the remote-action log entry show a command
+     * registered in the {@link SensitiveCommandRegistry} without its arguments (see
+     * {@link #loggedCommandLine(String, String)}); the command itself is dispatched unchanged.
      *
      * @param commandLine command text, optionally prefixed with a slash
      * @param actor audit actor, or null for the panel
@@ -372,12 +377,13 @@ public class CommandExecutionManager {
             sink.failed("Command cannot be empty");
             return;
         }
+        String shown = loggedCommandLine(commandLine, command);
         AccessDecision decision = canonicalCommandDecision(command);
         if (!decision.isAllowed()) {
             // Keep this WARNING line — the same control the v1 path carries.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.format("[远程命令] 已拦截: %s", commandLine));
-            recordCommandDecision(commandLine, actor, decision.getMessage());
+                    FrameworkText.format("[远程命令] 已拦截: %s", shown));
+            recordCommandDecision(shown, actor, decision.getMessage());
             sink.blocked(baseCommandName(command), resultMessage(decision.getMessage()));
             return;
         }
@@ -385,13 +391,13 @@ public class CommandExecutionManager {
         // must not turn into an execution path, so the switch is checked here as well.
         if (!Capability.COMMANDS.isEnabled()) {
             String refusal = resultMessage(Capability.COMMANDS.refusalMessage());
-            recordCommandDecision(commandLine, actor, refusal);
+            recordCommandDecision(shown, actor, refusal);
             sink.failed(refusal);
             return;
         }
         UltiTools.getInstance().getLogger().log(Level.INFO,
-                FrameworkText.format("[远程命令] > %s", commandLine));
-        recordCommandDecision(commandLine, actor, null);
+                FrameworkText.format("[远程命令] > %s", shown));
+        recordCommandDecision(shown, actor, null);
         mainThread.execute(() -> executeCaptured(command, sink));
     }
 
@@ -425,6 +431,33 @@ public class CommandExecutionManager {
             }
         }
         return normalized.toString();
+    }
+
+    /**
+     * The command line as the framework's own records show it: the remote-command echo and refusal
+     * lines in the server log (and so in {@code latest.log} and the panel's log stream), and the
+     * {@code target} of the remote-action log.
+     * <p>
+     * A command a module registered in the {@link SensitiveCommandRegistry} is shown as its canonical
+     * command followed by {@code ***} in place of its arguments, for example {@code logadmin ***} for
+     * {@code /logadmin reset Steve hunter2}. The canonical form is matched, not the raw text, because
+     * that is what is dispatched: a leading {@code "/ "} or a no-break space between the command and
+     * its arguments must not hide a registered command. Any other command line is shown exactly as
+     * received, as before 6.4.0. Without a framework instance or registry nothing can be registered,
+     * so the raw line is returned.
+     *
+     * @param raw       the command line as received
+     * @param canonical the same line after {@link #canonicalCommandLine(String)}
+     * @return the text to log and record
+     * @since 6.4.0
+     */
+    static String loggedCommandLine(String raw, String canonical) {
+        UltiTools instance = UltiTools.getInstance();
+        SensitiveCommandRegistry registry = instance == null ? null : instance.getSensitiveCommandRegistry();
+        if (registry == null || canonical == null || !registry.isSensitive(canonical)) {
+            return raw;
+        }
+        return registry.redactCommandLine(canonical);
     }
 
     /** Extracts a lower-case, namespace-free name from an already canonical command line. */
@@ -688,6 +721,7 @@ public class CommandExecutionManager {
                 sendCommandResult(commandId, false, "Command cannot be empty", 0);
                 return;
             }
+            String shown = loggedCommandLine(command, canonical);
 
             // Security check: verify command is not blocked
             AccessDecision decision = canonicalCommandDecision(canonical);
@@ -697,11 +731,11 @@ public class CommandExecutionManager {
                 // builds its own truncated command string: decision.getMessage() already names
                 // the resolved base command plus its config key and file (D-05).
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.format("[远程命令] 已拦截: %s", command));
+                    FrameworkText.format("[远程命令] 已拦截: %s", shown));
                 RemoteActionLog deniedLog = UltiTools.getInstance().getRemoteActionLog();
                 if (deniedLog != null) {
                     deniedLog.record(RemoteActionLog.Entry.denied(Capability.COMMANDS,
-                            ACTION_EXECUTE_COMMAND, command, resolveActor(executor), decision.getMessage()));
+                            ACTION_EXECUTE_COMMAND, shown, resolveActor(executor), decision.getMessage()));
                 }
                 sendCommandResult(commandId, false, decision.getMessage(), 0);
                 return;
@@ -711,7 +745,7 @@ public class CommandExecutionManager {
             long startTime = System.currentTimeMillis();
 
             UltiTools.getInstance().getLogger().log(Level.INFO,
-                FrameworkText.format("[远程命令] > %s", command));
+                FrameworkText.format("[远程命令] > %s", shown));
 
             // Record the policy decision BEFORE the dispatch hop, not inside it or after it
             // (D-22). The log records the decision, not the execution result — a decision
@@ -720,7 +754,7 @@ public class CommandExecutionManager {
             RemoteActionLog allowedLog = UltiTools.getInstance().getRemoteActionLog();
             if (allowedLog != null) {
                 allowedLog.record(RemoteActionLog.Entry.allowed(Capability.COMMANDS,
-                        ACTION_EXECUTE_COMMAND, command, resolveActor(executor)));
+                        ACTION_EXECUTE_COMMAND, shown, resolveActor(executor)));
             }
 
             // Bukkit.dispatchCommand() MUST run on the main server thread.
@@ -764,7 +798,7 @@ public class CommandExecutionManager {
 
             if (!success) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.format("[远程命令] 命令执行失败: %s", command));
+                    FrameworkText.format("[远程命令] 命令执行失败: %s", loggedCommandLine(command, command)));
             }
 
             String output = success ? DISPATCHED_OUTPUT : NOT_ACCEPTED_OUTPUT;
@@ -775,7 +809,7 @@ public class CommandExecutionManager {
         } catch (Exception e) {
             long executionTime = System.currentTimeMillis() - startTime;
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                FrameworkText.format("[远程命令] 命令执行异常: %s", command), e);
+                FrameworkText.format("[远程命令] 命令执行异常: %s", loggedCommandLine(command, command)), e);
             sendCommandResult(commandId, false, "Error executing command: " + e.getMessage(), executionTime);
         }
     }
