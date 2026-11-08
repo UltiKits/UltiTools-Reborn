@@ -98,6 +98,8 @@ public final class StubGateway {
     private volatile Exception startFailure;
     private volatile boolean acking = true;
     private volatile String nextWelcomeServerId;
+    /** Capabilities every later welcome leaves out of {@code accepted}, so a server sees them refused (#753). */
+    private volatile Set<String> refusedCapabilities = Collections.emptySet();
 
     StubGateway(UltiCloudStub.Contract contract, StubAccessLog log, UltiCloudStub.Credentials credentials,
                 long helloTimeoutMs) {
@@ -375,7 +377,8 @@ public final class StubGateway {
         JsonArray accepted = new JsonArray();
         for (JsonElement capability : hello.getAsJsonObject("payload").getAsJsonArray("capabilities")) {
             String name = capability.getAsString();
-            if (contract.knowsCapability(name) && connection.accepted.add(name)) {
+            if (contract.knowsCapability(name) && !refusedCapabilities.contains(name)
+                    && connection.accepted.add(name)) {
                 accepted.add(name);
             }
         }
@@ -600,6 +603,16 @@ public final class StubGateway {
             throw new IllegalArgumentException("serverId must be a ULID");
         }
         this.nextWelcomeServerId = serverId;
+    }
+
+    /**
+     * Makes every later welcome leave these capabilities out of {@code accepted}, as a gateway that
+     * does not accept them would (#753). An empty set accepts everything the contract knows again.
+     *
+     * @param capabilities the capability names to refuse; never null
+     */
+    public void refuseCapabilities(Set<String> capabilities) {
+        this.refusedCapabilities = Collections.unmodifiableSet(new LinkedHashSet<>(capabilities));
     }
 
     /** @return the open connections as JSON, for the admin status (no credential in it) */

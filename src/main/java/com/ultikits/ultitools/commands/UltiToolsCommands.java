@@ -70,12 +70,12 @@ public class UltiToolsCommands extends BaseCommandExecutor {
         } catch (IOException e) {
             throw new CommandException(ErrorCode.COMMAND_EXECUTION_FAILED, "Failed to reload plugins", e);
         }
-        for (int index = 0; index < summary.size(); index++) {
-            // Only the real console already received these module details through logging (#665).
-            // A capturing sender may have console permissions but owns a separate feedback channel.
-            if (!isNativeConsole(sender) || !PluginManager.isLoggedPartialReloadLine(summary, index)) {
-                sender.sendMessage(summary.get(index));
-            }
+        // Only the real console already received the module details through logging (#665); its reply
+        // keeps the headlines without a colon that would introduce nothing (#824). A capturing sender
+        // may have console permissions but owns a separate feedback channel, so it gets every line.
+        List<String> reply = isNativeConsole(sender) ? PluginManager.nativeConsoleReloadReply(summary) : summary;
+        for (String line : reply) {
+            sender.sendMessage(line);
         }
     }
 

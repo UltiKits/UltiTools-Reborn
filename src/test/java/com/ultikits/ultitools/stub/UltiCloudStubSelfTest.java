@@ -399,6 +399,22 @@ class UltiCloudStubSelfTest {
     }
 
     @Test
+    void refusedCapabilitiesAreLeftOutOfLaterWelcomes() throws Exception {
+        Login login = login();
+        assertThat(admin("/_stub/refuse", "{\"capabilities\":[\"logs\"]}").status).isEqualTo(200);
+        AgentClient first = connect(login.credential);
+        first.send(hello("telemetry", "logs"));
+        assertThat(first.nextFrame(5000).getAsJsonObject("payload").getAsJsonArray("accepted").toString())
+                .isEqualTo("[\"telemetry\"]");
+        assertThat(admin("/_stub/refuse", "{\"capabilities\":[]}").status).isEqualTo(200);
+        AgentClient second = connect(login.credential);
+        second.send(hello("telemetry", "logs"));
+        assertThat(second.nextFrame(5000).getAsJsonObject("payload").getAsJsonArray("accepted").toString())
+                .as("control: an empty list accepts everything again").isEqualTo("[\"telemetry\",\"logs\"]");
+        assertThat(admin("/_stub/refuse", "{\"capabilities\":\"logs\"}").status).isEqualTo(400);
+    }
+
+    @Test
     void ackSwitchStopsAndResumesAcknowledging() throws Exception {
         Login login = login();
         AgentClient client = connectAndHello(login, "events:players");

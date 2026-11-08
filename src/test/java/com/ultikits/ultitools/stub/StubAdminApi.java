@@ -49,6 +49,8 @@ public final class StubAdminApi {
             "POST /_stub/send        {\"type\": \"<down type>\", \"fixture\"?: \"<name>\", \"payload\"?: {...}, "
                     + "\"id\"?: \"<ULID>\", \"replyTo\"?: \"<ULID>\"}  send a frame built from its vendored fixture",
             "POST /_stub/welcome     {\"serverId\": \"<ULID>\"|null}  the next welcome carries this serverId",
+            "POST /_stub/refuse      {\"capabilities\": [\"<name>\", ...]}  later welcomes leave these out of"
+                    + " accepted; [] accepts everything again",
             "POST /_stub/ack         {\"enabled\": true|false}  stop or resume acknowledging reliable events",
             "POST /_stub/device      {\"action\": \"approve\"|\"deny\"|\"expire\"|\"slow_down\"|\"hold\"|\"auto\"}"
                     + "  decide the latest device authorization's next poll",
@@ -189,6 +191,19 @@ public final class StubAdminApi {
                 break;
             case "welcome":
                 stub.gateway().overrideNextWelcomeServerId(optionalString(body, "serverId"));
+                break;
+            case "refuse":
+                java.util.Set<String> refused = new java.util.LinkedHashSet<>();
+                if (!body.has("capabilities") || !body.get("capabilities").isJsonArray()) {
+                    throw new IllegalArgumentException("capabilities must be an array of names");
+                }
+                for (com.google.gson.JsonElement name : body.getAsJsonArray("capabilities")) {
+                    if (!name.isJsonPrimitive() || !name.getAsJsonPrimitive().isString()) {
+                        throw new IllegalArgumentException("capabilities must be an array of names");
+                    }
+                    refused.add(name.getAsString());
+                }
+                stub.gateway().refuseCapabilities(refused);
                 break;
             case "ack":
                 stub.gateway().setAcking(bool(body, "enabled"));

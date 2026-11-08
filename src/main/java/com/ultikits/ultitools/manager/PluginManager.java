@@ -152,6 +152,44 @@ public class PluginManager {
                 && index >= ((ReloadSummary) summary).headlineCount && index < summary.size();
     }
 
+    /**
+     * The lines {@code /ul reload} replies to the native console: the headlines of an unmodified
+     * reload summary, without the per-module details each module has already logged there (#665).
+     * When per-module details follow the headlines, the last headline
+     * introduces them with a colon; the console reply drops that trailing colon, because the
+     * details it introduced are not repeated beneath it (#824). Unknown lists carry no metadata
+     * and are returned unchanged. Internal command-output metadata, not a module API.
+     *
+     * @param summary the list returned by {@link #reloadAllAndReport()}
+     * @return the lines to send to the native console
+     * @since 6.4.0
+     */
+    @ApiStatus.Internal
+    public static List<String> nativeConsoleReloadReply(List<String> summary) {
+        if (!(summary instanceof ReloadSummary)) {
+            return new ArrayList<>(summary);
+        }
+        int headlines = ((ReloadSummary) summary).headlineCount;
+        List<String> reply = new ArrayList<>(summary.subList(0, Math.min(headlines, summary.size())));
+        if (headlines < summary.size() && !reply.isEmpty()) {
+            int last = reply.size() - 1;
+            reply.set(last, withoutTrailingColon(reply.get(last)));
+        }
+        return reply;
+    }
+
+    /** Code point of the full-width colon the Chinese catalogue ends a headline with. */
+    private static final int FULL_WIDTH_COLON = 0xFF1A;
+
+    /** A headline without the ASCII or full-width colon that introduced the lines below it. */
+    private static String withoutTrailingColon(String headline) {
+        if (headline.isEmpty()) {
+            return headline;
+        }
+        int last = headline.charAt(headline.length() - 1);
+        return last == ':' || last == FULL_WIDTH_COLON ? headline.substring(0, headline.length() - 1) : headline;
+    }
+
     /** Retains normal List behavior while carrying the boundary between headlines and details. */
     private static final class ReloadSummary extends ArrayList<String> {
         private static final long serialVersionUID = 1L;
