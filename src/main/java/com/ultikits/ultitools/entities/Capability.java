@@ -31,8 +31,8 @@ public enum Capability {
             "面板是否可以接收实时控制台日志流。"
     )),
     PLAYER_EVENTS("player-events", true, Arrays.asList(
-            "Whether the panel may receive live player join/quit/chat events.",
-            "面板是否可以接收玩家上线/下线/聊天等实时事件。"
+            "Whether the panel may receive live player join, quit and command events (there is no chat event).",
+            "面板是否可以接收玩家上线、下线与命令等实时事件（没有聊天事件）。"
     )),
     FILE_READ("file-read", true, Arrays.asList(
             "Whether the panel may read and list files within the editable roots.",
@@ -43,8 +43,8 @@ public enum Capability {
             "面板是否可以在可编辑根目录内写入或上传文件。"
     )),
     FILE_DELETE("file-delete", false, Arrays.asList(
-            "Whether the panel may delete files or directories within the editable roots.",
-            "面板是否可以在可编辑根目录内删除文件或目录。"
+            "Whether the panel may delete files within the editable roots. Directories are never deleted remotely.",
+            "面板是否可以在可编辑根目录内删除文件。目录永远不会被远程删除。"
     )),
     COMMANDS("commands", false, Arrays.asList(
             "Whether the panel may execute server commands remotely.",
