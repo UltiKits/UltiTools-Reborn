@@ -121,7 +121,7 @@ public class RetainedArtifactsParticipant extends AbstractMavenLifecycleParticip
     private static MavenProject checkedProject(MavenSession session, String version) throws MavenExecutionException {
         List<MavenProject> projects = session.getProjects();
         if (projects == null || projects.size() != 1) {
-            throw refuse("project_count", "expected exactly one project read from the retained POM, got "
+            throw refuse("project_count", "expected exactly one project read from the project model (the private copy of the source POM), got "
                     + (projects == null ? 0 : projects.size()), null);
         }
         MavenProject project = projects.get(0);

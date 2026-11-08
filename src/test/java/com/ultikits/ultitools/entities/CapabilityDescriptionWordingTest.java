@@ -17,8 +17,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Proves #495 is fixed: the shipped {@code config.yml} and the {@link Capability#LOGS} description
  * compiled into the jar no longer claim the panel can control the live console log stream, and the
- * {@code ultipanel.logging.batch.interval} comment no longer claims the key is read once at server
- * start. Every assertion here fails on the pre-fix wording quoted verbatim in issue #495 and passes
+ * {@code ultipanel.logging.batch.*} comments no longer claim the key is read once at server
+ * start (they now say the keys belong to the deprecated v1 sender only). Every assertion here fails on the pre-fix wording quoted verbatim in issue #495 and passes
  * on the corrected wording — this is the red-when-reverted proof for the wording change itself.
  */
 @DisplayName("#495：日志流描述不再声明控制能力，批量间隔注释不再声明只读一次")
@@ -137,29 +137,63 @@ class CapabilityDescriptionWordingTest {
     }
 
     @Test
-    @DisplayName("classpath 上的 config.yml：batch.interval 注释不再声明只在启动时读取一次")
-    void configYmlBatchIntervalCommentNoLongerClaimsReadOnce() throws IOException {
+    @DisplayName("classpath 上的 config.yml：batch.* 注释说明只属于已弃用的 v1 发送器，协议 2.1.0 会话忽略，且不再声明只读一次")
+    void configYmlBatchCommentsStateTheyOnlyServeTheDeprecatedV1Sender() throws IOException {
         String content = readConfigYmlFromClasspath();
         String lower = content.toLowerCase(Locale.ROOT);
 
         assertThat(lower)
-                .as("the corrected English comment must say the key is re-read each time a panel connection opens")
-                .contains("each time");
+                .as("the batch comments must say the protocol 2.1.0 session ignores the keys")
+                .contains("session this framework runs ignores all three keys")
+                .contains("ignored by the protocol 2.1.0 session");
         assertThat(lower)
-                .as("the stale \"read once\" claim must be gone")
-                .doesNotContain("read once");
+                .as("the batch comments must name the deprecated v1 sender")
+                .contains("deprecated protocol v1 sender");
         assertThat(lower)
-                .as("the stale \"once, at server start\" claim must be gone")
+                .as("the stale \"read once\" claim must stay gone")
+                .doesNotContain("read once")
                 .doesNotContain("once, at server start");
+        assertThat(lower)
+                .as("the v1 comments must no longer claim a reconnect re-reads the value")
+                .doesNotContain("each time a panel connection opens");
 
-        // Chinese must carry the same corrected meaning: "每次...连接" (each time a connection
-        // happens) present, and the stale "只在服务器启动时读取一次" claim gone.
         assertThat(content)
-                .as("the Chinese comment must state the key is re-read on each panel connection")
-                .contains("每次面板连接");
+                .as("the Chinese comment must carry the same meaning")
+                .contains("协议 2.1.0 会话忽略此键")
+                .contains("已弃用的协议 v1 发送器");
         assertThat(content)
-                .as("the stale Chinese \"read once at server start\" claim must be gone")
+                .as("the stale Chinese \"read once at server start\" claim must stay gone")
                 .doesNotContain("只在服务器启动时读取一次");
+    }
+
+    @Test
+    @DisplayName("player-events 描述不再提聊天事件，file-delete 描述只涉及文件（config.yml、Capability、config-example.yml 一致）")
+    void playerEventsHasNoChatAndFileDeleteCoversFilesOnly() throws IOException {
+        String config = readConfigYmlFromClasspath();
+        String example = readConfigExampleYmlFromDisk();
+
+        List<String> events = Capability.PLAYER_EVENTS.getCommentLines();
+        assertThat(events).anySatisfy(line -> assertThat(line)
+                .contains("join, quit and command events").contains("there is no chat event"));
+        assertThat(events).anySatisfy(line -> assertThat(line).contains("没有聊天事件"));
+        List<String> delete = Capability.FILE_DELETE.getCommentLines();
+        assertThat(delete).anySatisfy(line -> assertThat(line)
+                .contains("delete files within the editable roots").contains("Directories are never deleted remotely"));
+        assertThat(delete).anySatisfy(line -> assertThat(line).contains("目录永远不会被远程删除"));
+
+        for (String content : new String[] {config, example}) {
+            assertThat(content)
+                    .doesNotContain("join/quit/chat")
+                    .doesNotContain("上线/下线/聊天")
+                    .doesNotContain("files or directories")
+                    .doesNotContain("文件或目录");
+        }
+        for (String line : events) {
+            assertThat(config).contains(line);
+        }
+        for (String line : delete) {
+            assertThat(config).contains(line);
+        }
     }
 
     @Test
