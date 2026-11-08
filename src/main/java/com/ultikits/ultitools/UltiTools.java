@@ -371,7 +371,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // JAR, and decided after the modules load (initPluginModules). Their log lines wait for
         // the language to be loaded.
         moduleFileTransactions = new ModuleFileTransactions(getDataFolder());
-        ultiToolsClassLoader = new URLClassLoader(getModuleUrls(), getClassLoader());
+        ultiToolsClassLoader = new ModuleClassLoader(getModuleUrls(), getClassLoader(), getServerJar());
         this.eventBus = new EventBus();
 
         if (!initDependencies()) {
