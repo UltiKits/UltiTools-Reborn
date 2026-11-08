@@ -3,13 +3,11 @@ package com.ultikits.ultitools.compatibility;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,12 +23,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
-
-import net.bytebuddy.jar.asm.ClassReader;
-import net.bytebuddy.jar.asm.ClassVisitor;
-import net.bytebuddy.jar.asm.MethodVisitor;
-import net.bytebuddy.jar.asm.Opcodes;
 
 /**
  * The 6.3.1 deprecations of the protocol v1 cloud surface, read from the generated ledger
@@ -130,6 +122,19 @@ class V1CloudDeprecationTest {
         PEM + "#onPlayerCommandPreprocess(org.bukkit.event.player.PlayerCommandPreprocessEvent)",
         PEM + "#onPlayerChangedWorld(org.bukkit.event.player.PlayerChangedWorldEvent)");
 
+    /**
+     * The members 6.4.0 keeps on purpose: the plain HTTP helpers that the protocol v2 player-link
+     * calls still use. Every other 6.3.1 entry names a member 6.4.0 removed.
+     */
+    private static final Set<String> KEPT_IN_6_4_0 = new TreeSet<>(Arrays.asList(
+        "com.ultikits.ultitools.utils.SimpleHttpClient",
+        "com.ultikits.ultitools.utils.SimpleHttpClient$Response",
+        UCR,
+        UCR + "$Result",
+        UCR + "$Outcome",
+        UCR + "#post(java.lang.String,java.lang.String)",
+        UCR + "#get(java.lang.String,java.util.Map)"));
+
     private static Map<String, JsonObject> ledger;
 
     @BeforeAll
@@ -173,61 +178,26 @@ class V1CloudDeprecationTest {
     }
 
     @Test
-    @DisplayName("every 6.3.1 entry is announced for removal in 6.4.0 with a replacement sentence")
+    @DisplayName("every 6.3.1 entry was announced for removal in 6.4.0 with a replacement; removed ones may be marked REMOVED in 6.4.0")
     void everyEntryIsAnnouncedForRemovalWithAReplacement() {
+        assertThat(EXPECTED).as("every kept member is part of the 6.3.1 inventory").containsAll(KEPT_IN_6_4_0);
         for (String key : EXPECTED) {
             JsonObject entry = ledger.get(key);
             assertThat(entry).as(key).isNotNull();
             assertThat(entry.get("forRemoval").getAsBoolean()).as(key + " forRemoval").isTrue();
             assertThat(entry.get("removeIn").getAsString()).as(key + " removeIn").isEqualTo(REMOVE_IN);
-            assertThat(entry.get("status").getAsString()).as(key + " status").isEqualTo("ANNOUNCED");
             assertThat(entry.get("replacement").getAsString()).as(key + " replacement").isNotBlank();
-        }
-    }
-
-    /**
-     * The 22-06 no-op is still a no-op: its compiled body is a single {@code RETURN} (22-24
-     * verification noted that nothing pinned it).
-     */
-    @Test
-    @DisplayName("PluginInitiationUtils#startTokenRefreshScheduler compiles to a bare return")
-    void tokenRefreshSchedulerIsABareReturn() throws IOException {
-        List<Integer> opcodes = new ArrayList<>();
-        String resource = PluginInitiationUtils.class.getName().replace('.', '/') + ".class";
-        try (InputStream in = PluginInitiationUtils.class.getClassLoader().getResourceAsStream(resource)) {
-            assertThat(in).as(resource).isNotNull();
-            new ClassReader(in).accept(new ClassVisitor(Opcodes.ASM9) {
-                @Override
-                public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
-                        String[] exceptions) {
-                    if (!"startTokenRefreshScheduler".equals(name) || !"()V".equals(descriptor)) {
-                        return null;
-                    }
-                    return new MethodVisitor(Opcodes.ASM9) {
-                        @Override
-                        public void visitInsn(int opcode) {
-                            opcodes.add(opcode);
-                        }
-
-                        @Override
-                        public void visitMethodInsn(int opcode, String owner, String member, String desc,
-                                boolean isInterface) {
-                            opcodes.add(opcode);
-                        }
-
-                        @Override
-                        public void visitFieldInsn(int opcode, String owner, String member, String desc) {
-                            opcodes.add(opcode);
-                        }
-
-                        @Override
-                        public void visitVarInsn(int opcode, int index) {
-                            opcodes.add(opcode);
-                        }
-                    };
+            String status = entry.get("status").getAsString();
+            if (KEPT_IN_6_4_0.contains(key)) {
+                assertThat(status).as(key + " status (kept in 6.4.0)").isEqualTo("ANNOUNCED");
+            } else {
+                // The ledger is regenerated from source during `mvn verify`; until then a removed
+                // member still reads ANNOUNCED, afterwards REMOVED in 6.4.0. Nothing else is valid.
+                assertThat(status).as(key + " status").isIn("ANNOUNCED", "REMOVED");
+                if ("REMOVED".equals(status)) {
+                    assertThat(entry.get("removedIn").getAsString()).as(key + " removedIn").isEqualTo(REMOVE_IN);
                 }
-            }, ClassReader.SKIP_DEBUG);
+            }
         }
-        assertThat(opcodes).containsExactly(Opcodes.RETURN);
     }
 }

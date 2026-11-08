@@ -17,7 +17,6 @@ import java.util.List;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -39,7 +38,6 @@ import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import net.bytebuddy.jar.asm.ClassReader;
 import net.bytebuddy.jar.asm.ClassVisitor;
@@ -51,8 +49,13 @@ import net.bytebuddy.jar.asm.Type;
 /**
  * Plan 22-24 Task 1, the fence of CLOUD-11 ("no v1 cloud path remains in use"; D-01, D-29, S-04, S-67, checker B-W6).
  * <p>
+ * <b>6.4.0:</b> the v1 client, its entry points and the senders behind them were removed. The v1-client part of the
+ * fence below is therefore now a check that the v1 types are gone and that no framework method takes one; the probe
+ * keeps its v1 REST and user-token members as the scan's negative control, and the runtime part checks that no
+ * manager declares a v1 client or v1 transmitter field any more. The paragraph that follows describes 6.3.1.
+ * <p>
  * The public managers keep their protocol v1 senders in 6.3.1 because the public setters that feed them a
- * {@link UltiPanelWebSocketClient} ({@code ServerMonitorManager}, {@code CommandExecutionManager},
+ * {@code UltiPanelWebSocketClient} ({@code ServerMonitorManager}, {@code CommandExecutionManager},
  * {@code FileOperationManager} and {@code ServerPropertiesManager#setWebSocketClient}, {@code LogStreamManager} and
  * {@code PlayerEventManager#initialize}) are 6.3.0 API that a PATCH release may not remove. They are removed, with the
  * senders behind them, in <b>6.4.0</b>. This class proves that they are unreachable from the framework until then:
@@ -89,24 +92,14 @@ class NoV1RuntimePathTest {
     private static final String USER_TOKEN_KEY = "cloud_token";
     private static final String LEGACY_TOKEN_CLEANUP = ROOT_PACKAGE + "utils/ServerCredentialStore";
 
-    /**
-     * The methods of the framework jar that receive a v1 client as a parameter: the kept public entry points and the
-     * private steps behind them. All of them leave in 6.4.0 with the public setters (S-67). A new entry here is a new
-     * way into the v1 senders and needs a decision, so the list is exact.
-     */
-    private static final String[] KEPT_V1_ENTRY_POINTS = {
-        "com/ultikits/ultitools/manager/CommandExecutionManager#setWebSocketClient(" + CLIENT_DESC + ")V",
-        "com/ultikits/ultitools/manager/FileOperationManager#setWebSocketClient(" + CLIENT_DESC + ")V",
-        "com/ultikits/ultitools/manager/LogStreamManager#initialize(" + CLIENT_DESC + ")V",
-        "com/ultikits/ultitools/manager/PlayerEventManager#getServerId(" + CLIENT_DESC + ")Ljava/lang/String;",
-        "com/ultikits/ultitools/manager/PlayerEventManager#initialize(" + CLIENT_DESC + ")V",
-        "com/ultikits/ultitools/manager/PlayerEventManager#sendPlayerEvent(" + CLIENT_DESC
-                + "Lcom/google/gson/JsonObject;)V",
-        "com/ultikits/ultitools/manager/ServerMonitorManager#setWebSocketClient(" + CLIENT_DESC + ")V",
-        "com/ultikits/ultitools/manager/ServerPropertiesManager#setWebSocketClient(" + CLIENT_DESC + ")V",
-        "com/ultikits/ultitools/manager/UltiPanelLogTransmitter#<init>(" + CLIENT_DESC + "Ljava/lang/String;)V",
-        "com/ultikits/ultitools/manager/UltiPanelLogTransmitter#<init>(" + CLIENT_DESC
-                + "Ljava/lang/String;Lcom/ultikits/ultitools/manager/UltiPanelLogTransmitter$AgentLineSink;)V",
+    /** The protocol v1 types removed in 6.4.0; none may come back. */
+    private static final String[] REMOVED_V1_TYPES = {
+        "com.ultikits.ultitools.websocket.UltiPanelWebSocketClient",
+        "com.ultikits.ultitools.websocket.ExponentialBackoffStrategy",
+        "com.ultikits.ultitools.websocket.ReconnectStrategy",
+        "com.ultikits.ultitools.entities.TokenEntity",
+        "com.ultikits.ultitools.entities.ApiResponse",
+        "com.ultikits.ultitools.entities.vo.ServerEntityVO",
     };
 
     @Nested
@@ -136,30 +129,23 @@ class NoV1RuntimePathTest {
         }
 
         @Test
-        @DisplayName("a v1 client enters the framework only through the kept 6.3.0 entry points")
-        void onlyTheKeptEntryPointsReceiveAV1Client() throws IOException {
+        @DisplayName("6.4.0: the v1 types are gone and no framework method takes a v1 client")
+        void noFrameworkMethodReceivesAV1Client() throws IOException {
             Scan scan = Scan.of(frameworkClasses());
 
-            assertThat(scan.entryPoints).containsExactly(KEPT_V1_ENTRY_POINTS);
+            assertThat(scan.entryPoints).as("framework methods taking a v1 client").isEmpty();
+            for (String type : REMOVED_V1_TYPES) {
+                assertThatThrownBy(() -> Class.forName(type)).as(type).isInstanceOf(ClassNotFoundException.class);
+            }
         }
 
         @Test
-        @DisplayName("negative control: the scan reports a probe that constructs a client and calls a setter")
+        @DisplayName("negative control: the scan reports a probe that calls the v1 REST client and names the user token")
         void theScanReportsAProbeThatInjectsAClient() throws IOException {
             Scan scan = Scan.of(classBytes(V1InjectionProbe.class));
 
-            assertThat(scan.findings).anySatisfy(finding -> assertThat(finding)
-                    .contains("V1InjectionProbe#inject").contains("constructs " + CLIENT));
-            assertThat(scan.findings).anySatisfy(finding -> assertThat(finding)
-                    .contains("V1InjectionProbe#inject").contains("ServerMonitorManager.setWebSocketClient"));
-            assertThat(scan.findings).anySatisfy(finding -> assertThat(finding)
-                    .contains("V1InjectionProbe#fromField").contains("ServerMonitorManager.setWebSocketClient"));
-            assertThat(scan.findings).anySatisfy(finding -> assertThat(finding)
-                    .contains("V1InjectionProbe#methodReference").contains("ServerMonitorManager.setWebSocketClient"));
-            assertThat(scan.findings).anySatisfy(finding -> assertThat(finding)
-                    .contains("V1InjectionProbe#constructorReference").contains("constructs " + CLIENT));
-            assertThat(scan.findings).noneSatisfy(finding -> assertThat(finding).contains("#passAlong"));
-            assertThat(scan.findings).hasSize(5);
+            // The probe's v1-client members left with the client in 6.4.0 (they no longer compile).
+            assertThat(scan.findings).isEmpty();
             assertThat(scan.restFindings).containsExactly(
                     V1InjectionProbe.class.getName().replace('.', '/') + "#rest calls SimpleHttpClient.get");
             assertThat(scan.tokenFindings).containsExactly(
@@ -193,10 +179,6 @@ class NoV1RuntimePathTest {
         void tearDown() throws Exception {
             if (session != null) {
                 session.close();
-            }
-            ServerMonitorManager started = monitor.get();
-            if (started != null) {
-                started.stopMonitoring();
             }
             swapLogStreamInstance(previousLogStream);
             MockBukkitHelper.safeUnmock();
@@ -256,11 +238,13 @@ class NoV1RuntimePathTest {
                 plugin.getPlayerEventManager(), plugin.getLogStreamManager()};
             for (Object manager : managers) {
                 assertThat(manager).as("a real manager behind each getter").isNotNull();
-                assertThat(v1Client(manager)).as("%s: %s's v1 client", when, manager.getClass().getSimpleName())
-                        .isNull();
+                // 6.4.0: the v1 client fields are gone with the client, so no manager can hold one.
+                assertThat(declaredFieldNames(manager.getClass()))
+                        .as("%s: %s's v1 client field", when, manager.getClass().getSimpleName())
+                        .doesNotContain("webSocketClient");
             }
-            assertThat(readField(plugin.getLogStreamManager(), "logTransmitter"))
-                    .as("%s: LogStreamManager's v1 transmitter", when).isNull();
+            assertThat(declaredFieldNames(plugin.getLogStreamManager().getClass()))
+                    .as("%s: LogStreamManager's v1 transmitter field", when).doesNotContain("logTransmitter");
         }
     }
 
@@ -463,53 +447,21 @@ class NoV1RuntimePathTest {
         return previous;
     }
 
-    private static Object v1Client(Object manager) throws Exception {
-        return readField(manager, "webSocketClient");
-    }
-
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reads the managers' private v1 client fields
-    private static Object readField(Object target, String name) throws Exception {
-        Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(target);
+    private static List<String> declaredFieldNames(Class<?> type) {
+        List<String> names = new ArrayList<>();
+        for (Field field : type.getDeclaredFields()) {
+            names.add(field.getName());
+        }
+        return names;
     }
 
     /**
-     * The negative control of the static scan: never run, only compiled and scanned. {@link #inject} constructs a
-     * client and hands it to a setter, {@link #fromField} hands a stored client to a setter (the shape the framework
-     * wiring had), {@link #passAlong} only forwards the client it was handed (the shape of a kept entry point),
-     * {@link #methodReference} and {@link #constructorReference} reach the same two calls through method handles
-     * (invokedynamic), {@link #rest} calls the v1 REST client and {@link #token} reads the user-token entry.
+     * The negative control of the static scan: never run, only compiled and scanned. {@link #rest} calls the v1 REST
+     * client and {@link #token} reads the user-token entry. Its v1-client members (construction, setter injection,
+     * method and constructor references) were removed with the v1 client in 6.4.0.
      */
     @SuppressWarnings("unused")
     static final class V1InjectionProbe {
-        /** Target type of the constructor reference in {@link #constructorReference}. */
-        interface ClientFactory {
-            UltiPanelWebSocketClient make(String url, String uuid, String token) throws URISyntaxException;
-        }
-
-        private UltiPanelWebSocketClient stored;
-
-        void inject(ServerMonitorManager monitor) throws URISyntaxException {
-            monitor.setWebSocketClient(new UltiPanelWebSocketClient("ws://probe.invalid/ws", "probe", "probe"));
-        }
-
-        void fromField(ServerMonitorManager monitor) {
-            monitor.setWebSocketClient(stored);
-        }
-
-        void passAlong(ServerMonitorManager monitor, UltiPanelWebSocketClient client) {
-            monitor.setWebSocketClient(client);
-        }
-
-        Consumer<UltiPanelWebSocketClient> methodReference(ServerMonitorManager monitor) {
-            return monitor::setWebSocketClient;
-        }
-
-        ClientFactory constructorReference() {
-            return UltiPanelWebSocketClient::new;
-        }
-
         Object rest() {
             return SimpleHttpClient.get("http://probe.invalid/oauth/token");
         }

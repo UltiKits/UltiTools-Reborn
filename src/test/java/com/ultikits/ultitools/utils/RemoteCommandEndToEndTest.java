@@ -370,42 +370,6 @@ class RemoteCommandEndToEndTest {
         }
     }
 
-    @Test
-    @SuppressWarnings({"removal", "deprecation"}) // Exercises the retained v1 panel entry point.
-    void legacyPanelDispatchUsesCanonicalTextAndTheSameAuthenticationBackstop() throws Exception {
-        prepareLinkedCloud();
-        registerRealCloudCommand();
-        registerNestedCommand("cloud-alias", "ulticloud logout");
-        CommandExecutionManager manager = new CommandExecutionManager();
-        com.ultikits.ultitools.websocket.UltiPanelWebSocketClient client =
-                mock(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient.class);
-        when(client.getServerId()).thenReturn("test-server");
-        manager.setWebSocketClient(client);
-        List<String> dispatched = new ArrayList<>();
-        doAnswer(invocation -> {
-            dispatched.add(invocation.getArgument(1));
-            return invocation.callRealMethod();
-        }).when(server).dispatchCommand(any(CommandSender.class), anyString());
-        JsonObject request = new JsonObject();
-        request.addProperty("command", "/  cloud-alias  ");
-        request.addProperty("executor", "console");
-        request.addProperty("commandId", "legacy-panel-auth");
-        try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class, CALLS_REAL_METHODS)) {
-            manager.executeCommand(request);
-            assertThat(dispatched).isEmpty();
-            server.getScheduler().performOneTick();
-            assertThat(dispatched).containsExactly("cloud-alias", "ulticloud logout");
-            auth.verify(() -> CloudAuthManager.logoutReporting(any()), never());
-            assertThat(CloudAuthManager.status().isLinked()).isTrue();
-            assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
-            org.mockito.Mockito.verify(client).sendMessage(any(JsonObject.class));
-            assertThat(Bukkit.dispatchCommand(server.getConsoleSender(), "cloud-alias")).isTrue();
-            auth.verify(() -> CloudAuthManager.logoutReporting(any()));
-        }
-        server.getScheduler().waitAsyncTasksFinished();
-        assertThat(CloudAuthManager.status().isLinked()).isFalse();
-    }
-
     private void prepareLinkedCloud() {
         isolatedCloudState = true;
         CloudTestAccess.useTemporaryCredentials(credentials);

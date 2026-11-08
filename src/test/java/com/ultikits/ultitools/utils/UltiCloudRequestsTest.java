@@ -37,7 +37,6 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import com.ultikits.ultitools.entities.TokenEntity;
 
 /**
  * Tests for {@link UltiCloudRequests} under protocol 2.1.0, which has no v1 magic-link exchange: every
@@ -185,8 +184,12 @@ class UltiCloudRequestsTest {
     }
 
     @Test
-    @DisplayName("no public member of the helper is typed TokenEntity")
-    void surfaceNeverExposesTheToken() {
+    @DisplayName("no public member of the helper is typed as the server credential")
+    void surfaceNeverExposesTheToken() throws ClassNotFoundException {
+        // The protocol v1 TokenEntity this test was written against was removed in 6.4.0; the only
+        // credential type left is the package-private protocol v2 ServerCredential. Loading it by
+        // name makes a rename fail here instead of turning the check vacuous.
+        String credentialType = Class.forName("com.ultikits.ultitools.utils.ServerCredential").getName();
         List<String> offending = new ArrayList<>();
         for (Class<?> type : new Class<?>[] {UltiCloudRequests.class, UltiCloudRequests.Result.class,
                 UltiCloudRequests.Outcome.class}) {
@@ -198,19 +201,19 @@ class UltiCloudRequestsTest {
                 types.add(method.getGenericReturnType());
                 Collections.addAll(types, method.getGenericParameterTypes());
                 for (Type generic : types) {
-                    if (generic.getTypeName().contains(TokenEntity.class.getName())) {
+                    if (generic.getTypeName().contains(credentialType)) {
                         offending.add(type.getSimpleName() + "#" + method.getName());
                     }
                 }
             }
             for (Field field : type.getDeclaredFields()) {
                 if (Modifier.isPublic(field.getModifiers())
-                        && field.getGenericType().getTypeName().contains(TokenEntity.class.getName())) {
+                        && field.getGenericType().getTypeName().contains(credentialType)) {
                     offending.add(type.getSimpleName() + "." + field.getName());
                 }
             }
         }
-        assertThat(offending).as("public members typed TokenEntity").isEmpty();
+        assertThat(offending).as("public members typed ServerCredential").isEmpty();
     }
 
     /** Collects this logger's INFO records. */
