@@ -122,19 +122,6 @@ class V1CloudDeprecationTest {
         PEM + "#onPlayerCommandPreprocess(org.bukkit.event.player.PlayerCommandPreprocessEvent)",
         PEM + "#onPlayerChangedWorld(org.bukkit.event.player.PlayerChangedWorldEvent)");
 
-    /**
-     * The members 6.4.0 keeps on purpose: the plain HTTP helpers that the protocol v2 player-link
-     * calls still use. Every other 6.3.1 entry names a member 6.4.0 removed.
-     */
-    private static final Set<String> KEPT_IN_6_4_0 = new TreeSet<>(Arrays.asList(
-        "com.ultikits.ultitools.utils.SimpleHttpClient",
-        "com.ultikits.ultitools.utils.SimpleHttpClient$Response",
-        UCR,
-        UCR + "$Result",
-        UCR + "$Outcome",
-        UCR + "#post(java.lang.String,java.lang.String)",
-        UCR + "#get(java.lang.String,java.util.Map)"));
-
     private static Map<String, JsonObject> ledger;
 
     @BeforeAll
@@ -151,15 +138,16 @@ class V1CloudDeprecationTest {
     }
 
     @Test
-    @DisplayName("UltiCloudRequests#post is announced for removal in 6.4.0 and names CloudPlayerLinks")
-    void postIsAnnouncedForRemoval() {
+    @DisplayName("UltiCloudRequests#post was removed in 6.4.0 and its record names CloudPlayerLinks")
+    void postWasRemovedIn640() {
         JsonObject entry = ledger.get("com.ultikits.ultitools.utils.UltiCloudRequests#post(java.lang.String,java.lang.String)");
 
         assertThat(entry).as("ledger entry for UltiCloudRequests#post").isNotNull();
         assertThat(entry.get("since").getAsString()).isEqualTo(SINCE);
         assertThat(entry.get("forRemoval").getAsBoolean()).isTrue();
         assertThat(entry.get("removeIn").getAsString()).isEqualTo(REMOVE_IN);
-        assertThat(entry.get("status").getAsString()).isEqualTo("ANNOUNCED");
+        assertThat(entry.get("status").getAsString()).isEqualTo("REMOVED");
+        assertThat(entry.get("removedIn").getAsString()).isEqualTo(REMOVE_IN);
         assertThat(entry.get("replacement").getAsString()).contains("CloudPlayerLinks");
     }
 
@@ -178,26 +166,16 @@ class V1CloudDeprecationTest {
     }
 
     @Test
-    @DisplayName("every 6.3.1 entry was announced for removal in 6.4.0 with a replacement; removed ones may be marked REMOVED in 6.4.0")
-    void everyEntryIsAnnouncedForRemovalWithAReplacement() {
-        assertThat(EXPECTED).as("every kept member is part of the 6.3.1 inventory").containsAll(KEPT_IN_6_4_0);
+    @DisplayName("every 6.3.1 entry was announced for removal in 6.4.0 with a replacement and is REMOVED in 6.4.0")
+    void everyEntryWasRemovedIn640WithAReplacement() {
         for (String key : EXPECTED) {
             JsonObject entry = ledger.get(key);
             assertThat(entry).as(key).isNotNull();
             assertThat(entry.get("forRemoval").getAsBoolean()).as(key + " forRemoval").isTrue();
             assertThat(entry.get("removeIn").getAsString()).as(key + " removeIn").isEqualTo(REMOVE_IN);
             assertThat(entry.get("replacement").getAsString()).as(key + " replacement").isNotBlank();
-            String status = entry.get("status").getAsString();
-            if (KEPT_IN_6_4_0.contains(key)) {
-                assertThat(status).as(key + " status (kept in 6.4.0)").isEqualTo("ANNOUNCED");
-            } else {
-                // The ledger is regenerated from source during `mvn verify`; until then a removed
-                // member still reads ANNOUNCED, afterwards REMOVED in 6.4.0. Nothing else is valid.
-                assertThat(status).as(key + " status").isIn("ANNOUNCED", "REMOVED");
-                if ("REMOVED".equals(status)) {
-                    assertThat(entry.get("removedIn").getAsString()).as(key + " removedIn").isEqualTo(REMOVE_IN);
-                }
-            }
+            assertThat(entry.get("status").getAsString()).as(key + " status").isEqualTo("REMOVED");
+            assertThat(entry.get("removedIn").getAsString()).as(key + " removedIn").isEqualTo(REMOVE_IN);
         }
     }
 }

@@ -159,16 +159,20 @@ public class JsonStore implements DataStore {
     }
 
     /**
-     * Kept public for binary compatibility: until 6.4.0 this overrode the {@code DataStore} overload of
-     * the same signature, which 6.4.0 removed. It still checks ownership first and behaves as in 6.3.x.
-     * New code calls {@code UltiToolsPlugin#getDataOperator(Class)} or
-     * {@link com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}.
+     * Until 6.4.0 this overrode the {@code DataStore} overload of the same signature, which 6.4.0
+     * removed. It still checks ownership first and behaves as in 6.3.x.
      *
      * @param plugin     the requesting plugin
      * @param dataEntity the data entity class
      * @param <T>        the entity type
      * @return the data operator
+     * @deprecated Kept only for binary compatibility with the {@code DataStore} overload removed in
+     *             6.4.0. Use {@link com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}
+     *             instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).
+     * @removeIn 6.5.0
      */
+    @Deprecated(since = "6.4.0", forRemoval = true)
+    @SuppressWarnings("removal") // calls the deprecated DataStore#checkOwnership, removed with it in 6.5.0
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
         checkOwnership(plugin, dataEntity);
         ensureTableAnnotation(dataEntity);
@@ -178,16 +182,20 @@ public class JsonStore implements DataStore {
     }
 
     /**
-     * Kept public for binary compatibility: until 6.4.0 this overrode the {@code DataStore} overload of
-     * the same signature, which 6.4.0 removed. It still checks ownership first and behaves as in 6.3.x.
-     * New code calls {@code UltiToolsPlugin#getDataOperator(Class)} or
-     * {@link com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}.
+     * Until 6.4.0 this overrode the {@code DataStore} overload of the same signature, which 6.4.0
+     * removed. It still checks ownership first and behaves as in 6.3.x.
      *
      * @param dataFolder the external plugin's data folder
      * @param dataEntity the data entity class
      * @param <T>        the entity type
      * @return the data operator
+     * @deprecated Kept only for binary compatibility with the {@code DataStore} overload removed in
+     *             6.4.0. Use {@link com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}
+     *             instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).
+     * @removeIn 6.5.0
      */
+    @Deprecated(since = "6.4.0", forRemoval = true)
+    @SuppressWarnings("removal") // calls the deprecated DataStore#checkOwnership, removed with it in 6.5.0
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
         checkOwnership(dataFolder, dataEntity);
         ensureTableAnnotation(dataEntity);

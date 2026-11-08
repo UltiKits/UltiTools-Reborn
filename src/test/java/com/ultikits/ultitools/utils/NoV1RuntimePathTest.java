@@ -67,11 +67,10 @@ import net.bytebuddy.jar.asm.Type;
  *   invokedynamic instructions) except from a method that was itself handed one. Calls inside one class are a
  *   manager's own sender steps, not a hand-off. A v1 client therefore only ever enters the framework through one of
  *   the kept public entry points, whose inventory is pinned, and never originates in framework code. The same scan
- *   finds no call of the v1 REST client ({@code SimpleHttpClient}, the v1 server registration of
- *   {@code HttpRequestUtils}) outside those two classes, and (CLOUD-02, S-47) no class but
- *   {@code ServerCredentialStore}, whose 6.3.0-token cleanup removes it, names the user-token entry
- *   {@code cloud_token}. A probe class compiled with this test is the negative control: the same scan reports each
- *   of its violations. Reflection by class name cannot be fenced statically and is covered by review, not by this
+ *   finds (CLOUD-02, S-47) no class but {@code ServerCredentialStore}, whose 6.3.0-token cleanup removes it, naming
+ *   the user-token entry {@code cloud_token}; the v1 REST client ({@code SimpleHttpClient}) and the v1
+ *   server-registration calls of {@code HttpRequestUtils} were removed in 6.4.0. A probe class compiled with this
+ *   test is the negative control: the same scan reports its violation. Reflection by class name cannot be fenced statically and is covered by review, not by this
  *   test.</li>
  *   <li><b>Runtime part.</b> After a whole protocol v2 session on the in-process stub (welcome, telemetry, a
  *   command, a file listing, the properties, a reconnect and the teardown), every manager the framework reaches
@@ -84,10 +83,6 @@ class NoV1RuntimePathTest {
     private static final String CLIENT = "com/ultikits/ultitools/websocket/UltiPanelWebSocketClient";
     private static final String CLIENT_DESC = "L" + CLIENT + ";";
     private static final String ROOT_PACKAGE = "com/ultikits/ultitools/";
-    /** The protocol v1 REST client (6.3.0 API) and the v1 server-registration calls kept in its only user. */
-    private static final String V1_HTTP_CLIENT = ROOT_PACKAGE + "utils/SimpleHttpClient";
-    private static final String V1_REST_CALLS = ROOT_PACKAGE + "utils/HttpRequestUtils";
-    private static final String[] V1_REST_ENDPOINTS = {"getServerByUUID", "registerServer", "updateServer"};
     /** The 6.3.0 user-token entry of {@code credentials.json}, and the one class that may still name it. */
     private static final String USER_TOKEN_KEY = "cloud_token";
     private static final String LEGACY_TOKEN_CLEANUP = ROOT_PACKAGE + "utils/ServerCredentialStore";
@@ -100,6 +95,8 @@ class NoV1RuntimePathTest {
         "com.ultikits.ultitools.entities.TokenEntity",
         "com.ultikits.ultitools.entities.ApiResponse",
         "com.ultikits.ultitools.entities.vo.ServerEntityVO",
+        "com.ultikits.ultitools.utils.SimpleHttpClient",
+        "com.ultikits.ultitools.utils.UltiCloudRequests",
     };
 
     @Nested
@@ -116,11 +113,10 @@ class NoV1RuntimePathTest {
         }
 
         @Test
-        @DisplayName("no framework class calls a v1 REST endpoint or names the 6.3.0 user token")
-        void noFrameworkClassCallsV1RestOrTheUserToken() throws IOException {
+        @DisplayName("no framework class names the 6.3.0 user token")
+        void noFrameworkClassNamesTheUserToken() throws IOException {
             Scan scan = Scan.of(frameworkClasses());
 
-            assertThat(scan.restFindings).as("v1 REST calls in framework code").isEmpty();
             assertThat(scan.tokenFindings).as("framework code naming " + USER_TOKEN_KEY).isEmpty();
             assertThat(scan.tokenCleanupSites).as("control: the 6.3.0-token cleanup is seen by the scan")
                     .isNotEmpty();
@@ -140,14 +136,12 @@ class NoV1RuntimePathTest {
         }
 
         @Test
-        @DisplayName("negative control: the scan reports a probe that calls the v1 REST client and names the user token")
+        @DisplayName("negative control: the scan reports a probe that names the user token")
         void theScanReportsAProbeThatInjectsAClient() throws IOException {
             Scan scan = Scan.of(classBytes(V1InjectionProbe.class));
 
             // The probe's v1-client members left with the client in 6.4.0 (they no longer compile).
             assertThat(scan.findings).isEmpty();
-            assertThat(scan.restFindings).containsExactly(
-                    V1InjectionProbe.class.getName().replace('.', '/') + "#rest calls SimpleHttpClient.get");
             assertThat(scan.tokenFindings).containsExactly(
                     V1InjectionProbe.class.getName().replace('.', '/') + "#token names " + USER_TOKEN_KEY);
         }
@@ -254,7 +248,6 @@ class NoV1RuntimePathTest {
     static final class Scan {
         int classCount;
         final List<String> findings = new ArrayList<>();
-        final List<String> restFindings = new ArrayList<>();
         final List<String> tokenFindings = new ArrayList<>();
         final List<String> tokenCleanupSites = new ArrayList<>();
         final TreeSet<String> entryPointSet = new TreeSet<>();
@@ -329,10 +322,6 @@ class NoV1RuntimePathTest {
                         }
 
                         private void checkCall(String owner, String callee, String calleeDesc) {
-                            if (isV1Rest(owner, callee) && !isV1RestClass(className)) {
-                                restFindings.add(where + " calls "
-                                        + owner.substring(owner.lastIndexOf('/') + 1) + "." + callee);
-                            }
                             if (receivesClient) {
                                 // Passing along a client this method was handed: the only way a v1 client can
                                 // travel, so every chain starts at a kept entry point, outside the framework.
@@ -355,25 +344,6 @@ class NoV1RuntimePathTest {
 
         private static boolean isClientConstructor(String owner, String callee) {
             return CLIENT.equals(owner) && "<init>".equals(callee);
-        }
-
-        private static boolean isV1Rest(String owner, String callee) {
-            if (V1_HTTP_CLIENT.equals(owner)) {
-                return !"<init>".equals(callee) && !"<clinit>".equals(callee);
-            }
-            if (V1_REST_CALLS.equals(owner)) {
-                for (String endpoint : V1_REST_ENDPOINTS) {
-                    if (endpoint.equals(callee)) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        private static boolean isV1RestClass(String className) {
-            String top = topLevel(className);
-            return V1_HTTP_CLIENT.equals(top) || V1_REST_CALLS.equals(top);
         }
 
         private static boolean sameTopLevelClass(String owner, String caller) {
@@ -456,16 +426,11 @@ class NoV1RuntimePathTest {
     }
 
     /**
-     * The negative control of the static scan: never run, only compiled and scanned. {@link #rest} calls the v1 REST
-     * client and {@link #token} reads the user-token entry. Its v1-client members (construction, setter injection,
-     * method and constructor references) were removed with the v1 client in 6.4.0.
+     * The negative control of the static scan: never run, only compiled and scanned. {@link #token} reads the
+     * user-token entry. Its v1-client and v1 REST members were removed with those types in 6.4.0.
      */
     @SuppressWarnings("unused")
     static final class V1InjectionProbe {
-        Object rest() {
-            return SimpleHttpClient.get("http://probe.invalid/oauth/token");
-        }
-
         Object token(java.util.Map<String, Object> document) {
             return document.get("cloud_token");
         }
