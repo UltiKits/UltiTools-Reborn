@@ -658,7 +658,7 @@ class PackageScanUtilsTest {
             assertThat(message)
                     .contains(FIXTURE_PACKAGE)
                     .contains(BreakingConfigEntity.class.getName())
-                    .contains("COMPATIBILITY.md");
+                    .contains(ModuleScanDiagnostics.COMPATIBILITY_POINTER);
         }
 
         @Test
