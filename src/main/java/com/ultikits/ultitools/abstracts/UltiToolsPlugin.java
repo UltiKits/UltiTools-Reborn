@@ -2300,23 +2300,27 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Class)} overload directly -- so {@code DataStore.getOperator(DataScope, Class)}, the method
      * D-17/02-07 built specifically as the credential-typed supported path, had zero real callers
      * anywhere in the framework. This now routes through it, so production actually uses the path
-     * it was built for. {@code dataScope} is normally non-null by the time any module calls this
-     * (set by {@code PluginManager} right after minting, before {@code registerSelf()} runs); the
-     * {@code null} fallback below only covers a bare instance constructed outside the normal
-     * {@code PluginManager} load flow (e.g. a test), where the deprecated overload's own {@code
-     * checkOwnership(...)} call still refuses correctly on its own.
+     * it was built for. {@code dataScope} is non-null by the time any module calls this (set by
+     * {@code PluginManager} right after minting, before {@code registerSelf()} runs). A bare
+     * instance constructed outside the normal {@code PluginManager} load flow has no scope and is
+     * refused with {@code ENTITY_NOT_OWNED}; before 6.4.0 it fell back to the deprecated {@code
+     * DataStore.getOperator(UltiToolsPlugin, Class)} overload, which was removed in 6.4.0.
      *
      * @param dataClazz the class of the data entity
      * @param <T>       the type of the data entity
      * @return the data operator
      * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataClazz} is not
-     *         registered to this module
+     *         registered to this module, or this module was not loaded by the framework and so
+     *         holds no data scope
      */
     public final <T extends BaseDataEntity<String>> DataOperator<T> getDataOperator(Class<T> dataClazz) {
-        if (dataScope != null) {
-            return UltiTools.getInstance().getDataStore().getOperator(dataScope, dataClazz);
+        if (dataScope == null) {
+            throw new com.ultikits.ultitools.exceptions.DataAccessException(ErrorCode.ENTITY_NOT_OWNED,
+                    "Module '" + getPluginName() + "' has no data scope -- it was not loaded by the "
+                            + "UltiTools plugin manager, so it cannot request a data operator for "
+                            + dataClazz.getName() + ".");
         }
-        return UltiTools.getInstance().getDataStore().getOperator(this, dataClazz);
+        return UltiTools.getInstance().getDataStore().getOperator(dataScope, dataClazz);
     }
 
     /**

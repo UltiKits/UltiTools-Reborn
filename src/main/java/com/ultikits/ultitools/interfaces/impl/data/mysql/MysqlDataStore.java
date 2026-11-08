@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.interfaces.impl.data.mysql;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.exceptions.DataAccessException;
@@ -94,27 +93,13 @@ public class MysqlDataStore implements DataStore {
         return "mysql";
     }
 
-    @Override
-    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
-        checkOwnership(plugin, dataEntity);
-        return getOperatorForIdentity(plugin.getPluginName(), dataEntity);
-    }
-
-    @Override
-    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
-        checkOwnership(dataFolder, dataEntity);
-        return getOperatorForIdentity(canonicalPath(dataFolder), dataEntity);
-    }
-
     /**
      * Internal, unchecked construction path (CR-01/CR-03, 02-13): {@link
      * com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}'s default body
      * calls this only after its own {@code scope.owns(...)} check has already passed. Resolves
      * {@code scope} to the exact same identity {@link #identityFor(DataScope)} already derives for
      * {@link #transactionManagerFor(DataScope)} -- internal scopes resolve to the plugin's own
-     * name, external scopes to the canonical data-folder path -- so an internal scope's operator
-     * cache entry is keyed identically whether reached through here or through {@link
-     * #getOperator(UltiToolsPlugin, Class)}.
+     * name, external scopes to the canonical data-folder path.
      */
     @Override
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
@@ -122,8 +107,8 @@ public class MysqlDataStore implements DataStore {
     }
 
     /**
-     * Shared operator-construction body for all three entry points above, once ownership has
-     * already been established by whichever one of them was called. Single-sourced so the
+     * Operator-construction body for {@link #getOperatorUnchecked(DataScope, Class)}, once
+     * ownership has already been established. Single-sourced so the
      * operator cache (keyed by (identity, entity)) and the {@code transactionManagerForIdentity}
      * wiring are each written in exactly one place.
      */
@@ -163,8 +148,7 @@ public class MysqlDataStore implements DataStore {
     }
 
     /**
-     * Resolves {@code scope}'s operator-cache identity, matching whichever legacy {@code
-     * getOperator} overload the same scope would actually route through: the internal (plugin
+     * Resolves {@code scope}'s operator-cache identity: the internal (plugin
      * name) shape when {@code scope} is an internal plugin's own scope (its {@code dataFolder} is
      * exactly the core framework's own data folder, {@code DataScope.forPlugin}'s construction --
      * the same disambiguation {@code JsonStore.identityOf(DataScope)} and {@code

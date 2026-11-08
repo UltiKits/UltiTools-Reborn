@@ -11,7 +11,6 @@ import java.util.logging.Logger;
 import javax.sql.DataSource;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.exceptions.DataAccessException;
@@ -77,18 +76,6 @@ public class SQLiteDataStore implements DataStore {
         return "sqlite";
     }
 
-    @Override
-    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
-        checkOwnership(plugin, dataEntity);
-        return getOperatorForPath(dbPathForPlugin(plugin.getPluginName()), dataEntity);
-    }
-
-    @Override
-    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
-        checkOwnership(dataFolder, dataEntity);
-        return getOperatorForPath(dbPathForFolder(dataFolder), dataEntity);
-    }
-
     /**
      * Internal, unchecked construction path (CR-01/CR-03, 02-13): {@link
      * com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}'s default body
@@ -97,8 +84,7 @@ public class SQLiteDataStore implements DataStore {
      * derives for {@link #transactionManagerFor(DataScope)} -- internal scopes resolve to {@link
      * #dbPathForPlugin(String)} keyed on the plugin's own name, external scopes to {@link
      * #dbPathForFolder(File)} -- so an internal scope never collapses onto the framework's shared
-     * core folder the way routing through the public {@code getOperator(File, Class)} overload
-     * used to (the exact regression 02-07 guarded against and CR-01 found reopened as a security
+     * core folder (the regression 02-07 guarded against and CR-01 found reopened as a security
      * bypass).
      */
     @Override
@@ -107,8 +93,8 @@ public class SQLiteDataStore implements DataStore {
     }
 
     /**
-     * Shared operator-construction body for all three entry points above, once ownership has
-     * already been established by whichever one of them was called. Single-sourced so the pool
+     * Operator-construction body for {@link #getOperatorUnchecked(DataScope, Class)}, once
+     * ownership has already been established. Single-sourced so the pool
      * cache (keyed by backing-file path), the operator cache (keyed by (path, entity)), and the
      * {@code transactionManagerFor(...)} wiring are each written in exactly one place.
      */
@@ -156,8 +142,7 @@ public class SQLiteDataStore implements DataStore {
     }
 
     /**
-     * Resolves {@code scope}'s backing .db file path, matching whichever legacy {@code
-     * getOperator} overload the same scope would actually route through: the internal ({@code
+     * Resolves {@code scope}'s backing .db file path: the internal ({@code
      * dbPathForPlugin}) shape when {@code scope} is an internal plugin's own scope (its {@code
      * dataFolder} is exactly the core framework's own data folder, {@code DataScope.forPlugin}'s
      * construction -- the same disambiguation {@code JsonStore.identityOf(DataScope)} uses, 02-05),
@@ -172,7 +157,7 @@ public class SQLiteDataStore implements DataStore {
 
     /**
      * The internal-plugin .db path shape: {@code <core data folder>/sqliteDB/<plugin name>.db}.
-     * Shared by {@link #getOperator(UltiToolsPlugin, Class)} and {@link #dbPathFor(DataScope)}.
+     * Used by {@link #dbPathFor(DataScope)}.
      */
     private static String dbPathForPlugin(String pluginName) {
         File dataFolder = new File(UltiTools.getInstance().getDataFolder(), "sqliteDB");
@@ -181,8 +166,8 @@ public class SQLiteDataStore implements DataStore {
     }
 
     /**
-     * The external-plugin .db path shape: {@code <plugin's own data folder>/data.db}. Shared by
-     * {@link #getOperator(File, Class)} and {@link #dbPathFor(DataScope)}.
+     * The external-plugin .db path shape: {@code <plugin's own data folder>/data.db}. Used by
+     * {@link #dbPathFor(DataScope)}.
      */
     private static String dbPathForFolder(File dataFolder) {
         ensureExists(dataFolder);

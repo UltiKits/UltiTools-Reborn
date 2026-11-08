@@ -11,7 +11,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.Cached;
@@ -158,24 +157,6 @@ public class JsonStore implements DataStore {
         this.storeLocation = storeLocation;
     }
 
-    @Override
-    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
-        checkOwnership(plugin, dataEntity);
-        ensureTableAnnotation(dataEntity);
-        String identity = plugin.getPluginName();
-        return getOperatorForIdentity(identity, internalRoot(identity), internalLocation(identity, dataEntity),
-                dataEntity);
-    }
-
-    @Override
-    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
-        checkOwnership(dataFolder, dataEntity);
-        ensureTableAnnotation(dataEntity);
-        String identity = canonicalPath(dataFolder);
-        return getOperatorForIdentity(identity, externalRoot(dataFolder), externalLocation(dataFolder, dataEntity),
-                dataEntity);
-    }
-
     /**
      * Internal, unchecked construction path (CR-01/CR-03, 02-13): {@link
      * com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}'s default body
@@ -201,9 +182,8 @@ public class JsonStore implements DataStore {
     }
 
     /**
-     * Shared operator-construction body for all three entry points above, once ownership and the
-     * {@code @Table} annotation have already been established by whichever one of them was
-     * called. Single-sourced so the operator cache (keyed by (identity, entity)) and the {@code
+     * Operator-construction body for {@link #getOperatorUnchecked(DataScope, Class)}, once
+     * ownership and the {@code @Table} annotation have already been established. Single-sourced so the operator cache (keyed by (identity, entity)) and the {@code
      * transactionManagerFor(...)} wiring are each written in exactly one place.
      * <p>
      * Recovers the identity's journal before its first operator is constructed, so no table of
@@ -239,8 +219,7 @@ public class JsonStore implements DataStore {
 
     /**
      * The internal-plugin storage location shape: {@code <store location>/<plugin name>/<@Table
-     * value>}. Shared by {@link #getOperator(UltiToolsPlugin, Class)} and {@link
-     * #getOperatorUnchecked(DataScope, Class)}'s internal branch.
+     * value>}. Used by {@link #getOperatorUnchecked(DataScope, Class)}'s internal branch.
      */
     private String internalLocation(String identity, Class<?> dataEntity) {
         return storeLocation + File.separator + identity + File.separator
@@ -249,8 +228,7 @@ public class JsonStore implements DataStore {
 
     /**
      * The external-plugin storage location shape: {@code <plugin's own data folder>/data/<@Table
-     * value>}. Shared by {@link #getOperator(File, Class)} and {@link
-     * #getOperatorUnchecked(DataScope, Class)}'s external branch.
+     * value>}. Used by {@link #getOperatorUnchecked(DataScope, Class)}'s external branch.
      */
     private static String externalLocation(File dataFolder, Class<?> dataEntity) {
         return dataFolder.getAbsolutePath() + File.separator + "data" + File.separator
@@ -304,9 +282,8 @@ public class JsonStore implements DataStore {
     }
 
     /**
-     * Derives the same identity {@link #getOperator(UltiToolsPlugin, Class)} and {@link
-     * #getOperator(File, Class)} each already resolve for {@link OperatorKey}, from a {@link
-     * DataScope} instead of a raw plugin or {@link File}.
+     * Derives the identity {@link #getOperatorUnchecked(DataScope, Class)} resolves for {@link
+     * OperatorKey}, from a {@link DataScope}.
      * <p>
      * {@link DataScope} carries both a plugin name and a data folder but no explicit
      * internal-vs-external discriminator, so this disambiguates the same way {@link

@@ -331,14 +331,13 @@ class PluginManagerFirstAssemblyTest {
 
     /**
      * Stubs the data store so {@code ConfigReadyFixtureModule}'s observing service can ask for an
-     * operator: the scoped overload answers {@code scoped}, the unscoped legacy overload
-     * {@code unscoped}. The fixture entity is not a {@code @Table} entity of the module, so the
+     * operator: the scoped overload answers {@code scoped}. Without a data scope (the 6.4.0
+     * {@code getDataOperator} has no unscoped fallback) the call is refused. The fixture entity is not a {@code @Table} entity of the module, so the
      * store's real ownership check would refuse it.
      */
-    void stubOperatorStore(DataOperator<?> scoped, DataOperator<?> unscoped) {
+    void stubOperatorStore(DataOperator<?> scoped) {
         DataStore dataStore = mock(DataStore.class, CALLS_REAL_METHODS);
         doReturn(scoped).when(dataStore).getOperator(any(DataScope.class), any());
-        doReturn(unscoped).when(dataStore).getOperator(any(UltiToolsPlugin.class), any());
         lenient().when(ultiTools.getDataStore()).thenReturn(dataStore);
     }
 
@@ -450,7 +449,7 @@ class PluginManagerFirstAssemblyTest {
         }
 
         private void assertConfigDependentServiceLoads(EntryPoint entryPoint) throws Exception {
-            stubOperatorStore(mock(DataOperator.class), mock(DataOperator.class));
+            stubOperatorStore(mock(DataOperator.class));
             FixtureJarClassLoader loader = configLoader();
             AbstractConfigEntity config = supplyConfigEntity(loader);
             Loaded loaded = load(entryPoint, loader, CONFIG_MODULE);
@@ -463,7 +462,7 @@ class PluginManagerFirstAssemblyTest {
 
         private void assertPostConstructSeesScope(EntryPoint entryPoint) throws Exception {
             DataOperator<?> scoped = mock(DataOperator.class);
-            stubOperatorStore(scoped, mock(DataOperator.class));
+            stubOperatorStore(scoped);
             FixtureJarClassLoader loader = configLoader();
             // The config entity comes from the parent container here, so this case does not
             // depend on when the module's own config entities are registered (that is the case
@@ -479,7 +478,7 @@ class PluginManagerFirstAssemblyTest {
             assertAll(
                     () -> assertThat(call(service, "getOperatorDuringPostConstruct"))
                             .as("getDataOperator during @PostConstruct must go through the module's "
-                                    + "DataScope; the unscoped operator means the DataScope was still null")
+                                    + "DataScope")
                             .isSameAs(scoped),
                     () -> assertThat(call(service, "getContextDuringPostConstruct"))
                             .as("getContext() during @PostConstruct")

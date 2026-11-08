@@ -32,12 +32,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.context.SimpleContainer;
-import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
@@ -88,12 +86,6 @@ class TransactionalRollbackEndToEndTest {
             @Override
             public String getStoreType() {
                 return "fake-jdbc";
-            }
-
-            @Override
-            public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin,
-                    Class<T> dataEntity) {
-                throw new UnsupportedOperationException("not needed by this test");
             }
 
             @Override
@@ -165,7 +157,7 @@ class TransactionalRollbackEndToEndTest {
 
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         private void insert(int id) {
-            try (Statement st = txManager.getConnection().createStatement()) {
+            try (Statement st = ((JdbcTransactionManager) txManager).getConnection().createStatement()) {
                 st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
             } catch (SQLException e) {
                 throw new RuntimeException(e);

@@ -82,7 +82,7 @@ class SimpleTempListenerTest {
         TempEventHandler<Event> mockHandler = mock(TempEventHandler.class);
         when(mockHandler.handle(any())).thenReturn(true); // Return true to unregister
         
-        SimpleTempListener<Event> listener = new SimpleTempListener<>(Event.class, mockHandler);
+        SimpleTempListener<Event> listener = new SimpleTempListener<>(Event.class, EventPriority.NORMAL, mockHandler, e -> true);
         
         // Act
         listener.register();
@@ -111,7 +111,7 @@ class SimpleTempListenerTest {
         TempEventHandler<Event> mockHandler = mock(TempEventHandler.class);
         Function<Event, Boolean> filter = event -> false; // Filter out everything
         
-        SimpleTempListener<Event> listener = new SimpleTempListener<>(Event.class, mockHandler, filter);
+        SimpleTempListener<Event> listener = new SimpleTempListener<>(Event.class, EventPriority.NORMAL, mockHandler, filter);
         
         // Act
         listener.register();
@@ -126,21 +126,6 @@ class SimpleTempListenerTest {
         verify(mockHandler, never()).handle(any());
     }
     
-    @Test
-    void testConstructors() {
-        TempEventHandler<Event> mockHandler = mock(TempEventHandler.class);
-        
-        SimpleTempListener<Event> l1 = new SimpleTempListener<>(Event.class, mockHandler);
-        assertEquals(EventPriority.NORMAL, l1.getPriority());
-        
-        SimpleTempListener<Event> l2 = new SimpleTempListener<>(Event.class, mockHandler, EventPriority.HIGH);
-        assertEquals(EventPriority.HIGH, l2.getPriority());
-        
-        Function<Event, Boolean> filter = e -> true;
-        SimpleTempListener<Event> l3 = new SimpleTempListener<>(Event.class, mockHandler, filter);
-        assertEquals(filter, l3.getFilter());
-    }
-
     @Test
     void builderPathShouldProduceListenerWithFilterPriorityAndHandler() {
         // Arrange
@@ -165,9 +150,8 @@ class SimpleTempListenerTest {
 
     @Test
     void registerWithoutEventHandlerShouldFailWithDescriptiveMessage() {
-        // Arrange - direct construction (no-arg + setters), eventHandler intentionally left null
-        SimpleTempListener<Event> listener = new SimpleTempListener<>();
-        listener.setEventClass(Event.class);
+        // Arrange - direct construction, eventHandler intentionally left null
+        SimpleTempListener<Event> listener = new SimpleTempListener<>(Event.class, EventPriority.NORMAL, null, e -> true);
 
         // Act + Assert
         assertThatThrownBy(listener::register)
@@ -177,10 +161,9 @@ class SimpleTempListenerTest {
 
     @Test
     void registerWithoutEventClassShouldFailWithDescriptiveMessage() {
-        // Arrange - direct construction (no-arg + setters), eventClass intentionally left null
-        SimpleTempListener<Event> listener = new SimpleTempListener<>();
+        // Arrange - direct construction, eventClass intentionally left null
         TempEventHandler<Event> handler = mock(TempEventHandler.class);
-        listener.setEventHandler(handler);
+        SimpleTempListener<Event> listener = new SimpleTempListener<>(null, EventPriority.NORMAL, handler, e -> true);
 
         // Act + Assert
         assertThatThrownBy(listener::register)
