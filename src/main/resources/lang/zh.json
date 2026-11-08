@@ -18,6 +18,7 @@
   "UltiCloud answered this server's connection with a different server ID than the one it is linked to. Reconnecting has stopped and the credential is kept. Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login to link this server again.": "UltiCloud 对本服务器连接的应答使用了与绑定时不同的服务器 ID。已停止重连，凭据保留。请联系 UltiCloud 支持，或先执行 /ulticloud logout 再执行 /ulticloud login 重新绑定此服务器。",
   "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login.": "重连保持停止：UltiCloud 应答的服务器 ID 与本服务器绑定的不同。请联系 UltiCloud 支持，或先执行 /ulticloud logout 再执行 /ulticloud login。",
   "Please wait %d seconds before trying again.": "请等待 %d 秒后再试。",
+  "That is not a valid UltiCloud re-pair code. Copy the whole code from the panel and try again.": "这不是有效的 UltiCloud 重新配对代码。请从面板复制完整的代码后重试。",
   "更新检查未完成：无法确认 %s 的最新版本。": "更新检查未完成：无法确认 %s 的最新版本。",
   "更新检查仍在进行，请稍后重试。": "更新检查仍在进行，请稍后重试。",
   "更新检查失败，详情见控制台；重启服务器后会再次检查。": "更新检查失败，详情见控制台；重启服务器后会再次检查。",

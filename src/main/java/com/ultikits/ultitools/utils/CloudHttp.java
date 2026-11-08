@@ -15,7 +15,7 @@ import com.google.gson.JsonObject;
 /**
  * The single JSON REST exchange the protocol v2 client uses against UltiCloud ({@code /v1/*}).
  * <p>
- * It keeps these exchange rules (the ones the 6.3.0 {@link UltiCloudRequests} exchange kept), because the
+ * It keeps these exchange rules (the ones the 6.3.0 {@code UltiCloudRequests} exchange kept), because the
  * server credential travels through it:
  * <ul>
  *   <li><b>No redirect is followed.</b> Following one would re-send the {@code Authorization}
@@ -34,7 +34,7 @@ import com.google.gson.JsonObject;
  * 400 or more and capped at {@value #MAX_BODY_BYTES} bytes. {@code Retry-After} is exposed only in
  * its delta-seconds form ({@link Response#retryAfterSeconds()}).
  * <p>
- * {@link UltiCloudRequests} makes no HTTP request in 6.3.1 (plan 22-17 removed its exchange), so this
+ * {@code UltiCloudRequests} made no HTTP request from 6.3.1 and was removed in 6.4.0, so this
  * class is the one REST exchange implementation the framework uses.
  *
  * @since 6.3.1

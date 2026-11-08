@@ -42,7 +42,6 @@ import com.ultikits.ultitools.config.convert.builtin.ConversionTypes;
 import com.ultikits.ultitools.config.convert.builtin.GenericConverters;
 import com.ultikits.ultitools.config.convert.builtin.ScalarConverter;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
-import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 
 /**
@@ -240,18 +239,15 @@ public final class ConverterRegistry {
 
     /**
      * Checks every annotated field and every generic argument without reading or writing a file.
-     * A nondefault legacy parser owns conversion and is adapted separately.
      * @param entity the config class, including inherited fields
      * @param module the module name
      * @param file the module-relative config file
      */
-    // Nondefault legacy parsers retain ownership of their annotated fields.
-    @SuppressWarnings("removal")
     public void checkEntityFields(Class<?> entity, String module, String file) {
         for (Class<?> level = entity; level != null && level != Object.class; level = level.getSuperclass()) {
             for (Field field : level.getDeclaredFields()) {
                 ConfigEntry entry = field.getAnnotation(ConfigEntry.class);
-                if (entry == null || entry.parser() != DefaultConfigParser.class) { continue; }
+                if (entry == null) { continue; }
                 Type declared = TypeToken.of(entity).resolveType(field.getGenericType()).getType();
                 Type missing = missingType(declared, new HashSet<>());
                 if (missing == null) { continue; }
@@ -377,17 +373,15 @@ public final class ConverterRegistry {
     }
 
     /**
-     * Selects an explicitly declared legacy parser before registry conversion.
+     * Converts a Java value to plain data through the converter registry.
      * @param value Java value
      * @param type declared type
      * @param file configuration file
      * @param path whole keys
-     * @param entry annotation, or null for registry conversion
+     * @param entry annotation, or null; registry conversion either way
      * @return plain data
      * @throws ConversionException on conversion failure
      */
-    // Explicit legacy parsers remain supported through this compatibility adapter.
-    @SuppressWarnings("removal")
     public Object toPlain(Object value, Type type, String file, List<String> path, ConfigEntry entry)
             throws ConversionException {
         return toPlainResult(value, type, file, path, entry).value();
@@ -399,7 +393,7 @@ public final class ConverterRegistry {
      * @param type declared type
      * @param file configuration file
      * @param path whole keys
-     * @param entry annotation, or null for registry conversion
+     * @param entry annotation, or null; registry conversion either way
      * @return plain value and collected nested omissions
      * @throws ConversionException on conversion failure
      */
@@ -415,21 +409,17 @@ public final class ConverterRegistry {
      * @param type declared type
      * @param file configuration file
      * @param path whole keys
-     * @param entry annotation, or null for registry conversion
+     * @param entry annotation, or null; registry conversion either way
      * @param fileValue the plain value the file holds at {@code path}, or {@code null} when unknown
      * @return plain value and collected nested omissions
      * @throws ConversionException on conversion failure
      */
     @ApiStatus.Internal
-    @SuppressWarnings("removal")
     public ConversionResult<Object> toPlainResult(Object value, Type type, String file, List<String> path, ConfigEntry entry,
                                                   Object fileValue) throws ConversionException {
         List<ConversionFailure> failures = new ArrayList<>();
-        boolean registryConversion = entry == null || entry.parser() == DefaultConfigParser.class;
-        // A legacy parser never sees the file's value: it serializes the Java value as it always did.
-        Context ctx = new Context(this, file, path, type, failures, registryConversion ? fileValue : null);
-        Object plain = registryConversion
-                ? write(value, ctx) : invokeWrite(new LegacyParserAdapter(entry.parser()), value, ctx);
+        Context ctx = new Context(this, file, path, type, failures, fileValue);
+        Object plain = write(value, ctx);
         return new ConversionResult<>(plain, failures);
     }
 
@@ -491,24 +481,21 @@ public final class ConverterRegistry {
     private static boolean heldInSeveralSpellings(List<String> spellings) { return spellings.size() > 1; }
 
     /**
-     * Selects an explicitly declared legacy parser before registry conversion.
+     * Converts a document value through the converter registry.
      * @param plain document value
      * @param type declared type
      * @param file configuration file
      * @param path whole keys
-     * @param entry annotation, or null for registry conversion
+     * @param entry annotation, or null; registry conversion either way
      * @param <T> result type
      * @return converted value and failures
      * @throws ConversionException on conversion failure
      */
-    // Explicit legacy parsers remain supported through this compatibility adapter.
-    @SuppressWarnings("removal")
     public <T> ConversionResult<T> fromPlainResult(Object plain, Type type, String file, List<String> path, ConfigEntry entry)
             throws ConversionException {
         List<ConversionFailure> failures = new ArrayList<>();
         Context ctx = new Context(this, file, path, type, failures, null);
-        T value = entry == null || entry.parser() == DefaultConfigParser.class
-                ? read(plain, ctx) : invokeRead(new LegacyParserAdapter(entry.parser()), plain, ctx);
+        T value = read(plain, ctx);
         return new ConversionResult<>(value, failures);
     }
 

@@ -47,9 +47,10 @@ import com.ultikits.ultitools.config.document.PlainData;
  * and {@code write} touches only the file of its snapshot and refuses when that file is gone. Values must be plain
  * data (strings, numbers, booleans, {@code null}, and lists and string-keyed maps of those); a Bukkit object such as
  * an {@code ItemStack}, a {@code UUID} or any other type is refused before anything is read or written - serialize it
- * first. This is not a general file API: it writes YAML keys of a file that already exists (a crash-safe file API for
- * modules is UltiKits/UltiTools-Reborn#545, a later feature), and it is not for a module's {@code @ConfigEntity}
- * files, which have their own save rules.
+ * first. This is not a general file API: it writes YAML keys of a file that already exists, and it is not for a
+ * module's {@code @ConfigEntity} files, which have their own save rules. For strict complete publication, including
+ * exclusive creation of a new YAML map, explicitly opt in to {@link CrashSafeYamlFiles} (6.4.0). That helper has a
+ * narrower POSIX/metadata contract and no in-place fallback; it does not change this API's defaults or link behavior.
  *
  * @since 6.3.0
  */

@@ -238,6 +238,35 @@ public final class OperatorFileWriter {
         return write(file, owned, expectedFingerprint, edit, null);
     }
 
+    /**
+     * Internal bridge for the opt-in module YAML API; the same ownership verifier with strict publication only.
+     * Unowned bytes cannot change: all normal gate checks apply. No parent creation or load maintenance is performed.
+     * Legacy entry points do not select this strategy. The whole read/verify/stage/commit is serialized with config
+     * loads and commits, not merely the last replacement.
+     *
+     * @param file trusted destination on the default local POSIX filesystem
+     * @param owned named keys, or whole-file ownership solely for absent-file creation
+     * @param expectedFingerprint required snapshot fingerprint, or ABSENT for creation
+     * @param edit plain-data edit of the fresh document, limited to owned paths
+     * @return gate result, with a value-free reason logged on refusal/conflict
+     * @throws IOException if staging, metadata or strict publication fails
+     * @since 6.4.0
+     */
+    @ApiStatus.Internal
+    public static Result writeCrashSafe(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit)
+            throws IOException {
+        synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+            try {
+                StrictYamlPublication.Target target = StrictYamlPublication.prepare(file, ABSENT.equals(expectedFingerprint));
+                return stage(target.path, owned, expectedFingerprint, edit, null, target).commit();
+            } catch (StrictYamlPublication.Refused refusal) {
+                return refuse(file.toAbsolutePath(), owned, Collections.emptyList(), refusal.getMessage());
+            } catch (StrictYamlPublication.Changed conflict) {
+                return changed(file.toAbsolutePath(), owned, Collections.emptyList(), conflict.getMessage());
+            }
+        }
+    }
+
     /** As {@link #write(Path, OwnedPaths, String, Consumer)}, with the publication steps as a test seam ({@code null}: real). */
     static Result write(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
             AtomicConfigWriter.FileOperations files) throws IOException {
@@ -266,9 +295,14 @@ public final class OperatorFileWriter {
         return stage(file, owned, expectedFingerprint, edit, null);
     }
 
-    @SuppressWarnings("PMD.NPathComplexity") // Every refusal of the write gate is decided here, in the order the class describes.
     static Staged stage(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
             AtomicConfigWriter.FileOperations files) throws IOException {
+        return stage(file, owned, expectedFingerprint, edit, files, null);
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // Every refusal of the write gate is decided here, in the order the class describes.
+    private static Staged stage(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
+            AtomicConfigWriter.FileOperations files, StrictYamlPublication.Target strict) throws IOException {
         Path absolute = file.toAbsolutePath();
         Snapshot snapshot;
         ConfigDocument candidate;
@@ -277,7 +311,7 @@ public final class OperatorFileWriter {
         // What the gate is doing, so a runtime failure's refusal names the step that failed (gate-1 F7, 17-74).
         String step = READING;
         try {
-            snapshot = Snapshot.read(file, owned, expectedFingerprint);
+            snapshot = Snapshot.read(file, owned, expectedFingerprint, strict != null);
             if (snapshot.failure != null) {
                 if (ANCHORED.equals(snapshot.reason)) {
                     return Staged.settled(refuseAnchored(absolute, owned));
@@ -304,7 +338,7 @@ public final class OperatorFileWriter {
             step = RENDERING;
             fault(Step.RENDER);
             rendered = candidate.render();
-            if (rendered.equals(snapshot.text)) {
+            if (rendered.equals(snapshot.text) && !(strict != null && ABSENT.equals(snapshot.fingerprint))) {
                 return Staged.settled(new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint));
             }
             step = CHECKING;
@@ -324,14 +358,15 @@ public final class OperatorFileWriter {
             return Staged.settled(refuse(absolute, owned, Collections.<String>emptyList(),
                     runtimeFailure(owned, step, failure)));
         }
-        if (ABSENT.equals(snapshot.fingerprint)) {
+        if (strict == null && ABSENT.equals(snapshot.fingerprint)) {
             Path parent = absolute.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
         }
-        AtomicConfigWriter.StagedWrite temporary = files == null ? AtomicConfigWriter.stage(file, rendered)
-                : AtomicConfigWriter.stage(file, rendered, files);
+        Publication temporary = strict != null ? new StrictPublication(strict.stage(rendered))
+                : new LegacyPublication(files == null ? AtomicConfigWriter.stage(file, rendered)
+                        : AtomicConfigWriter.stage(file, rendered, files));
         return new Staged(file, absolute, owned, keys, rendered, candidate, snapshot.fingerprint,
                 ABSENT.equals(snapshot.fingerprint) ? null : snapshot.text, temporary);
     }
@@ -399,7 +434,7 @@ public final class OperatorFileWriter {
         private final ConfigDocument candidate;
         private final String read;
         private final String readText;
-        private final AtomicConfigWriter.StagedWrite temporary;
+        private final Publication temporary;
         private boolean finished;
         /** Whether this write replaced or created the target (the published state). */
         private boolean published;
@@ -411,7 +446,7 @@ public final class OperatorFileWriter {
         private boolean notPutBack;
 
         private Staged(Path file, Path absolute, OwnedPaths owned, List<String> keys, String rendered,
-                ConfigDocument candidate, String read, String readText, AtomicConfigWriter.StagedWrite temporary) {
+                ConfigDocument candidate, String read, String readText, Publication temporary) {
             this.settled = null;
             this.file = file;
             this.absolute = absolute;
@@ -494,25 +529,27 @@ public final class OperatorFileWriter {
             finished = true;
             boolean creating = ABSENT.equals(read);
             synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+                Throwable primary = null;
                 try {
-                    byte[] now = readOrNull(file);
-                    if (creating && now == null) {
-                        temporary.commitAsNewFile();
-                        published = true;
-                    } else if (!creating && now != null && ConfigDocument.sha256(now).equals(read)) {
-                        temporary.commit();
-                        published = true;
-                    }
+                    publishIfCurrent(creating);
                 } catch (FileAlreadyExistsException appeared) {
+                    if (temporary.strict() && !creating) {
+                        primary = appeared;
+                        throw appeared; // A provider refusing atomic replacement is an I/O failure, not create conflict.
+                    }
                     // A file appeared at the target after the re-read: it is left as it is, and this is reported below.
                     LOGGER.fine("Config creation lost the race to an existing file at " + absolute);
                 } catch (AtomicConfigWriter.RestoreFailedException failedPutBack) {
                     // The only failure after which bytes of this write may remain in the target (#622).
                     notPutBack = true;
+                    primary = failedPutBack;
                     throw failedPutBack;
+                } catch (IOException | RuntimeException | Error failure) {
+                    primary = failure;
+                    throw failure;
                 } finally {
                     if (!published) {
-                        temporary.discard();
+                        temporary.discard(primary);
                     }
                 }
             }
@@ -521,6 +558,20 @@ public final class OperatorFileWriter {
             }
             return changed(absolute, owned, keys, creating ? "a file appeared while the new content was being prepared"
                     : "the file changed while the new content was being prepared");
+        }
+
+        /** Called under WRITE_LOAD_LOCK; the same final check and commit points for each publication strategy. */
+        private void publishIfCurrent(boolean creating) throws IOException {
+            if (temporary.matchesTarget()) {
+                byte[] now = readOrNull(file, temporary.strict());
+                if (creating && now == null) {
+                    temporary.commitAsNewFile();
+                    published = true;
+                } else if (!creating && now != null && ConfigDocument.sha256(now).equals(read)) {
+                    temporary.commit();
+                    published = true;
+                }
+            }
         }
 
         /**
@@ -582,6 +633,72 @@ public final class OperatorFileWriter {
             }
             finished = true;
             return temporary.discard();
+        }
+    }
+
+    /** Publication is selected explicitly; AtomicConfigWriter itself keeps its API and fallback algorithm. */
+    private interface Publication {
+        void commit() throws IOException;
+        void commitAsNewFile() throws IOException;
+        boolean discard();
+        default void discard(Throwable primary) {
+            discard();
+        }
+        default boolean matchesTarget() throws IOException {
+            return true;
+        }
+        default boolean strict() {
+            return false;
+        }
+    }
+
+    private static final class LegacyPublication implements Publication {
+        private final AtomicConfigWriter.StagedWrite staged;
+        LegacyPublication(AtomicConfigWriter.StagedWrite staged) {
+            this.staged = staged;
+        }
+        @Override
+        public void commit() throws IOException {
+            staged.commit();
+        }
+        @Override
+        public void commitAsNewFile() throws IOException {
+            staged.commitAsNewFile();
+        }
+        @Override
+        public boolean discard() {
+            return staged.discard();
+        }
+    }
+
+    private static final class StrictPublication implements Publication {
+        private final StrictYamlPublication staged;
+        StrictPublication(StrictYamlPublication staged) {
+            this.staged = staged;
+        }
+        @Override
+        public void commit() throws IOException {
+            staged.commit();
+        }
+        @Override
+        public void commitAsNewFile() throws IOException {
+            staged.commitAsNewFile();
+        }
+        @Override
+        public boolean discard() {
+            return staged.discard(null);
+        }
+        @Override
+        public void discard(Throwable primary) {
+            staged.discard(primary);
+        }
+        @Override
+        public boolean matchesTarget() throws IOException {
+            return staged.matchesTarget();
+        }
+        @Override
+        public boolean strict() {
+            return true;
         }
     }
 
@@ -659,11 +776,11 @@ public final class OperatorFileWriter {
         private Outcome failure;
         private String reason;
 
-        static Snapshot read(Path file, OwnedPaths owned, String expectedFingerprint) {
+        static Snapshot read(Path file, OwnedPaths owned, String expectedFingerprint, boolean strict) {
             Snapshot snapshot = new Snapshot();
-            ConfigLoadResult loaded = ConfigDocument.load(file);
+            ConfigLoadResult loaded = strict ? ConfigDocument.loadForStrictWrite(file) : ConfigDocument.load(file);
             if (loaded.state() == ConfigLoadResult.State.LOADED) {
-                snapshot.readLoaded(file, loaded);
+                snapshot.readLoaded(file, loaded, strict);
             } else if (loaded.state() != ConfigLoadResult.State.ABSENT) {
                 snapshot.fail(Outcome.REFUSED, UNREADABLE);
             }
@@ -674,11 +791,11 @@ public final class OperatorFileWriter {
         }
 
         /** Reads the bytes the load parsed; a second read that differs means the file moved in between. */
-        private void readLoaded(Path file, ConfigLoadResult loaded) {
+        private void readLoaded(Path file, ConfigLoadResult loaded, boolean strict) {
             absent = false;
             byte[] bytes;
             try {
-                bytes = readOrNull(file);
+                bytes = readOrNull(file, strict);
             } catch (IOException e) {
                 fail(Outcome.REFUSED, UNREADABLE);
                 return;
@@ -1477,8 +1594,12 @@ public final class OperatorFileWriter {
     }
 
     private static byte[] readOrNull(Path file) throws IOException {
+        return readOrNull(file, false);
+    }
+
+    private static byte[] readOrNull(Path file, boolean strict) throws IOException {
         try {
-            return Files.readAllBytes(AtomicConfigWriter.resolve(file));
+            return strict ? ConfigDocument.readForStrictWrite(file) : Files.readAllBytes(AtomicConfigWriter.resolve(file));
         } catch (NoSuchFileException e) {
             return null;
         }

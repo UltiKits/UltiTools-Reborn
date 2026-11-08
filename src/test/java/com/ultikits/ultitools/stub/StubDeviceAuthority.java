@@ -192,7 +192,8 @@ public final class StubDeviceAuthority {
         if (server) {
             String serverId;
             synchronized (this) {
-                serverId = authorization.legacyUuid == null ? null : serverIdByLegacyUuid.get(authorization.legacyUuid);
+                serverId = authorization.boundServerId != null ? authorization.boundServerId
+                        : authorization.legacyUuid == null ? null : serverIdByLegacyUuid.get(authorization.legacyUuid);
                 if (serverId == null) {
                     serverId = UltiCloudStub.Contract.newUlid();
                     if (authorization.legacyUuid != null) {
@@ -223,6 +224,30 @@ public final class StubDeviceAuthority {
     }
 
     // ------------------------------------------------------------------ admin actions
+
+    /**
+     * UltiCloud's "revoke and re-pair" owner action ({@code POST /v1/servers/{serverId}/credential/repair}):
+     * revokes every credential of {@code serverId} and returns a fresh device code that is already approved and
+     * bound to that same server record. Its one successful {@code deviceToken} poll issues a new credential carrying
+     * {@code serverId} and {@code serverName}; every later poll answers {@code expired_token}. Closing the plugin's
+     * live connection with 4401 is left to the test ({@link UltiCloudStub.Handle#closeLive}).
+     *
+     * @param serverId   the existing server record
+     * @param serverName the name that record carries
+     * @return the device code, 43 base64url characters
+     */
+    public String issueRepairCode(String serverId, String serverName) {
+        credentials.revokeServer(serverId, "revoked by credential repair");
+        Authorization authorization = new Authorization(UltiCloudStub.Contract.randomToken(32), userCode(),
+                "server", serverName, null);
+        authorization.boundServerId = serverId;
+        authorization.state = State.APPROVED;
+        synchronized (this) {
+            byDeviceCode.put(authorization.deviceCode, authorization);
+        }
+        log.log("DEVICE", "issued a re-pair code for serverId=" + serverId);
+        return authorization.deviceCode;
+    }
 
     /** Approves the latest pending authorization (or the next one, when none is pending). */
     public void approve() {
@@ -380,6 +405,8 @@ public final class StubDeviceAuthority {
         final String legacyUuid;
         final long expiresAt = System.currentTimeMillis() + LIFETIME_MS;
         State state = State.PENDING;
+        /** The existing server record a re-pair code is bound to, or {@code null}. */
+        String boundServerId;
         boolean slowDownNext;
         boolean held;
         int polls;

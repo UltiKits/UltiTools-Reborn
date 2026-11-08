@@ -53,9 +53,6 @@ class TelemetryEndToEndTest {
 
     @AfterEach
     void tearDown() {
-        if (monitor != null) {
-            monitor.stopMonitoring();
-        }
         MockBukkitHelper.safeUnmock();
     }
 

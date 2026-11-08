@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.utils;
 
 import java.io.IOException;
-import java.util.Date;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.logging.Level;
@@ -13,23 +12,22 @@ import org.bukkit.plugin.PluginDescriptionFile;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.entities.TokenEntity;
 
 /**
  * The three command-facing entry points behind {@code /ulticloud login|logout|status}.
  * <p>
  * As of plan 16-09 (D-17) this class owns no state of its own and exposes no generation-shaped or
- * {@link TokenEntity}-shaped public surface -- everything that used to be a fine-grained public
+ * {@code TokenEntity}-shaped public surface -- everything that used to be a fine-grained public
  * static (the generation triple, {@code saveToken}/{@code clearToken}/{@code refreshToken}/
  * {@code loadSavedToken}, the start/stop pairs for polling and refresh) is gone outright, not
  * deprecated: {@link CloudSession} instance methods now carry that behaviour, reached only through
- * {@link #login(Runnable, Consumer, Runnable, Consumer, Consumer)}, {@link #logout()} and
+ * {@link #login(DeviceLoginListener)}, {@link #logout()} and
  * {@link #status()} below. Keeping a delegating shim for any of them would leave the generation
  * convention callable, which is exactly what issue #298's second acceptance criterion requires to
  * stop being true (see plan 16-08's {@link CloudSession} javadoc for the mechanism this replaced).
  * <p>
  * {@code CredentialStaticSurfaceInvariantTest} enforces this structurally: no public static method
- * anywhere in this package may accept or return a {@link TokenEntity} or a generation (D-18), so a
+ * anywhere in this package may accept or return a {@code TokenEntity} or a generation (D-18), so a
  * static bypass of the session's credential commit cannot be reintroduced unnoticed. As of 6.3.1 the
  * 6.3.0 user token is neither stored nor sent (plan 22-24 removed its store); the server credential is
  * committed only through {@link CloudSession#commitCredential(ServerCredential)}.
@@ -45,6 +43,8 @@ public class CloudAuthManager {
     static final int MAX_SUGGESTED_NAME_CODE_POINTS = 64;
     /** The message a login reports when an overlapping login already replaced its session. */
     static final String LOGIN_IN_PROGRESS = "Another login attempt is already in progress; please try again";
+    /** The reason {@link #loginWithCode} reports for a code that does not have the contract's shape. */
+    static final String INVALID_REPAIR_CODE = "the code is not a valid UltiCloud re-pair code";
     private static final long RECONNECT_COOLDOWN_MS = 10_000L;
 
     private CloudAuthManager() {
@@ -69,6 +69,49 @@ public class CloudAuthManager {
      */
     public static void login(DeviceLoginListener listener) {
         Objects.requireNonNull(listener, "listener");
+        start(listener, session -> session.beginDeviceLogin(listener));
+    }
+
+    /**
+     * Links this server with a device code UltiCloud has already approved: the single-use code the panel's
+     * "Revoke and re-pair" action shows, typed as {@code /ulticloud login <code>} (issue #869). No new device code
+     * is requested; the code is exchanged through the same {@code POST /v1/device/token} poll a normal login uses,
+     * and a grant is stored, and the connection started, exactly as for a normal login. The credential it yields
+     * belongs to the server record the code was bound to, so the server keeps its id, name and history.
+     * <p>
+     * The already-linked check, the rate limit and the session replacement are those of
+     * {@link #login(DeviceLoginListener)}; {@link DeviceLoginListener#onCode} is never called. A code that does not
+     * have the contract's shape is refused through {@link DeviceLoginListener#onRequestFailed} before anything else,
+     * and never sent. A used, unknown or expired code ends in {@link DeviceLoginListener#onExpired}. The code is a
+     * bearer secret: it is never logged or echoed.
+     *
+     * @param deviceCode the code from the panel
+     * @param listener   receives every outcome; must not be {@code null}
+     * @since 6.4.0
+     */
+    public static void loginWithCode(String deviceCode, DeviceLoginListener listener) {
+        Objects.requireNonNull(listener, "listener");
+        if (!isWellFormedRepairCode(deviceCode)) {
+            listener.onRequestFailed(INVALID_REPAIR_CODE);
+            return;
+        }
+        start(listener, session -> session.beginCodeLogin(deviceCode, listener));
+    }
+
+    /**
+     * @param code the text an operator typed after {@code /ulticloud login}, or {@code null}
+     * @return {@code true} when it has the shape of an UltiCloud device code ({@code ^[A-Za-z0-9_-]{43,128}$})
+     * @since 6.4.0
+     */
+    public static boolean isWellFormedRepairCode(String code) {
+        return DeviceAuthorizationClient.isWellFormedDeviceCode(code);
+    }
+
+    /**
+     * The checks and the session replacement shared by both logins; {@code begin} then starts the network part on
+     * the new session.
+     */
+    private static void start(DeviceLoginListener listener, Consumer<CloudSession> begin) {
         CloudSession sessionAtCheck = CloudSession.current();
         ServerCredential linked = linkedCredential(sessionAtCheck);
         if (linked != null) {
@@ -115,9 +158,9 @@ public class CloudAuthManager {
                 newSession = CloudSession.startNew();
             }
         }
-        // The device-code request is a network call: it stays outside both locks and off the
-        // caller's thread, on the new session's own executor.
-        newSession.beginDeviceLogin(listener);
+        // The device-code request (or the code exchange) is a network call: it stays outside both
+        // locks and off the caller's thread, on the new session's own executor.
+        begin.accept(newSession);
     }
 
     /**
@@ -219,53 +262,6 @@ public class CloudAuthManager {
         }
         Object uuid = result.data().get("uuid");
         return uuid instanceof String ? LegacyServerId.canonical((String) uuid) : null;
-    }
-
-    /**
-     * The 6.3.0 callback form of {@link #login(DeviceLoginListener)}, kept with its signature for
-     * compatibility. It now runs the device authorization: {@code onSuccess} receives the
-     * verification URI with the code filled in ({@code verificationUriComplete}); the later outcome
-     * (linked, denied, expired) is reported only in the server log.
-     *
-     * @param onAlreadyLoggedIn invoked, with nothing else attempted, if this server is already linked
-     * @param onRateLimited     invoked with the remaining cooldown in seconds if the login attempt
-     *                          is currently rate-limited
-     * @param onRequesting      invoked right before the device-code request is made
-     * @param onSuccess         invoked with the complete verification URI once a code was issued
-     * @param onError           invoked with an error message if the request fails
-     * @deprecated Use {@link #login(DeviceLoginListener)} instead; removed in 6.4.0.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.1", forRemoval = true)
-    public static void login(Runnable onAlreadyLoggedIn, Consumer<Long> onRateLimited,
-            Runnable onRequesting, Consumer<String> onSuccess, Consumer<String> onError) {
-        login(new DeviceLoginListener() {
-            @Override
-            public void onAlreadyLinked(String serverName) {
-                onAlreadyLoggedIn.run();
-            }
-
-            @Override
-            public void onRateLimited(long seconds) {
-                onRateLimited.accept(seconds);
-            }
-
-            @Override
-            public void onRequesting() {
-                onRequesting.run();
-            }
-
-            @Override
-            public void onCode(String verificationUri, String userCode, String verificationUriComplete,
-                    long expiresInSeconds) {
-                onSuccess.accept(verificationUriComplete);
-            }
-
-            @Override
-            public void onRequestFailed(String reason) {
-                onError.accept(reason);
-            }
-        });
     }
 
     /**
@@ -455,7 +451,7 @@ public class CloudAuthManager {
 
     /**
      * An immutable view of {@link #status()}'s result. Deliberately carries only the fields
-     * {@code /ulticloud status} actually prints -- never a {@link TokenEntity} reference -- so this
+     * {@code /ulticloud status} actually prints -- never a {@code TokenEntity} reference -- so this
      * type cannot become a second way to leak the token past the D-18 guard.
      */
     public static final class CloudStatus {
@@ -485,26 +481,6 @@ public class CloudAuthManager {
         /** @return {@code true} only while the current agent connection is open */
         public boolean isConnected() {
             return connected;
-        }
-
-        /**
-         * @return {@code null}; protocol v2 holds no user token
-         * @deprecated Use {@link #getServerName()} or {@link #getServerId()} instead; removed in 6.4.0.
-         * @removeIn 6.4.0
-         */
-        @Deprecated(since = "6.3.1", forRemoval = true)
-        public String getUserName() {
-            return null;
-        }
-
-        /**
-         * @return {@code null}; the server credential never expires
-         * @deprecated Use {@link #getServerName()} or {@link #getServerId()} for identity instead; removed in 6.4.0.
-         * @removeIn 6.4.0
-         */
-        @Deprecated(since = "6.3.1", forRemoval = true)
-        public Date getExpirationDate() {
-            return null;
         }
 
         /**
@@ -549,7 +525,10 @@ public class CloudAuthManager {
         /** @param seconds the remaining cooldown before another login attempt is allowed */
         void onRateLimited(long seconds);
 
-        /** The device-code request is about to be made. */
+        /**
+         * The device-code request is about to be made -- or, for {@link #loginWithCode}, the exchange of the
+         * supplied code.
+         */
         void onRequesting();
 
         /**

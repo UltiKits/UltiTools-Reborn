@@ -134,10 +134,11 @@ public final class UltiToolsAPI {
      * directly -- so {@code DataStore.getOperator(DataScope, Class)}, the method D-17/02-07 built
      * specifically as the credential-typed supported path, had zero real callers anywhere in the
      * framework. This now routes through it, so production actually uses the path it was built
-     * for. {@code scope} is normally non-null by the time a connected plugin calls this (set by
-     * {@code PluginManager.registerExternal} right after minting); the {@code null} fallback below
-     * only covers an adapter that predates that wiring, where the deprecated overload's own {@code
-     * checkOwnership(...)} call still refuses correctly on its own.
+     * for. {@code scope} is non-null by the time a connected plugin calls this (set by {@code
+     * PluginManager.registerExternal} right after minting). An adapter without a scope (its
+     * registration was refused) is refused with {@code ENTITY_NOT_OWNED}, as the deprecated
+     * {@code DataStore.getOperator(File, Class)} overload it fell back to before 6.4.0 refused an
+     * unregistered data folder.
      *
      * @param plugin the external JavaPlugin
      * @param dataEntity the data entity class (must have @Table annotation)
@@ -152,10 +153,13 @@ public final class UltiToolsAPI {
             throw new IllegalStateException("Plugin " + plugin.getName() + " is not connected to UltiTools");
         }
         com.ultikits.ultitools.manager.DataScope scope = adapter.getDataScope();
-        if (scope != null) {
-            return UltiTools.getInstance().getDataStore().getOperator(scope, dataEntity);
+        if (scope == null) {
+            throw new com.ultikits.ultitools.exceptions.DataAccessException(
+                    com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED,
+                    "Data folder is not a registered external plugin -- call UltiToolsAPI.connect(...) "
+                            + "before requesting a data operator.");
         }
-        return UltiTools.getInstance().getDataStore().getOperator(adapter.getDataFolder(), dataEntity);
+        return UltiTools.getInstance().getDataStore().getOperator(scope, dataEntity);
     }
 
     /**

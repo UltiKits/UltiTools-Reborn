@@ -34,6 +34,30 @@ class SensitiveCommandRegistryTest {
     }
 
     @Nested
+    @DisplayName("the framework's own registry (issue #869)")
+    class FrameworkCommands {
+
+        @Test
+        @DisplayName("redacts the re-pair code of /ulticloud login <code> in a player command line")
+        void redactsTheRepairCode() {
+            SensitiveCommandRegistry framework = SensitiveCommandRegistry.withFrameworkCommands();
+            String code = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE";
+
+            assertThat(framework.redactText("Steve issued server command: /ulticloud login " + code))
+                    .isEqualTo("Steve issued server command: /ulticloud ***");
+            assertThat(framework.redactText("Steve issued server command: /ultitools:ulticloud login " + code))
+                    .doesNotContain(code);
+            assertThat(framework.isSensitive("/ulticloud login " + code)).isTrue();
+        }
+
+        @Test
+        @DisplayName("a registry constructed directly still starts empty")
+        void constructedRegistryStartsEmpty() {
+            assertThat(registry.isSensitive("/ulticloud login x")).isFalse();
+        }
+    }
+
+    @Nested
     @DisplayName("normalize")
     class Normalize {
 

@@ -62,14 +62,11 @@ class ConverterLoadTimeCheckTest {
     }
 
     @Test
-    void customRegistrationResolvesUnknownAndLegacyOverridesUseTheirAdapter() {
+    void customRegistrationResolvesUnknown() {
         ConverterRegistry registry = new ConverterRegistry(ConverterRegistry.framework());
         registry.register(RecipeDefinitionLike.class,
                 new ConverterRegistryLookupTest.MarkerConverter<RecipeDefinitionLike>(), false);
         assertThatCode(() -> registry.checkEntityFields(Recipes.class, "FixtureModule", "config/recipes.yml"))
-                .doesNotThrowAnyException();
-        assertThatCode(() -> ConverterRegistry.framework().checkEntityFields(
-                Legacy.class, "FixtureModule", "config/legacy.yml"))
                 .doesNotThrowAnyException();
     }
 
@@ -156,12 +153,6 @@ class ConverterLoadTimeCheckTest {
         @ConfigEntry List<? extends String> strings;
         @ConfigEntry T text;
         @ConfigEntry List<U> enums;
-    }
-    static class Legacy {
-        // Deliberately verifies that a legacy override owns its unknown value type.
-        @SuppressWarnings("removal")
-        @ConfigEntry(parser = com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class)
-        Map<String, RecipeDefinitionLike> value;
     }
     enum TestEnum { FIRST, SECOND }
 }
