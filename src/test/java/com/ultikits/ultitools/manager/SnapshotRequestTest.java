@@ -141,6 +141,34 @@ class SnapshotRequestTest {
         assertThat(types(channel.frames())).contains("worlds.snapshot");
     }
 
+    /**
+     * The router's catch only covers the dispatching thread; the push runs later on the main
+     * thread, so a failure there must still answer the request exactly once (issue #753).
+     */
+    @Test
+    @DisplayName("a failure on the main thread still answers the request once with internal_error")
+    void mainThreadFailureAnswersInternalErrorOnce() {
+        TestMainThread mainThread = new TestMainThread();
+        AgentTelemetry deferred = new AgentTelemetry(monitor, () -> true, clock::get, mainThread, targets -> { });
+        AgentMessageRouter deferredRouter = new AgentMessageRouter(capability -> true, capability -> "disabled",
+                () -> 0L);
+        deferredRouter.register("snapshot.request", deferred);
+        when(monitor.currentStateSnapshot()).thenThrow(new IllegalStateException("sampling broke"));
+
+        deferredRouter.dispatch(ContractFixtures.text("fixtures/agent/snapshot.request/valid/worlds.json"), channel);
+        mainThread.drain();
+
+        List<JsonObject> frames = channel.frames();
+        assertThat(types(frames)).containsExactly("snapshot.request.result");
+        JsonObject result = frames.get(0);
+        assertThat(result.get("replyTo").getAsString()).isEqualTo(REQUEST_ID);
+        assertThat(result.getAsJsonObject("payload").get("status").getAsString()).isEqualTo("error");
+        assertThat(result.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("internal_error");
+        assertThat(result.toString()).doesNotContain("sampling broke").doesNotContain("IllegalStateException");
+        assertThat(com.ultikits.ultitools.contract.ContractSchemas.isValid(result))
+                .as("the error result matches the vendored schema").isTrue();
+    }
+
     @Test
     @DisplayName("an empty target list is refused by the router as an invalid message")
     void emptyTargetsIsInvalid() {

@@ -7,6 +7,7 @@
   "Cancelled the pending UltiCloud link request. Cloud features are stopped.": "Cancelled the pending UltiCloud link request. Cloud features are stopped.",
   "This server is not linked to UltiCloud.": "This server is not linked to UltiCloud.",
   "Cloud features have been stopped regardless.": "Cloud features have been stopped regardless.",
+  "Could not delete this server's UltiCloud credential from the local credentials file. Check the server log, then run /ulticloud logout again.": "Could not delete this server's UltiCloud credential from the local credentials file. Check the server log, then run /ulticloud logout again.",
   "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.": "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.",
   "Reconnecting to UltiCloud now.": "Reconnecting to UltiCloud now.",
   "Use /ulticloud status to see the result.": "Use /ulticloud status to see the result.",

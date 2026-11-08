@@ -184,12 +184,7 @@ final class RemotePropertiesHandler implements CloudRequestHandler {
         PayloadReader reader = new PayloadReader(request.id(), request.payload())
                 .keys(new String[]{"baseVersion", "changes"});
         String baseVersion = reader.string("baseVersion", 64, 64, ContractPrimitives.SHA256_HEX);
-        JsonObject changes = reader.object("changes");
-        if (changes.size() == 0) {
-            channel.replyError(request.id(), "error", "invalid_message",
-                    "Payload does not match the message schema.", null);
-            return;
-        }
+        JsonObject changes = reader.object("changes", 1);
         List<String> writable = ServerPropertiesManager.writableKeys();
         new PayloadReader(request.id(), changes).keys(new String[0], writable.toArray(new String[writable.size()]));
 

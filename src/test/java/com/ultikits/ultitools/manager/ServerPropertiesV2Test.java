@@ -265,6 +265,28 @@ class ServerPropertiesV2Test {
         assertThat(Files.getLastModifiedTime(propsFile)).isEqualTo(modified);
     }
 
+    /**
+     * Empty changes fail through the shared payload-validation path (an unchecked invalid_message
+     * the router answers), like every other schema check, instead of replying from the handler
+     * itself (issue #764).
+     */
+    @Test
+    @DisplayName("empty changes fail through the shared payload-validation path, not a handler-local reply")
+    void emptyChangesThrowTheSharedValidationFailure() throws IOException {
+        byte[] before = Files.readAllBytes(propsFile);
+        JsonObject frame = updateRequest(RemoteFilesEndToEndTest.sha256(before), new JsonObject());
+        com.ultikits.ultitools.websocket.CloudRequest request = new com.ultikits.ultitools.websocket.CloudRequest(
+                frame.get("id").getAsString(), "properties.update", frame.get("ts").getAsLong(), null,
+                frame.getAsJsonObject("payload"));
+
+        RuntimeException thrown = org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
+                () -> handler.handle(request, channel));
+
+        assertThat(thrown.getClass().getSimpleName()).isEqualTo("InvalidFrameException");
+        assertThat(channel.frames()).as("the handler itself sends nothing").isEmpty();
+        verify(properties, never()).updateWithBaseVersion(anyString(), anyMap());
+    }
+
     @Test
     @DisplayName("the manager refuses online-mode, white-list and any key outside the 12 even when called directly")
     void directUpdateRefusesTheTwoSecurityKeys() throws IOException {

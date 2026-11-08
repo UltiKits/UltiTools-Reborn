@@ -241,12 +241,8 @@ public class PluginInitiationUtils {
      */
     public static boolean resumeSavedCredentialOnStartup() {
         try {
-            ServerCredentialStore.LegacyTokenRemoval removal;
-            try {
-                removal = ServerCredentialStore.removeLegacyToken();
-            } catch (com.ultikits.ultitools.exceptions.DataAccessException failure) {
-                return false;
-            }
+            // A failed removal falls through to the catch below, which names the cause class.
+            ServerCredentialStore.LegacyTokenRemoval removal = ServerCredentialStore.removeLegacyToken();
             if (removal == ServerCredentialStore.LegacyTokenRemoval.REMOVED_UNLINKED) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
                         UltiTools.getInstance().i18n(LEGACY_TOKEN_REMOVED_KEY),

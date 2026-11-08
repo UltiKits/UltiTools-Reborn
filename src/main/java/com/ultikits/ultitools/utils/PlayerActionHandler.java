@@ -169,8 +169,15 @@ final class PlayerActionHandler implements CloudRequestHandler {
     /**
      * Runs once per accepted request, on the main thread: resolve the subject, then act.
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void perform(CloudRequest request, CloudChannel channel, Action action) {
-        Player subject = onlinePlayer(action.player);
+        Player subject;
+        try {
+            subject = onlinePlayer(action.player);
+        } catch (RuntimeException ex) {
+            fail(channel, request, action, ex);
+            return;
+        }
         if (subject == null) {
             deny(channel, request, action, CODE_PLAYER_NOT_ONLINE, action.player + OFFLINE_SUFFIX);
             return;
@@ -236,8 +243,15 @@ final class PlayerActionHandler implements CloudRequestHandler {
      * Starts the asynchronous teleport and answers when its future completes. The answer may come
      * from a thread other than the main thread; every Bukkit call was made before it.
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void runTeleport(CloudChannel channel, CloudRequest request, Action action, Player subject) {
-        Location destination = destination(channel, request, action, subject);
+        Location destination;
+        try {
+            destination = destination(channel, request, action, subject);
+        } catch (RuntimeException ex) {
+            fail(channel, request, action, ex);
+            return;
+        }
         if (destination == null) {
             return;
         }

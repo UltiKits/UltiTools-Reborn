@@ -246,6 +246,42 @@ class PlayerActionHandlerTest {
         assertThat(subject.getLocation().getWorld()).as("nothing moved").isNotNull();
     }
 
+    /**
+     * The lookups that resolve the subject and the destination run inside the main-thread task,
+     * outside the router's catch, so a throwing lookup must still answer once (issue #753).
+     */
+    @Test
+    void aThrowingTargetLookupAnswersInternalErrorOnce() {
+        ActionPlayer subject = addPlayer("Steve");
+        ActionPlayer target = addPlayer(".Steve");
+        target.failLocationWith(new IllegalStateException("entity removed"));
+        JsonObject frame = fixture("teleport-to-player");
+        RecordingChannel channel = new RecordingChannel();
+
+        handle(frame, channel);
+
+        assertError(channel, id(frame), "internal_error");
+        assertThat(message(channel)).isEqualTo("The request could not be processed.");
+        assertThat(rawFrame(channel)).doesNotContain("entity removed").doesNotContain("IllegalStateException");
+        assertThat(audit.denied).singleElement().asString().startsWith("teleport:Steve:");
+        assertThat(subject.getLocation().getWorld()).as("nothing moved").isNotNull();
+    }
+
+    @Test
+    void aThrowingSubjectLookupAnswersInternalErrorOnce() {
+        ActionPlayer subject = addPlayer("Alex");
+        subject.failOnlineCheckWith(new IllegalStateException("player table busy"));
+        JsonObject frame = fixture("gamemode");
+        RecordingChannel channel = new RecordingChannel();
+
+        handle(frame, channel);
+
+        assertError(channel, id(frame), "internal_error");
+        assertThat(rawFrame(channel)).doesNotContain("player table busy").doesNotContain("IllegalStateException");
+        assertThat(audit.denied).singleElement().asString().startsWith("gamemode:Alex:");
+        assertThat(audit.allowed).isEmpty();
+    }
+
     @Test
     void theTeleportAnswerMayArriveFromAnotherThread() throws InterruptedException {
         ActionPlayer subject = addPlayer("Steve");
@@ -340,6 +376,8 @@ class PlayerActionHandlerTest {
     public static final class ActionPlayer extends PlayerMock {
         private CompletableFuture<Boolean> answer;
         private RuntimeException failure;
+        private RuntimeException locationFailure;
+        private RuntimeException onlineFailure;
 
         ActionPlayer(ServerMock server, String name) {
             super(server, name);
@@ -351,6 +389,30 @@ class PlayerActionHandlerTest {
 
         void failWith(RuntimeException failure) {
             this.failure = failure;
+        }
+
+        void failLocationWith(RuntimeException failure) {
+            this.locationFailure = failure;
+        }
+
+        void failOnlineCheckWith(RuntimeException failure) {
+            this.onlineFailure = failure;
+        }
+
+        @Override
+        public Location getLocation() {
+            if (locationFailure != null) {
+                throw locationFailure;
+            }
+            return super.getLocation();
+        }
+
+        @Override
+        public boolean isOnline() {
+            if (onlineFailure != null) {
+                throw onlineFailure;
+            }
+            return super.isOnline();
         }
 
         @Override

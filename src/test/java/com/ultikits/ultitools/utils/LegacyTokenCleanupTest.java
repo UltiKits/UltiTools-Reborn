@@ -165,8 +165,12 @@ class LegacyTokenCleanupTest {
         assertThat(records.stream().filter(r -> r.getLevel() == Level.WARNING)).isEmpty();
     }
 
+    /**
+     * A failed removal stops the cloud start-up with one warning that names the cause class, never
+     * its message, and no legacy-token cleanup warning (issue #753).
+     */
     @Test
-    void updateFailureStopsStartupWithoutAnExtraCleanupWarning() throws Exception {
+    void updateFailureStopsStartupWithOneCauseClassWarning() throws Exception {
         Files.write(file, LEGACY.getBytes(StandardCharsets.UTF_8));
         CredentialStore.ReadResult parsed = CredentialStore.read();
         try (MockedStatic<CredentialStore> store = mockStatic(CredentialStore.class)) {
@@ -176,7 +180,10 @@ class LegacyTokenCleanupTest {
             store.verify(() -> CredentialStore.update(any()));
         }
         assertThat(new String(Files.readAllBytes(file), StandardCharsets.UTF_8)).isEqualTo(LEGACY);
-        assertThat(records).isEmpty();
+        assertThat(records).singleElement().satisfies(record -> {
+            assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(record.getMessage()).contains("DataAccessException").doesNotContain("synthetic failure");
+        });
     }
 
     private byte[] hash() throws Exception {
