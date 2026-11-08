@@ -279,6 +279,8 @@ def parse_release_xml(data):
 # (https://repo1.maven.org/maven2/com/ultikits/UltiTools-API/6.2.5/UltiTools-API-6.2.5.pom), the output of the
 # build's flatten-maven-plugin: these top-level elements, and a build that only declares the Central publisher
 # as a build extension. Anything else (dependencies, repositories, profiles, properties, ...) is refused.
+# Only the top-level element set and <build> are checked: content nested in licenses, developers or scm is
+# not compared with the 6.2.5 POM. Those blocks come unchanged from pom.xml through the flatten plugin.
 PUBLICATION_POM_ELEMENTS = ("modelVersion", "groupId", "artifactId", "version", "name", "description", "url",
                             "licenses", "developers", "scm", "build")
 PUBLICATION_BUILD_PLUGIN = ("org.sonatype.central", "central-publishing-maven-plugin")
@@ -1366,6 +1368,7 @@ def cmd_central_inputs(args):
     if jar is None:
         problems.emit()
         return 1
+    # RETAINED_POM is read by no workflow step; it is the test suites' handle on the retained publication POM.
     fields = (("RETAINED_POM", entries[0][3]), ("PROJECT_POM", str(project_pom)),
               ("PROPERTIES", str(properties)), ("HELPER_JAR", str(jar)),
               ("HELPER_JAR_SHA256", sha256_bytes(jar.read_bytes())), ("STAGING_DIR", str(scratch / "staging")),
