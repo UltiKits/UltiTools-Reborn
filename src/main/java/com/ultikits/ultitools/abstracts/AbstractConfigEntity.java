@@ -2191,7 +2191,8 @@ public abstract class AbstractConfigEntity {
             }
             parentSecret |= isSecretShapedFieldName(part);
         }
-        String key = located.toString();
+        // #825: a quoted map key can hold an escaped line separator, so the key follows the value's single-line policy.
+        String key = singleLineDiagnostic(located.toString());
         boolean secret = isSecretShapedFieldName(field.getName());
         for (String part : path) { secret |= isSecretShapedFieldName(part); }
         String found = raw instanceof Map ? "a map" : raw instanceof List ? "a list"
