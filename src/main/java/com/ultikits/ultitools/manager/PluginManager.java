@@ -25,6 +25,7 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
+import java.util.function.BiConsumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
@@ -220,6 +221,18 @@ public class PluginManager {
     private final Map<UltiToolsPlugin, List<Runnable>> supersedeHandovers =
             Collections.synchronizedMap(new IdentityHashMap<>());
     private ClassLoader classLoader;
+    private BiConsumer<Class<?>, String[]> moduleScanObserver;
+
+    /**
+     * Installs the framework's diagnostic callback, invoked with the actual merged scan roots
+     * immediately before component scanning. It does not decide whether any bean is accepted.
+     *
+     * @param observer module main class and the already-resolved component scan packages
+     */
+    @ApiStatus.Internal
+    public void setModuleScanObserver(BiConsumer<Class<?>, String[]> observer) {
+        this.moduleScanObserver = observer;
+    }
     @Getter
     private TaskManager taskManager;
     @Getter
@@ -3213,6 +3226,9 @@ public class PluginManager {
 
             // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
             String[] scanPackages = getPluginScanPackages(pluginClass);
+            if (moduleScanObserver != null) {
+                moduleScanObserver.accept(pluginClass, scanPackages);
+            }
             if (scanPackages.length > 0) {
                 pluginContext.scanComponents(scanPackages);
             }
