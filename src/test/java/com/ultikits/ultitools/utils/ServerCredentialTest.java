@@ -139,7 +139,7 @@ class ServerCredentialTest {
         assertThat(entry.get("userId").getAsJsonPrimitive().isNumber()).isTrue();
         assertThat(entry.get("userId").getAsBigDecimal().longValueExact()).isEqualTo(userId);
         Object decoded = ((Map<?, ?>) CredentialStore.read().data().get(ServerCredentialStore.KEY)).get("userId");
-        assertThat(decoded).as("the actual Gson Map reader returns Double").isInstanceOf(Double.class);
+        assertThat(decoded).as("#753: the credential reader returns a JSON integer as Long").isInstanceOf(Long.class);
         assertThat(ServerCredentialStore.load().getUserId()).isEqualTo(userId);
     }
 
