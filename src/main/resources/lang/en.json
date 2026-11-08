@@ -170,7 +170,7 @@
   "下载失败：%s": "the download failed: %s",
   "下载的文件 %s 不是有效的模块 JAR": "the downloaded file %s is not a valid module JAR",
   "下载的 %s 没有声明 identify-string %s 和版本号": "the downloaded %s does not declare identify-string %s and a version",
-  "the downloaded %s could not be read (%s)": "the downloaded %s could not be read (%s)",
+  "无法读取下载的 %s（%s）": "the downloaded %s could not be read (%s)",
   "下载的 %s 声明的版本是 %s，不是云端给出的最新版本 %s": "the download %s declares version %s, not the latest version %s the catalogue offered",
   "下载期间该模块已被卸载，本次更新已取消": "the module was uninstalled while the update downloaded, so the update was cancelled",
   "更新记录无法写入：%s": "the update record could not be written: %s",

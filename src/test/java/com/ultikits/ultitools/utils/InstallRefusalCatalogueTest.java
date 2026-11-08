@@ -90,7 +90,7 @@ class InstallRefusalCatalogueTest {
     @Test
     @DisplayName("a version that needs a licence is refused with the licence reason before any download")
     void licensedVersionIsRefusedWithItsReason() {
-        ultiTools.when(UltiTools::getPluginVersion).thenReturn(640);
+        ultiTools.when(UltiTools::getPluginVersion).thenReturn(StubCatalogue.LICENSED_API_LEVEL);
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
                 StubCatalogue.LICENSED_VERSION);

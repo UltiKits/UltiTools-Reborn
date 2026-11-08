@@ -124,8 +124,15 @@ class SimpleJsonDataOperatorTest {
             assertThat(operator.getById("null-guard").getName()).isEqualTo("kept");
         }
 
+        /**
+         * Known-limitation pin, not a contract (#815): on the JSON backend an {@code EQUAL} condition
+         * with a null value and {@code del(WhereCondition.empty())} still throw a raw
+         * {@link NullPointerException}. COMPATIBILITY.md documents that module authors must not pass
+         * either. A later change that refuses them with a typed {@code DataAccessException} replaces
+         * these assertions; it is not a regression.
+         */
         @Test
-        void equalNullAndEmptyConditionBehaviourIsUnchanged() {
+        void knownLimitationEqualNullAndEmptyDeleteStillThrowNullPointerException() {
             operator.insert(new TestData("null-guard", "kept", 1));
             WhereCondition equalNull = condition(Comparison.EQUAL, null);
             assertThatThrownBy(() -> operator.getAll(equalNull)).isInstanceOf(NullPointerException.class);

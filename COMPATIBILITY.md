@@ -13,6 +13,8 @@ Earlier builds can exhaust a nominal 3 s busy wait in about 0.4 s on the server 
 
 A read-before-write transaction can still fail immediately when upgrading its read lock would deadlock with another transaction. A busy handler does not remove that SQLite behavior: do not assume every SQLITE_BUSY waits for the full timeout, or retry an entire transaction blindly. The framework does not switch transactions to IMMEDIATE to hide it. Direct changes to SQLite-owned busy handlers or PRAGMA busy_timeout by module code are outside the framework-managed wait policy.
 
+The elapsed-time busy handler is built for the SQLite JDBC driver UltiTools ships (#823). If another plugin or a fork places a different `org.sqlite` driver where UltiTools' classes resolve it, the wait budget can behave differently without a warning. Do not replace or shadow the shipped SQLite driver.
+
 ## Upgrade checklist: moving a module from 6.2.5 to 6.3.0
 
 What a module author has to do, in the order you would do it. Each item is one action and links to the section that
@@ -598,6 +600,10 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
 - a comment that closes a section after a blank line, indented deeper than the key that follows it, and any comment
   indented deeper than the key below it (including in a comment-only file);
 - two indentation widths in one file (two spaces in one section, four in another);
+- raw non-ASCII text and double-quoted `\u`, `\U` or `\x` escapes mixed in one file: the renderer keeps one
+  Unicode spelling per file, so the other spelling's line is named and the write refused (behaviour unchanged since
+  6.3.0, [#836](https://github.com/UltiKits/UltiTools-Reborn/issues/836)). Use one spelling per file - raw UTF-8
+  (recommended) or escapes throughout;
 - mixed line endings (CRLF on some lines, LF on others);
 - a plain value continued onto the next line, a tab inside a value, an explicit `? key`, an explicit tag (`!!str`);
 - a file holding only a byte-order mark (an emptied file saved as UTF-8 with BOM; the reason names the mark);
@@ -605,7 +611,7 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
   library cannot emit the comment there, so the write is refused naming that key
   ([#624](https://github.com/UltiKits/UltiTools-Reborn/issues/624), pinned by `WriteGateRuntimeFailureTest`).
 
-Ordinary plain string keys longer than 128 characters are another ownership-dependent refusal
+Long ordinary plain string keys (about 123 characters and above with the current SnakeYAML 2.2 options) are another ownership-dependent refusal
 ([#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 1): SnakeYAML emits the key in explicit `? key` form.
 A write to another setting is refused at that line because the long key's bytes are outside its owned paths; the original
 file remains unchanged. The effective boundary can be shorter than 128 characters because the emitter also counts tag
@@ -1313,7 +1319,7 @@ touched files with in-process rollback.
 Known limits remain explicit, not guaranteed away: [#578](https://github.com/UltiKits/UltiTools-Reborn/issues/578)
 records a remaining temporary-file identity limit through a symlink followed by `..`. Avoid that path combination and
 use the same resolved real path when staging and loading configuration files. Its quadratic style-detection finding is
-fixed: scalar mark offsets no longer rescan the text from the beginning for each scalar. Its anchored-container and
+fixed as of 6.3.2: scalar mark offsets no longer rescan the text from the beginning for each scalar. Its anchored-container and
 alias-comment items cannot occur, because no write path writes a file that uses anchors, aliases or merge keys.
 A valid block anchor with a comment before
 its first child key cannot be read and the file is protected as unparseable
@@ -1476,6 +1482,14 @@ version number is used for:
 So: the *ordering* of module version numbers is consumed by machines, while the *meaning* of
 MAJOR/MINOR/PATCH is not — that part is addressed to server owners. On the framework side both are
 machine-consumed, which is why its version number does not have the same freedom.
+
+Libraries the framework delivers at runtime through its `plugin.yml` `libraries:` block (XSeries,
+HikariCP, ByteBuddy and the others in [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
+are not covered by the framework's version number either. They keep their own versioning, and a
+framework MINOR or PATCH release may move one of them to a new major version; that release's notes
+and its entry in this file name the library's removals (for example XSeries 13.7.1 to 14.0.0 in
+6.3.1). A module that calls such a library directly declares it itself and checks those notes when
+the framework moves it.
 
 ## Declaring the dependency
 
@@ -2039,6 +2053,9 @@ This section governs the third kind.
   cleanup failures are attached as suppressed exceptions and do not stop the remaining cleanup attempts. If a
   cleanup operation itself fails, some of its resources may remain until restart; inspect the suppressed exceptions
   before reconnecting. This does not roll back arbitrary side effects performed by plugin code during initialization.
+  The cleanup is keyed by plugin name: a second `registerExternal` call for a plugin that is still registered is
+  accepted, and if it then fails in one of these stages, its cleanup also removes the first registration's tasks,
+  EventBus handlers, commands and listeners. Call `unregisterExternal` before registering the same plugin again.
 - Naming a missing required plugin instead of printing a class-not-found trace (#554). A module
   that cannot load because a plugin in its `plugin.yml` `depend:` list is not installed or not
   enabled used to log `Cannot initialize plugin for <main class>: <missing class>` with a
@@ -2490,7 +2507,11 @@ This section governs the third kind.
   `IllegalArgumentException` is not normalised to `DataAccessException`; a missing-row `updateIf`
   returns `false` before evaluating its condition. Module authors must use finite query values,
   including for `EQUAL` and `updateIf`, rather than rely on a common rejection type or retry a
-  non-finite threshold. A numeric field's column that holds non-numeric text,
+  non-finite threshold. **Known limitation (#815): a null comparison value is not portable either.** JSON refuses a
+  non-`EQUAL` condition whose value is null with `DataAccessException` (`DATA_ENTITY_INVALID`), while SQLite and MySQL
+  compare it with the text `null`; on JSON an `EQUAL` condition whose value is null, and `del(WhereCondition.empty())`,
+  throw `NullPointerException`. Module authors must not pass a null comparison value or an empty condition to `del`.
+  A numeric field's column that holds non-numeric text,
   written by hand or by another program, compares on SQLite as its leading number (`'abc'` as 0,
   `'12abc'` as 12), while JSON compares that row as text. See `ultitools.storage.where-comparisons`
   in `FEATURES.md`.
@@ -2809,7 +2830,10 @@ This section governs the third kind.
   `config.yml` (which now also lists the blocklist and the editable roots) answer for them. A file that holds one of
   these settings as a flat dotted key (`ultipanel.capabilities.logs: false`) or a dotted section key, where the
   inserted nested section would replace it as the server reads the file, is not written either: one WARNING names the
-  file and that setting (never a value), and the jar defaults answer for the missing keys. Measured on older
+  file and that setting (never a value), and the jar defaults answer for the missing keys. If the file changes on disk while this check runs, or the
+  inserted text cannot be read back the way the server reads it, that WARNING names `the whole file` instead of a
+  setting; nothing is written and the next start retries
+  ([#828](https://github.com/UltiKits/UltiTools-Reborn/issues/828)). Measured on older
   releases: a 6.0.9 or 6.1.x `config.yml` is written insert-only too; the `config.yml` of every 6.0.x release before 6.0.9
   (6.0.0 to 6.0.8) holds `trustIp: [ ]` (spaces inside flow brackets), so it is refused at every start with that one
   WARNING naming line 14, the missing keys run on the jar's defaults, and nothing is written - only a direct upgrade
@@ -2828,14 +2852,15 @@ This section governs the third kind.
   the field and its constraint; the operator's file is not rewritten to a default. In 6.2.5,
   validation first tried to construct a default instance of the config class through its `(String)`
   constructor, passing the config path. If that succeeded, a violating value was reset to its
-  declared default and the file saved; if construction failed (including a missing constructor),
+  declared default, and the file was saved only when a value had been reset and the entity had an
+  owning plugin; if construction failed (including a missing constructor),
   validation was skipped with only a FINE diagnostic. The in-memory default for an empty
   `@NotEmpty` list, set or map is a separate case, described in the next entry.
 
   中文补充：**配置约束违规时拒绝加载或重载，不再改写文件**（自 6.3.0 起）。违反 `@Range`、`@Size`、
   `@Pattern` 或文本上 `@NotEmpty` 的值会让模块在加载时被拒绝；`/ul reload` 时拒绝这次重载并保留运行中的值，
   错误会写明字段和约束，不会把服主的文件改写成默认值。6.2.5 会先通过配置类的 `(String)` 构造器传入配置路径来
-  创建默认实例：成功时才会校验、把违规值重置为声明默认值并保存文件；构造失败（包括没有这个构造器）时跳过校验，
+  创建默认实例：成功时才会校验并把违规值重置为声明默认值，只有确实重置了值且实体有所属插件时才保存文件；构造失败（包括没有这个构造器）时跳过校验，
   只记录 FINE 诊断。空的 `@NotEmpty` 列表、集合或映射在内存中使用默认值，属于下一条说明的独立情况。
 - **`@NotEmpty` on a list, set or map now acts** ([#630](https://github.com/UltiKits/UltiTools-Reborn/issues/630), as of
   v6.3.0, maintainer decision of 2026-10-06). Before 6.3.0 the check read only the value's text, so an empty list (`[]`)
@@ -2922,6 +2947,30 @@ This section governs the third kind.
   现在帧内请求的重建在下一帧执行。**已知限制：**这样的坏页面只要还开着，仍会每个 tick 重试一次，每次失败都会记录日志。
   请修复该组件：`State` 不应从 `initState` 抛出异常，应在其中捕获失败并渲染错误状态。
 
+### Behavioral changes that do need one
+
+- A documented default value flipping.
+- Moving from silent degradation to failure (for example, a missing optional dependency was
+  previously skipped and is now rejected at load time).
+- A change in return-value semantics (previously an empty collection, now `null`, or the reverse).
+- A change in the timing or thread of a side effect (previously synchronous, now asynchronous).
+
+The migration period runs in two steps:
+
+- **Version N**: keep the old behaviour, but emit a **one-shot** WARNING when the path is taken. The
+  warning text must name the target version and a feedback issue link, for example:
+
+  ```
+  [UltiTools] Module <name> relies on the old behaviour of X (<one-line description>).
+  This behaviour will change to <new behaviour> in 6.4.0. See <issue link> to migrate.
+  This warning is printed once per startup.
+  ```
+
+- **Version N+1**: switch to the new behaviour and remove the warning.
+
+This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
+tell people which floor they are standing on before removing it.
+
 ### Declarative GUI known limitations and author guidance
 
 The limitations collected in [#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)
@@ -2962,8 +3011,10 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   propagate to its caller. A task that keeps requeuing itself can keep that drain running.
   Use normal scheduled frames in production, not `flush()` to force an update.
 - **A queued task's `Error` is not isolated like an `Exception`.** The per-task handler catches
-  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the server
-  scheduler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
+  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the caller of
+  the frame: the server scheduler, or, when the frame runs inline (a `scheduleFrame` or `setState` call
+  on the main thread with no frame running and no delay pending), the code that made that call, such as
+  an event handler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
   ordinary module failure handling or assume every throwable is caught by the GUI scheduler.
 - **One `GridView` cell must produce one rendered leaf.** A wrapper may contain that leaf at
   any depth, but several leaves under the same cell all receive the same computed slot and
@@ -2971,29 +3022,13 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   computed slot wins, including in a multi-leaf cell. Put separately displayed items in separate
   cells instead of relying on collision or click-handler ordering.
 
-### Behavioral changes that do need one
-
-- A documented default value flipping.
-- Moving from silent degradation to failure (for example, a missing optional dependency was
-  previously skipped and is now rejected at load time).
-- A change in return-value semantics (previously an empty collection, now `null`, or the reverse).
-- A change in the timing or thread of a side effect (previously synchronous, now asynchronous).
-
-The migration period runs in two steps:
-
-- **Version N**: keep the old behaviour, but emit a **one-shot** WARNING when the path is taken. The
-  warning text must name the target version and a feedback issue link, for example:
-
-  ```
-  [UltiTools] Module <name> relies on the old behaviour of X (<one-line description>).
-  This behaviour will change to <new behaviour> in 6.4.0. See <issue link> to migrate.
-  This warning is printed once per startup.
-  ```
-
-- **Version N+1**: switch to the new behaviour and remove the warning.
-
-This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
-tell people which floor they are standing on before removing it.
+  中文补充：**声明式 GUI 的已知限制与编写建议**（[#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)）。
+  `initState` 先调用 `setState` 再抛出异常时，页面开着就会每帧重试并记录日志，请在组件内捕获失败并渲染错误状态；
+  需要保留 State 时请为同级子组件使用稳定且互不重复的 `SlotKey`；`State.dispose()` 应可重复调用且不抛异常；
+  单子组件包装器里替换失败后请关闭并重新打开界面；不要在 `build` 中关闭界面；首次构建的异常会从
+  `DeclarativeGui.onOpen` 抛出；`GuiScheduler.flush()` 仅供测试；队列任务抛出的 JVM `Error` 不会被逐任务捕获，
+  会抛给这一帧的调用方（服务器调度器，或帧在主线程内联执行时发起 `scheduleFrame`/`setState` 调用的代码）；
+  `GridView` 的每个格子只应渲染一个叶子组件。
 
 ### Command bodies run at dispatch (6.3.0) — changed without a migration period
 
@@ -3126,7 +3161,8 @@ Each corrects behaviour that contradicted the documentation or left state held b
     down - one built with `new` and registered by hand, outside the container - keeps a shared
     validator registered while that executor remains reachable. Garbage collection alone does not
     trigger unregister: a later executor teardown prunes cleared executor references before deciding
-    which validators to release. The effect is delayed cleanup, never a wrong verdict.
+    which validators to release. The effect is delayed cleanup, never a wrong verdict; if no other
+    executor sharing the validator is torn down later, it can stay registered until shutdown.
     **Let the module container own its executors.**
   - **The inherited `@CmdTarget` check isolates a missing signature dependency to one class.** The
     load check for a method-level `@CmdTarget` that widens or switches the class-level value covers
@@ -3151,7 +3187,7 @@ Each corrects behaviour that contradicted the documentation or left state held b
   且恰在另一个共用它的模块卸载的同一时刻，卸载可能释放共享的锁校验器，而那条命令仍在执行。请勿在执行器之间共用同一个自定义链，
   尤其不要跨模块共用；每个执行器使用自己的链。(2) 共享校验器在最后一个共用它的执行器被销毁前一直登记在玩家缓存管理器中；不由模块容器
   销毁的执行器（用 `new` 创建并手动注册）在仍可达时会让它保持登记。垃圾回收本身不会触发注销；后续执行器销毁时才会清理失效的弱引用，
-  再决定释放哪些校验器。只是清理延后，不会产生错误的判定。请让容器持有执行器。(3) 继承的 `@CmdTarget` 检查在组件扫描时读取整条父类链：
+  再决定释放哪些校验器。只是清理延后，不会产生错误的判定；如果之后没有其他共用它的执行器被销毁，它会一直登记到服务器关闭。请让容器持有执行器。(3) 继承的 `@CmdTarget` 检查在组件扫描时读取整条父类链：
   父类方法签名引用了缺失的可选依赖时，目录和 JAR 扫描都会逐类捕获 `NoClassDefFoundError`，跳过该命令类并记录警告与扫描摘要，
   继续扫描其余类，不会中断整个组件扫描。请让可选依赖的类型不出现在命令基类的方法签名中，或只在依赖存在时加载相应的命令类。
   (4) 后续参数的补全只在加入字面量时检查是否已有相同字符串，不会对最终合并列表去重；参数补全器返回与已提供字面量相同的字符串时，
@@ -3536,8 +3572,9 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   the directory <directory> to disk ...`). A commit made while that happens is committed and survives a server
   crash; it survives a power loss only once the next flush has completed. A flush or a start-up recovery that
   meets the failure fails and is repeated; records are retained until their deletion step. If the final force
-  after journal unlinking fails, the records are already absent, and a retry finding an empty journal does not
-  force that directory again.
+  after journal unlinking fails, the records are already absent, and a start-up recovery retry finding an empty
+  journal does not force that directory again. After a failed checkpoint, the next flush writes a new checkpoint
+  record, and that write forces the journal directory, which also persists the earlier unlinks.
 - Reopening an empty journal can reuse internal sequence numbers. Reuse alone does not lose data: the risk of
   an old deleted record reappearing requires an unsupported or failed durability barrier and an additional
   power-loss window before a successful directory force establishes the new state. The empty-retry caveat
@@ -4208,8 +4245,8 @@ delivered at all; the framework uses Paper's native Adventure (see the plan 18-3
 above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
 delivered through the `libraries:` route in the table instead, the same way HikariCP already
 was. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
-along for the ride: declare it yourself (`com.github.cryptomorin:XSeries:13.7.1`, or your own
-pinned version) if your module uses it.
+along for the ride: declare it yourself (the version in the framework's `plugin.yml` `libraries:` block,
+`com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1, or your own pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
 category, pinning a version in this repository is an effective fix. For anything in the second, the
