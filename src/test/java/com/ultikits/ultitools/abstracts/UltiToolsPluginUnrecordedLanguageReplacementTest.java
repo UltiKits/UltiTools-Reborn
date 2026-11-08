@@ -290,12 +290,19 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
     void failureRestoringBackupRetainsBothCopiesAndReportsPaths() throws Exception {
         fixture.jarEntry(LANG, NEW).onDisk(LANG, OLD);
         UltiToolsPlugin plugin = fixture.construct("6.3.0");
-        File record = fixture.provenanceRecord();
-        Files.write(record.toPath(), utf8("{}"));
-        assertThat(record.setWritable(false)).isTrue();
+        Path record = fixture.provenanceRecord().toPath();
+        Files.write(record, utf8("{}"));
         Path backup = new File(langDir(), "en.json.bak").toPath();
         AtomicInteger injectedMoves = new AtomicInteger();
+        AtomicInteger refusedRecordWrites = new AtomicInteger();
+        // The provenance-record write is refused by injection, not by File.setWritable(false): a
+        // privileged process (root) can still write a file whose mode bits leave group write set,
+        // so a permission-based refusal depends on the environment the test runs in (#827).
         try (org.mockito.MockedStatic<Files> files = Mockito.mockStatic(Files.class, call -> {
+            if ("isWritable".equals(call.getMethod().getName()) && record.equals(call.getArgument(0))) {
+                refusedRecordWrites.incrementAndGet();
+                return false;
+            }
             if ("move".equals(call.getMethod().getName()) && backup.equals(call.getArgument(0))) {
                 injectedMoves.incrementAndGet();
                 throw new IOException("injected restore move failure");
@@ -303,10 +310,9 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
             return call.callRealMethod();
         })) {
             plugin.commitLanguageProvenance();
-        } finally {
-            record.setWritable(true);
         }
 
+        assertThat(refusedRecordWrites.get()).isPositive();
         assertThat(injectedMoves.get()).isEqualTo(1);
         assertThat(BootLanguageFixture.bytesOf(fixture.disk(LANG))).isEqualTo(utf8(NEW));
         assertThat(Files.readAllBytes(backup)).isEqualTo(utf8(OLD));

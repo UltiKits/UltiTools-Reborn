@@ -118,7 +118,7 @@ class ModuleUpdateStagingTest {
             result = stage(downloading("Demo", "1.1", "demo"));
         }
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo("the downloaded %s could not be read (%s)");
+        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE);
         assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "IOException: hash read failed");
         assertThat(snapshot()).isEqualTo(before);
     }
@@ -134,7 +134,7 @@ class ModuleUpdateStagingTest {
             result = stage(downloading("Demo", "1.1", "demo"));
         }
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo("the downloaded %s could not be read (%s)");
+        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE);
         assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "IOException: metadata read failed");
         assertThat(snapshot()).isEqualTo(before);
     }
