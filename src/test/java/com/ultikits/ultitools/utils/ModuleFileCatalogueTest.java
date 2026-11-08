@@ -63,4 +63,13 @@ class ModuleFileCatalogueTest {
                     .isFalse();
         }
     }
+
+    @Test
+    @DisplayName("#837: every key is Chinese source text, as the rest of the catalogue")
+    void everyKeyIsChineseSourceText() {
+        for (String key : ModuleFileTransactions.Keys.all()) {
+            assertThat(key.codePoints().anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN))
+                    .as("catalogue key %s is Chinese source text", key).isTrue();
+        }
+    }
 }
