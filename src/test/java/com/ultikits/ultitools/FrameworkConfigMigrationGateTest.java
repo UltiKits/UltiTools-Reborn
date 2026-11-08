@@ -487,6 +487,13 @@ class FrameworkConfigMigrationGateTest {
         assertThat(migrationLog.get(0).getLevel()).isEqualTo(Level.WARNING);
         assertThat(migrationLog.get(0).getMessage()).contains(file.getAbsolutePath(), key, "validation")
                 .doesNotContain("a flat dotted key").doesNotContain("migration-secret-sentinel").doesNotContain("false");
+        if ("the whole file".equals(key)) {
+            assertThat(migrationLog.get(0).getMessage()).doesNotContain("for example");
+        } else {
+            // #826: a named key says why, with examples covering both layouts that produce it.
+            assertThat(migrationLog.get(0).getMessage()).contains("would change how the server reads '" + key + "'",
+                    "for example", "dotted key and as a nested section", "a value where the inserted keys need a section");
+        }
         assertThat(migrationLog.get(0).getThrown()).isNull();
         assertThat(gateWarnings).isEmpty();
     }

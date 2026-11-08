@@ -296,6 +296,47 @@ class UltiCloudStubSelfTest {
         connectAndHello(login, "events:players");
     }
 
+    /**
+     * Regression for issue #863. Closing the public listener while its acceptor thread is blocked in
+     * {@code accept()} leaves the kernel listener alive until that thread wakes, so an upgrade made right
+     * after the switch could still be accepted and served. On a single CPU this admitted 139 of 1000
+     * upgrades before the front door checked its current listener on admission.
+     */
+    @Test
+    void unreachableAdmitsNoUpgradeMadeRightAfterTheSwitch() throws Exception {
+        Login login = login();
+        int admitted = 0;
+        for (int cycle = 0; cycle < 200; cycle++) {
+            stub.frontDoor().setUnreachable(true);
+            try {
+                if (upgradeRaw(login.credential, "2", FRAMEWORK).status == 101) {
+                    admitted++;
+                }
+            } catch (IOException refusedOrReset) {
+                // Refused by the closed port, or reset by the front door: both are the expected outcome.
+            }
+            stub.frontDoor().setUnreachable(false);
+        }
+        assertThat(admitted).as("upgrades accepted after the public port was switched off").isZero();
+    }
+
+    @Test
+    void connectionAcceptedOnASwitchedOffListenerIsResetAndNeverServed() throws Exception {
+        // Loopback-only plain sockets in a test: no transport security or outbound request is involved.
+        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
+        try (ServerSocket stale = new ServerSocket()) {
+            // nosemgrep: java_ssrf_rule-SSRF
+            stale.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+            // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), stale.getLocalPort());
+                 Socket accepted = stale.accept()) {
+                assertThat(stub.frontDoor().admit(stale, accepted))
+                        .as("a connection from a listener that is no longer current").isFalse();
+                assertThat(accepted.isClosed()).as("the connection is closed, not served").isTrue();
+            }
+        }
+    }
+
     @Test
     void closeEndsTheLiveConnectionWithEveryContractCode() throws Exception {
         Login login = login();

@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -295,6 +296,29 @@ class UpdateCheckShutdownAndOutcomeTest {
             }
 
             assertThat(messagesAtOrAbove(Level.WARNING)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("#838: a check that dies outside the per-lookup handlers is marked failed, not left pending")
+        void unexpectedFailureMarksTheCheckFailed() {
+            try (MockedStatic<UltiTools> ultiMock = mockStatic(UltiTools.class)) {
+                stubUltiTools(ultiMock, Collections.singletonList(demo));
+                when(UltiTools.getInstance().getPluginManager().getPluginList())
+                        .thenThrow(new NoClassDefFoundError("com/ultikits/ultitools/entities/UpdateInfo"));
+
+                assertThatThrownBy(updateManager::checkUpdatesSync).isInstanceOf(NoClassDefFoundError.class);
+            }
+
+            assertThat(updateManager.isCheckComplete()).isFalse();
+            assertThat(updateManager.isCheckFailed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("#838: a completed check and a check ended by disable are not marked failed")
+        void completedOrStoppedChecksAreNotFailed() {
+            check(Collections.singletonList(demo));
+            assertThat(updateManager.isCheckComplete()).isTrue();
+            assertThat(updateManager.isCheckFailed()).isFalse();
         }
 
         @Test

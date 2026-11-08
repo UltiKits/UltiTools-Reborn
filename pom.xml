@@ -60,6 +60,11 @@
              build refuses a baseline that is missing, a SNAPSHOT, or not strictly older than the
              project version (ReleaseBoundaryInvariant). -->
         <japicmp.baseline.version>6.3.2</japicmp.baseline.version>
+        <!-- The Paper API floor fixture (#831): one timestamped 1.19.2 snapshot jar and its SHA-256.
+             Paper may prune old snapshots; the runtime-api-floor-paper-fixture execution below then
+             fails with instructions for replacing it. Change both values together. -->
+        <runtime.api.floor.paper.version>1.19.2-R0.1-20221206.184705-189</runtime.api.floor.paper.version>
+        <runtime.api.floor.paper.sha256>8860f1ee1b6610cd7810ccb448612bc96fe0ce343800ed88f7cc235a8f4a9fcb</runtime.api.floor.paper.sha256>
     </properties>
 
     <distributionManagement>
@@ -197,6 +202,57 @@
             <!-- maven-dependency-plugin analyze-only (FOUND-05, T-01-03b) - fails the build
                  when framework code uses a class from a dependency that is not explicitly
                  declared in pom.xml (only pulled in transitively, or not resolved at all). -->
+            <!-- The Paper API floor fixture (#831), fetched here rather than by dependency:copy so that a
+                 missing or changed jar stops the build with a message naming the jar and how to
+                 replace it, instead of a bare resolution error. The local Maven repository copy is
+                 used first (offline builds), then the Paper repository, whose verified download is
+                 then kept in the local repository; the SHA-256 is always checked.
+                 Test fixture only: never on any classpath of the published jar. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>runtime-api-floor-paper-fixture</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <property name="floor.dir" value="${project.build.directory}/runtime-api-floor"/>
+                                <property name="floor.jar" value="${floor.dir}/paper-api-1.19.2.jar"/>
+                                <property name="floor.file" value="paper-api-${runtime.api.floor.paper.version}.jar"/>
+                                <property name="floor.local" value="${settings.localRepository}/io/papermc/paper/paper-api/1.19.2-R0.1-SNAPSHOT/${floor.file}"/>
+                                <property name="floor.url" value="https://repo.papermc.io/repository/maven-public/io/papermc/paper/paper-api/1.19.2-R0.1-SNAPSHOT/${floor.file}"/>
+                                <mkdir dir="${floor.dir}"/>
+                                <copy file="${floor.local}" tofile="${floor.jar}" failonerror="false" quiet="true" preservelastmodified="true"/>
+                                <get src="${floor.url}" dest="${floor.jar}" skipexisting="true" ignoreerrors="true" quiet="true"/>
+                                <fail message="Runtime API floor fixture missing: ${floor.file} (SHA-256 ${runtime.api.floor.paper.sha256}) is neither in the local Maven repository (${floor.local}) nor downloadable from ${floor.url}. The floor guard (RuntimeApiGuardTest) checks the framework against exactly this jar. If Paper has pruned the snapshot, replace the fixture: choose another published paper-api 1.19.2-R0.1-SNAPSHOT jar from that repository, set runtime.api.floor.paper.version and runtime.api.floor.paper.sha256 in pom.xml to its timestamped version and SHA-256 (sha256sum), and update RuntimeGuardConfigurationTest. Offline: place the original jar at ${floor.local}.">
+                                    <condition>
+                                        <not>
+                                            <available file="${floor.jar}"/>
+                                        </not>
+                                    </condition>
+                                </fail>
+                                <checksum file="${floor.jar}" algorithm="SHA-256" property="floor.actual"/>
+                                <fail message="Runtime API floor fixture changed: ${floor.jar} has SHA-256 ${floor.actual}, but pom.xml records ${runtime.api.floor.paper.sha256} for ${floor.file}. Delete target/runtime-api-floor and ${floor.local}, then build again. If the Paper repository now serves different bytes under that version, replace the fixture: set runtime.api.floor.paper.version and runtime.api.floor.paper.sha256 in pom.xml to a published paper-api 1.19.2-R0.1-SNAPSHOT jar and its SHA-256, and update RuntimeGuardConfigurationTest.">
+                                    <condition>
+                                        <not>
+                                            <equals arg1="${floor.actual}" arg2="${runtime.api.floor.paper.sha256}" casesensitive="false"/>
+                                        </not>
+                                    </condition>
+                                </fail>
+                                <!-- A verified download is kept in the local Maven repository, so a later offline
+                                     build after mvn clean still finds it. A jar copied from there keeps its time
+                                     stamp and is not copied back. -->
+                                <copy file="${floor.jar}" tofile="${floor.local}" overwrite="false" failonerror="false" quiet="true" preservelastmodified="true"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-dependency-plugin</artifactId>
@@ -249,13 +305,6 @@
                                     <version>2.8.9</version>
                                     <type>jar</type>
                                     <destFileName>gson-2.8.9.jar</destFileName>
-                                </artifactItem>
-                                <artifactItem>
-                                    <groupId>io.papermc.paper</groupId>
-                                    <artifactId>paper-api</artifactId>
-                                    <version>1.19.2-R0.1-20221206.184705-189</version>
-                                    <type>jar</type>
-                                    <destFileName>paper-api-1.19.2.jar</destFileName>
                                 </artifactItem>
                             </artifactItems>
                         </configuration>
