@@ -1483,6 +1483,14 @@ So: the *ordering* of module version numbers is consumed by machines, while the 
 MAJOR/MINOR/PATCH is not — that part is addressed to server owners. On the framework side both are
 machine-consumed, which is why its version number does not have the same freedom.
 
+Libraries the framework delivers at runtime through its `plugin.yml` `libraries:` block (XSeries,
+HikariCP, ByteBuddy and the others in [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
+are not covered by the framework's version number either. They keep their own versioning, and a
+framework MINOR or PATCH release may move one of them to a new major version; that release's notes
+and its entry in this file name the library's removals (for example XSeries 13.7.1 to 14.0.0 in
+6.3.1). A module that calls such a library directly declares it itself and checks those notes when
+the framework moves it.
+
 ## Declaring the dependency
 
 Maven:
@@ -4225,8 +4233,8 @@ delivered at all; the framework uses Paper's native Adventure (see the plan 18-3
 above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
 delivered through the `libraries:` route in the table instead, the same way HikariCP already
 was. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
-along for the ride: declare it yourself (`com.github.cryptomorin:XSeries:13.7.1`, or your own
-pinned version) if your module uses it.
+along for the ride: declare it yourself (the version in the framework's `plugin.yml` `libraries:` block,
+`com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1, or your own pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
 category, pinning a version in this repository is an effective fix. For anything in the second, the
