@@ -35,7 +35,9 @@ import java.util.regex.Pattern;
  *   <li>{@code UPGRADE} an upgrade request and the decision ({@code -> 101} or the refusal status);</li>
  *   <li>{@code WS-OPEN}, {@code WS-CLOSED}, {@code WS-ERROR} connection events; {@code WS-IN} and
  *       {@code WS-OUT} one frame each (frame type, envelope id, replyTo; {@code ping}, {@code pong}
- *       and {@code close} for the heartbeat and close frames); {@code WS-INVALID} an inbound frame the
+ *       and {@code close} for the heartbeat and close frames; a {@code WS-OUT} line is written just
+ *       before its frame is sent, and a later {@code WS-NOTE ... not sent} line on the same connection
+ *       means it never left); {@code WS-INVALID} an inbound frame the
  *       stub refused, with the schema's first issue; {@code WS-SELF-INVALID} an outbound frame of the
  *       stub's own that failed its schema; {@code WS-NOTE} something the stub did not do on purpose
  *       (an event left unacknowledged, a frame not sent because the connection had closed);</li>

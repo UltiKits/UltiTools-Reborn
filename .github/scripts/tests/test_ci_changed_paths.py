@@ -228,6 +228,13 @@ class MainOnlyWorkflowTests(unittest.TestCase):
         self.assertIn("/14.1.3/codacy-coverage-reporter-linux", codacy["run"])
         self.assertIn("sha256sum --check --strict", codacy["run"])
         self.assertNotIn("get.sh", codacy["run"])
+        self.assertIn("--retry-all-errors", codacy["run"])
+        self.assertLess(codacy["run"].index("sha256sum --check --strict"), codacy["run"].index('"$REPORTER" report'))
+        cache = step_named(job, "📦 Cache Codacy Coverage Reporter")
+        self.assertEqual(cache["if"], codacy["if"])
+        self.assertRegex(cache["uses"], r"^actions/cache@[0-9a-f]{40}$")
+        self.assertIn("14.1.3", cache["with"]["key"])
+        self.assertIn("15c5f052207d27b8501ab5d5910c68c206ea70b0157ee1725132780530580875", cache["with"]["key"])
         for name, other in workflow["jobs"].items():
             for step in other["steps"]:
                 if "CODACY_API_TOKEN" in str(step):
