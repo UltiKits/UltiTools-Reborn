@@ -225,7 +225,7 @@ class BuildVerificationConfigurationTest {
     @Test
     void githubPackagesDeploysTheRetainedFilesWithoutABuild() throws IOException {
         assertThat(calls(workflowRuns("publish-packages.yml", "publish-github")))
-                .containsExactly("-B deploy:deploy-file -s \"$SETTINGS\" \\");
+                .containsExactly("-B org.apache.maven.plugins:maven-deploy-plugin:3.1.4:deploy-file -s \"$SETTINGS\" \\");
     }
 
     @Test

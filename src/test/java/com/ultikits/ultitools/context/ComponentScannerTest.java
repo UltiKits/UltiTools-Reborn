@@ -3,6 +3,7 @@ package com.ultikits.ultitools.context;
 import com.ultikits.testfixtures.finalviolation.scanner.ViolatingComponent;
 import com.ultikits.testfixtures.linkageerror.scanner.LinkageErrorBreakingFixture;
 import com.ultikits.testfixtures.linkageerror.scanner.LinkageErrorSurvivorFixture;
+import com.ultikits.testfixtures.linkageerror.inherited.InheritedSignatureSurvivor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Component;
 import com.ultikits.ultitools.annotations.Service;
@@ -24,6 +25,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -506,6 +508,76 @@ class ComponentScannerTest {
 
             assertTrue(exception.getMessage().contains(ViolatingComponent.class.getName()),
                     exception.getMessage());
+        }
+
+        @Test
+        @DisplayName("A missing optional type in an inherited command signature skips only that command class (#817)")
+        void missingTypeInInheritedCommandSignatureSkipsOnlyThatClass() throws Exception {
+            String fixturePackage = "com.ultikits.testfixtures.linkageerror.inherited";
+            String commandClassName = fixturePackage + ".InheritedSignatureCommand";
+            URL testClasses = InheritedSignatureSurvivor.class.getProtectionDomain().getCodeSource().getLocation();
+            try (HidingChildFirstLoader loader = new HidingChildFirstLoader(testClasses,
+                    getClass().getClassLoader(), fixturePackage + ".", fixturePackage + ".MissingOptionalType")) {
+                // Control: the command class itself loads; only its base class's method descriptors fail.
+                Class<?> commandClass = loader.loadClass(commandClassName);
+                assertThrows(NoClassDefFoundError.class, () -> commandClass.getSuperclass().getDeclaredMethods());
+
+                SimpleContainer freshContainer = new SimpleContainer();
+                freshContainer.setClassLoader(loader);
+                ComponentScanner freshScanner = new ComponentScanner(freshContainer);
+                assertDoesNotThrow(() -> freshScanner.scanPackage(fixturePackage));
+
+                assertTrue(freshContainer.containsBean(decapitalize(InheritedSignatureSurvivor.class.getSimpleName())),
+                        "the sibling component must still register");
+                assertFalse(freshContainer.containsBean(decapitalize("InheritedSignatureCommand")),
+                        "the command class with the unresolvable inherited signature must be skipped");
+                LogRecord skip = captured.stream()
+                        .filter(r -> Level.WARNING.equals(r.getLevel()) && r.getMessage() != null
+                                && r.getMessage().equals("Failed to load scanned class: " + commandClassName))
+                        .findFirst().orElse(null);
+                assertNotNull(skip, "expected the per-class skip WARNING naming the command class");
+                assertTrue(skip.getThrown() instanceof NoClassDefFoundError, String.valueOf(skip.getThrown()));
+                assertTrue(Arrays.stream(skip.getThrown().getStackTrace()).anyMatch(frame ->
+                                frame.getClassName().endsWith(".CmdTargetComposition")),
+                        "the error must come from the inherited @CmdTarget composition check");
+                assertFalse(captured.stream().anyMatch(r -> Level.SEVERE.equals(r.getLevel())),
+                        "a skip is a WARNING, not a registration failure");
+            }
+        }
+
+        /**
+         * Loads the fixture package child-first from the test classes and hides one class, the way an
+         * absent optional plugin leaves its types unresolvable from a module's class loader.
+         */
+        private final class HidingChildFirstLoader extends URLClassLoader {
+            private final String childFirstPrefix;
+            private final String hiddenClassName;
+
+            HidingChildFirstLoader(URL classes, ClassLoader parent, String childFirstPrefix, String hiddenClassName) {
+                super(new URL[]{classes}, parent);
+                this.childFirstPrefix = childFirstPrefix;
+                this.hiddenClassName = hiddenClassName;
+            }
+
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                synchronized (getClassLoadingLock(name)) {
+                    if (hiddenClassName.equals(name)) {
+                        throw new ClassNotFoundException(name);
+                    }
+                    if (!name.startsWith(childFirstPrefix)) {
+                        return super.loadClass(name, resolve);
+                    }
+                    Class<?> loaded = findLoadedClass(name);
+                    if (loaded == null) {
+                        loaded = findClass(name);
+                    }
+                    if (resolve) {
+                        resolveClass(loaded);
+                    }
+                    return loaded;
+                }
+            }
         }
 
         private void assertSkippedAndSurvivorRegisters(Supplier<? extends LinkageError> errorSupplier,
