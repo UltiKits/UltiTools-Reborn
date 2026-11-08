@@ -262,15 +262,6 @@ public class PluginInitiationUtils {
         }
     }
 
-    /**
-     * No-op: the protocol v2 server credential never expires and has no refresh token.
-     * @deprecated No replacement is needed for non-expiring server credentials; removed in 6.4.0.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.1", forRemoval = true)
-    public static void startTokenRefreshScheduler() {
-    }
-
     /** Stops device-login polling; the server credential never expires, so no refresh scheduler exists. */
     public static void stopCredentialSchedulers() {
         CloudSession.current().stopPolling();
@@ -494,12 +485,12 @@ public class PluginInitiationUtils {
                 + "polling, closes the agent connection, and discards anything already in flight)",
             session::invalidate);
 
-        // Round-1 review, fourth pass (16-10, PR #464): the currency check and the two
-        // global-manager teardown steps below must be ATOMIC with session replacement, not just
-        // consulted once before them. A one-time, unlocked read here (the prior fix's shape) still
+        // Round-1 review, fourth pass (16-10, PR #464): the currency check and the
+        // global-manager teardown step below must be ATOMIC with session replacement, not just
+        // consulted once before it. A one-time, unlocked read here (the prior fix's shape) still
         // leaves a TOCTOU window: another login's startNew() -- and, immediately afterward, that
         // fresh session's own connection start reaching the same global managers -- can land in the gap between
-        // this check and the actual stopMonitoring()/shutdown() calls, so the stale teardown below
+        // this check and the actual shutdown() call, so the stale teardown below
         // still runs and undoes wiring that belongs to a session that, by the time it executes,
         // already exists and is already current.
         //
@@ -516,18 +507,10 @@ public class PluginInitiationUtils {
         // new session as current and returns immediately, before touching either global manager).
         synchronized (CloudSession.class) {
             if (session != CloudSession.current()) {
-                // session has already been superseded -- see the reasoning above for why the two
-                // global-manager steps below must not run in that case.
+                // session has already been superseded -- see the reasoning above for why the
+                // global-manager step below must not run in that case.
                 return session;
             }
-
-            // Stop the protocol v1 server monitor. It carries its own ScheduledExecutorService
-            // (batch_update every 5 seconds) plus two main-thread Bukkit scheduled tasks (1Hz
-            // TPS/CPU, a world/player/plugin snapshot every 5 seconds). As of 6.3.1 the framework
-            // never starts it, but a caller of the deprecated v1 API still can, and "cloud features
-            // are disabled" must stop it too; otherwise the main thread keeps iterating every world
-            // and chunk every 5 seconds.
-            teardownStep("stopping server monitor", PluginInitiationUtils::stopV1Monitor);
 
             // Strip the player event listener. Still receiving player events after cloud is
             // disabled is pure waste — the isConnected() check inside the event handler only
@@ -540,14 +523,6 @@ public class PluginInitiationUtils {
         }
 
         return session;
-    }
-
-    /** Stops the protocol v1 server monitor, if one exists; it runs only when a caller started it. */
-    @SuppressWarnings("removal") // stops the deprecated v1 monitor until it leaves in 6.4.0 (S-67)
-    private static void stopV1Monitor() {
-        if (UltiTools.getInstance().getServerMonitorManager() != null) {
-            UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
-        }
     }
 
     /**

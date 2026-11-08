@@ -1,11 +1,16 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 import org.bukkit.command.Command;
@@ -16,37 +21,35 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.mockito.ArgumentCaptor;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 
-import com.google.gson.JsonObject;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+
+import net.kyori.adventure.text.Component;
 
 /**
  * #541: a module command's body runs inside the dispatch the panel's remote command makes on the
- * primary thread, as the server console sender.
+ * primary thread.
  * <p>
- * Superseded in part later in 6.3.0 (maintainer decision Q-PANEL): the {@code command_result} no
- * longer carries the reply. On Paper 1.21.11 the dispatch replaces any console sender with the real
- * console, so no capture ever received a reply; the result now says the command was dispatched, and
- * the reply reaches the panel through the log stream, which mirrors the console
- * ({@code handler.ConsoleMirrorTest}). These tests pin that the body still runs inside the
- * dispatch, replying to the console sender, before the result is sent.
+ * Re-pointed in 6.4.0, when the protocol v1 {@code command_result} sender was removed: the panel's
+ * command now goes through {@link CommandExecutionManager#execute}, which dispatches with Paper's
+ * feedback-capturing sender, so a body that runs inside the dispatch is proven by its reply being
+ * part of the {@code command.result} lines. The capturing sender is stubbed as in
+ * {@code CommandExecutionManagerOutputTest}.
  */
-@DisplayName("The panel's remote command runs a module command's body inside the dispatch, as the console (#541)")
+@DisplayName("The panel's remote command runs a module command's body inside the dispatch (#541)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class RemoteCommandModuleReplyTest {
 
     private ServerMock server;
     private CommandExecutionManager manager;
-    private UltiPanelWebSocketClient webSocketClient;
 
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     @CmdExecutor(alias = {"moduleprobe"})
@@ -62,20 +65,53 @@ class RemoteCommandModuleReplyTest {
         }
     }
 
+    /** Records the lines a completed command reports. */
+    private static final class LinesSink implements CommandExecutionManager.CommandResultSink {
+        List<String> lines;
+        String failure;
+
+        @Override
+        public void blocked(String matched, String message) {
+            failure = message;
+        }
+
+        @Override
+        public void completed(List<String> captured, boolean truncated, long executionMs) {
+            lines = new ArrayList<>(captured);
+        }
+
+        @Override
+        public void failed(String message) {
+            failure = message;
+        }
+    }
+
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        server = MockBukkit.mock(spy(new ServerMock()));
         MockBukkit.createMockPlugin();
         Logger logger = mock(Logger.class);
+        YamlConfiguration config = new YamlConfiguration();
+        config.set(Capability.COMMANDS.getConfigPath(), true);
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getLogger()).thenReturn(logger);
-            when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            when(ultiTools.getConfig()).thenReturn(config);
         });
-        webSocketClient = mock(UltiPanelWebSocketClient.class);
-        when(webSocketClient.getServerId()).thenReturn("test-server-id");
+        doAnswer(invocation -> {
+            Consumer<? super Component> feedback = invocation.getArgument(0);
+            CommandSender sender = mock(CommandSender.class);
+            doAnswer(message -> {
+                feedback.accept(message.getArgument(0));
+                return null;
+            }).when(sender).sendMessage(any(Component.class));
+            doAnswer(message -> {
+                feedback.accept(Component.text((String) message.getArgument(0)));
+                return null;
+            }).when(sender).sendMessage(any(String.class));
+            return sender;
+        }).when(server).createCommandSender(any());
         manager = new CommandExecutionManager();
-        manager.setWebSocketClient(webSocketClient);
 
         ModuleProbeExecutor executor = new ModuleProbeExecutor();
         server.getCommandMap().register("moduleprobe", new Command("moduleprobe") {
@@ -92,27 +128,19 @@ class RemoteCommandModuleReplyTest {
     }
 
     @Test
-    @DisplayName("the module body replies to the console sender inside the dispatch; the result says dispatched")
+    @DisplayName("the module body replies inside the dispatch: its reply is in the command result")
     void remoteCommandRunsTheModuleBodyInsideTheDispatch() {
-        JsonObject commandData = new JsonObject();
-        commandData.addProperty("command", "moduleprobe");
-        commandData.addProperty("executor", "console");
-        commandData.addProperty("commandId", "reply-541");
+        LinesSink sink = new LinesSink();
 
-        manager.executeCommand(commandData);
-        // One tick runs the manager's own hop to the main thread, which dispatches the command.
-        server.getScheduler().performOneTick();
+        // The executor runs the dispatch at once on this (main) thread; no further tick runs.
+        manager.execute("moduleprobe", null, Runnable::run, sink);
 
-        // The body ran inside that dispatch (no further tick), replying to the console sender.
-        assertThat(server.getConsoleSender().nextMessage()).isEqualTo("module reply 541");
-        ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
-        verify(webSocketClient).sendMessage(sent.capture());
-        JsonObject data = sent.getValue().getAsJsonObject("data");
-        assertThat(data.get("output").getAsString()).isEqualTo(CommandExecutionManager.DISPATCHED_OUTPUT);
+        assertThat(sink.failure).isNull();
+        assertThat(sink.lines).containsExactly("module reply 541");
     }
 
     @Test
-    @DisplayName("control: a command that replies inside its own dispatch replies to the console sender too")
+    @DisplayName("control: a command that replies inside its own dispatch has its reply in the result too")
     void controlAnInlineReplyingCommandRepliesToTheConsole() {
         server.getCommandMap().register("controlprobe", new Command("controlprobe") {
             @Override
@@ -121,18 +149,11 @@ class RemoteCommandModuleReplyTest {
                 return true;
             }
         });
-        JsonObject commandData = new JsonObject();
-        commandData.addProperty("command", "controlprobe");
-        commandData.addProperty("executor", "console");
-        commandData.addProperty("commandId", "control-541");
+        LinesSink sink = new LinesSink();
 
-        manager.executeCommand(commandData);
-        server.getScheduler().performOneTick();
+        manager.execute("controlprobe", null, Runnable::run, sink);
 
-        assertThat(server.getConsoleSender().nextMessage()).isEqualTo("control reply");
-        ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
-        verify(webSocketClient).sendMessage(sent.capture());
-        assertThat(sent.getValue().getAsJsonObject("data").get("output").getAsString())
-                .isEqualTo(CommandExecutionManager.DISPATCHED_OUTPUT);
+        assertThat(sink.failure).isNull();
+        assertThat(sink.lines).containsExactly("control reply");
     }
 }

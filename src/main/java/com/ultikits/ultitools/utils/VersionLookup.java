@@ -33,7 +33,7 @@ public final class VersionLookup {
     /** The failure description for an answer longer than the client reads; the contract allows none. */
     static final String TOO_LARGE = "response too large";
 
-    /** The prefix {@link SimpleHttpClient} puts on the body it makes up when the request itself failed. */
+    /** The prefix the 6.3.x {@code SimpleHttpClient} (removed in 6.4.0) put on the body it made up when the request itself failed. */
     private static final String NOT_SENT_PREFIX = "Error: ";
 
     private static final VersionLookup NONE_OFFERED = new VersionLookup(Outcome.NONE, null, null);
@@ -72,7 +72,7 @@ public final class VersionLookup {
     }
 
     /**
-     * Describes a non-2xx answer. {@link SimpleHttpClient} answers an I/O failure (refused, timed
+     * Describes a non-2xx answer. The 6.3.x {@code SimpleHttpClient} answered an I/O failure (refused, timed
      * out, unknown host) with status 500 and a body starting {@code "Error: "}; that case is
      * described as not reached rather than as a server error.
      *

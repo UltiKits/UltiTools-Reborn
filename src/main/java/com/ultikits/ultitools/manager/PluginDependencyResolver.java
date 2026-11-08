@@ -149,18 +149,6 @@ public class PluginDependencyResolver {
         }
 
         /**
-         * Gets all dependencies (hard + soft) that exist in the available plugins.
-         *
-         * @deprecated use {@link #getAllDependencies(Set, Map)}, which resolves each entry
-         *             through the plugin.yml-name alias map (D-12) before checking availability
-         * @removeIn 6.4.0
-         */
-        @Deprecated(since = "6.3.0", forRemoval = true)
-        public Set<String> getAllDependencies(Set<String> availablePlugins) {
-            return getAllDependencies(availablePlugins, Collections.emptyMap());
-        }
-
-        /**
          * Gets all dependencies (hard + soft) that exist in the available plugins, resolving each
          * soft-dependency entry through {@code aliasMap} before checking availability so it may
          * name either a simple class name or a {@code plugin.yml} name (D-12).

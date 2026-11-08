@@ -1,9 +1,6 @@
 package com.ultikits.ultitools.manager;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -21,22 +18,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
 import java.util.logging.Level;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
-import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.CredentialStore;
-import com.ultikits.ultitools.utils.FrameworkText;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
-import com.ultikits.ultitools.websocket.PanelConnectionLog;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -54,21 +40,14 @@ import org.jetbrains.annotations.ApiStatus;
  * which resolves the request against the real filesystem and checks real containment, so the
  * object that is authorized is the object that read, write, list and delete actually reach.
  *
- * <p>Two rules hold on every path of this class. <b>Links are never followed when an entry is
- * removed or descended into</b>: one predicate, {@link #isRealDirectory(Path, Path)}, decides
- * "real directory or link" for the delete's terminal entry, every entry of a recursive delete,
- * and the list marking, so a symbolic link or a Windows junction is removed as the entry itself
- * whether it is the target or inside the deleted tree. <b>Protected locations are judged by real
+ * <p><b>Protected locations are judged by real
  * path</b> ({@link #deniedAtRealPath(Path, List)}), never by the name of the editable root a
  * request happened to match, so neither an alias root nor the order of the roots moves a
  * protected object out from under the deny layer.
  */
 @ApiStatus.Internal
 public class FileOperationManager {
-    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
-    private UltiPanelWebSocketClient webSocketClient;
     private final File serverRoot;
-    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     /**
      * Protected server-core files, matched by exact basename. Kept equal to the panel's protected
@@ -150,12 +129,6 @@ public class FileOperationManager {
     private static final String STATE_DIR_REFUSAL = "path is inside the framework's own state directory "
             + "(.ultikits), which holds the UltiCloud credential and the reliable-delivery state file";
 
-    /**
-     * The {@link RemoteActionLog.Entry#getAction()} literal prefix every entry this class records
-     * carries, extended with the operation itself (e.g. {@code file_operation:read}) — D-22.
-     */
-    private static final String ACTION_FILE_OPERATION_PREFIX = "file_operation:";
-
     /** D-15's config key for the operator-configured editable-root set. */
     private static final String EDITABLE_ROOTS_CONFIG_KEY = "ultipanel.files.editable-roots";
 
@@ -169,15 +142,6 @@ public class FileOperationManager {
      * without reconstructing the manager.
      */
     private List<File> editableRoots;
-
-    /**
-     * The real-path lookup behind {@link #isRealDirectory(Path, Path)}: the filesystem's
-     * {@link Path#toRealPath}, or {@code null} when a path cannot be resolved. Not {@code final}
-     * only so a test can model an entry the JDK reports as a directory although its real path is
-     * elsewhere (a Windows junction), which cannot be created on Linux.
-     */
-    @SuppressWarnings("PMD.ImmutableField") // replaced by reflection in a test; see the javadoc
-    private Function<Path, Path> realPathResolver = FileOperationManager::realPathOrNull;
 
     // All field declarations precede all methods below this point (PMD
     // FieldDeclarationsShouldBeAtStartOfClass) — buildDenyGlobMatchers() used to sit between
@@ -195,20 +159,6 @@ public class FileOperationManager {
     public FileOperationManager() {
         this.serverRoot = new File(System.getProperty("user.dir"));
         reloadRootsFromConfig();
-    }
-
-    /**
-     * Sets the WebSocket client.
-     * @param client the WebSocket client
-     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.1", forRemoval = true)
-    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
-    public void setWebSocketClient(UltiPanelWebSocketClient client) {
-        V1CloudNotice.once(FileOperationManager.class, "setWebSocketClient");
-        this.webSocketClient = client;
     }
 
     /**
@@ -454,6 +404,15 @@ public class FileOperationManager {
         }
     }
 
+    /** The real path of {@code path}, or {@code null} if it cannot be determined. */
+    private static Path realPathOrNull(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     /**
      * {@code path}'s real path when it exists; otherwise the real path of its deepest existing
      * ancestor followed by the remaining names. {@code null} only if no ancestor resolves.
@@ -556,638 +515,6 @@ public class FileOperationManager {
             }
         }
         return false;
-    }
-
-    /**
-     * Handles a file operation request.
-     * <p>
-     * Dispatches to one of the four operation handlers inside a {@link CompletableFuture#runAsync}
-     * hop, then records exactly one {@link RemoteActionLog} entry per operation (D-22) — at this
-     * single point, not inside each of the four handlers, so the log's line count means "file
-     * decisions" and not "handler entries". {@code operation}/{@code path}/{@code actor} are
-     * captured into locals <b>before</b> the async hop and never re-read from
-     * {@code operationData} afterward, following the immutable-string capture discipline
-     * {@link TriggerContext} establishes — the mutable {@link JsonObject} itself is not safe to
-     * re-read once handed to another thread.
-     * @deprecated There is no replacement for modules: the framework's own UltiCloud session (protocol
-     *     2.1.0) answers the panel's file requests; this v1 handler replies only over the client
-     *     handed to setWebSocketClient. Removed in 6.4.0.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.1", forRemoval = true)
-    public void handleFileOperation(JsonObject operationData) {
-        try {
-            String operation = operationData.has("operation") && !operationData.get("operation").isJsonNull()
-                ? operationData.get("operation").getAsString() : null;
-            String path = operationData.has("path") && !operationData.get("path").isJsonNull()
-                ? operationData.get("path").getAsString() : null;
-            String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull()
-                ? operationData.get("operationId").getAsString() : null;
-            String actor = operationData.has("executor") && !operationData.get("executor").isJsonNull()
-                ? operationData.get("executor").getAsString() : "panel";
-
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                FrameworkText.format("收到文件操作请求: %s, 路径: %s (ID: %s)", operation, path, operationId));
-
-            // Captured before the async hop — see this method's javadoc.
-            String capturedOperation = operation;
-            String capturedPath = path;
-            String capturedOperationId = operationId;
-            String capturedActor = actor;
-
-            // Handle the file operation asynchronously
-            CompletableFuture.runAsync(() -> {
-                AccessDecision decision;
-                switch (capturedOperation) {
-                    case "read":
-                        decision = handleReadOperation(capturedPath, operationData, capturedOperationId);
-                        break;
-                    case "write":
-                        decision = handleWriteOperation(capturedPath, operationData, capturedOperationId);
-                        break;
-                    case "list":
-                        decision = handleListOperation(capturedPath, operationData, capturedOperationId);
-                        break;
-                    case "delete":
-                        decision = handleDeleteOperation(capturedPath, operationData, capturedOperationId);
-                        break;
-                    default:
-                        sendFileOperationResult(capturedOperationId, capturedOperation, capturedPath, false,
-                            "Unsupported operation: " + capturedOperation, null);
-                        decision = null;
-                }
-                recordFileDecision(capturedOperation, capturedPath, capturedActor, decision);
-            });
-
-        } catch (Exception e) {
-            String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull()
-                ? operationData.get("operationId").getAsString() : null;
-            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("文件操作处理失败: %s", e.getMessage()));
-            sendFileOperationResult(operationId, "unknown", "unknown", false,
-                "Error processing file operation: " + e.getMessage(), null);
-        }
-    }
-
-    /**
-     * D-22's single action-log record point for the whole remote file API — called once per
-     * operation from {@link #handleFileOperation}'s async task, after the dispatched handler has
-     * run, so a refusal decided deep inside a handler (Task 3's missing-{@code recursive}-flag
-     * case) is the decision this records, not an earlier, now-superseded verdict.
-     * <p>
-     * A {@code null} decision — the unsupported-operation branch — records nothing: an operation
-     * this manager does not recognise is not a file <em>decision</em>. A {@code null}
-     * {@link RemoteActionLog} (no live plugin, or a test harness) is also a silent no-op.
-     *
-     * @param operation the operation name as received, used verbatim to resolve the capability and
-     *                   build the action string
-     * @param path      the requested path as received — the action-log {@code target}
-     * @param actor     the inbound {@code executor} field verbatim, or the literal {@code "panel"}
-     * @param decision  the policy decision the dispatched handler reached, or {@code null} for an
-     *                  unsupported operation
-     */
-    private void recordFileDecision(String operation, String path, String actor, AccessDecision decision) {
-        if (decision == null) {
-            return;
-        }
-        RemoteActionLog log = UltiTools.getInstance().getRemoteActionLog();
-        if (log == null) {
-            return;
-        }
-        Capability capability = PluginInitiationUtils.resolveFileOperationCapability(operation);
-        String action = ACTION_FILE_OPERATION_PREFIX + operation;
-        if (decision.isAllowed()) {
-            log.record(RemoteActionLog.Entry.allowed(capability, action, path, actor));
-        } else {
-            log.record(RemoteActionLog.Entry.denied(capability, action, path, actor, decision.getMessage()));
-        }
-    }
-    
-    /**
-     * Handles a file read operation.
-     *
-     * @return the {@link AccessDecision} that gated this read — the value
-     *         {@link #recordFileDecision} records, regardless of whether the read then succeeded
-     *         or failed for an unrelated reason (file not found, not a regular file, ...)
-     */
-    private AccessDecision handleReadOperation(String path, JsonObject operationData, String operationId) {
-        ResolvedTarget target = resolveTarget(path, ResolveMode.FOLLOW);
-        AccessDecision readDecision = target.getDecision();
-        try {
-            if (!readDecision.isAllowed()) {
-                sendFileOperationResult(operationId, "read", path, false, readDecision.getMessage(), null);
-                return readDecision;
-            }
-
-            File file = target.getOperand();
-            if (!file.exists()) {
-                sendFileOperationResult(operationId, "read", path, false, "File not found", null);
-                return readDecision;
-            }
-
-            if (!file.isFile()) {
-                sendFileOperationResult(operationId, "read", path, false, "Path is not a file", null);
-                return readDecision;
-            }
-
-            int limit = operationData.has("limit") && !operationData.get("limit").isJsonNull()
-                ? operationData.get("limit").getAsInt() : 0;
-            if (limit <= 0) limit = 1000; // Default limit of 1000 lines
-
-            StringBuilder content = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-                String line;
-                int lineCount = 0;
-                while ((line = reader.readLine()) != null && lineCount < limit) {
-                    content.append(line).append("\n");
-                    lineCount++;
-                }
-            }
-
-            JsonObject resultData = new JsonObject();
-            resultData.addProperty("content", content.toString().trim());
-            resultData.addProperty("size", file.length());
-            resultData.addProperty("lastModified", file.lastModified());
-            resultData.addProperty("linesRead", content.toString().split("\n").length);
-
-            sendFileOperationResult(operationId, "read", path, true, "File read successfully", resultData);
-            return readDecision;
-
-        } catch (Exception e) {
-            sendFileOperationResult(operationId, "read", path, false,
-                "Error reading file: " + e.getMessage(), null);
-            return readDecision;
-        }
-    }
-
-    /**
-     * Handles a file write operation.
-     *
-     * @return the {@link AccessDecision} that gated this write
-     */
-    private AccessDecision handleWriteOperation(String path, JsonObject operationData, String operationId) {
-        ResolvedTarget target = resolveTarget(path, ResolveMode.FOLLOW);
-        AccessDecision writeDecision = target.getDecision();
-        try {
-            if (!writeDecision.isAllowed()) {
-                sendFileOperationResult(operationId, "write", path, false, writeDecision.getMessage(), null);
-                return writeDecision;
-            }
-
-            File file = target.getOperand();
-            String content = operationData.has("content") && !operationData.get("content").isJsonNull()
-                ? operationData.get("content").getAsString() : null;
-            boolean append = operationData.has("append") && !operationData.get("append").isJsonNull()
-                && operationData.get("append").getAsBoolean();
-
-            if (content == null) {
-                sendFileOperationResult(operationId, "write", path, false, "Content cannot be null", null);
-                return writeDecision;
-            }
-
-            // Ensure the parent directory exists. The operand is the real existing prefix plus
-            // ordinary missing names only, so this never creates anything outside the root.
-            File parentDir = file.getParentFile();
-            if (parentDir != null && !parentDir.exists()) {
-                parentDir.mkdirs();
-            }
-
-            try (FileWriter writer = new FileWriter(file, append)) {
-                writer.write(content);
-            }
-
-            JsonObject resultData = new JsonObject();
-            resultData.addProperty("bytesWritten", content.getBytes().length);
-            resultData.addProperty("fileSize", file.length());
-
-            sendFileOperationResult(operationId, "write", path, true, "File written successfully", resultData);
-            return writeDecision;
-
-        } catch (Exception e) {
-            sendFileOperationResult(operationId, "write", path, false,
-                "Error writing file: " + e.getMessage(), null);
-            return writeDecision;
-        }
-    }
-    
-    /**
-     * Handles a directory listing operation.
-     *
-     * @return the {@link AccessDecision} that gated listing the directory itself — one decision
-     *         for the whole operation, not one per returned row (see {@link #recordFileDecision})
-     */
-    // PMD.UnusedFormalParameter: operationData is deliberately kept even though this handler
-    // does not read it today. handleFileOperation()'s switch dispatches all four operation
-    // handlers — handleReadOperation, handleWriteOperation, handleListOperation,
-    // handleDeleteOperation — with the identical (String, JsonObject, String) signature; the
-    // other three do read operationData (limit, content/append, recursive flag). Keeping the
-    // family uniform is the deliberate choice, not an oversight.
-    @SuppressWarnings("PMD.UnusedFormalParameter")
-    private AccessDecision handleListOperation(String path, JsonObject operationData, String operationId) {
-        ResolvedTarget target = resolveTarget(path, ResolveMode.FOLLOW);
-        AccessDecision listDecision = target.getDecision();
-        try {
-            if (!listDecision.isAllowed()) {
-                sendFileOperationResult(operationId, "list", path, false, listDecision.getMessage(), null);
-                return listDecision;
-            }
-
-            File dir = target.getOperand();
-            if (!dir.exists()) {
-                sendFileOperationResult(operationId, "list", path, false, "Directory not found", null);
-                return listDecision;
-            }
-
-            if (!dir.isDirectory()) {
-                sendFileOperationResult(operationId, "list", path, false, "Path is not a directory", null);
-                return listDecision;
-            }
-
-            File[] files = dir.listFiles();
-            if (files == null) {
-                sendFileOperationResult(operationId, "list", path, false, "Cannot read directory", null);
-                return listDecision;
-            }
-
-            Path dirReal = realPathResolver.apply(dir.toPath());
-            JsonArray fileList = new JsonArray();
-            for (File file : files) {
-                fileList.add(buildListEntry(path, dirReal, file));
-            }
-
-            JsonObject resultData = new JsonObject();
-            resultData.add("files", fileList);
-            resultData.addProperty("totalCount", fileList.size());
-
-            sendFileOperationResult(operationId, "list", path, true, "Directory listed successfully", resultData);
-            return listDecision;
-
-        } catch (Exception e) {
-            sendFileOperationResult(operationId, "list", path, false,
-                "Error listing directory: " + e.getMessage(), null);
-            return listDecision;
-        }
-    }
-
-    /**
-     * Builds a single directory-listing row, applying D-18's mark-not-filter policy to a refused
-     * child entry. Extracted from {@link #handleListOperation(String, JsonObject, String)} to keep
-     * that method's cyclomatic/NPath complexity within the project's PMD threshold — this is the
-     * per-entry decision-and-marking step, the cohesive seam in that loop.
-     * <p>
-     * A child that is not a real directory is marked refused exactly when a read or list of that
-     * child would be refused: its decision comes from {@link #resolveTarget(String, ResolveMode)}
-     * in follow mode, so an in-root alias whose real target lies outside every editable root, or
-     * inside a protected location, is marked too, not only a child whose name the lexical layer
-     * rejects. Only a real directory ({@link #isRealDirectory(Path, Path)}) keeps the
-     * never-refused rule; a symbolic link or junction to a directory is judged by its target like
-     * any other alias.
-     *
-     * @param basePath the directory path being listed (the parent of {@code file})
-     * @param dirReal  the listed directory's real path, or {@code null} if it cannot be resolved
-     * @param file     one child entry returned by {@code dir.listFiles()}
-     * @return the JSON row for this entry, either full metadata or a withheld-metadata marker
-     */
-    private JsonObject buildListEntry(String basePath, Path dirReal, File file) {
-        // D-18: a refused child is MARKED, not filtered out — the panel used to render
-        // "this file does not exist" for a file that exists and is protected.
-        String childPath = (basePath == null || basePath.isEmpty() || basePath.equals("/"))
-            ? file.getName()
-            : basePath + "/" + file.getName();
-        AccessDecision childDecision = isRealDirectory(dirReal, file.toPath())
-            ? AccessDecision.allowed()
-            : resolveTarget(childPath, ResolveMode.FOLLOW).getDecision();
-        boolean refused = !childDecision.isAllowed();
-
-        JsonObject fileInfo = new JsonObject();
-        fileInfo.addProperty("name", file.getName());
-        fileInfo.addProperty("isDirectory", file.isDirectory());
-        if (refused) {
-            // Deliberately withholds size/lastModified/readable/writable — marking an
-            // entry must not leak the metadata the refusal exists to withhold (T-06-27).
-            fileInfo.addProperty("accessible", false);
-            fileInfo.addProperty("reason", reasonCodeFor(childDecision));
-        } else {
-            fileInfo.addProperty("accessible", true);
-            fileInfo.addProperty("size", file.isDirectory() ? 0 : file.length());
-            fileInfo.addProperty("lastModified", file.lastModified());
-            fileInfo.addProperty("readable", file.canRead());
-            fileInfo.addProperty("writable", file.canWrite());
-        }
-        return fileInfo;
-    }
-
-    /**
-     * Handles a file delete operation.
-     * <p>
-     * The target is resolved in entry mode ({@link ResolveMode#ENTRY}): the parent is followed,
-     * the terminal entry itself is not. The terminal entry is classified by the same predicate
-     * the walk uses for every entry inside the tree, {@link #isRealDirectory(Path, Path)}: only a
-     * real directory keeps the recursive-flag and protected-descendant gates in front of
-     * {@link #deleteDirectory}. Anything else that is a directory or a link without being a real
-     * directory - a symbolic link to a file, to a directory or to nothing, a Windows junction,
-     * another reparse point - is removed as the entry itself and its target is never touched
-     * (JDK {@link Files#delete(Path)} semantics; for a link to a directory this is the
-     * maintainer's recorded link-only decision). A regular file is deleted as before.
-     *
-     * @return the {@link AccessDecision} that gated this delete
-     */
-    private AccessDecision handleDeleteOperation(String path, JsonObject operationData, String operationId) {
-        ResolvedTarget target = resolveTarget(path, ResolveMode.ENTRY);
-        AccessDecision deleteDecision = target.getDecision();
-        try {
-            if (!deleteDecision.isAllowed()) {
-                sendFileOperationResult(operationId, "delete", path, false, deleteDecision.getMessage(), null);
-                return deleteDecision;
-            }
-
-            File entry = target.getOperand();
-            if (!Files.exists(entry.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                sendFileOperationResult(operationId, "delete", path, false, "File not found", null);
-                return deleteDecision;
-            }
-
-            Path entryPath = entry.toPath();
-            boolean realDirectory = isRealDirectory(realPathResolver.apply(entryPath.getParent()), entryPath);
-            AccessDecision directoryDecision = realDirectory
-                ? directoryDeleteGate(entryPath, operationData, target.getMappedPath())
-                : AccessDecision.allowed();
-            if (!directoryDecision.isAllowed()) {
-                sendFileOperationResult(operationId, "delete", path, false,
-                    directoryDecision.getMessage(), null);
-                return directoryDecision;
-            }
-
-            boolean deleted = deleteEntry(entry, realDirectory);
-
-            if (deleted) {
-                sendFileOperationResult(operationId, "delete", path, true, "File deleted successfully", null);
-            } else {
-                sendFileOperationResult(operationId, "delete", path, false, "Failed to delete file", null);
-            }
-            return deleteDecision;
-
-        } catch (Exception e) {
-            sendFileOperationResult(operationId, "delete", path, false,
-                "Error deleting file: " + e.getMessage(), null);
-            return deleteDecision;
-        }
-    }
-
-    /**
-     * The gates a <b>real</b> directory entry passes before {@link #deleteDirectory} may run:
-     * D-20's recursive-flag shape guard first, then the protected-descendant walk. Only called
-     * for an entry {@link #isRealDirectory(Path, Path)} accepts; a link, a junction and a regular
-     * file never reach it, because removing them removes only the entry, so there is no subtree
-     * to guard.
-     * <p>
-     * The ancestor walk closes the gap a phase-06 security audit found: the path decision only
-     * ever ran against the requested entry itself, never against what is underneath it, so a
-     * recursive delete of an ancestor of a protected path (e.g. {@code plugins/UltiTools}, an
-     * ancestor of {@code plugins/UltiTools/security} and of {@code plugins/UltiTools/data.json})
-     * reached {@link #deleteDirectory} with no policy consulted for any descendant at all.
-     *
-     * @param entryReal     the real directory entry (its real path, as {@link #isRealDirectory}
-     *                      established)
-     * @param operationData the inbound request's data object (carries {@code recursive})
-     * @param mappedPath    the entry's server-root-relative path, as mapped by the resolver; used
-     *                      only to name the refused descendant in the reply
-     * @return {@link AccessDecision#allowed()}, or the first gate's non-configurable refusal
-     */
-    private AccessDecision directoryDeleteGate(Path entryReal, JsonObject operationData, String mappedPath) {
-        AccessDecision recursiveDecision = requireRecursiveFlag(operationData);
-        if (!recursiveDecision.isAllowed()) {
-            return recursiveDecision;
-        }
-        return deniedAsAncestorOfProtectedPath(mappedPath, entryReal, protectedRealLocations());
-    }
-
-    /**
-     * Removes one resolved delete entry. A real directory is emptied by {@link #deleteDirectory};
-     * any other directory or link entry - a symbolic link, a Windows junction, another reparse
-     * point - is removed as the entry itself with {@link Files#delete(Path)}, which never follows
-     * it (D-02); a regular file is deleted as a single file.
-     *
-     * @param entry         the resolved, not-followed delete operand
-     * @param realDirectory whether {@link #isRealDirectory(Path, Path)} accepted {@code entry}
-     * @return whether the entry was removed
-     * @throws IOException if removing a link entry fails
-     */
-    private boolean deleteEntry(File entry, boolean realDirectory) throws IOException {
-        if (realDirectory) {
-            return deleteDirectory(entry);
-        }
-        Path entryPath = entry.toPath();
-        if (Files.isSymbolicLink(entryPath) || Files.isDirectory(entryPath, LinkOption.NOFOLLOW_LINKS)) {
-            Files.delete(entryPath);
-            return true;
-        }
-        return entry.delete();
-    }
-
-    /**
-     * D-20's shape guard: deleting a directory requires the request's data to carry a
-     * {@code recursive} member that is a JSON boolean primitive with value {@code true}.
-     * <p>
-     * A present-but-non-boolean {@code recursive} (e.g. the string {@code "false"}) is treated as
-     * absent rather than coerced — Gson's {@code JsonPrimitive.getAsBoolean()} is lenient on a
-     * string primitive, and a request carrying the string {@code "false"} must not delete a world
-     * tree. The missing field is never defaulted to {@code true} for backward compatibility: D-20
-     * accepts the break because {@code file-delete} defaults off, so a caller already reaching
-     * this code had the capability turned on deliberately, and fails here with a clear reason
-     * rather than silently.
-     *
-     * @param operationData the inbound request's data object
-     * @return {@link AccessDecision#allowed()} when {@code recursive} is present and {@code true};
-     *         otherwise a denied, non-configurable decision naming the missing/invalid field — no
-     *         configuration makes an unflagged recursive delete valid
-     */
-    private static AccessDecision requireRecursiveFlag(JsonObject operationData) {
-        com.google.gson.JsonElement recursive = operationData.get("recursive");
-        boolean explicitlyTrue = recursive != null
-                && recursive.isJsonPrimitive()
-                && recursive.getAsJsonPrimitive().isBoolean()
-                && recursive.getAsBoolean();
-        if (explicitlyTrue) {
-            return AccessDecision.allowed();
-        }
-        return AccessDecision.deniedNonConfigurable(
-                "deleting a directory requires the request's 'recursive' field to be the boolean true");
-    }
-
-    /**
-     * Refuses a recursive directory delete whose target is an ancestor of any path
-     * {@link #deniedUnconditionally} would refuse on its own. Runs after {@link
-     * #requireRecursiveFlag} and strictly before {@link #deleteDirectory}; nothing is deleted
-     * when this refuses. This method is the gate that decides whether {@link #deleteDirectory}
-     * may run at all, not a per-descendant check woven into it.
-     * <p>
-     * <b>Why this walks the real directory instead of comparing paths lexically.</b> One of
-     * {@link #deniedUnconditionally}'s rules — the security-directory check — is answerable from
-     * the path alone: {@link #SECURITY_DIR_RELATIVE} is a single fixed location, so "is {@code
-     * dir} an ancestor of it" is just {@link Path#startsWith(Path)} run in the opposite
-     * direction from the existing direct check. But the credential rules ({@link
-     * #DENY_EXACT_BASENAMES}, the glob patterns, {@link #BLOCKED_FILES}, {@link
-     * #BLOCKED_EXTENSIONS}) match on a <b>basename</b>, wherever it occurs in the tree — "is
-     * {@code dir} an ancestor of some path a glob would deny" cannot be answered from {@code
-     * dir}'s own path at all; it depends on what files actually exist underneath it. A recursive
-     * delete already requires the real directory handle, and this gate runs before any deletion,
-     * so walking the real subtree is exactly as knowable at gate time as the lexical check would
-     * be for the security-directory rule alone — and it is the one approach that covers every
-     * rule {@link #deniedUnconditionally} enforces with a single method, rather than hand-listing
-     * the two paths this defect happened to be filed against. A credential pattern or protected
-     * directory added later is covered automatically; nobody has to remember to extend a second
-     * list.
-     * <p>
-     * <b>Which path it judges.</b> Every descendant is judged at its real location - the real
-     * path of the directory it was listed from plus its own name - by
-     * {@link #deniedAtRealPath(Path, List)}, never by a root-relative name. Which editable root
-     * matched the request, and the order of the configured roots, therefore cannot hide a
-     * protected descendant: with roots {@code [plugins/shadow, plugins]} and
-     * {@code plugins/shadow} linking to {@code plugins/UltiTools}, a recursive delete of
-     * {@code plugins/UltiTools} still meets the real action-log directory and is refused.
-     * {@code displayPath} only names the refused descendant in the reply.
-     * <p>
-     * <b>Links inside the tree are never followed.</b> This walk, {@link #deleteDirectory}, the
-     * delete's terminal entry and the list marking share one rule,
-     * {@link #isRealDirectory(Path, Path)}: only a real subdirectory is descended into. A
-     * symbolic link (or, on Windows, a junction) found inside the tree is checked at its own
-     * location like any other entry and is then removed as a link by {@link #deleteDirectory};
-     * its target and the target's contents are never reached, so a link to an outside
-     * directory, to the action-log directory or to the credential directory neither refuses the
-     * delete nor empties its target.
-     *
-     * @param displayPath        the mapped server-root-relative path of {@code dirReal}
-     *                           (forward-slash separated, no leading slash), used only to name a
-     *                           refused descendant in the reply
-     * @param dirReal            the real path of the directory {@link #handleDeleteOperation} is
-     *                           about to recursively delete, or of a real subdirectory of it
-     * @param protectedLocations the result of {@link #protectedRealLocations()}
-     * @return {@link AccessDecision#allowed()} if no descendant (at any depth) is unconditionally
-     *         denied; otherwise a denied, non-configurable decision naming the first protected
-     *         descendant found — non-configurable because every rule {@link
-     *         #deniedUnconditionally} enforces is itself non-configurable
-     */
-    private AccessDecision deniedAsAncestorOfProtectedPath(String displayPath, Path dirReal,
-                                                           List<ProtectedLocation> protectedLocations) {
-        File[] children = dirReal.toFile().listFiles();
-        // An unreadable directory is not walked here; deleteDirectory cannot list it either, so
-        // allowing the gate removes nothing under it and its own removal reports the failure.
-        if (children == null) {
-            return AccessDecision.allowed();
-        }
-        for (File child : children) {
-            Path childLocation = dirReal.resolve(child.getName());
-            String childPath = displayPath.isEmpty()
-                    ? child.getName()
-                    : displayPath + "/" + child.getName();
-            if (deniedAtRealPath(childLocation, protectedLocations) != null) {
-                return AccessDecision.deniedNonConfigurable(
-                        "recursive delete of '" + displayPath + "' would remove '" + childPath
-                                + "', which is unconditionally protected");
-            }
-            if (isRealDirectory(dirReal, childLocation)) {
-                AccessDecision nested = deniedAsAncestorOfProtectedPath(childPath, childLocation, protectedLocations);
-                if (!nested.isAllowed()) {
-                    return nested;
-                }
-            }
-        }
-        return AccessDecision.allowed();
-    }
-
-    /**
-     * Recursively deletes a real directory without following any link inside it.
-     * <p>
-     * Only a child for which {@link #isRealDirectory(Path, Path)} holds is descended into. Every
-     * other child — a regular file, a symbolic link to a file or to a directory, a dangling
-     * link, or a Windows junction — is removed as a single entry with
-     * {@link Files#deleteIfExists(Path)}, which never follows a link, so a link's target and the
-     * target's contents stay untouched. If {@code dir}'s real path cannot be determined nothing
-     * under it is removed, so its own removal fails and the delete reports the failure. Before
-     * this rule, {@code File#isDirectory()} followed a descendant link to a directory and the
-     * walk emptied the link's target, wherever it was.
-     *
-     * @param dir the real directory to delete (never a link; {@link #isRealDirectory}
-     *            establishes that for the terminal entry and for every descendant)
-     * @return whether {@code dir} itself was removed
-     */
-    private boolean deleteDirectory(File dir) {
-        Path dirReal = realPathResolver.apply(dir.toPath());
-        File[] files = dir.listFiles();
-        if (files != null && dirReal != null) {
-            for (File file : files) {
-                Path childLocation = dirReal.resolve(file.getName());
-                if (isRealDirectory(dirReal, childLocation)) {
-                    deleteDirectory(childLocation.toFile());
-                } else {
-                    deleteSingleEntry(childLocation);
-                }
-            }
-        }
-        return dir.delete();
-    }
-
-    /**
-     * The one "real directory or link" predicate of the remote file API, through this manager's
-     * real-path lookup. Used for the delete's terminal entry, every entry of the
-     * protected-descendant walk and of {@link #deleteDirectory}, and the list marking.
-     *
-     * @see #isRealDirectory(Path, Path, Function)
-     */
-    private boolean isRealDirectory(Path parentReal, Path entry) {
-        return isRealDirectory(parentReal, entry, realPathResolver);
-    }
-
-    /**
-     * Whether {@code entry} is a real directory: it is a directory when links are not followed,
-     * <b>and</b> its own real path is exactly {@code parentReal} plus its name. Anything else is a
-     * link, whatever the operating system calls it: a symbolic link fails the first test; a
-     * Windows junction or another directory reparse point, which the JDK reports as a directory,
-     * fails the second, because its real path is its target's. An entry, or a parent, whose real
-     * path cannot be determined is not a real directory. A link is never descended into and,
-     * deleted, is removed as the entry itself - whether it is the delete target or inside the
-     * deleted tree.
-     *
-     * @param parentReal the real path of the directory {@code entry} lives in, or {@code null}
-     * @param entry      the entry, not followed: its parent's real path plus its own name
-     * @param realPath   the real-path lookup; returns {@code null} when a path cannot be resolved
-     * @return {@code true} only for a real, non-link directory
-     */
-    static boolean isRealDirectory(Path parentReal, Path entry, Function<Path, Path> realPath) {
-        if (parentReal == null || entry == null || !Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
-            return false;
-        }
-        Path name = entry.getFileName();
-        if (name == null) {
-            return false;
-        }
-        Path entryReal = realPath.apply(entry);
-        return entryReal != null && entryReal.equals(parentReal.resolve(name.toString()));
-    }
-
-    /** The real path of {@code path}, or {@code null} if it cannot be determined. */
-    private static Path realPathOrNull(Path path) {
-        try {
-            return path.toRealPath();
-        } catch (IOException e) {
-            return null;
-        }
-    }
-
-    /**
-     * Removes one non-directory entry (or link) of a tree being deleted, as the entry itself.
-     * The walk does not act on the result, exactly as it never acted on a per-file failure: the
-     * enclosing directory then stays non-empty and its own removal reports the failure.
-     *
-     * @return whether the entry is gone
-     */
-    private static boolean deleteSingleEntry(Path entry) {
-        try {
-            Files.deleteIfExists(entry);
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
     }
     
     /**
@@ -1377,7 +704,7 @@ public class FileOperationManager {
      * to: the root's configured location relative to {@link #serverRoot}, followed by the
      * operand's location inside the root's real path. It depends on which root matched first,
      * so it only names things in replies; no allow or deny decision is taken on it (those use
-     * real paths, see {@link #unlessProtected} and {@link #deniedAsAncestorOfProtectedPath}).
+     * real paths, see {@link #unlessProtected}).
      */
     private String mappedPath(File root, Path realRoot, Path operand) {
         Path base = serverRoot.toPath().toAbsolutePath().normalize();
@@ -1392,43 +719,6 @@ public class FileOperationManager {
             joined = prefix + "/" + inside;
         }
         return joined.replace(File.separatorChar, '/');
-    }
-    
-    /**
-     * Sends the file operation result.
-     */
-    private void sendFileOperationResult(String operationId, String operation, String path, 
-                                       boolean success, String message, JsonObject data) {
-        try {
-            JsonObject resultMessage = new JsonObject();
-            resultMessage.addProperty("type", "file_operation_result");
-            
-            JsonObject resultData = new JsonObject();
-            resultData.addProperty("operationId", operationId);
-            resultData.addProperty("operation", operation);
-            resultData.addProperty("path", path);
-            resultData.addProperty("success", success);
-            resultData.addProperty("message", message);
-            resultData.addProperty("timestamp", System.currentTimeMillis());
-            
-            if (data != null) {
-                for (String key : data.keySet()) {
-                    resultData.add(key, data.get(key));
-                }
-            }
-            
-            resultMessage.add("data", resultData);
-            resultMessage.addProperty("serverId", webSocketClient.getServerId());
-            
-            webSocketClient.sendMessage(resultMessage);
-            
-            PanelConnectionLog.log(Level.INFO, 
-                FrameworkText.format("文件操作结果已发送 (ID: %s, 操作: %s, 成功: %s)", 
-                operationId, operation, success));
-            
-        } catch (Exception e) {
-            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送文件操作结果失败: %s", e.getMessage()));
-        }
     }
 
     /**

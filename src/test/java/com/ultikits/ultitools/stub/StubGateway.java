@@ -98,6 +98,8 @@ public final class StubGateway {
     private volatile Exception startFailure;
     private volatile boolean acking = true;
     private volatile String nextWelcomeServerId;
+    /** Capabilities every later welcome leaves out of {@code accepted}, so a server sees them refused (#753). */
+    private volatile Set<String> refusedCapabilities = Collections.emptySet();
 
     StubGateway(UltiCloudStub.Contract contract, StubAccessLog log, UltiCloudStub.Credentials credentials,
                 long helloTimeoutMs) {
@@ -375,7 +377,8 @@ public final class StubGateway {
         JsonArray accepted = new JsonArray();
         for (JsonElement capability : hello.getAsJsonObject("payload").getAsJsonArray("capabilities")) {
             String name = capability.getAsString();
-            if (contract.knowsCapability(name) && connection.accepted.add(name)) {
+            if (contract.knowsCapability(name) && !refusedCapabilities.contains(name)
+                    && connection.accepted.add(name)) {
                 accepted.add(name);
             }
         }
@@ -602,6 +605,16 @@ public final class StubGateway {
         this.nextWelcomeServerId = serverId;
     }
 
+    /**
+     * Makes every later welcome leave these capabilities out of {@code accepted}, as a gateway that
+     * does not accept them would (#753). An empty set accepts everything the contract knows again.
+     *
+     * @param capabilities the capability names to refuse; never null
+     */
+    public void refuseCapabilities(Set<String> capabilities) {
+        this.refusedCapabilities = Collections.unmodifiableSet(new LinkedHashSet<>(capabilities));
+    }
+
     /** @return the open connections as JSON, for the admin status (no credential in it) */
     public JsonArray describeConnections() {
         JsonArray array = new JsonArray();
@@ -650,30 +663,39 @@ public final class StubGateway {
 
     // ------------------------------------------------------------------ sending
 
-    /** Sends one frame on a connection, after checking it against its schema; caller holds the connection. */
+    /**
+     * Sends one frame on a connection, after checking it against its schema; caller holds the connection.
+     *
+     * <p>The frame is recorded and its {@code WS-OUT} line written <em>before</em> it goes on the wire, so a
+     * client that has received the frame always finds both (#865). When the send then fails because the
+     * connection has closed, the record is withdrawn and a {@code WS-NOTE} line says the frame was not sent.
+     */
     void sendFrame(Connection connection, JsonObject frame) {
         String type = string(frame, "type");
         String issue = contract.firstIssue(UltiCloudStub.Contract.frameSchema(type), frame);
         if (issue != null) {
             log.log("WS-SELF-INVALID", connection + " " + type + " " + issue);
         }
+        Frame recorded = record("out", connection, frame);
+        log.log("WS-OUT", connection + " " + describe(frame));
         try {
             connection.socket.send(frame.toString());
         } catch (WebsocketNotConnectedException closedMeanwhile) {
+            synchronized (frames) {
+                frames.remove(recorded);
+            }
             log.log("WS-NOTE", connection + " " + type + " not sent: the connection is closed");
-            return;
         }
-        record("out", connection, frame);
-        log.log("WS-OUT", connection + " " + describe(frame));
     }
 
+    /** Sends a text frame; like {@link #sendFrame}, its {@code WS-OUT} line is written before the send. */
     private void sendText(Connection connection, String text) {
+        log.log("WS-OUT", connection + " " + text);
         try {
             connection.socket.send(text);
         } catch (WebsocketNotConnectedException closedMeanwhile) {
-            return;
+            log.log("WS-NOTE", connection + " " + text + " not sent: the connection is closed");
         }
-        log.log("WS-OUT", connection + " " + text);
     }
 
     /** Closes a connection with a close frame; caller holds the connection. */
@@ -704,12 +726,14 @@ public final class StubGateway {
         return closed;
     }
 
-    private void record(String direction, Connection connection, JsonObject frame) {
+    private Frame record(String direction, Connection connection, JsonObject frame) {
         JsonObject masked = JsonParser.parseString(StubAccessLog.mask(frame.toString())).getAsJsonObject();
+        Frame recorded = new Frame(System.currentTimeMillis(), connection.id, direction, masked);
         synchronized (frames) {
-            frames.add(new Frame(System.currentTimeMillis(), connection.id, direction, masked));
+            frames.add(recorded);
             frames.notifyAll();
         }
+        return recorded;
     }
 
     private static String describe(JsonObject frame) {

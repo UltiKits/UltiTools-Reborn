@@ -1,7 +1,7 @@
 /**
  * UltiPanel WebSocket client internals, and the three stable extension points modules use.
  * <p>
- * Connection lifecycle, reconnect strategy and inbound message dispatch for the link to
+ * Connection lifecycle and inbound message dispatch for the link to
  * UltiPanel. The whole subsystem is driven by the framework: it is created after a successful
  * cloud login and torn down on shutdown. The wire protocol is a private contract between this
  * client and the panel worker, and both sides change together, so these internals are not an
@@ -25,9 +25,9 @@
  * contract.
  * <p>
  * As of 6.3.1 the live dispatch path is the UltiCloud protocol v2 agent connection in
- * {@code com.ultikits.ultitools.utils}. {@link UltiPanelWebSocketClient} and the protocol v1
- * inbound-message dispatch table that used to serve it are no longer used; the dispatch table was
- * removed in 6.3.1.
+ * {@code com.ultikits.ultitools.utils}. The protocol v1 inbound-message dispatch table was removed
+ * in 6.3.1, and the protocol v1 client it served ({@code UltiPanelWebSocketClient}, with its
+ * {@code ReconnectStrategy} and {@code ExponentialBackoffStrategy}) in 6.4.0.
  * <p>
  * <b>This package previously also held a second, superseded dispatch mechanism</b> — a
  * registry-plus-interface pair with five per-message-type implementations, formerly the sole

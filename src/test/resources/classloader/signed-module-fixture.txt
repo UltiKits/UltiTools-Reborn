@@ -1,0 +1,45 @@
+Public signed JAR fixture for ModuleClassLoaderTest
+
+signed-module.jar.base64 is a Base64-encoded JAR, not a private key or keystore.
+Decoded size: 2401 bytes
+Decoded SHA-256: 2dbbb1637072c51ba8048284102e4cf486c3c43f986e68a43787d8813253ea1c
+
+Contents:
+  META-INF/MANIFEST.MF
+  META-INF/FIXTURE.SF
+  META-INF/FIXTURE.RSA (public self-signed test certificate and JAR signature)
+  META-INF/
+  fixture/Signed.class
+
+The only class is our Java 8 test class, with this complete source:
+
+package fixture;
+public final class Signed {
+    public static String value() {
+        return "signed";
+    }
+}
+
+Generation recipe (JDK 21, source/target 8):
+1. In a disposable directory, save that source as src/fixture/Signed.java and
+   create an empty classes directory.
+2. Run:
+   javac -source 8 -target 8 -d classes src/fixture/Signed.java
+   jar --create --file signed-module.jar -C classes fixture/Signed.class
+   keytool -genkeypair -alias fixture -keyalg RSA -keysize 2048 -keystore fixture.p12 -dname "CN=UltiTools Loader Public Test Fixture" -validity 36500
+   jarsigner -keystore fixture.p12 -digestalg SHA-256 -sigalg SHA256withRSA signed-module.jar fixture
+   jarsigner -verify signed-module.jar
+   base64 signed-module.jar
+3. Choose a disposable password when prompted; never commit the keystore,
+   private key or password. Save only the final Base64 output as the resource.
+   Delete the disposable keystore afterwards.
+
+The certificate is deliberately self-signed and has no production identity or
+trust-chain claim. Verification warnings about that and the absent timestamp
+are expected. Tests compare verified CodeSigners with the original URLClassLoader
+and separately corrupt the signed class to prove that both reject tampering.
+No external command runs during tests.
+
+Regeneration produces a new key, signature and ZIP timestamps, so it does not
+reproduce the same hash. If deliberately regenerating, review the archive's
+contents, confirm its signing behavior, and update the size/hash recorded here.

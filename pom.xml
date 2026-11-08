@@ -512,8 +512,82 @@
                              from 6.2.5 to 6.3.2 (#738): all 44 ledger removals carry removedIn 6.3.0
                              and the remaining allowlist entries named 6.3.0 changes, none of which
                              differ between 6.3.2 and this tree. A removal made in this cycle adds
-                             its entry here together with its ledger record. -->
+                             its entry here together with its ledger record. 6.4.0: the removals
+                             announced for 6.4.0 (COMPATIBILITY.md, "Removal list for 6.4.0"). -->
                         <excludes>
+                            <exclude>com.ultikits.ultitools.annotations.ConfigEntry#parser()</exclude>
+                            <exclude>com.ultikits.ultitools.config.convert.LegacyParserAdapter</exclude>
+                            <exclude>com.ultikits.ultitools.entities.ApiResponse</exclude>
+                            <exclude>com.ultikits.ultitools.entities.TokenEntity</exclude>
+                            <exclude>com.ultikits.ultitools.entities.vo.ServerEntityVO</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.DataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.DataStore#getOperator(java.io.File, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.ObjectConfigSerializer</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.Parser</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#getConnection()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setIsolationLevel(int)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setReadOnly(boolean)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener(java.lang.Class, com.ultikits.ultitools.interfaces.TempEventHandler)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener(java.lang.Class, com.ultikits.ultitools.interfaces.TempEventHandler, java.util.function.Function)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener(java.lang.Class, com.ultikits.ultitools.interfaces.TempEventHandler, org.bukkit.event.EventPriority)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandExecutionManager#executeCommand(com.google.gson.JsonObject)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandExecutionManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandExecutionManager$CommandResult</exclude>
+                            <exclude>com.ultikits.ultitools.manager.FileOperationManager#handleFileOperation(com.google.gson.JsonObject)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.FileOperationManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#getLogTransmitter()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#handleLogStreamMessage(com.google.gson.JsonObject)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#initialize(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#onPlayerJoin(org.bukkit.event.player.PlayerJoinEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#onServerLoad(org.bukkit.event.server.ServerLoadEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#sendCustomLog(java.lang.String, java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#sendPlayerEventLog(java.lang.String, java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#sendPluginActionLog(java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PlayerEventManager#initialize(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PlayerEventManager#onPlayerChangedWorld(org.bukkit.event.player.PlayerChangedWorldEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PlayerEventManager#onPlayerChat(org.bukkit.event.player.PlayerChatEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PlayerEventManager#onPlayerCommandPreprocess(org.bukkit.event.player.PlayerCommandPreprocessEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PlayerEventManager#onPlayerDeath(org.bukkit.event.entity.PlayerDeathEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PlayerEventManager#onPlayerJoin(org.bukkit.event.player.PlayerJoinEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PlayerEventManager#onPlayerKick(org.bukkit.event.player.PlayerKickEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PlayerEventManager#onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.PluginDependencyResolver$PluginNode#getAllDependencies(java.util.Set)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#isMonitoring()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#sendMetricsData()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#sendMetricsDataWithRequestId(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#sendPlayerEvent(java.lang.String, org.bukkit.entity.Player, com.google.gson.JsonObject)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#sendServerStatus()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#sendServerStatusWithRequestId(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#startMonitoring()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerMonitorManager#stopMonitoring()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerPropertiesManager#handleServerProperties(com.google.gson.JsonObject)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ServerPropertiesManager#setWebSocketClient(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.UltiPanelLogTransmitter#UltiPanelLogTransmitter(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.AnnotationUtils#findAnnotation(java.lang.Class, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#login(java.lang.Runnable, java.util.function.Consumer, java.lang.Runnable, java.util.function.Consumer, java.util.function.Consumer)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus#getExpirationDate()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager$CloudStatus#getUserName()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.HttpRequestUtils#getServerByUUID(java.lang.String, com.ultikits.ultitools.entities.TokenEntity)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.HttpRequestUtils#registerServer(java.lang.String, java.lang.String, int, java.lang.String, boolean, com.ultikits.ultitools.entities.TokenEntity)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.HttpRequestUtils#updateServer(java.lang.String, int, java.lang.String, boolean, com.ultikits.ultitools.entities.TokenEntity)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.PluginInitiationUtils#startTokenRefreshScheduler()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.SimpleHttpClient</exclude>
+                            <exclude>com.ultikits.ultitools.utils.SimpleHttpClient$Response</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests#get(java.lang.String, java.util.Map)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests#post(java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests$Outcome</exclude>
+                            <exclude>com.ultikits.ultitools.utils.UltiCloudRequests$Result</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.ExponentialBackoffStrategy</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.ExponentialBackoffStrategy$Builder</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.ReconnectStrategy</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.UltiPanelWebSocketClient</exclude>
                         </excludes>
                     </parameter>
                 </configuration>

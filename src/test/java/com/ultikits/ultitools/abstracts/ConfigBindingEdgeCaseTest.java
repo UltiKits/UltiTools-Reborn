@@ -27,9 +27,6 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.MemoryConfiguration;
-import org.bukkit.configuration.MemorySection;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,7 +34,6 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
 import com.ultikits.ultitools.annotations.ConfigEntry;
-import com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser;
 
 /**
  * Gate-1 review of plan 17-41 (#523, #526): the declared-type binder must not print a secret nested
@@ -115,78 +111,12 @@ class ConfigBindingEdgeCaseTest {
         }
     }
 
-    /** A module's own parser for a Set field: writes the set as one comma-joined value in a section. */
-    public static class JoinedSetParser extends ConfigParser<Set<String>> {
-        @Override
-        public Set<String> parse(Object object) {
-            Set<String> result = new LinkedHashSet<>();
-            if (object instanceof ConfigurationSection) {
-                String joined = ((ConfigurationSection) object).getString("joined", "");
-                for (String part : joined.split(",")) {
-                    if (!part.isEmpty()) {
-                        result.add(part);
-                    }
-                }
-            }
-            return result;
-        }
-
-        @Override
-        public MemorySection serializeToMemorySection(Set<String> object) {
-            MemoryConfiguration section = new MemoryConfiguration();
-            section.set("joined", String.join(",", object));
-            return section;
-        }
-    }
-
-    @SuppressWarnings("unused")
-    static class CustomParserConfig extends AbstractConfigEntity {
-        @ConfigEntry(path = "tags", parser = JoinedSetParser.class)
-        Set<String> tags = new LinkedHashSet<>();
-
-        public CustomParserConfig(String configFilePath) {
-            super(configFilePath);
-        }
-    }
-
-    @SuppressWarnings("removal")
-    public static class InheritedMapParser extends com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser { }
-    @SuppressWarnings("removal")
-    public static class SuperMapParser extends InheritedMapParser {
-        @Override public Object parse(Object value) { return super.parse(value); }
-        @Override public MemorySection serializeToMemorySection(Object value) {
-            return super.serializeToMemorySection(value);
-        }
-    }
-    @SuppressWarnings("removal")
-    static class LegacyMaps extends AbstractConfigEntity {
-        @ConfigEntry(parser = InheritedMapParser.class) Map<String, Object> inherited = new LinkedHashMap<>();
-        @ConfigEntry(parser = SuperMapParser.class) Map<String, Object> overridden = new LinkedHashMap<>();
-        public LegacyMaps(String path) {
-            super(path); inherited.put("default", "value"); overridden.put("default", "value");
-        }
-    }
     static class SharedPaths extends AbstractConfigEntity {
         @ConfigEntry(path = "first") List<Integer> first = new ArrayList<>();
         @ConfigEntry(path = "second") List<Integer> second = new ArrayList<>();
         @ConfigEntry(path = "owner.child") List<Integer> child = new ArrayList<>();
         @ConfigEntry(path = "owner") Map<String, List<Integer>> owner = new LinkedHashMap<>();
         public SharedPaths(String path) { super(path); }
-    }
-    @Test void inheritedAndSuperLegacyEntityMapsKeepDefaultSaveLoadAndPanelRoutes() throws Exception {
-        LegacyMaps first = new LegacyMaps(PATH); first.init(plugin);
-        assertThat(first.inherited).containsEntry("default", "value");
-        assertThat(first.overridden).containsEntry("default", "value");
-        first.inherited.put("saved", "yes"); first.overridden.put("saved", "yes"); first.save();
-        LegacyMaps fresh = new LegacyMaps(PATH); fresh.init(plugin);
-        assertThat(fresh.inherited).isEqualTo(first.inherited);
-        assertThat(fresh.overridden).isEqualTo(first.overridden);
-        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
-        com.google.gson.JsonObject map = new com.google.gson.JsonObject(); map.addProperty("panel", "value");
-        payload.add("inherited", map); payload.add("overridden", map.deepCopy()); fresh.updateProperties(payload);
-        LegacyMaps panel = new LegacyMaps(PATH); panel.init(plugin);
-        assertThat(panel.inherited).containsOnlyKeys("panel").containsEntry("panel", "value");
-        assertThat(panel.overridden).isEqualTo(panel.inherited);
     }
     @Test void sharedBadChildAndOverlappingOwnersHaveSeparateLocatedWarnings() throws Exception {
         writeFile("first: &bad [wrong, 2]\nsecond: *bad\nowner:\n  child: *bad\n");
@@ -408,21 +338,5 @@ class ConfigBindingEdgeCaseTest {
             assertThat(warnings.messagesContaining("'queue'")).hasSize(1);
             assertThat(warnings.messagesContaining("'concurrent'")).hasSize(1);
         }
-    }
-
-    @Test
-    @DisplayName("a module's own parser for a Set field keeps writing its own form")
-    void customSetParserKeepsItsSerialization() throws Exception {
-        CustomParserConfig config = new CustomParserConfig(PATH);
-        config.init(plugin);
-        config.tags.add("red");
-        config.tags.add("blue");
-        config.save();
-
-        // Follow-up 21 permits emitter quote normalization, not a different parser value.
-        assertThat(ConfigFileView.read(config).getString("tags.joined")).isEqualTo("red,blue");
-        CustomParserConfig second = new CustomParserConfig(PATH);
-        second.init(plugin);
-        assertThat(second.tags).containsExactly("red", "blue");
     }
 }

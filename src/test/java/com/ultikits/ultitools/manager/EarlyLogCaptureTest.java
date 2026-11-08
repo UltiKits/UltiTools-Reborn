@@ -4,13 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
-import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Handler;
@@ -19,9 +17,6 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.java_websocket.WebSocket;
-import org.java_websocket.handshake.ClientHandshake;
-import org.java_websocket.server.WebSocketServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,16 +25,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
-import com.ultikits.ultitools.websocket.V1ClientConnectSeam;
 
 /**
- * #487: records logged after {@code UltiTools#onLoad()} and before {@code LogStreamManager#initialize}
+ * #487: records logged after {@code UltiTools#onLoad()} and before the log stream starts
  * reach the panel's log stream, oldest first and before live records, from a bounded buffer that is
  * released when the stream does not start in time.
  * <p>
@@ -71,104 +62,40 @@ class EarlyLogCaptureTest {
         MockBukkitHelper.safeUnmock();
     }
 
-    /** A local WebSocket server that records every text frame it receives. */
-    static final class CapturingServer extends WebSocketServer {
-        final List<JsonObject> frames = new CopyOnWriteArrayList<>();
-        final CountDownLatch started = new CountDownLatch(1);
-
-        CapturingServer() {
-            super(new InetSocketAddress("127.0.0.1", 0));
-            setReuseAddr(true);
-        }
-
-        @Override
-        public void onOpen(WebSocket conn, ClientHandshake handshake) {
-            // Nothing to send.
-        }
-
-        @Override
-        public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-            // Nothing to release.
-        }
-
-        @Override
-        public void onMessage(WebSocket conn, String message) {
-            frames.add(JsonParser.parseString(message).getAsJsonObject());
-        }
-
-        @Override
-        public void onError(WebSocket conn, Exception ex) {
-            // Surfaced by the assertions.
-        }
-
-        @Override
-        public void onStart() {
-            started.countDown();
-        }
-
-        /** The log messages of every log_batch / log_stream frame received, in arrival order. */
-        List<String> logMessages() {
-            List<String> messages = new ArrayList<>();
-            for (JsonObject frame : frames) {
-                String type = frame.get("type").getAsString();
-                if ("log_batch".equals(type)) {
-                    for (JsonElement log : frame.getAsJsonArray("data")) {
-                        messages.add(log.getAsJsonObject().get("message").getAsString());
-                    }
-                } else if ("log_stream".equals(type)) {
-                    messages.add(frame.getAsJsonObject("data").get("message").getAsString());
-                }
-            }
-            return messages;
-        }
-    }
-
     @Nested
-    @DisplayName("through a real WebSocket connection")
+    @DisplayName("through the protocol v2 log handler")
     class EndToEnd {
 
-        private CapturingServer server;
-        private UltiPanelWebSocketClient client;
-
-        @BeforeEach
-        void startServer() throws InterruptedException {
-            server = new CapturingServer();
-            server.start();
-            assertThat(server.started.await(10, TimeUnit.SECONDS)).isTrue();
-            // 6.3.1 refuses every v1 connect; these kept v1 log-stream tests reach their own local server.
-            V1ClientConnectSeam.permitConnect(true);
-        }
+        private final List<String> sent = new CopyOnWriteArrayList<>();
+        private UltiPanelLogTransmitter transmitter;
+        private SystemLogHandler handler;
 
         @AfterEach
-        void stopServer() throws InterruptedException {
-            V1ClientConnectSeam.permitConnect(false);
-            LogStreamManager.getInstance().shutdown();
-            if (client != null) {
-                client.disconnect();
+        void detachHandler() {
+            if (handler != null) {
+                Logger.getLogger("").removeHandler(handler);
             }
-            server.stop(1000);
+            if (transmitter != null) {
+                transmitter.shutdown();
+            }
         }
 
         @Test
         @DisplayName("lines logged before the stream starts arrive first, oldest first, then live lines")
-        void earlyLinesArriveFirstInOrder() throws Exception {
+        void earlyLinesArriveFirstInOrder() {
             EarlyLogCapture.start(Collections.emptyList());
             bukkitLogger.info("early line 1");
             bukkitLogger.info("early line 2");
 
-            client = new UltiPanelWebSocketClient("ws://127.0.0.1:" + server.getPort(), "test-server", "token");
-            assertThat(client.connectBlocking(10, TimeUnit.SECONDS)).isTrue();
-            LogStreamManager.getInstance().initialize(client);
+            // What AgentOutboundFeeds#ensureLogCapture does when the v2 stream starts.
+            transmitter = new UltiPanelLogTransmitter((timestamp, level, message) -> sent.add(message));
+            handler = new SystemLogHandler(transmitter);
+            Logger root = Logger.getLogger("");
+            EarlyLogCapture.drainInto(handler.replayHandler(), () -> root.addHandler(handler));
             bukkitLogger.info("live line 1");
-            LogStreamManager.getInstance().getLogTransmitter().flushLogs();
 
-            long deadline = System.currentTimeMillis() + 10_000;
-            while (!server.logMessages().contains("live line 1") && System.currentTimeMillis() < deadline) {
-                Thread.sleep(20);
-            }
-            List<String> received = server.logMessages();
-            assertThat(received).containsSubsequence("early line 1", "early line 2", "live line 1");
-            assertThat(received.indexOf("early line 2")).isLessThan(received.indexOf("live line 1"));
+            assertThat(sent).containsSubsequence("early line 1", "early line 2", "live line 1");
+            assertThat(sent.indexOf("early line 2")).isLessThan(sent.indexOf("live line 1"));
         }
     }
 
