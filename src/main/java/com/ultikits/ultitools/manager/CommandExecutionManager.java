@@ -356,7 +356,7 @@ public class CommandExecutionManager {
         String shown = loggedCommandLine(commandLine, command);
         AccessDecision decision = canonicalCommandDecision(command);
         if (!decision.isAllowed()) {
-            // Keep this WARNING line — the same control the v1 path carries.
+            // Keep this WARNING line: it is the operator's record of a refused remote command.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                     FrameworkText.format("[远程命令] 已拦截: %s", shown));
             recordCommandDecision(shown, actor, decision.getMessage());

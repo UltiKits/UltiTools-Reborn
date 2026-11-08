@@ -376,7 +376,7 @@ below). No line ever holds file content or a configuration value.
 **Behaviour change in 6.4.0: local log content changes.** When the panel's remote console (`command.execute`) runs a
 command a module registered with `UltiTools#getSensitiveCommandRegistry()`, the framework's own records of that
 request no longer carry its arguments. The `[Remote command] > ...` echo, the `[Remote command] Blocked: ...` line and
-the failure lines show the command followed by `***`, and so do the server console, `logs/latest.log` and the panel's
+the echo and refusal lines show the command followed by `***` (the line for a command that throws while being dispatched names only the command, `[Remote command] Command threw an exception: logadmin`, never its arguments), and so do the server console, `logs/latest.log` and the panel's
 log stream, which all receive those lines; the request's line in `plugins/UltiTools/security/action.log.<n>` has the
 same text as its `target`. For example, with UltiLogin registering `logadmin`, the panel command
 `logadmin reset Steve <password>` is logged as `[Remote command] > logadmin ***` and recorded with
@@ -399,7 +399,7 @@ text redaction to find.
 
 中文补充：**6.4.0 行为变更：本地日志内容改变。** 面板远程控制台（`command.execute`）运行模块通过
 `UltiTools#getSensitiveCommandRegistry()` 注册的命令时，框架为该请求写下的记录不再包含参数：`[Remote command] > ...`
-回显行、`[Remote command] Blocked: ...` 行和失败行都只显示命令名加 `***`，服务器控制台、`logs/latest.log` 和面板日志流
+回显行和 `[Remote command] Blocked: ...` 行都只显示命令名加 `***`（命令分发时抛出异常的那一行只记命令名，如 `[远程命令] 命令执行异常: logadmin`，不含参数），服务器控制台、`logs/latest.log` 和面板日志流
 （它们都收到这些行）同样如此；`plugins/UltiTools/security/action.log.<n>` 中该请求的 `target` 也是这段文字。例如 UltiLogin
 注册了 `logadmin` 后，面板命令 `logadmin reset Steve <密码>` 记为 `[Remote command] > logadmin ***`，动作日志为
 `"target":"logadmin ***"`。6.3.1 与 6.3.2 中本地控制台、`latest.log` 和动作日志会记下包括密码在内的整行命令，面板日志流也会，
@@ -700,7 +700,7 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
 - an inline comment aligned with several spaces (`enabled: true    # note`; one space before `#` is kept);
 - more than one space after a colon (`key:  value`), and spaces inside flow brackets (`worlds: [ world ]`);
 - a document start marker `---` or end marker `...`;
-- a block scalar value (`|` or `>`) followed by a blank line;
+- a block scalar value (`|`, `|-` or `>`) followed by a blank line. **Known limitation ([#883](https://github.com/UltiKits/UltiTools-Reborn/issues/883), same behaviour as 6.3.2):** when an operator-edited YAML file has such a block scalar, the framework does not append a newly introduced default key. The file is left unchanged, the default applies in memory, and a WARN from `OperatorFileWriter` names the key. Add the key by hand;
 - a block comment before any list item (at the item's column or deeper, before the first or a later item, including
   after a block scalar or flow item): a changed write to another key, or one that keeps the list's length, is refused.
   Before a plain or block-mapping item the refusal names the line; before a flow item (`- [1, 2]` or `- {k: v}`) it says
