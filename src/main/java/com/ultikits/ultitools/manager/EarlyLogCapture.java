@@ -47,7 +47,7 @@ public final class EarlyLogCapture extends Handler {
     /** Most records kept. */
     static final int MAX_RECORDS = 2000;
 
-    /** Most bytes kept, estimated from each record's message, logger name and exception. */
+    /** Most bytes kept, estimated from each record's message, logger name, exception and parameters. */
     static final long MAX_BYTES = 512L * 1024L;
 
     /** How long the capture waits for the stream to start before it releases what it holds. */
@@ -55,6 +55,12 @@ public final class EarlyLogCapture extends Handler {
 
     /** Charged per record carrying an exception, whose stack trace the stream will render. */
     private static final int THROWN_ESTIMATE_BYTES = 2048;
+
+    /**
+     * Charged per parameter that is not a {@link String}: the capture holds the object but never
+     * calls its {@code toString()}, which could run arbitrary code inside the logging call (#571).
+     */
+    private static final int PARAMETER_ESTIMATE_BYTES = 64;
 
     private static final Object LOCK = new Object();
 
@@ -250,6 +256,13 @@ public final class EarlyLogCapture extends Handler {
         }
         if (record.getThrown() != null) {
             size += THROWN_ESTIMATE_BYTES;
+        }
+        Object[] parameters = record.getParameters();
+        if (parameters != null) {
+            for (Object parameter : parameters) {
+                // String is final, so length() runs no foreign code; anything else gets a fixed charge.
+                size += parameter instanceof String ? 2L * ((String) parameter).length() : PARAMETER_ESTIMATE_BYTES;
+            }
         }
         return size;
     }
