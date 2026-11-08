@@ -238,6 +238,18 @@ class CjkScopeScriptTest {
     }
 
     @Test
+    void everyValueFlagWithoutItsValueFailsClosedWithStatusTwo() throws Exception {
+        prepare("// 中文\n");
+        for (String flag : Arrays.asList("--allowlist", "--scope", "--max-violations")) {
+            for (String[] args : Arrays.asList(new String[] {flag}, new String[] {"--report-only", flag})) {
+                Result result = gate(args);
+                assertThat(result.exit).as(flag + ": " + result.output).isEqualTo(2);
+                assertThat(result.output).contains("ERROR:", flag).doesNotContain("SUMMARY:", "unbound variable");
+            }
+        }
+    }
+
+    @Test
     void decimalThresholdHandlesLeadingZerosAndArbitrarilyLargeValues() throws Exception {
         prepare("// 中文\n");
         for (String value : Arrays.asList("0", "0000")) {

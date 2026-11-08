@@ -23,6 +23,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.scoreboard.Criteria;
 import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Scoreboard;
 import org.junit.jupiter.api.DisplayName;
@@ -196,11 +197,17 @@ class XVersionUtilsTest {
         }
 
         @Test
-        @DisplayName("应该返回非 null 的目标当不存在时")
+        @DisplayName("应该注册并返回新的目标当不存在时")
         void shouldRegisterNewObjectiveWhenNotExist() {
-            // 因为 Criteria.DUMMY 需要 Bukkit server，这个测试只验证方法签名
-            // 在没有完整 Bukkit 环境时跳过实际执行
-            assertThat(XVersionUtils.class.getDeclaredMethods()).isNotEmpty();
+            Scoreboard scoreboard = mock(Scoreboard.class);
+            Objective created = mock(Objective.class);
+            when(scoreboard.getObjective("test")).thenReturn(null);
+            when(scoreboard.registerNewObjective("test", Criteria.DUMMY, "Test")).thenReturn(created);
+
+            Objective result = XVersionUtils.registerNewObjective(scoreboard, "test", "dummy", "Test");
+
+            assertThat(result).isSameAs(created);
+            verify(scoreboard).registerNewObjective("test", Criteria.DUMMY, "Test");
         }
     }
 
@@ -217,9 +224,10 @@ class XVersionUtilsTest {
                     .thenReturn(Optional.of(mockXSound));
                 when(mockXSound.parseSound()).thenReturn(org.bukkit.Sound.ENTITY_PLAYER_LEVELUP);
                 
-                XVersionUtils.getSound(Sounds.BLOCK_CHEST_OPEN);
-                
-                // 结果可能为 null 或 Sound，取决于 XSound 的行为
+                org.bukkit.Sound result = XVersionUtils.getSound(Sounds.BLOCK_CHEST_OPEN);
+
+                assertThat(result).isSameAs(org.bukkit.Sound.ENTITY_PLAYER_LEVELUP);
+                mockedXSound.verify(() -> XSound.matchXSound("BLOCK_CHEST_OPEN"));
             }
         }
 

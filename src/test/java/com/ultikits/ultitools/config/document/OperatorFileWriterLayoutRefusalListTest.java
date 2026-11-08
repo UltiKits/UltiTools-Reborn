@@ -53,7 +53,10 @@ class OperatorFileWriterLayoutRefusalListTest {
                 Arguments.of("a comment-only file with an indented comment", "# a\n  # indented\n", 2),
                 Arguments.of("a last block scalar with | in a file without a final line break", "a: 1\ns: |\n  x\n  y", 2),
                 Arguments.of("a last block scalar with |+ in a file without a final line break", "a: 1\ns: |+\n  x\n  y", 2),
-                Arguments.of("a last block scalar with > in a file without a final line break", "a: 1\ns: >\n  x\n\n  y", 2));
+                Arguments.of("a last block scalar with > in a file without a final line break", "a: 1\ns: >\n  x\n\n  y", 2),
+                // #836: one Unicode spelling per document; the minority spelling would be re-rendered.
+                Arguments.of("raw non-ASCII text, then a \\u escape", "b: \u4E2D\nc: \"\\u4E2D\"\na: 1\n", 2),
+                Arguments.of("a \\u escape, then raw non-ASCII text", "c: \"\\u4E2D\"\nb: \u4E2D\na: 1\n", 1));
     }
 
     static Stream<Arguments> kept() {
