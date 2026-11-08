@@ -31,9 +31,9 @@ import java.lang.annotation.Target;
  *     }
  * }
  * }</pre>
- * {@code async = true} is for literal timings only: a {@code @Scheduled} bound to a config key
- * (below) must be sync, and {@code async = true} together with a binding refuses the module at load
- * (#535 tracks async bindings).
+ * {@code async = true} runs the method body off the main thread. For config-bound timings, a
+ * synchronous trigger observes each fire before dispatching the async body; see the binding
+ * contract below (#535). Literal async tasks retain their direct async scheduling behavior.
  *
  * <h2>Binding the timing to a config key (6.3.0)</h2>
  * Instead of a literal, {@link #periodKey()} and {@link #delayKey()} can name a
@@ -74,12 +74,13 @@ import java.lang.annotation.Target;
  *       A module {@code @Range} on the same field would make an out-of-range reload throw from the
  *       config reload itself, which aborts the rest of that module's reload (issue #509) instead of
  *       keeping the running value.</li>
- *   <li><b>Sync only.</b> A bound method cannot be {@code async = true}; that combination is
- *       refused at load. Bind a sync task and hand the heavy work to
- *       {@code Bukkit.getScheduler().runTaskAsynchronously(...)} from its body. A sync task's runs
- *       happen on the main thread, where the reload also runs, which is what lets a reload keep
- *       the task's place in its cycle exactly. Literal (unbound) {@code async} tasks are
- *       unaffected. Issue #535 tracks allowing async bindings.</li>
+ *   <li><b>Async bindings.</b> With {@code async = true}, a synchronous trigger records each fire
+ *       on the main thread, then submits the method body with a one-tick async delay (#535). The
+ *       body starts one scheduler heartbeat after the trigger, or later under load; the period and
+ *       reload phase are measured between triggers, not between worker starts or completions.
+ *       Reload leaves already-dispatched work alone. Slow bodies may overlap, as with literal async
+ *       tasks, and must not use thread-unsafe Bukkit APIs. Module unload cancels the trigger and
+ *       pending workers; a body already running may finish. Literal async tasks are unchanged.</li>
  *   <li><b>Modules only.</b> A binding on an External Plugin API bean is refused.</li>
  *   <li><b>Declare {@code api-version: 630}</b> in the module's {@code plugin.yml}. An older
  *       framework does not know these elements and silently ignores them -- the method would then
@@ -111,7 +112,9 @@ public @interface Scheduled {
     long period() default -1;
 
     /**
-     * Run on async thread instead of main server thread. Default: false
+     * Run the method body on an async thread instead of the main server thread. Default: false.
+     * For a config-bound task, the trigger remains synchronous and the async body is submitted
+     * with a one-tick delay; literal async tasks use the scheduler directly.
      *
      * @return true if async
      */
