@@ -18,6 +18,7 @@ import java.util.logging.Level;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
+import com.google.gson.ToNumberPolicy;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 
@@ -111,7 +112,14 @@ public final class CredentialStore {
     public static final String CREDENTIAL_FILE_NAME = "credentials.json";
 
     private static final String TEMP_FILE_NAME = CREDENTIAL_FILE_NAME + ".tmp";
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    /**
+     * Reads a JSON integer back as a {@code Long} and any other number as a {@code Double}, so an update
+     * writes {@code userId} and {@code linkedAt} back as the integers they were ({@code 12}, not
+     * {@code 12.0}; {@code 1700000000000}, not {@code 1.7E12}) (#753). Readers take every stored number
+     * as a {@link Number}.
+     */
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting()
+            .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE).create();
     private static final Object LOCK = new Object();
 
     /**

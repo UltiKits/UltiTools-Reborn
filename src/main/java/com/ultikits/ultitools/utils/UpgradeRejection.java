@@ -50,7 +50,8 @@ final class UpgradeRejection {
     private static final int MAX_MESSAGE_CHARS = 200;
     private static final int MAX_URL_CHARS = 200;
     private static final int MAX_PROTOCOLS = 16;
-    private static final int MAX_PROTOCOL_VALUE = 1000;
+    /** The contract's bound for one supported protocol ({@code details.supportedProtocols} items, 1..99), header included (#753). */
+    private static final int MAX_PROTOCOL_VALUE = 99;
     private static final String MANAGE_DOMAIN = "ultikits.com";
     private static final String HEADER_RETRY_AFTER = "retry-after";
     private static final String HEADER_PROTOCOL_SUPPORTED = "x-ulticloud-protocol-supported";
@@ -225,7 +226,7 @@ final class UpgradeRejection {
     }
 
     private static Integer protocolValue(String raw) {
-        if (raw == null || !raw.matches("\\d{1,4}")) {
+        if (raw == null || !raw.matches("\\d{1,2}")) {
             return null;
         }
         int value = Integer.parseInt(raw);

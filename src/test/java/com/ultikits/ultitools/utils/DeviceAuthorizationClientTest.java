@@ -416,11 +416,12 @@ class DeviceAuthorizationClientTest {
         assertThat(client.pollToken("dc-1").retryAfterSeconds()).isEqualTo(-1);
     }
 
-    @Test
-    @DisplayName("Retry-After above an hour is clamped to 3600")
-    void hugeRetryAfterIsClamped() {
-        assertThat(CloudHttp.parseRetryAfter("999999999999999")).isEqualTo(3600);
-        assertThat(CloudHttp.parseRetryAfter(" 12 ")).isEqualTo(12);
+    @ParameterizedTest(name = "Retry-After header {0} -> {1}")
+    @DisplayName("#753: the Retry-After header is read with the contract's range 1..86400, like the JSON value")
+    @CsvSource({"1, 1", "' 12 ', 12", "3600, 3600", "3601, 3601", "86400, 86400", "0, -1", "86401, -1",
+            "99999, -1", "999999999999999, -1"})
+    void retryAfterHeaderUsesTheContractRange(String header, long expected) {
+        assertThat(CloudHttp.parseRetryAfter(header)).isEqualTo(expected);
         assertThat(CloudHttp.parseRetryAfter(null)).isEqualTo(-1);
     }
 
@@ -455,10 +456,17 @@ class DeviceAuthorizationClientTest {
     }
 
     @Test
-    void authorizeRetryAfterHeaderStillTakesPrecedenceAndKeepsItsOwnRange() {
+    void authorizeRetryAfterHeaderTakesPrecedenceInsideTheContractRange() {
+        responder.set(answerWithRetryAfter(429, "7200", "{\"error\":{\"details\":{\"retryAfterSeconds\":86400}}}"));
+
+        assertThat(client.authorize("6.3.1", null, null).retryAfterSeconds()).isEqualTo(7200);
+    }
+
+    @Test
+    void authorizeRetryAfterHeaderOutsideTheContractRangeFallsBackToTheBody() {
         responder.set(answerWithRetryAfter(429, "99999", "{\"error\":{\"details\":{\"retryAfterSeconds\":86400}}}"));
 
-        assertThat(client.authorize("6.3.1", null, null).retryAfterSeconds()).isEqualTo(3600);
+        assertThat(client.authorize("6.3.1", null, null).retryAfterSeconds()).isEqualTo(86400);
     }
 
     @ParameterizedTest(name = "authorize timing {0}/{1} uses constants or their identical fallback")

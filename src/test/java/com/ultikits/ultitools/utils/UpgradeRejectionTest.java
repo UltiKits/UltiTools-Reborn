@@ -274,11 +274,12 @@ class UpgradeRejectionTest {
     }
 
     @Test
-    void protocolHeaderKeepsItsSeparateDigitOnlyDiagnosticPolicy() {
+    void protocolHeaderUsesTheBodysContractRangeWithDigitOnlyValues() {
         Map<String, String> headers = new HashMap<>();
-        headers.put("x-ulticloud-protocol-supported", "2, 1000, 2.0, 2e0, 1001, -1, invalid");
+        headers.put("x-ulticloud-protocol-supported", "2, 99, 100, 1000, 0, 2.0, 2e0, 1001, -1, invalid");
 
-        assertThat(UpgradeRejection.parse(426, headers, null).supportedProtocols()).containsExactly(2, 1000);
+        assertThat(UpgradeRejection.parse(426, headers, null).supportedProtocols())
+                .as("#753: 1..99, the same range as details.supportedProtocols").containsExactly(2, 99);
         assertThat(UpgradeRejection.parse(426, headers, protocolsBody("2.0")).supportedProtocols())
                 .as("a valid JSON body still wins over the header").containsExactly(2);
     }

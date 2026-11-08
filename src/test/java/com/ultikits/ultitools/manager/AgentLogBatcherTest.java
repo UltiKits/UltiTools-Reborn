@@ -50,6 +50,47 @@ class AgentLogBatcherTest {
     }
 
     @Test
+    void aBufferedMessageIsBoundedAndStillCutToTheSameText() {
+        StringBuilder huge = new StringBuilder("漢😀ab");
+        while (huge.length() < 1_000_000) {
+            huge.append("0123456789😀");
+        }
+        String whole = huge.toString();
+        String control = whole.substring(0, 20_000);
+        for (int lineMaxBytes : new int[] {8192, 256}) {
+            AgentLogBatcher batcher = new AgentLogBatcher(() -> START);
+            batcher.offer(START, Level.INFO, whole);
+            assertThat(batcher.bufferedMessageChars())
+                    .as("#753: the buffer keeps at most 8193 code points of one message")
+                    .isLessThanOrEqualTo(2L * (AgentLogBatcher.MAX_LINE_MAX_BYTES + 1));
+
+            RecordingChannel channel = new RecordingChannel();
+            channel.setLimits(limits(50, 200, lineMaxBytes, 100, 1048576));
+            batcher.flush(channel);
+            AgentLogBatcher controlBatcher = new AgentLogBatcher(() -> START);
+            controlBatcher.offer(START, Level.INFO, control);
+            RecordingChannel controlChannel = new RecordingChannel();
+            controlChannel.setLimits(limits(50, 200, lineMaxBytes, 100, 1048576));
+            controlBatcher.flush(controlChannel);
+
+            String cut = onlyLines(channel.frames().get(0)).get(0).getAsJsonObject().get("message").getAsString();
+            assertThat(cut).endsWith(SUFFIX).isEqualTo(onlyLines(controlChannel.frames().get(0)).get(0)
+                    .getAsJsonObject().get("message").getAsString());
+        }
+    }
+
+    @Test
+    void aMessageOfOnlySurrogatePairsJustOverTheBoundIsKeptWhole() {
+        StringBuilder pairs = new StringBuilder();
+        for (int i = 0; i < AgentLogBatcher.MAX_LINE_MAX_BYTES; i++) {
+            pairs.append("😀");
+        }
+        AgentLogBatcher batcher = new AgentLogBatcher(() -> START);
+        batcher.offer(START, Level.INFO, pairs.toString());
+        assertThat(batcher.bufferedMessageChars()).isEqualTo(pairs.length());
+    }
+
+    @Test
     void aBatchNeverExceedsTheLineCountAndTheFramesFollowOneAnother() {
         AtomicLong clock = new AtomicLong(START);
         AgentLogBatcher batcher = new AgentLogBatcher(clock::get);

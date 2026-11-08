@@ -343,7 +343,9 @@ final class RemoteFileOperations implements CloudRequestHandler {
      * path — the very spelling a subsequent {@code files.list} of that name needs. A root that is
      * outside the server root, or whose name the guard refuses, cannot be addressed by any valid
      * {@code ServerPath} and is skipped: listing it would offer the panel a name that every later
-     * request refuses.
+     * request refuses. A root that does not exist, or is not a directory, is skipped too: it is listed
+     * with {@code type: "dir"}, and opening it would only answer {@code not_found} or
+     * {@code not_a_directory} (#753).
      *
      * @param entries receives one entry per addressable root
      * @return whether the contract's 2000-entry cap was exceeded
@@ -352,6 +354,10 @@ final class RemoteFileOperations implements CloudRequestHandler {
         List<File> roots = files.getEditableRoots();
         int appended = 0;
         for (File root : roots) {
+            if (!root.isDirectory()) {
+                LOGGER.fine("UltiCloud: an editable root does not exist or is not a directory and is not listed.");
+                continue;
+            }
             String name = relativeToServerRoot(root);
             if (name == null || !ContractPrimitives.SERVER_PATH.matcher(name).matches()) {
                 LOGGER.fine("UltiCloud: an editable root is not addressable from the server root and is not listed.");

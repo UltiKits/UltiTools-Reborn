@@ -1285,7 +1285,11 @@ final class CloudSession {
                 return;
             case TRANSIENT:
                 long retryAfterMillis = result.retryAfterSeconds() * 1000L;
-                scheduleDeviceStep(() -> pollDeviceOnce(poll), Math.max(poll.intervalMillis, retryAfterMillis));
+                // A Retry-After may be up to a day (the contract's 1..86400); the step never waits past
+                // the code's deadline, so an expiry is still reported when the code expires (#753).
+                long untilDeadline = Math.max(0L, poll.deadline - now());
+                scheduleDeviceStep(() -> pollDeviceOnce(poll),
+                        Math.min(Math.max(poll.intervalMillis, retryAfterMillis), untilDeadline));
                 return;
             case EXPIRED:
             case DENIED:

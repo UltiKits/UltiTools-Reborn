@@ -52,6 +52,14 @@ final class AgentLogBatcher {
     /** Runs the network call and the socket's state machine; never re-enters this batcher. */
     private static final Logger LOGGER = Logger.getLogger(AgentLogBatcher.class.getName());
 
+    /**
+     * The contract's upper bound for {@code limits.log.lineMaxBytes} (256..8192, see {@code CloudLimits}).
+     * A buffered message is kept to at most one code point more than this: every UTF-16 unit is at least
+     * one UTF-8 byte, so a longer message can never fit any negotiated line limit and the flush cuts it to
+     * the same text either way, while the buffer no longer holds an arbitrarily long string (#753).
+     */
+    static final int MAX_LINE_MAX_BYTES = 8192;
+
     /** Local diagnostics only: how often the drop summary may be written. */
     private static final long DROP_REPORT_INTERVAL_MS = 60_000L;
 
@@ -118,7 +126,7 @@ final class AgentLogBatcher {
      */
     boolean offer(long ts, Level level, String redactedMessage) {
         Level effective = level == null ? Level.INFO : level;
-        String message = redactedMessage == null ? "" : redactedMessage;
+        String message = bounded(redactedMessage == null ? "" : redactedMessage);
         long now = clock.getAsLong();
         synchronized (this) {
             refill(now);
@@ -343,6 +351,28 @@ final class AgentLogBatcher {
             }
         }
         return prefix(message, Math.max(best, 0)) + TRUNCATION_SUFFIX;
+    }
+
+    /** @return the UTF-16 length of every buffered message added together; tests read it */
+    synchronized long bufferedMessageChars() {
+        long total = 0L;
+        for (Line line : buffered) {
+            total += line.message.length();
+        }
+        return total;
+    }
+
+    /**
+     * Keeps a buffered message to at most {@value #MAX_LINE_MAX_BYTES} + 1 code points. The kept prefix is
+     * still longer than any negotiated line limit, so {@link #truncate} cuts it at the flush and appends
+     * {@link #TRUNCATION_SUFFIX} exactly as it would for the whole message.
+     */
+    private static String bounded(String message) {
+        int keep = MAX_LINE_MAX_BYTES + 1;
+        if (message.length() <= keep || message.codePointCount(0, message.length()) <= keep) {
+            return message;
+        }
+        return prefix(message, keep);
     }
 
     /**

@@ -45,8 +45,14 @@ final class CloudHttp {
     static final int MAX_BODY_BYTES = 64 * 1024;
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final int READ_TIMEOUT_MS = 15_000;
-    private static final long MAX_RETRY_AFTER_SECONDS = 3600L;
-    /** Longest digit string parsed as a {@code Retry-After} value; anything longer is clamped. */
+    /**
+     * The contract's range for a REST {@code Retry-After}: the device endpoints' 429 repeats the header as
+     * {@code error.details.retryAfterSeconds}, an integer in 1..86400, so the header is read with the same
+     * range (#753).
+     */
+    private static final long MIN_RETRY_AFTER_SECONDS = 1L;
+    private static final long MAX_RETRY_AFTER_SECONDS = 86_400L;
+    /** Longest digit string parsed as a {@code Retry-After} value; anything longer is out of range. */
     private static final int MAX_RETRY_AFTER_DIGITS = 10;
 
     private CloudHttp() {
@@ -149,8 +155,9 @@ final class CloudHttp {
 
     /**
      * @param header the raw {@code Retry-After} value, or {@code null}
-     * @return the delay in seconds clamped to 0..3600, or {@code -1} when the header is absent or not
-     *         in delta-seconds form (an HTTP date, a negative number, any other text)
+     * @return the delay in seconds when it lies in the contract's range 1..86400, or {@code -1} when the
+     *         header is absent, not in delta-seconds form (an HTTP date, a negative number, any other
+     *         text) or outside that range, the same range the JSON {@code retryAfterSeconds} is read with
      */
     static long parseRetryAfter(String header) {
         if (header == null) {
@@ -167,9 +174,10 @@ final class CloudHttp {
             }
         }
         if (value.length() > MAX_RETRY_AFTER_DIGITS) {
-            return MAX_RETRY_AFTER_SECONDS;
+            return -1;
         }
-        return Math.min(Long.parseLong(value), MAX_RETRY_AFTER_SECONDS);
+        long seconds = Long.parseLong(value);
+        return seconds >= MIN_RETRY_AFTER_SECONDS && seconds <= MAX_RETRY_AFTER_SECONDS ? seconds : -1;
     }
 
     private static String readBody(HttpURLConnection connection, int status) throws IOException {
@@ -233,7 +241,7 @@ final class CloudHttp {
         }
 
         /**
-         * @return the {@code Retry-After} delay in seconds (0..3600), or {@code -1} when absent or
+         * @return the {@code Retry-After} delay in seconds (1..86400), or {@code -1} when absent or
          *         not in delta-seconds form
          */
         long retryAfterSeconds() {
