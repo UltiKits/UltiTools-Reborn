@@ -441,6 +441,52 @@ take.
   `rate_limited`, and a switch turned off while a request already waits does not stop that request.
 - **Error-report attribution.** `error.report.moduleName` names a module only when the report names a loaded
   module; errors of command executors and AOP beans are reported as the framework's own (`null`).
+- **A panel command's audit line follows `language`, and a refusal is in `message`.** The console audit line is
+  written through the framework's text catalogue, so it reads `[UltiTools] [Remote command] > <command>` in English
+  and `[UltiTools] [远程命令] > <command>` with the default `language: zh`. The text of a refused command (for
+  example a blocklisted one) is the `message` of the `command_failed` error reply, not `data.output` of a
+  `command.result`.
+- **The command blocklist is read when the request is admitted.** A request is checked against the blocklist at
+  admission, before it waits for the server thread, so a `ul reload` that changes `ultipanel.commands.blocklist`
+  in that moment does not affect a request already admitted. A command that throws an `Error` (not an `Exception`)
+  after its acknowledgement gets no `command.result`; the panel sees its own timeout.
+- **`server.power` is acknowledged before it is scheduled.** Its `ok` reply is sent first, and the stop or restart
+  is scheduled to begin one second later. If UltiTools starts disabling between the reply and the scheduling, the
+  action is dropped with only a FINE log line although the panel saw `ok`. Check the console and send the request
+  again if the server is still running.
+- **A teleport that never completes is answered by the gateway's timeout.** A `player.action` teleport waits for
+  the server's asynchronous teleport to finish; if it never does, the framework sends no reply and the panel sees
+  its own timeout. There is no local deadline.
+- **Player-link ordering has gaps.** These need a lost answer, a closed connection or a very early event, and a
+  server restart clears every one of them:
+  - a completion held while its link-create answer is outstanding stays marked busy if the connection closes or an
+    error reply arrives first, so the gateway's redelivery is ignored until the next start (a module that needs the
+    result meanwhile asks the panel again);
+  - checking the saved result and marking a completion busy are two steps, so two simultaneous redeliveries of one
+    completion can both reach the handler (the same effect as the crash case above);
+  - an expiry for a link whose create has not been answered is delivered first, so a module should correlate by
+    link id, not by arrival order;
+  - an expiry that arrives before any module has registered a handler is consumed and not delivered, so register
+    the handler before asking for a link.
+- **Some malformed backend answers look like other failures.** A device-login grant that is `200` but unusable (for
+  example an invalid `userId` or `serverId`) is logged as a WARNING without values and polling continues, so the
+  operator finally sees the device code expire although the backend issued a credential: run `/ulticloud login`
+  again and revoke the orphaned credential in the panel. A revoke answered `200` without `revoked: true` is counted
+  as revoked. Neither happens with a contract-valid backend.
+- **While a logout's revoke is in flight, `status` and `login` still see the server as linked.** The revoke has a
+  15-second read timeout after a 10-second connect timeout (25 seconds at most); during it `/ulticloud status`
+  shows the link and `/ulticloud login` answers that the server is already linked. Wait for the logout outcome
+  line before logging in again.
+- **Configuration the panel cannot show.** A module setting whose value is outside the contract bounds (text over
+  8192 characters, a list over 500 items or an item over 1024 characters, an integer outside the safe-integer
+  range) is left out of `config.entries` instead of being truncated, and a module lists at most the contract's
+  entry cap. Edit such a setting in the file.
+- **An editable root equal to the server root is not listed.** `files.list` with an empty path lists the editable
+  roots by their path relative to the server root; the server root itself has no such path and is omitted, although
+  requests for paths inside it are still judged normally. Use sub-directories (`plugins`, `logs`) as editable roots.
+- **A log line with a negative timestamp invalidates its `log.lines` frame.** The framework forwards the line's
+  timestamp unchanged, and the contract requires `ts` of at least 0, so a system clock set before 1970 makes the
+  gateway refuse the frame. Keep the system clock correct.
 
 ## Config layer (6.3.0)
 
@@ -2735,9 +2781,9 @@ This section governs the third kind.
   around the atomic rename, which adds the cost of two disk syncs to each credential write.
   When both the pre-6.3.0 `plugins/UltiTools/data.json` and the current `.ultikits/credentials.json` under the server
   root exist, the old copy is removed only after the current file has been read as a credential document - any JSON
-  object, `{}` included ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672)); the current file's content
+  object, `{}` included, and also a JSON array such as `[]`, which the reader parses as the empty document ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672)); the current file's content
   wins and is never overwritten with the old one's. A current file that is empty, whitespace-only, the JSON literal
-  `null`, not valid JSON, a string or a number instead of an object, or not a regular file does not count: both files are
+  `null`, not valid JSON, a string or a number instead of an object or array, or not a regular file does not count: both files are
   kept unchanged, one WARNING names both paths (never any content), no server UUID is generated and no UltiCloud token is
   written or cleared, and `CredentialStore.write` refuses with a `DataAccessException` while a readable pre-6.3.0 copy
   waits behind such a file. The next access after the current file is fixed - restored from a backup, or moved out of the
@@ -2746,7 +2792,7 @@ This section governs the third kind.
   unreadable current file left no readable credential at all. Migration to a current file that does not exist yet is
   unchanged: the copy is written, read back and compared with the old data before the old file is removed.
 
-  中文补充：两份凭据文件并存时，只有当前文件（服务器根目录下的 `.ultikits/credentials.json`）能被读成凭据文档（任何 JSON 对象，包括 `{}`）之后，才会删除 6.3.0 之前的旧副本（`plugins/UltiTools/data.json`）（#672）；以当前文件的内容为准，不会被旧内容覆盖。当前文件为空、只含空白、为 `null`、不是合法 JSON、是字符串或数字而不是对象，或不是普通文件时，两个文件都原样保留，一条 WARNING 写明两个路径（不含任何文件内容），不生成服务器 UUID，也不写入或清除 UltiCloud 令牌；旧副本可读而当前文件不可读期间，`CredentialStore.write` 以 `DataAccessException` 拒绝。修好当前文件（从备份恢复，或把它移开让旧副本迁移）之后的下一次访问会完成清理。当前文件无法打开（权限不足）时同样保留两个文件，并使这次访问失败。此前只要当前文件存在就会删除旧副本，当前文件不可读时就不剩任何可读的凭据。当前文件尚不存在时的迁移不变：先写入、读回并与旧数据比较，之后才删除旧文件。
+  中文补充：两份凭据文件并存时，只有当前文件（服务器根目录下的 `.ultikits/credentials.json`）能被读成凭据文档（任何 JSON 对象，包括 `{}`；JSON 数组如 `[]` 也一样，读取器把它解析为空文档）之后，才会删除 6.3.0 之前的旧副本（`plugins/UltiTools/data.json`）（#672）；以当前文件的内容为准，不会被旧内容覆盖。当前文件为空、只含空白、为 `null`、不是合法 JSON、是字符串或数字而不是对象或数组，或不是普通文件时，两个文件都原样保留，一条 WARNING 写明两个路径（不含任何文件内容），不生成服务器 UUID，也不写入或清除 UltiCloud 令牌；旧副本可读而当前文件不可读期间，`CredentialStore.write` 以 `DataAccessException` 拒绝。修好当前文件（从备份恢复，或把它移开让旧副本迁移）之后的下一次访问会完成清理。当前文件无法打开（权限不足）时同样保留两个文件，并使这次访问失败。此前只要当前文件存在就会删除旧副本，当前文件不可读时就不剩任何可读的凭据。当前文件尚不存在时的迁移不变：先写入、读回并与旧数据比较，之后才删除旧文件。
 - **A remote file request uses the object it authorizes** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
   as of v6.3.0). The remote file API (`read`, `write`, `list`, `delete`) used to judge one form of the requested path and
   use another: the check ran on the path with every `name/..` pair removed textually, while the I/O used the path as
@@ -2784,7 +2830,27 @@ This section governs the third kind.
   case is treated as an entry rather than as a real directory: a non-empty directory requested in the wrong case is
   refused ("directory not empty") and not deleted, and an empty one is deleted without `recursive`.
 
+  More known limitations of the remote file API (#691), documented rather than defended. The 6.3.1 `files.delete`
+  never deletes a directory (it answers `is_directory`), so the directory cases in this list concern only the
+  deprecated v1 file handler, which is scheduled for removal.
+  - Windows junctions are covered by a unit test with an injected link lookup, not by a run on a real Windows host.
+    On Windows, try a panel delete of a junction on a throw-away tree before relying on it.
+  - A file name that the platform cannot map to a path (for example a name that is not valid in a non-UTF-8 file
+    name encoding) makes the deprecated v1 recursive delete refuse the whole request with a failure reply, recorded
+    as `ALLOWED`. The protected-descendant check finishes before anything is removed, so nothing is half-deleted.
+    Run the server with a UTF-8 file name encoding.
+  - A path string that cannot be parsed as a path (for example one containing a NUL character) reaches the
+    deprecated v1 handler before its error handling: it gets no reply and writes no action-log line. The 6.3.1
+    `files.*` handlers validate the path first and answer `invalid_message`.
+  - The deprecated v1 recursive delete uses recursion, so a directory tree thousands of levels deep can end in a
+    `StackOverflowError`. The 6.3.1 `files.delete` cannot recurse because it refuses directories.
+  - If the read-back of a migrated credential file does not match what was written, the old copy is kept and one
+    WARNING is logged; no automated test reaches that branch (the test seams cover only a failing path and a failing
+    write), so it is verified by code reading. Do not edit credential files while the server runs.
+
   中文补充：**远程文件请求使用的就是被授权的那个对象**（自 6.3.0 起，#672）。远程文件 API（`read`、`write`、`list`、`delete`）原来判断的是路径的一种形式，实际使用的却是另一种：检查时先把路径中每个 `名称/..` 在文本上消去，I/O 却用原样的路径，所以符号链接后面的 `..` 可能到达检查从未看过的可编辑根之外的文件，向悬空链接写入还会创建链接指向的目标。现在每个请求只在文件系统上解析一次，这一个结果既是被判断的对象，也是被读取、写入、列出或删除的对象。服主和面板作者会看到：真实目标在所有可编辑根之外的请求，以可配置的 `ultipanel.files.editable-roots` 拒绝，`list` 会把这样的条目标为 `accessible: false`、`reason: OUTSIDE_ROOTS`（指向根外文件的别名原来被列为可访问）；无法被安全定位的路径一律拒绝且无法通过配置放行——路径中尚不存在的部分里的 `.` 或 `..`、悬空或循环的符号链接、无法搜索的目录，以及不指向任何普通条目的 `delete`（`/`、`.`、`dir/.`、`dir/..`，这些原来会清掉它们所折叠到的目录的内容）；根内指向受保护文件（凭据文件、远程操作日志目录）的符号链接，与该文件本身一样被拒绝，`list` 将其标为 `PROTECTED_CREDENTIAL`；对末端符号链接的 `delete`——无论指向文件、指向目录（`recursive` 缺省、`false` 或 `true`）还是什么都不指向——只删除链接本身，目标及其下的一切不动（带 `recursive: true` 删除指向目录的链接，原来会先清空链接所指的目录）；对真实目录的递归 `delete` 也绝不跟随被删目录树内部的符号链接：该链接作为链接被删除，其目标不动（树内指向根外目录或操作日志目录的链接，原来会让其目标被清空；指向凭据目录的链接，原来会使整个删除被拒绝）。链接与 junction 无论是删除目标本身还是位于被删除的树内，都不会被跟随；受保护位置按真实路径判断，与请求匹配到哪个可编辑根、根的配置顺序无关（根为 `[plugins/shadow, plugins]` 且 `plugins/shadow` 链接到 `plugins/UltiTools` 时，经哪个根都到不了操作日志目录），因此 `list` 也像对待其他别名一样按目标标记指向目录的链接。每次拒绝都在远程操作日志里记为一条 `DENIED`；此前在磁盘上解析路径时才发生的拒绝被记为 `ALLOWED`。获准之后因普通原因失败的请求（文件不存在、类型不符、写入不带内容）仍是一条 `ALLOWED` 加一条失败回复，`list` 仍只为目录记一条，不会每行一条。只在根内活动的面板看不到差别；通过链接后面的 `..` 到达文件的面板现在会被拒绝，想让那些内容可达的服主，请把真实目录加入 `ultipanel.files.editable-roots`。已知限制：另一个本地进程若在检查与使用之间把路径中的某一段换成链接，仍可改变这一次请求的去向（面板本身无法创建链接）；服主以其他名称放进可编辑根的、指向凭据文件的硬链接，按路径无法与普通文件区分，所以不要把凭据文件硬链接进可编辑根；在不区分大小写的 macOS 文件系统上，受保护的 `plugins/UltiTools/security` 目录名的大小写变体不会被无条件拒绝层识别。在这类文件系统上，以错误大小写指定目录的请求会被当作普通条目而非真实目录处理：以错误大小写请求删除非空目录会被拒绝（“directory not empty”）而不会被删除，空目录则无需 `recursive` 即被删除。
+
+  中文补充（远程文件 API 的更多已知限制，#691，只写文档不做防御）：6.3.1 的 `files.delete` 从不删除目录（以 `is_directory` 回复），所以下面涉及目录的几条只与计划移除的已弃用 v1 文件处理器有关。Windows junction 只由注入链接查询的单元测试覆盖，没有在真实 Windows 主机上跑过，在 Windows 上依赖它之前请先在一次性目录树上试删一个 junction。平台无法映射成路径的文件名（例如在非 UTF-8 文件名编码下无效的名称）会让已弃用的 v1 递归删除以失败回复拒绝整个请求并记为 `ALLOWED`；受保护后代检查在删除任何东西之前完成，所以不会删到一半，请让服务器使用 UTF-8 文件名编码。无法解析为路径的字符串（例如含 NUL 字符）会在已弃用 v1 处理器的错误处理之前出错：没有回复，也不写操作日志行；6.3.1 的 `files.*` 处理器先校验路径并回复 `invalid_message`。已弃用的 v1 递归删除使用递归，数千层深的目录树可能以 `StackOverflowError` 结束；6.3.1 的 `files.delete` 拒绝目录，不会递归。迁移后的凭据文件读回与写入内容不一致时，保留旧副本并记一条 WARNING；没有自动化测试覆盖这个分支（测试接缝只覆盖路径失败和写入失败），只靠阅读代码验证；服务器运行期间不要编辑凭据文件。
 - **`update_config` is gated by the target it routes to** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
   as of v6.3.0). The message was gated by `ultipanel.capabilities.file-write` whatever it carried, although a `fileName` of
   `server_properties` is handed to the server-properties editor (a read without content, a write with it). A message for
