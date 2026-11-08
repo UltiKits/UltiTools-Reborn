@@ -214,13 +214,43 @@ public final class StubFrontDoor {
             } catch (IOException closed) {
                 return;
             }
-            open.add(client);
+            if (!admit(socket, client)) {
+                return;
+            }
             try {
                 workers.execute(() -> serve(client));
             } catch (RuntimeException rejected) {
                 closeQuietly(client);
             }
         }
+    }
+
+    /**
+     * Registers a just-accepted connection, or resets it when its listener was switched off meanwhile.
+     *
+     * <p>Closing a {@link ServerSocket} while its acceptor thread is blocked in {@code accept()} does not
+     * stop the kernel listener at once: the socket keeps listening until that thread is woken, so a
+     * connection made right after {@link #setUnreachable(boolean)} returned can still be handed to
+     * {@code accept()}. Checking the current listener under the same lock as {@code setUnreachable} and
+     * {@code stop} makes "closed" mean closed: such a connection is reset and never served, and a
+     * connection accepted before the switch is in {@link #open} when the switch drops every open one.
+     *
+     * @param source the listener {@code client} was accepted on
+     * @param client the accepted connection
+     * @return whether the connection is to be served
+     */
+    synchronized boolean admit(ServerSocket source, Socket client) {
+        if (source != listener) {
+            try {
+                client.setSoLinger(true, 0);
+            } catch (IOException ignored) {
+                // Closing below still ends the connection.
+            }
+            closeQuietly(client);
+            return false;
+        }
+        open.add(client);
+        return true;
     }
 
     // ------------------------------------------------------------------ routing
