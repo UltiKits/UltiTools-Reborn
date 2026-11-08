@@ -32,10 +32,12 @@ class EarlyLogCaptureParameterEstimateTest {
 
         @Override
         public void flush() {
+            // Nothing is buffered: publish() records synchronously.
         }
 
         @Override
         public void close() {
+            // Nothing to release: the handler holds only an in-memory list.
         }
     };
 

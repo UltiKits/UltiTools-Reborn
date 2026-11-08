@@ -54,6 +54,7 @@ class UltiToolsOnLoadFailureTest {
         instanceField().set(null, previousInstance);
     }
 
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // restores the framework singleton the test replaced
     private static Field instanceField() throws NoSuchFieldException {
         Field field = UltiTools.class.getDeclaredField("ultiTools");
         field.setAccessible(true);
