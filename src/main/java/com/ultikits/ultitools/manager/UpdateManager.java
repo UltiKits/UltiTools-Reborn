@@ -89,6 +89,16 @@ public class UpdateManager {
     @Getter
     private volatile boolean checkComplete;
 
+    /**
+     * {@code true} once the start-up check ended with an unexpected failure outside the
+     * per-lookup handlers (for example a {@link LinkageError}), so it will not complete this run
+     * (#838). Never set when the check completes or ends because {@link #stop()} was called.
+     *
+     * @since 6.4.0
+     */
+    @Getter
+    private volatile boolean checkFailed;
+
     public UpdateManager(Logger logger) {
         this.logger = logger;
     }
@@ -170,6 +180,11 @@ public class UpdateManager {
                 throw e;
             }
             logger.log(Level.FINE, LOG_PREFIX + "Update check ended while UltiTools was disabling: " + e);
+        } finally {
+            // Any other ending that is neither completion nor disable is terminal for this run (#838).
+            if (!checkComplete && !stopped) {
+                checkFailed = true;
+            }
         }
     }
 
