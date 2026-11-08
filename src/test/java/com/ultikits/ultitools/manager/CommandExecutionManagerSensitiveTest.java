@@ -225,9 +225,20 @@ class CommandExecutionManagerSensitiveTest {
     private void execute(String commandLine) {
         new CommandExecutionManager().execute(commandLine, null, Runnable::run,
                 new CommandExecutionManager.CommandResultSink() {
-                    @Override public void blocked(String matched, String message) { }
-                    @Override public void completed(List<String> lines, boolean truncated, long ms) { }
-                    @Override public void failed(String message) { }
+                    @Override
+                    public void blocked(String matched, String message) {
+                        // The outcome is not what these tests check; the log lines and records are.
+                    }
+
+                    @Override
+                    public void completed(List<String> lines, boolean truncated, long ms) {
+                        // As above: only the framework's own records are asserted.
+                    }
+
+                    @Override
+                    public void failed(String message) {
+                        // As above: only the framework's own records are asserted.
+                    }
                 });
     }
 
