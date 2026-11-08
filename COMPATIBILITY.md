@@ -931,6 +931,17 @@ condition that failed, and `getReason()` names the entry's key path, never a val
 `null` as the first argument, `saveOperatorMapEntry(null, "path", "key")`, does not compile, because it is ambiguous
 between them; cast the `null` to the intended type (it then throws `IllegalArgumentException`).
 
+**Known limitation retained (#626): a new map key that contains a dot is written unquoted and named
+by its dotted path.** A map entry added through the write gate (for example `saveOperatorMapEntry` with
+the key `x.y`) is rendered as a plain `x.y:` line; an existing key keeps the quoting the operator gave
+it. The framework always reads such a key back as one whole key, but Bukkit's own `YamlConfiguration`
+splits it into `x` and `y`, so a plugin that reads the file through Bukkit sees a nested section
+instead. Warnings and refusal reasons join the path with dots, so `'autoreply.rules.x.y'` can mean the
+whole key `x.y` or the nested keys `x` and `y`. Read map settings through the framework, not
+through Bukkit, and prefer map keys without dots (for example `-` or `_` as a separator) when an
+entry name is chosen by a command or the panel; when a diagnostic names a dotted path, check the file
+for both forms.
+
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
 keeps declared defaults and logs one SEVERE naming the file and safe cause. As of 6.3.0 (#589) a
 failed reload keeps running fields and the file unchanged and throws `ConfigurationException`
