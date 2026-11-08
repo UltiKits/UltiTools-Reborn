@@ -117,7 +117,7 @@ Login, Panel Integration, Player Link) explain each part in prose.
 
 | API | Since | Purpose |
 |---|---|---|
-| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged. The table starts empty, matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
+| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged, except the framework's own records of a remote-console command as of 6.4.0 (see [Sensitive commands in the remote console's local records](#sensitive-commands-in-the-remote-consoles-local-records-as-of-640)). The table starts empty, matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
 | `websocket.CloudPlayerLinks`, `UltiTools#getCloudPlayerLinks()` | 6.3.1 | The player-link API that replaces the magic-link calls: `create(...)` returns a one-time link valid for 600 seconds; one module-owned `LinkEventHandler` receives completions and expiries on a framework worker thread; the framework persists each result before it answers the gateway, so a completion redelivered after a restart is answered without calling the module again. `getCloudPlayerLinks()` returns `null` only before the framework has enabled. |
 | `PanelResponderRegistry#ownerModuleOf(String)`, `#ownerModules()` | 6.3.1 | Read-only views of responder ownership. |
 | `websocket.CloudChannel`, `CloudRequest`, `CloudRequestHandler`, `CloudLimits` | 6.3.1, `@ApiStatus.Internal` | The framework's internal request and reply seam. Public only because handlers live in two packages; not for module use, and they may change without notice. |
@@ -349,6 +349,43 @@ and the requested target names joined by commas in request order as its target. 
 of the disable a read (`files.read`, `files.list`, `properties.get`) is still answered but writes no line either;
 a `snapshot.request` needs the server thread and is dropped unanswered, writing no line (see the shutdown window
 below). No line ever holds file content or a configuration value.
+
+### Sensitive commands in the remote console's local records (as of 6.4.0)
+
+**Behaviour change in 6.4.0: local log content changes.** When the panel's remote console (`command.execute`) runs a
+command a module registered with `UltiTools#getSensitiveCommandRegistry()`, the framework's own records of that
+request no longer carry its arguments. The `[Remote command] > ...` echo, the `[Remote command] Blocked: ...` line and
+the failure lines show the command followed by `***`, and so do the server console, `logs/latest.log` and the panel's
+log stream, which all receive those lines; the request's line in `plugins/UltiTools/security/action.log.<n>` has the
+same text as its `target`. For example, with UltiLogin registering `logadmin`, the panel command
+`logadmin reset Steve <password>` is logged as `[Remote command] > logadmin ***` and recorded with
+`"target":"logadmin ***"`. In 6.3.1 and 6.3.2 the local console, `latest.log` and the action log carried the whole
+command line, password included, and the panel's log stream did too, because the echo line has no leading `/` for the
+text redaction to find.
+
+- The registered name is matched against the command as it is dispatched (one leading `/` and surrounding or repeated
+  whitespace, no-break spaces included, removed; a `namespace:` prefix and letter case ignored), so `/ logadmin ...`
+  or a no-break space after the name does not hide it. The command keeps the spelling it was sent with
+  (`/UltiLogin:LogAdmin reset ...` is logged as `UltiLogin:LogAdmin ***`).
+- The command itself is still dispatched with its arguments, and its reply (`command.result`) is unchanged: what the
+  command prints is the module's own output, and redacting it is the module's decision.
+- A command that is not registered is logged and recorded exactly as received, as before.
+- No API changes. A module that already registers its commands gets this without a change; a module that does not
+  register any gets nothing new. A log reader or audit script that parsed the arguments of a registered command out
+  of these lines, or out of the action log, finds only `***` from 6.4.0 on.
+- Out of scope: a player's own `issued server command` line in the local log files (written by Paper, unchanged
+  locally and redacted on the way to UltiCloud as before), and lines other plugins write.
+
+中文补充：**6.4.0 行为变更：本地日志内容改变。** 面板远程控制台（`command.execute`）运行模块通过
+`UltiTools#getSensitiveCommandRegistry()` 注册的命令时，框架为该请求写下的记录不再包含参数：`[Remote command] > ...`
+回显行、`[Remote command] Blocked: ...` 行和失败行都只显示命令名加 `***`，服务器控制台、`logs/latest.log` 和面板日志流
+（它们都收到这些行）同样如此；`plugins/UltiTools/security/action.log.<n>` 中该请求的 `target` 也是这段文字。例如 UltiLogin
+注册了 `logadmin` 后，面板命令 `logadmin reset Steve <密码>` 记为 `[Remote command] > logadmin ***`，动作日志为
+`"target":"logadmin ***"`。6.3.1 与 6.3.2 中本地控制台、`latest.log` 和动作日志会记下包括密码在内的整行命令，面板日志流也会，
+因为回显行没有可供文本脱敏识别的前导 `/`。注册名按实际分发的命令匹配（去掉一个前导 `/`、首尾和重复空白（含不换行空格），
+忽略 `namespace:` 前缀和大小写）；命令本身仍带参数分发，回复（`command.result`）不变；未注册的命令照原样记录。没有 API 变化；
+解析这些行或动作日志中已注册命令参数的脚本从 6.4.0 起只会看到 `***`。玩家自己的 `issued server command` 行（由 Paper 写入）
+和其他插件写的行不在此列。
 
 ### Shutdown window
 
