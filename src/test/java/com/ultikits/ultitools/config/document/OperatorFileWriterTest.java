@@ -334,6 +334,7 @@ class OperatorFileWriterTest {
     /** #842: a bare list item ({@code -}) has no text either; an insert right after it keeps the list's bytes. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("insertionsAfterABareListItem")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through the shared #628 test body
     void insertsAfterABareListItemWithoutChangingAnyOperatorBytes(String name, String before, List<String> path,
             boolean commented, String expected) throws Exception {
         insertsAfterAnEmptySiblingWithoutChangingAnyOperatorBytes(name, before, path, commented, expected);
