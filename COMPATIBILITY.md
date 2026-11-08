@@ -2551,7 +2551,8 @@ This section governs the third kind.
   such values (a null `EQUAL` or `GREATER` matched no row, a null `INCLUDE` matched the text `null`, an infinity
   compared as bound, a NaN matched no row and on SQLite made an `updateIf` never apply), while JSON threw
   `NullPointerException` (a null `EQUAL` value, an empty condition in `del`) or Gson's `IllegalArgumentException`
-  (an infinite or NaN value). A module that relied on such a value matching no row, or caught
+  (an infinite or NaN value); only a null value under another comparison was already refused there with
+  `DataAccessException` (since 6.3.2). A module that relied on such a value matching no row, or caught
   `NullPointerException` or `IllegalArgumentException` around these calls, checks the value first (a null check,
   `Double.isFinite`) or catches `DataAccessException`.
   A numeric field's column that holds non-numeric text,

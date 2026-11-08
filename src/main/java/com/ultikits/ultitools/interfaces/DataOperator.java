@@ -199,8 +199,9 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      * against a column that was unset when it was read therefore misses, and keeps the value, when
      * another writer filled the column in between. This meaning belongs to {@code updateIf} alone:
      * {@link #getAll(WhereCondition...)}, {@link #exist(WhereCondition...)},
-     * {@link #del(WhereCondition...)} and {@link #page(int, int, WhereCondition...)} treat a
-     * {@code null} condition value as they always have. (6.3.0 snapshots published before this
+     * {@link #del(WhereCondition...)} and {@link #page(int, int, WhereCondition...)} refuse a
+     * {@code null} condition value with a {@code DataAccessException} as of 6.4.0, as they refuse an
+     * infinite or NaN {@code Double} or {@code Float} value, which {@code updateIf} refuses too. (6.3.0 snapshots published before this
      * change refused a {@code null} expected value; no release did.)
      *
      * @param entity   the new state of the row, carrying the id of the row to write
@@ -211,7 +212,8 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      *         {@code null}, a condition is {@code null}, a condition names a column the entity does
      *         not map with {@code @Column} (also when its value is {@code null}), or a condition's
      *         value is {@code null} under a comparison other than {@code EQUAL} (only {@code EQUAL}
-     *         gives {@code null} a meaning; under any other the write could never apply) -- on every
+     *         gives {@code null} a meaning; under any other the write could never apply) or is an
+     *         infinite or NaN {@code Double} or {@code Float} (as of 6.4.0) -- on every
      *         backend, so a misspelt column cannot turn a retry loop into an endless one
      * @throws UnsupportedOperationException if this implementation does not provide conditional
      *         writes -- the default, so a third-party implementation is never silently
