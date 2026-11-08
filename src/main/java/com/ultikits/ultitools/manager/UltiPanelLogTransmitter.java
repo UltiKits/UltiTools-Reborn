@@ -32,7 +32,7 @@ public class UltiPanelLogTransmitter {
 
     /**
      * Shared lower bound for the batch-send interval (#432/WR-01). Before this fix, the
-     * boot-time path ({@link LogStreamManager#loadBatchConfiguration()}) clamped to 1000ms via
+     * boot-time path ({@code LogStreamManager#loadBatchConfiguration()}, removed in 6.4.0) clamped to 1000ms via
      * its own inline {@code Math.max(1000, interval)}, while this class's own
      * {@link #setIntervalMs(int)} -- reachable live, over the panel's WebSocket {@code config}
      * action -- only rejected a non-positive value, leaving every value from 1ms up accepted. A

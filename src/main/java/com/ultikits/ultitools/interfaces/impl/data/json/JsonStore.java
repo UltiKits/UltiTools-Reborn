@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.Cached;
@@ -155,6 +156,44 @@ public class JsonStore implements DataStore {
         initScheduler();
         DataStoreManager.register(this);
         this.storeLocation = storeLocation;
+    }
+
+    /**
+     * Kept public for binary compatibility: until 6.4.0 this overrode the {@code DataStore} overload of
+     * the same signature, which 6.4.0 removed. It still checks ownership first and behaves as in 6.3.x.
+     * New code calls {@code UltiToolsPlugin#getDataOperator(Class)} or
+     * {@link com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}.
+     *
+     * @param plugin     the requesting plugin
+     * @param dataEntity the data entity class
+     * @param <T>        the entity type
+     * @return the data operator
+     */
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+        checkOwnership(plugin, dataEntity);
+        ensureTableAnnotation(dataEntity);
+        String identity = plugin.getPluginName();
+        return getOperatorForIdentity(identity, internalRoot(identity), internalLocation(identity, dataEntity),
+                dataEntity);
+    }
+
+    /**
+     * Kept public for binary compatibility: until 6.4.0 this overrode the {@code DataStore} overload of
+     * the same signature, which 6.4.0 removed. It still checks ownership first and behaves as in 6.3.x.
+     * New code calls {@code UltiToolsPlugin#getDataOperator(Class)} or
+     * {@link com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}.
+     *
+     * @param dataFolder the external plugin's data folder
+     * @param dataEntity the data entity class
+     * @param <T>        the entity type
+     * @return the data operator
+     */
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
+        checkOwnership(dataFolder, dataEntity);
+        ensureTableAnnotation(dataEntity);
+        String identity = canonicalPath(dataFolder);
+        return getOperatorForIdentity(identity, externalRoot(dataFolder), externalLocation(dataFolder, dataEntity),
+                dataEntity);
     }
 
     /**

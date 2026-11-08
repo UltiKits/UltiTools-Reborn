@@ -269,6 +269,9 @@ the changelogs across pages. JAR size and hash verification are unchanged.
 
 ### Deprecations: the protocol v1 surface, removed in 6.4.0
 
+As of 6.4.0 every entry below except the `SimpleHttpClient` and `UltiCloudRequests` rows is removed; see
+[Removal list for 6.4.0](#removal-list-for-640) for the migration. The table records their 6.3.1 behaviour.
+
 Every entry below is `@Deprecated(since = "6.3.1", forRemoval = true)` with a `@deprecated` paragraph and
 `@removeIn 6.4.0`, and appears in `compatibility/DEPRECATIONS.md`. Behaviour codes: **R** refuses explicitly
 (a failure result, or one INFO line per run); **F** forwards to the 6.3.1 equivalent; **E** an entry point that
@@ -1592,6 +1595,50 @@ flatten-maven-plugin and carries no dependency declarations, so placing UltiTool
 beyond compile time (Maven `compile`, Gradle `implementation`) gains you no transitive dependencies.
 What it does do, if your build has a shade or shadow step, is bundle the entire shaded framework into
 your module JAR, where it conflicts at runtime with the UltiTools already installed on the server.
+## Removal list for 6.4.0
+
+6.4.0 removes the public API that 6.3.0 and 6.3.1 announced for removal in 6.4.0. Every entry below carried
+`@Deprecated(forRemoval = true)` and `@removeIn 6.4.0` in a released version, so a module still using one was
+warned by name at compile time. The generated registry (`compatibility/DEPRECATIONS.md`) marks each one
+`REMOVED` in 6.4.0. A module compiled against 6.3.x that calls a removed member fails with
+`NoSuchMethodError` or `NoClassDefFoundError` on 6.4.0; recompile against 6.4.0 and apply the migration.
+
+**Announced in 6.3.0**
+
+| Removed | Migration |
+|---|---|
+| `DataStore#getOperator(UltiToolsPlugin, Class)`, `DataStore#getOperator(File, Class)` | Call `UltiToolsPlugin#getDataOperator(Class)` or `UltiToolsAPI.getDataOperator(plugin, Class)`; both resolve through `DataStore#getOperator(DataScope, Class)`. A custom `DataStore` overrides `getOperatorUnchecked(DataScope, Class)`. The two `checkOwnership` defaults were not deprecated and stay. |
+| `TransactionManager#getConnection()`, `#setIsolationLevel(int)`, `#setReadOnly(boolean)` | Program against `JdbcTransactionManager`, which declares all three. |
+| `SimpleTempListener()`, `SimpleTempListener(Class, TempEventHandler)`, `(Class, TempEventHandler, Function)`, `(Class, TempEventHandler, EventPriority)` | Use `TempListener.common(Class)` or the four-argument constructor `SimpleTempListener(Class, EventPriority, TempEventHandler, Function)`. |
+| `PluginDependencyResolver.PluginNode#getAllDependencies(Set)` | Use `getAllDependencies(Set, Map)`; pass `Collections.emptyMap()` for the old behaviour. |
+| `AnnotationUtils#findAnnotation(Class, Class)` | Use `MergedAnnotationResolver.find(Class, Class)`. |
+
+**Announced in 6.3.1: the protocol v1 cloud surface** (listed with its 6.3.1 behaviour under
+[Deprecations: the protocol v1 surface, removed in 6.4.0](#deprecations-the-protocol-v1-surface-removed-in-640))
+
+| Removed | Migration |
+|---|---|
+| `entities.ApiResponse`, `entities.TokenEntity`, `entities.vo.ServerEntityVO` | None: they modelled the v1 Worker envelope, JWT and server record, which UltiCloud no longer serves. Link a server with `/ulticloud login` (`CloudAuthManager#login(DeviceLoginListener)`). |
+| `websocket.UltiPanelWebSocketClient`, `websocket.ReconnectStrategy`, `websocket.ExponentialBackoffStrategy` (and its `Builder`) | None: the framework's own UltiCloud session (protocol 2.1.0) holds the connection and its reconnect policy. |
+| `CommandExecutionManager#executeCommand(JsonObject)`, `#setWebSocketClient(..)`, `CommandExecutionManager.CommandResult` | `execute(String, String, Executor, CommandResultSink)`, which the protocol 2.1.0 session calls for a panel command. |
+| `FileOperationManager#handleFileOperation(JsonObject)`, `#setWebSocketClient(..)`; `ServerPropertiesManager#handleServerProperties(JsonObject)`, `#setWebSocketClient(..)` | None for modules: the protocol 2.1.0 session answers the panel's file and `server.properties` requests. |
+| `LogStreamManager#initialize(..)`, `#getLogTransmitter()`, `#handleLogStreamMessage(..)`, `#sendCustomLog(..)`, `#sendPlayerEventLog(..)`, `#sendPluginActionLog(..)`, `#onPlayerJoin`, `#onPlayerQuit`, `#onServerLoad`; `UltiPanelLogTransmitter(UltiPanelWebSocketClient, String)` | None: the protocol 2.1.0 session streams the console itself. |
+| `PlayerEventManager#initialize(..)` and its seven `on…` listener methods | None: the protocol 2.1.0 session reports player events itself. |
+| `ServerMonitorManager#startMonitoring()`, `#stopMonitoring()`, `#isMonitoring()`, `#sendServerStatus()`, `#sendServerStatusWithRequestId(..)`, `#sendMetricsData()`, `#sendMetricsDataWithRequestId(..)`, `#sendPlayerEvent(..)`, `#setWebSocketClient(..)` | None: the protocol 2.1.0 session sends server state itself. |
+| `CloudAuthManager#login(Runnable, Consumer, Runnable, Consumer, Consumer)` | `CloudAuthManager#login(DeviceLoginListener)`. |
+| `CloudAuthManager.CloudStatus#getUserName()`, `#getExpirationDate()` | `getServerName()` or `getServerId()`; a server credential has no user name or expiry. |
+| `HttpRequestUtils#registerServer(..)`, `#updateServer(..)`, `#getServerByUUID(..)` | None: `/ulticloud login` links a protocol 2.1.0 server. `HttpRequestUtils` itself stays. |
+| `PluginInitiationUtils#startTokenRefreshScheduler()` | None needed: the server credential does not expire. |
+
+The managers above are `@ApiStatus.Internal`; their removed members only acted through a v1 client that could
+never connect, so their removal changes nothing a server operator sees.
+
+**Announced for 6.4.0 and still present in this tree.** The legacy configuration parser family
+(`@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`,
+`StringHashMapParser`), `SimpleHttpClient` (and `SimpleHttpClient.Response`) and `UltiCloudRequests` (with
+`Outcome` and `Result`) are not removed yet: code that the project still maintains uses them. They keep their
+6.3.x behaviour and their deprecation warning until their removal is decided.
+
 ## Removal list for 6.3.0
 
 The removal list is generated at `mvn verify` from the `@Deprecated(forRemoval = true)`
