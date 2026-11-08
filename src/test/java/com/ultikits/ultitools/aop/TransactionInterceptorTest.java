@@ -40,6 +40,7 @@ import com.ultikits.ultitools.annotations.Propagation;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.ultikits.ultitools.manager.DataSourceTransactionManager;
 import com.zaxxer.hikari.HikariConfig;
@@ -54,7 +55,7 @@ import com.zaxxer.hikari.HikariDataSource;
 class TransactionInterceptorTest {
 
     @Mock
-    private TransactionManager transactionManager;
+    private JdbcTransactionManager transactionManager;
 
     @Mock
     private MethodInvocation mockInvocation;
@@ -226,7 +227,7 @@ class TransactionInterceptorTest {
 
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         private void write(int id) {
-            try (Statement st = txManager.getConnection().createStatement()) {
+            try (Statement st = ((JdbcTransactionManager) txManager).getConnection().createStatement()) {
                 st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
             } catch (SQLException e) {
                 throw new RuntimeException(e);
@@ -351,7 +352,7 @@ class TransactionInterceptorTest {
         }
 
         private void write(int id) {
-            try (Statement st = txManager.getConnection().createStatement()) {
+            try (Statement st = ((JdbcTransactionManager) txManager).getConnection().createStatement()) {
                 st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
             } catch (SQLException e) {
                 throw new RuntimeException(e);
@@ -386,7 +387,7 @@ class TransactionInterceptorTest {
          */
         @Transactional
         public void outerRequiredThenSelfInvokesRequiresNewThatFails() {
-            capturedOuterConnectionBeforeInner = txManager.getConnection();
+            capturedOuterConnectionBeforeInner = ((JdbcTransactionManager) txManager).getConnection();
             write(1);
             try {
                 innerRequiresNewFailsSelf();
@@ -394,7 +395,7 @@ class TransactionInterceptorTest {
                 // The inner REQUIRES_NEW transaction's own failure and rollback must not
                 // propagate into the outer transaction's state.
             }
-            capturedOuterConnectionAfterInner = txManager.getConnection();
+            capturedOuterConnectionAfterInner = ((JdbcTransactionManager) txManager).getConnection();
             write(2);
         }
 
@@ -412,10 +413,10 @@ class TransactionInterceptorTest {
          */
         @Transactional
         public void outerRequiredThenSelfInvokesRequiresNewThatSucceeds() {
-            capturedOuterConnectionBeforeInner = txManager.getConnection();
+            capturedOuterConnectionBeforeInner = ((JdbcTransactionManager) txManager).getConnection();
             write(5);
             innerRequiresNewSucceedsSelf();
-            capturedOuterConnectionAfterInner = txManager.getConnection();
+            capturedOuterConnectionAfterInner = ((JdbcTransactionManager) txManager).getConnection();
             write(6);
         }
 
@@ -462,7 +463,7 @@ class TransactionInterceptorTest {
         }
 
         private void write(int id) {
-            try (Statement st = txManager.getConnection().createStatement()) {
+            try (Statement st = ((JdbcTransactionManager) txManager).getConnection().createStatement()) {
                 st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
             } catch (SQLException e) {
                 throw new RuntimeException(e);
@@ -1872,6 +1873,27 @@ class TransactionInterceptorTest {
             doThrow(settingsFailure).when(transactionManager).setTimeout(30);
 
             assertSettingFailureRollsBackOnce("withTimeout", settingsFailure);
+        }
+
+        @Test
+        @DisplayName("A lifecycle-only manager (not JDBC, not JSON) refuses isolation and read-only "
+                + "with UnsupportedOperationException naming JdbcTransactionManager, then rolls back once")
+        void lifecycleOnlyManagerRefusesJdbcSettings() throws Throwable {
+            for (String fixture : new String[] {"withIsolation", "readOnly"}) {
+                TransactionManager lifecycleOnly = mock(TransactionManager.class);
+                TransactionInterceptor plain = new TransactionInterceptor(lifecycleOnly);
+                MethodInvocation invocation = mock(MethodInvocation.class);
+                when(invocation.getMethod()).thenReturn(TransactionSettingsService.class.getMethod(fixture));
+
+                Throwable thrown = assertThrows(Throwable.class, () -> plain.invoke(invocation));
+
+                assertThat(thrown).as(fixture).isInstanceOf(UnsupportedOperationException.class)
+                        .hasMessageContaining(JdbcTransactionManager.class.getName());
+                verify(lifecycleOnly).begin();
+                verify(lifecycleOnly, times(1)).rollback();
+                verify(lifecycleOnly, never()).commit();
+                verify(invocation, never()).proceed();
+            }
         }
 
         private void assertSettingFailureRollsBackOnce(String fixtureMethod,

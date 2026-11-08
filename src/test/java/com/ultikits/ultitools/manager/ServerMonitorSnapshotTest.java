@@ -1,10 +1,8 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -21,11 +19,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -44,17 +39,10 @@ import org.mockbukkit.mockbukkit.ServerMock;
  */
 @DisplayName("服务器状态采样的线程契约")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-@SuppressWarnings({
-        "PMD.AvoidAccessibilityAlteration", // 测试需要反射读任务句柄，与仓库其它测试类一致
-        // PMD 只认 assert*/fail* 这类方法名，识别不了 AssertJ 的流式断言
-        // （doesNotSampleWithoutClient 断的是 assertThatCode(...).doesNotThrowAnyException()）。
-        "PMD.JUnitTestsShouldIncludeAssert"
-})
 class ServerMonitorSnapshotTest {
 
     private ServerMock server;
     private ServerMonitorManager manager;
-    private UltiPanelWebSocketClient mockClient;
     private Logger mockLogger;
 
     @BeforeEach
@@ -72,19 +60,11 @@ class ServerMonitorSnapshotTest {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
         });
 
-        mockClient = mock(UltiPanelWebSocketClient.class);
-        when(mockClient.isConnected()).thenReturn(true);
-        when(mockClient.getServerId()).thenReturn("test-server");
-
         manager = new ServerMonitorManager();
-        manager.setWebSocketClient(mockClient);
     }
 
     @AfterEach
     void tearDown() {
-        if (manager != null) {
-            manager.stopMonitoring();
-        }
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
@@ -110,11 +90,11 @@ class ServerMonitorSnapshotTest {
         }
     }
 
-    /** 抓取发往面板的 server_status 消息里的 data 段。 */
-    private JsonObject captureStatusData() {
-        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-        verify(mockClient, atLeastOnce()).sendMessage(captor.capture());
-        return captor.getValue().getAsJsonObject("data");
+    /** Reads the published snapshot on a thread that is not the main thread, as the v2 telemetry sender does. */
+    private ServerMonitorManager.ServerStateSnapshot snapshotOffPrimaryThread() throws InterruptedException {
+        AtomicReference<ServerMonitorManager.ServerStateSnapshot> read = new AtomicReference<>();
+        runOffPrimaryThread(() -> read.set(manager.currentStateSnapshot()));
+        return read.get();
     }
 
     @Nested
@@ -131,69 +111,63 @@ class ServerMonitorSnapshotTest {
 
         @Test
         @DisplayName("主线程上采样会填充快照")
-        void samplingOnPrimaryThreadPopulatesSnapshot() {
+        void samplingOnPrimaryThreadPopulatesSnapshot() throws InterruptedException {
             server.addPlayer();
             server.addPlayer();
 
-            manager.refreshStateSnapshot();
+            assertThat(manager.sampleAndPublishState()).isTrue();
 
-            // 从非主线程发送，确保读到的只可能是快照
-            manager.sendServerStatus();
-            assertThat(captureStatusData().get("playerCount").getAsInt()).isEqualTo(2);
+            // 从非主线程读取，确保读到的只可能是快照
+            assertThat(snapshotOffPrimaryThread().playerCount).isEqualTo(2);
         }
 
         @Test
         @DisplayName("非主线程上采样被拒绝，并记 SEVERE")
         void samplingOffPrimaryThreadIsRefused() throws InterruptedException {
             server.addPlayer();
+            AtomicReference<Boolean> sampled = new AtomicReference<>();
 
-            runOffPrimaryThread(manager::refreshStateSnapshot);
+            runOffPrimaryThread(() -> sampled.set(manager.sampleAndPublishState()));
 
+            assertThat(sampled.get()).isFalse();
             verify(mockLogger).log(eq(Level.SEVERE), anyString());
-
-            // 快照没被填上：异步读到的仍然是空的那份
-            runOffPrimaryThread(manager::sendServerStatus);
-            assertThat(captureStatusData().get("playerCount").getAsInt())
+            assertThat(manager.hasSampledState())
                     .as("被拒绝的采样不该留下任何痕迹")
-                    .isZero();
+                    .isFalse();
         }
     }
 
     @Nested
-    @DisplayName("异步发送读的是快照，不是活的 Bukkit 状态")
+    @DisplayName("异步读取的是快照，不是活的 Bukkit 状态")
     class AsyncPathReadsSnapshot {
 
         @Test
-        @DisplayName("采样之后世界变了，异步发送仍然报采样时刻的值")
+        @DisplayName("采样之后世界变了，异步读取仍然是采样时刻的值")
         void asyncSendReportsSnapshotNotLiveState() throws InterruptedException {
             server.addPlayer();
-            manager.refreshStateSnapshot();     // 主线程采样：此刻 1 人
+            manager.sampleAndPublishState();    // 主线程采样：此刻 1 人
 
             server.addPlayer();
             server.addPlayer();                 // 活的 Bukkit 现在是 3 人，但没有重新采样
 
-            runOffPrimaryThread(manager::sendServerStatus);
-
-            assertThat(captureStatusData().get("playerCount").getAsInt())
+            assertThat(snapshotOffPrimaryThread().playerCount)
                     .as("报 3 就说明异步线程直接读了 Bukkit——正是本 issue 要消灭的行为")
                     .isEqualTo(1);
         }
 
         @Test
-        @DisplayName("从未采样时，异步发送不会就地去读 Bukkit")
+        @DisplayName("从未采样时，异步读取不会就地去读 Bukkit")
         void asyncSendDoesNotLazilySample() throws InterruptedException {
             server.addPlayer();
             server.addPlayer();
-            // 刻意不调 refreshStateSnapshot
+            // 刻意不采样
 
-            runOffPrimaryThread(manager::sendServerStatus);
-
-            JsonObject data = captureStatusData();
-            assertThat(data.get("playerCount").getAsInt())
+            ServerMonitorManager.ServerStateSnapshot snapshot = snapshotOffPrimaryThread();
+            assertThat(snapshot.playerCount)
                     .as("非主线程上宁可报空快照，也不能去读 Bukkit")
                     .isZero();
-            assertThat(data.getAsJsonArray("worlds")).isEmpty();
-            assertThat(data.getAsJsonArray("onlinePlayers")).isEmpty();
+            assertThat(snapshot.worlds).isEmpty();
+            assertThat(snapshot.onlinePlayers).isEmpty();
         }
 
         @Test
@@ -201,38 +175,24 @@ class ServerMonitorSnapshotTest {
         void primaryThreadLazilySamplesOnFirstUse() {
             server.addPlayer();
             server.addPlayer();
-            // 同样不调 refreshStateSnapshot，但这次在主线程上发送
+            // 同样不采样，但这次在主线程上读取
 
-            manager.sendServerStatus();
-
-            assertThat(captureStatusData().get("playerCount").getAsInt())
+            assertThat(manager.currentStateSnapshot().playerCount)
                     .as("否则连接建立后的第一帧会是一片零")
                     .isEqualTo(2);
         }
     }
 
     @Nested
-    @DisplayName("发给面板的 JSON 形状没有变")
+    @DisplayName("快照里的元素形状没有变")
     class PayloadContract {
-
-        @Test
-        @DisplayName("status 顶层字段齐全")
-        void statusKeysUnchanged() {
-            manager.refreshStateSnapshot();
-            manager.sendServerStatus();
-
-            assertThat(captureStatusData().keySet()).contains(
-                    "playerCount", "maxPlayers", "onlineMode", "serverVersion",
-                    "tps", "memory", "cpu", "uptime", "worlds", "onlinePlayers");
-        }
 
         @Test
         @DisplayName("worlds 元素字段齐全")
         void worldObjectKeysUnchanged() {
-            manager.refreshStateSnapshot();
-            manager.sendServerStatus();
+            manager.sampleAndPublishState();
 
-            JsonArray worlds = captureStatusData().getAsJsonArray("worlds");
+            JsonArray worlds = manager.currentStateSnapshot().worlds;
             assertThat(worlds).as("MockBukkit 默认没有世界的话这条就没在测东西").isNotEmpty();
             assertThat(worlds.get(0).getAsJsonObject().keySet()).containsExactlyInAnyOrder(
                     "name", "environment", "difficulty", "playerCount",
@@ -243,10 +203,9 @@ class ServerMonitorSnapshotTest {
         @DisplayName("onlinePlayers 元素字段齐全")
         void playerObjectKeysUnchanged() {
             server.addPlayer();
-            manager.refreshStateSnapshot();
-            manager.sendServerStatus();
+            manager.sampleAndPublishState();
 
-            JsonArray players = captureStatusData().getAsJsonArray("onlinePlayers");
+            JsonArray players = manager.currentStateSnapshot().onlinePlayers;
             assertThat(players).isNotEmpty();
             assertThat(players.get(0).getAsJsonObject().keySet()).containsExactlyInAnyOrder(
                     "uuid", "name", "world", "x", "y", "z",
@@ -259,140 +218,39 @@ class ServerMonitorSnapshotTest {
             server.addPlayer();
             server.addPlayer();
             server.addPlayer();
-            manager.refreshStateSnapshot();
-            manager.sendServerStatus();
+            manager.sampleAndPublishState();
 
-            JsonObject data = captureStatusData();
-            assertThat(data.get("playerCount").getAsInt())
+            ServerMonitorManager.ServerStateSnapshot snapshot = manager.currentStateSnapshot();
+            assertThat(snapshot.playerCount)
                     .as("两者由同一次采样的同一个数组导出，不该有分歧")
-                    .isEqualTo(data.getAsJsonArray("onlinePlayers").size())
+                    .isEqualTo(snapshot.onlinePlayers.size())
                     .isEqualTo(3);
         }
 
         @Test
-        @DisplayName("metrics 里的插件与世界计数取自快照")
+        @DisplayName("插件与世界计数取自同一次采样")
         void metricsCountsComeFromSnapshot() {
-            manager.refreshStateSnapshot();
-            manager.sendMetricsData();
+            manager.sampleAndPublishState();
 
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockClient, atLeastOnce()).sendMessage(captor.capture());
-            JsonObject pluginUsage = captor.getValue()
-                    .getAsJsonObject("data").getAsJsonObject("pluginUsage");
-
-            assertThat(pluginUsage.get("loadedWorlds").getAsInt())
-                    .isEqualTo(Bukkit.getWorlds().size());
-            assertThat(pluginUsage.get("enabledPlugins").getAsInt())
-                    .isEqualTo(Bukkit.getPluginManager().getPlugins().length);
+            ServerMonitorManager.ServerStateSnapshot snapshot = manager.currentStateSnapshot();
+            assertThat(snapshot.worldCount).isEqualTo(Bukkit.getWorlds().size());
+            assertThat(snapshot.pluginCount).isEqualTo(Bukkit.getPluginManager().getPlugins().length);
         }
     }
 
     @Nested
-    @DisplayName("断连与停止监控时不做无谓的主线程工作（#265 评审）")
-    class NoWorkWhenIdle {
-
-        @Test
-        @DisplayName("未连接时不采样")
-        void doesNotSampleWhileDisconnected() {
-            // 修复前 sendBatchUpdate 在 !isConnected 时是先返回、再遍历的，所以永久断连的
-            // 服务器一次遍历都不做。采样搬到主线程之后必须保住这个性质，否则断连反而变成了
-            // 每 5 秒白遍历一遍所有世界和区块——而且是在主线程上。
-            server.addPlayer();
-            when(mockClient.isConnected()).thenReturn(false);
-
-            manager.refreshStateSnapshot();
-
-            // 直接看快照有没有被填，而不是去看发出去的 JSON——后者会撞上「主线程惰性补采」
-            // 那条刻意保留的路径（见 primaryThreadLazilySamplesOnFirstUse），测错东西。
-            assertThat(manager.hasSampledState())
-                    .as("断连期间不该留下任何采样结果")
-                    .isFalse();
-        }
-
-        @Test
-        @DisplayName("客户端为 null 时不采样也不抛异常")
-        void doesNotSampleWithoutClient() {
-            ServerMonitorManager fresh = new ServerMonitorManager();
-            server.addPlayer();
-
-            org.assertj.core.api.Assertions.assertThatCode(fresh::refreshStateSnapshot)
-                    .doesNotThrowAnyException();
-        }
-
-        @Test
-        @DisplayName("断连时线程契约的闸仍然有效")
-        void threadGuardStillFiresWhileDisconnected() throws InterruptedException {
-            // 线程检查排在连接判断之前：否则这道防御闸在最需要它的场景
-            //（连不上、于是走各种异常路径）反而是哑的。
-            when(mockClient.isConnected()).thenReturn(false);
-
-            runOffPrimaryThread(manager::refreshStateSnapshot);
-
-            verify(mockLogger).log(eq(Level.SEVERE), anyString());
-        }
-
-        @Test
-        @DisplayName("stopMonitoring 取消两个主线程定时任务")
-        void stopMonitoringCancelsMainThreadTasks() throws Exception {
-            manager.startMonitoring();
-
-            java.lang.reflect.Field snapshotField =
-                    ServerMonitorManager.class.getDeclaredField("snapshotTask");
-            java.lang.reflect.Field tpsField =
-                    ServerMonitorManager.class.getDeclaredField("tpsTask");
-            snapshotField.setAccessible(true);
-            tpsField.setAccessible(true);
-            assertThat(snapshotField.get(manager)).as("启动后应当持有任务句柄").isNotNull();
-            assertThat(tpsField.get(manager)).isNotNull();
-
-            manager.stopMonitoring();
-
-            assertThat(snapshotField.get(manager))
-                    .as("不取消的话，「停止监控」会变成「不再发送、但照样每 5 秒遍历所有世界」")
-                    .isNull();
-            assertThat(tpsField.get(manager)).isNull();
-        }
-
-        @Test
-        @DisplayName("stopMonitoring 之后还能重新 startMonitoring")
-        void monitoringCanRestartAfterStop() {
-            manager.startMonitoring();
-            manager.stopMonitoring();
-
-            // ScheduledExecutorService 一经 shutdown 就永久失效，重启必须换一个新的。
-            // 否则「logout 之后再 login」这条完全正常的路径会在 scheduleAtFixedRate
-            // 上抛 RejectedExecutionException——而这正是把 stopMonitoring 接进
-            // disableCloud 拆线路径的前提。
-            org.assertj.core.api.Assertions.assertThatCode(manager::startMonitoring)
-                    .doesNotThrowAnyException();
-        }
-    }
-
-    @Nested
-    @DisplayName("采样失败不影响发送")
+    @DisplayName("采样失败不影响读取")
     class Resilience {
 
         @Test
         @DisplayName("重复采样是安全的")
         void repeatedSamplingIsSafe() {
             server.addPlayer();
-            manager.refreshStateSnapshot();
-            manager.refreshStateSnapshot();
-            manager.refreshStateSnapshot();
+            manager.sampleAndPublishState();
+            manager.sampleAndPublishState();
+            manager.sampleAndPublishState();
 
-            manager.sendServerStatus();
-            assertThat(captureStatusData().get("playerCount").getAsInt()).isEqualTo(1);
-        }
-
-        @Test
-        @DisplayName("WebSocket 未连接时不发送")
-        void doesNotSendWhenDisconnected() {
-            when(mockClient.isConnected()).thenReturn(false);
-            manager.refreshStateSnapshot();
-
-            manager.sendServerStatus();
-
-            verify(mockClient, org.mockito.Mockito.never()).sendMessage(any(JsonObject.class));
+            assertThat(manager.currentStateSnapshot().playerCount).isEqualTo(1);
         }
     }
 }

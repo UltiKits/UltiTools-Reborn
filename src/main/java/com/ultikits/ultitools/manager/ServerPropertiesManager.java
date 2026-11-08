@@ -31,7 +31,6 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
 import com.ultikits.ultitools.utils.FrameworkText;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -60,8 +59,6 @@ public class ServerPropertiesManager {
     private static final String FILE_NAME = "server.properties";
 
     private final File serverRoot;
-    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
-    private UltiPanelWebSocketClient webSocketClient;
 
     private static final Set<String> SAFE_KEYS = new HashSet<>(Arrays.asList(
         "motd", "max-players", "view-distance", "simulation-distance",
@@ -95,20 +92,6 @@ public class ServerPropertiesManager {
 
     public ServerPropertiesManager(File serverRoot) {
         this.serverRoot = serverRoot;
-    }
-
-    /**
-     * Sets the protocol v1 client the v1 senders of this manager reply over.
-     *
-     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.1.0) carries the panel requests. Removed in 6.4.0.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.1", forRemoval = true)
-    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
-    public void setWebSocketClient(UltiPanelWebSocketClient client) {
-        V1CloudNotice.once(ServerPropertiesManager.class, "setWebSocketClient");
-        this.webSocketClient = client;
     }
 
     /**
@@ -669,10 +652,6 @@ public class ServerPropertiesManager {
         static WriteResult of(WriteOutcome outcome) {
             return new WriteResult(outcome, null);
         }
-
-        String describe() {
-            return reason != null ? reason : describeOutcome(outcome);
-        }
     }
 
     /** One physical line that defines a key, located with the {@link Properties} grammar. */
@@ -1009,30 +988,6 @@ public class ServerPropertiesManager {
         return lines;
     }
 
-    /**
-     * One line naming why a single-key write did not happen, or {@code null} when it
-     * {@link WriteOutcome#WRITTEN did}. Exposed through {@link #handleSet(JsonObject)}'s
-     * response so a panel operator is told the reason, not just {@code success: false}.
-     */
-    private static String describeOutcome(WriteOutcome outcome) {
-        switch (outcome) {
-            case WRITTEN:
-                return null;
-            case REJECTED:
-                return "Key is not in the allowed list";
-            case NOT_PRESENT_ON_THIS_SERVER:
-                // #473: states only what is known. A key absent from the file may be one this
-                // server version does not have, or one the file simply omits (Paper then uses its
-                // built-in default); nothing tells the two apart -- the Bukkit Server API lists no
-                // server.properties keys (measured on paper-api 1.21.11: no property-listing method
-                // on org.bukkit.Server) and the version's own key set lives in version-specific
-                // server internals.
-                return "This key is not in this server's server.properties";
-            default:
-                return "Failed to read or write server.properties";
-        }
-    }
-
     /** What actually happened to one key. */
     private enum WriteOutcome {
         /** Written to disk. */
@@ -1079,8 +1034,7 @@ public class ServerPropertiesManager {
          *        {@code server.properties} (D-15) — Gate-2 finding: kept distinct from
          *        {@code failed} so the response can say "this key is not in this server's server.properties"
          *        rather than making it indistinguishable from a genuine read/write I/O error,
-         *        matching what a single-key {@code action: "set"} already reports via
-         *        {@link #describeOutcome(WriteOutcome)}.
+         *        matching what a single-key write reports.
          */
         public SetAllResult(List<String> updated, List<String> rejected, List<String> failed,
                             List<String> skipped, List<String> malformed, List<String> notPresentOnServer) {
@@ -1200,74 +1154,10 @@ public class ServerPropertiesManager {
     }
 
     /**
-     * Handle WebSocket message for server properties operations.
-     *
-     * @param data the message data
-     * @deprecated Use readVersioned(int) and updateWithBaseVersion(String, Map), which the protocol
-     *     2.1.0 session calls; this v1 handler replies only over the client handed to
-     *     setWebSocketClient. Removed in 6.4.0.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.1", forRemoval = true)
-    public void handleServerProperties(JsonObject data) {
-        if (data == null) return;
-
-        String action = data.has("action") && !data.get("action").isJsonNull()
-            ? data.get("action").getAsString() : "get";
-
-        if ("get".equals(action)) {
-            handleGet();
-        } else if ("set".equals(action)) {
-            handleSet(data);
-        } else if ("set_all".equals(action)) {
-            handleSetAll(data);
-        }
-    }
-
-    private void handleGet() {
-        Map<String, String> props = getSafeProperties();
-        JsonObject response = new JsonObject();
-        response.addProperty("type", "server_properties_result");
-        JsonObject payload = new JsonObject();
-        for (Map.Entry<String, String> entry : props.entrySet()) {
-            payload.addProperty(entry.getKey(), entry.getValue());
-        }
-        response.add("data", payload);
-        sendResponse(response);
-    }
-
-    private void handleSet(JsonObject data) {
-        String key = data.has("key") ? data.get("key").getAsString() : null;
-        String value = data.has("value") ? data.get("value").getAsString() : null;
-        if (key == null || value == null) return;
-
-        WriteResult result = writeProperty(key, value);
-        JsonObject response = new JsonObject();
-        response.addProperty("type", "server_properties_result");
-        response.addProperty("action", "set");
-        response.addProperty("success", result.outcome == WriteOutcome.WRITTEN);
-        response.addProperty("key", key);
-        String reason = result.describe();
-        if (reason != null) {
-            response.addProperty("reason", reason);
-        }
-        sendResponse(response);
-    }
-
-    private void handleSetAll(JsonObject data) {
-        JsonObject values = data.has("values") && data.get("values").isJsonObject()
-            ? data.getAsJsonObject("values") : null;
-        if (values == null) return;
-
-        applySetAll(values);
-    }
-
-    /**
-     * Apply a batch of properties, report it over the socket, and hand the outcome back.
+     * Apply a batch of properties and hand the outcome back.
      * <p>
-     * The return value is the point. {@code handleSetAll} does not need it — it only ever
-     * builds a message — but {@code update_config} with
-     * {@code fileName: server_properties} routes through here too, and its
+     * The return value is the point: {@code update_config} with
+     * {@code fileName: server_properties} routes through here, and its
      * {@code config_update_response} is supposed to distinguish "delivered" from
      * "took effect". Before this returned anything, that path had no way to learn the
      * answer and reported success unconditionally.
@@ -1320,7 +1210,7 @@ public class ServerPropertiesManager {
                     // ("this server does not have this key"), not a read/write I/O error, and
                     // collapsing the two made a set_all response indistinguishable from an actual
                     // disk failure even though the single-key action: "set" path already reports
-                    // the two separately via describeOutcome(WriteOutcome).
+                    // the two separately.
                     notPresentOnServer.add(key);
                     break;
                 default:
@@ -1335,39 +1225,7 @@ public class ServerPropertiesManager {
         SetAllResult result = new SetAllResult(updated, rejected, failed, skipped, malformed, notPresentOnServer,
                 failureReasons);
         warnIfIncomplete(result, reportedFailures);
-        sendResponse(buildSetAllResponse(result));
         return result;
-    }
-
-    private JsonObject buildSetAllResponse(SetAllResult result) {
-        JsonObject response = new JsonObject();
-        response.addProperty("type", "server_properties_result");
-        response.addProperty("action", "set_all");
-        response.addProperty("success", result.isSuccess());
-        // "updated" stays a number — the panel has always read this field; blocked keys
-        // go through the newly added array fields.
-        response.addProperty("updated", result.getUpdated().size());
-        response.add("rejected", toJsonArray(result.getRejected()));
-        response.add("failed", toJsonArray(result.getFailed()));
-        response.add("skipped", toJsonArray(result.getSkipped()));
-        response.add("malformed", toJsonArray(result.getMalformed()));
-        response.add("notPresentOnServer", toJsonArray(result.getNotPresentOnServer()));
-        // Additive (17-66 review R66-I1): why each failed key was refused, as the single-key "set" reply's
-        // "reason" already says. A key that failed on I/O has no entry. Reasons never carry a value.
-        JsonObject reasons = new JsonObject();
-        for (Map.Entry<String, String> reason : result.getFailureReasons().entrySet()) {
-            reasons.addProperty(reason.getKey(), reason.getValue());
-        }
-        response.add("failureReasons", reasons);
-        return response;
-    }
-
-    private static JsonArray toJsonArray(List<String> keys) {
-        JsonArray array = new JsonArray();
-        for (String key : keys) {
-            array.add(key);
-        }
-        return array;
     }
 
     /**
@@ -1386,13 +1244,6 @@ public class ServerPropertiesManager {
         UltiTools instance = UltiTools.getInstance();
         if (instance != null && instance.getLogger() != null) {
             instance.getLogger().log(Level.WARNING, failure);
-        }
-    }
-
-    private void sendResponse(JsonObject response) {
-        if (webSocketClient != null) {
-            response.addProperty("serverId", webSocketClient.getServerId());
-            webSocketClient.sendMessage(response);
         }
     }
 }

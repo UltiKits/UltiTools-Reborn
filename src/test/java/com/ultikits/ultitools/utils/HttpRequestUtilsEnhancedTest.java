@@ -2,7 +2,6 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 
 import org.junit.jupiter.api.AfterEach;
@@ -86,18 +85,6 @@ class HttpRequestUtilsEnhancedTest {
             HttpRequestUtils.setBaseUrlForTesting("http://another.example.com");
             
             assertThat(HttpRequestUtils.getBaseUrl()).isEqualTo("http://another.example.com");
-        }
-    }
-
-    @Nested
-    @DisplayName("方法签名测试")
-    class MethodSignatureTests {
-
-        @Test
-        @DisplayName("应该有 getServerByUUID 方法")
-        void shouldHaveGetServerByUUIDMethod() throws Exception {
-            Method method = HttpRequestUtils.class.getDeclaredMethod("getServerByUUID", String.class, com.ultikits.ultitools.entities.TokenEntity.class);
-            assertThat(method).isNotNull();
         }
     }
 }

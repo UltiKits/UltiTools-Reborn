@@ -27,7 +27,7 @@ explains it; the sections below are the reference and stay authoritative where t
 5. Replace every other removed API you call with its named replacement - for example `UltiTools#getEconomy()` with `EconomyUtils.getEconomy()`, `AbstractDataEntity` with `BaseDataEntity`, and `DependenceManagers#getAdventure()` with Paper's native `Player#sendMessage(Component)` - checking the generated registry and the exceptions list (see [Removal list for 6.3.0](#removal-list-for-630) and [Same-release exceptions applied in 6.3.0](#same-release-exceptions-applied-in-630)).
 6. Replace `AbstractConfigEntity#getConfig()` with `isPresentInFile(String)` for presence checks, and read or change declared fields and call `save()` instead of mutating Bukkit storage (see [Removed mutable configuration accessor](#removed-mutable-configuration-accessor)).
 7. Persist a configuration change when you make it - `save()` for a change the module made, `saveOperatorChange`/`saveOperatorMapEntry` for exactly what an operator's command names - because nothing writes configuration at server stop, module unload or replacement any more and `save()` writes only what the module changed (see [Configuration release; nothing written at stop](#configuration-release-nothing-written-at-stop) and [Declared types, whole map keys and persistence](#declared-types-whole-map-keys-and-persistence)).
-8. Move each legacy parser (`@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`, `StringHashMapParser`) to a public top-level `ConfigConverter` annotated `@ConfigConverterFor` in a scanned package, and register a converter for any declared field type the framework does not support, which otherwise refuses the module; the legacy parsers are deprecated in 6.3.0 and announced for removal in 6.4.0 (see [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)).
+8. Move each legacy parser (`@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`, `StringHashMapParser`) to a public top-level `ConfigConverter` annotated `@ConfigConverterFor` in a scanned package, and register a converter for any declared field type the framework does not support, which otherwise refuses the module; the legacy parsers are deprecated in 6.3.0 and removed in 6.4.0 (see [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)).
 9. If a field uses `@Scheduled(config = …, periodKey/delayKey = …)` or `@CmdCD(config = …, key = …)`, declare `api-version: 630`, keep a bound `@Scheduled` synchronous, and drop any `@Range` on the bound field, whose range the binding replaces (see [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)).
 10. Check command bodies for the one-tick delay they no longer get: a synchronous body now runs at dispatch, so code inside an `InventoryClickEvent` that opens or closes an inventory or dispatches a command must defer it with `runTask`, and a body that dispatches its own command meets `@UsageLimit` and `@CmdCD` on the same tick (see [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)).
 11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file if its `(String)` default instance could be constructed (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
@@ -46,7 +46,7 @@ explains it; the sections below are the reference and stay authoritative where t
 5. 把调用到的其他已删除 API 换成文中指明的替代——例如 `UltiTools#getEconomy()` 换成 `EconomyUtils.getEconomy()`，`AbstractDataEntity` 换成 `BaseDataEntity`，`DependenceManagers#getAdventure()` 换成 Paper 原生的 `Player#sendMessage(Component)`——并对照生成的登记表和例外清单逐项检查（见 [Removal list for 6.3.0](#removal-list-for-630) 和 [Same-release exceptions applied in 6.3.0](#same-release-exceptions-applied-in-630)）。
 6. 用 `isPresentInFile(String)` 替代 `AbstractConfigEntity#getConfig()` 做存在性判断，读取或修改声明的字段后调用 `save()`，不要再直接改 Bukkit 的存储（见 [Removed mutable configuration accessor](#removed-mutable-configuration-accessor)）。
 7. 在改动发生时就保存配置——模块自己的改动用 `save()`，服主命令指定的内容用 `saveOperatorChange`/`saveOperatorMapEntry`——因为服务器关闭、模块卸载或替换时都不再写入任何配置，`save()` 也只写模块改过的内容（见 [Configuration release; nothing written at stop](#configuration-release-nothing-written-at-stop) 和 [Declared types, whole map keys and persistence](#declared-types-whole-map-keys-and-persistence)）。
-8. 把每个旧解析器（`@ConfigEntry(parser = …)`、`Parser`、`ObjectConfigSerializer`、`ConfigParser`、`DefaultConfigParser`、`StringHashMapParser`）改写为扫描包内带 `@ConfigConverterFor` 的 public 顶层 `ConfigConverter`，并为框架不支持的声明字段类型注册转换器，否则模块会被拒绝；旧解析器在 6.3.0 弃用，公告在 6.4.0 删除（见 [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)）。
+8. 把每个旧解析器（`@ConfigEntry(parser = …)`、`Parser`、`ObjectConfigSerializer`、`ConfigParser`、`DefaultConfigParser`、`StringHashMapParser`）改写为扫描包内带 `@ConfigConverterFor` 的 public 顶层 `ConfigConverter`，并为框架不支持的声明字段类型注册转换器，否则模块会被拒绝；旧解析器在 6.3.0 弃用，已在 6.4.0 删除（见 [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)）。
 9. 字段使用 `@Scheduled(config = …, periodKey/delayKey = …)` 或 `@CmdCD(config = …, key = …)` 时，声明 `api-version: 630`，绑定配置的 `@Scheduled` 保持同步，并删除该字段上的 `@Range`（由绑定自带的范围取代）（见 [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)）。
 10. 检查依赖“延后一刻执行”的命令代码：同步命令体现在于分发时立即执行，因此在 `InventoryClickEvent` 中打开或关闭物品栏、或分发命令的代码要用 `runTask` 推迟，分发自身命令的命令体会在同一刻遇到 `@UsageLimit` 和 `@CmdCD`（见 [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)）。
 11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 在能通过 `(String)` 构造器创建默认实例时，会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
@@ -268,6 +268,9 @@ has a 4,194,304-byte limit, which fits five worst-case 64,000-character changelo
 the changelogs across pages. JAR size and hash verification are unchanged.
 
 ### Deprecations: the protocol v1 surface, removed in 6.4.0
+
+As of 6.4.0 every entry below is removed; see
+[Removal list for 6.4.0](#removal-list-for-640) for the migration. The table records their 6.3.1 behaviour.
 
 Every entry below is `@Deprecated(since = "6.3.1", forRemoval = true)` with a `@deprecated` paragraph and
 `@removeIn 6.4.0`, and appears in `compatibility/DEPRECATIONS.md`. Behaviour codes: **R** refuses explicitly
@@ -1389,7 +1392,8 @@ The six deprecated announcements are `ConfigEntry#parser()`, `interfaces.Parser`
 `interfaces.ObjectConfigSerializer`, and `interfaces.impl.pasers.ConfigParser`,
 `DefaultConfigParser`, `StringHashMapParser` (the published package spelling `pasers` is retained).
 Their first release carrying `@Deprecated(since = "6.3.0", forRemoval = true)` is 6.3.0; the next
-MINOR, 6.4.0, is the announced removal version. They are retained in 6.3.0, not deleted now.
+MINOR, 6.4.0, is the announced removal version. They were retained in 6.3.x and are removed in 6.4.0; the
+rest of this section describes the 6.3.x behaviour and the migration.
 An explicit non-default `parser = X.class` still selects the frozen legacy adapter. Its detached
 input is emitted under one key and loaded by a fresh Bukkit `YamlConfiguration#get`, retaining
 6.2 section-based dotted-key splitting and Bukkit `==` alias deserialization at the root and inside
@@ -1707,6 +1711,55 @@ flatten-maven-plugin and carries no dependency declarations, so placing UltiTool
 beyond compile time (Maven `compile`, Gradle `implementation`) gains you no transitive dependencies.
 What it does do, if your build has a shade or shadow step, is bundle the entire shaded framework into
 your module JAR, where it conflicts at runtime with the UltiTools already installed on the server.
+## Removal list for 6.4.0
+
+6.4.0 removes the public API that 6.3.0 and 6.3.1 announced for removal in 6.4.0. Every entry below carried
+`@Deprecated(forRemoval = true)` and `@removeIn 6.4.0` in a released version, so a module still using one was
+warned by name at compile time. The generated registry (`compatibility/DEPRECATIONS.md`) marks each one
+`REMOVED` in 6.4.0. A module compiled against 6.3.x that calls a removed member fails with
+`NoSuchMethodError` or `NoClassDefFoundError` on 6.4.0; recompile against 6.4.0 and apply the migration.
+
+**Announced in 6.3.0**
+
+| Removed | Migration |
+|---|---|
+| `DataStore#getOperator(UltiToolsPlugin, Class)`, `DataStore#getOperator(File, Class)` | Call `UltiToolsPlugin#getDataOperator(Class)` or `UltiToolsAPI.getDataOperator(plugin, Class)`; both resolve through `DataStore#getOperator(DataScope, Class)`. A custom `DataStore` overrides `getOperatorUnchecked(DataScope, Class)`. |
+| `@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`, `StringHashMapParser` | Delete `parser = …` and register a `ConfigConverter<T>` annotated `@ConfigConverterFor(T.class)` in a scanned package: `Parser#parse` becomes `fromPlain`, `serialize` / `ObjectConfigSerializer` become `toPlain` returning plain data. The built-in conversions already cover plain types, typed collections and `Map<String, String>`, so a `DefaultConfigParser` or `StringHashMapParser` declaration is simply deleted. See [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters). |
+| `TransactionManager#getConnection()`, `#setIsolationLevel(int)`, `#setReadOnly(boolean)` | Program against `JdbcTransactionManager`, which declares all three. |
+| `SimpleTempListener()`, `SimpleTempListener(Class, TempEventHandler)`, `(Class, TempEventHandler, Function)`, `(Class, TempEventHandler, EventPriority)` | Use `TempListener.common(Class)` or the four-argument constructor `SimpleTempListener(Class, EventPriority, TempEventHandler, Function)`. |
+| `PluginDependencyResolver.PluginNode#getAllDependencies(Set)` | Use `getAllDependencies(Set, Map)`; pass `Collections.emptyMap()` for the old behaviour. |
+| `AnnotationUtils#findAnnotation(Class, Class)` | Use `MergedAnnotationResolver.find(Class, Class)`. |
+
+**Announced in 6.3.1: the protocol v1 cloud surface** (listed with its 6.3.1 behaviour under
+[Deprecations: the protocol v1 surface, removed in 6.4.0](#deprecations-the-protocol-v1-surface-removed-in-640))
+
+| Removed | Migration |
+|---|---|
+| `entities.ApiResponse`, `entities.TokenEntity`, `entities.vo.ServerEntityVO` | None: they modelled the v1 Worker envelope, JWT and server record, which UltiCloud no longer serves. Link a server with `/ulticloud login` (`CloudAuthManager#login(DeviceLoginListener)`). |
+| `websocket.UltiPanelWebSocketClient`, `websocket.ReconnectStrategy`, `websocket.ExponentialBackoffStrategy` (and its `Builder`) | None: the framework's own UltiCloud session (protocol 2.1.0) holds the connection and its reconnect policy. |
+| `CommandExecutionManager#executeCommand(JsonObject)`, `#setWebSocketClient(..)`, `CommandExecutionManager.CommandResult` | `execute(String, String, Executor, CommandResultSink)`, which the protocol 2.1.0 session calls for a panel command. |
+| `FileOperationManager#handleFileOperation(JsonObject)`, `#setWebSocketClient(..)`; `ServerPropertiesManager#handleServerProperties(JsonObject)`, `#setWebSocketClient(..)` | None for modules: the protocol 2.1.0 session answers the panel's file and `server.properties` requests. |
+| `LogStreamManager#initialize(..)`, `#getLogTransmitter()`, `#handleLogStreamMessage(..)`, `#sendCustomLog(..)`, `#sendPlayerEventLog(..)`, `#sendPluginActionLog(..)`, `#onPlayerJoin`, `#onPlayerQuit`, `#onServerLoad`; `UltiPanelLogTransmitter(UltiPanelWebSocketClient, String)` | None: the protocol 2.1.0 session streams the console itself. |
+| `PlayerEventManager#initialize(..)` and its seven `on…` listener methods | None: the protocol 2.1.0 session reports player events itself. |
+| `ServerMonitorManager#startMonitoring()`, `#stopMonitoring()`, `#isMonitoring()`, `#sendServerStatus()`, `#sendServerStatusWithRequestId(..)`, `#sendMetricsData()`, `#sendMetricsDataWithRequestId(..)`, `#sendPlayerEvent(..)`, `#setWebSocketClient(..)` | None: the protocol 2.1.0 session sends server state itself. |
+| `CloudAuthManager#login(Runnable, Consumer, Runnable, Consumer, Consumer)` | `CloudAuthManager#login(DeviceLoginListener)`. |
+| `CloudAuthManager.CloudStatus#getUserName()`, `#getExpirationDate()` | `getServerName()` or `getServerId()`; a server credential has no user name or expiry. |
+| `HttpRequestUtils#registerServer(..)`, `#updateServer(..)`, `#getServerByUUID(..)` | None: `/ulticloud login` links a protocol 2.1.0 server. `HttpRequestUtils` itself stays. |
+| `PluginInitiationUtils#startTokenRefreshScheduler()` | None needed: the server credential does not expire. |
+| `SimpleHttpClient` (and `SimpleHttpClient.Response`) | `HttpURLConnection` or an HTTP client library of your own; the framework no longer used it. |
+| `UltiCloudRequests` (with `get`, `post`, `Outcome`, `Result`) | `CloudPlayerLinks` (`UltiTools#getCloudPlayerLinks()`) for player links; every call already answered `PATH_NOT_ALLOWED` without a request since 6.3.1. |
+
+The managers above are `@ApiStatus.Internal`; their removed members only acted through a v1 client that could
+never connect, so their removal changes nothing a server operator sees.
+
+**Deprecated in 6.4.0 for removal in 6.5.0.** `DataStore#checkOwnership(File, Class)` and
+`#checkOwnership(UltiToolsPlugin, Class)`, and the public `getOperator(UltiToolsPlugin, Class)` and
+`getOperator(File, Class)` methods of `JsonStore`, `MysqlDataStore` and `SQLiteDataStore`, outlived the
+`DataStore` overloads they served. They keep their 6.3.x behaviour, now carry
+`@Deprecated(since = "6.4.0", forRemoval = true)` with `@removeIn 6.5.0` (the first release the one-MINOR rule
+above allows), and are replaced by `DataStore#getOperator(DataScope, Class)` (a module calls
+`UltiToolsPlugin#getDataOperator(Class)`).
+
 ## Removal list for 6.3.0
 
 The removal list is generated at `mvn verify` from the `@Deprecated(forRemoval = true)`

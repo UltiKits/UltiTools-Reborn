@@ -1,9 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -30,13 +28,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * A panel edit of one {@code server.properties} key changes exactly the one line that defines it (inventory B4,
@@ -65,7 +61,6 @@ class ServerPropertiesOneLineWriteTest {
 
     private Path file;
     private ServerPropertiesManager manager;
-    private UltiPanelWebSocketClient socket;
     private final List<LogRecord> warnings = new ArrayList<>();
     private final Handler capture = new Handler() {
         @Override
@@ -90,9 +85,6 @@ class ServerPropertiesOneLineWriteTest {
     void setUp() {
         file = directory.resolve("server.properties");
         manager = new ServerPropertiesManager(directory.toFile());
-        socket = mock(UltiPanelWebSocketClient.class);
-        lenient().when(socket.getServerId()).thenReturn("srv-1");
-        manager.setWebSocketClient(socket);
         Logger.getLogger(ServerPropertiesManager.class.getName()).addHandler(capture);
     }
 
@@ -106,9 +98,9 @@ class ServerPropertiesOneLineWriteTest {
         byte[] original = UTF8_FILE.getBytes(StandardCharsets.UTF_8);
         Files.write(file, original);
 
-        JsonObject reply = set("max-players", "30");
+        ServerPropertiesManager.SetAllResult reply = set("max-players", "30");
 
-        assertThat(reply.get("success").getAsBoolean()).isTrue();
+        assertThat(reply.isSuccess()).isTrue();
         assertOnlyLineChanged(original, Files.readAllBytes(file), 5, "max-players=30\n");
         assertThat(readLikePaper(Files.readAllBytes(file)).getProperty("max-players")).isEqualTo("30");
         assertThat(readLikePaper(Files.readAllBytes(file)).getProperty("motd")).isEqualTo("§a欢迎");
@@ -126,19 +118,19 @@ class ServerPropertiesOneLineWriteTest {
         byte[] original = text.getBytes(StandardCharsets.UTF_8);
         Files.write(file, original);
 
-        assertThat(set("max-players", "31").get("success").getAsBoolean()).isTrue();
+        assertThat(set("max-players", "31").isSuccess()).isTrue();
         assertOnlyLineChanged(original, Files.readAllBytes(file), 1, "max\\-players : 31\r\n");
 
         byte[] second = Files.readAllBytes(file);
-        assertThat(set("view-distance", "8").get("success").getAsBoolean()).isTrue();
+        assertThat(set("view-distance", "8").isSuccess()).isTrue();
         assertOnlyLineChanged(second, Files.readAllBytes(file), 2, "view-distance\t8\r\n");
 
         byte[] third = Files.readAllBytes(file);
-        assertThat(set("pvp", "false").get("success").getAsBoolean()).isTrue();
+        assertThat(set("pvp", "false").isSuccess()).isTrue();
         assertOnlyLineChanged(third, Files.readAllBytes(file), 3, "   pvp = false\r\n");
 
         byte[] fourth = Files.readAllBytes(file);
-        assertThat(set("motd", "new").get("success").getAsBoolean()).isTrue();
+        assertThat(set("motd", "new").isSuccess()).isTrue();
         assertOnlyLineChanged(fourth, Files.readAllBytes(file), 4, "motd=new");
     }
 
@@ -147,7 +139,7 @@ class ServerPropertiesOneLineWriteTest {
         Files.write(file, UTF8_FILE.getBytes(StandardCharsets.UTF_8));
         String value = " lead\\back#hash!bang=eq:colon\ttab §b你好";
 
-        assertThat(set("motd", value).get("success").getAsBoolean()).isTrue();
+        assertThat(set("motd", value).isSuccess()).isTrue();
 
         assertThat(readLikePaper(Files.readAllBytes(file)).getProperty("motd")).isEqualTo(value);
         assertThat(manager.getSafeProperties().get("motd")).isEqualTo(value);
@@ -159,11 +151,11 @@ class ServerPropertiesOneLineWriteTest {
         byte[] original = ("motd=café\n" + "max-players=20\n").getBytes(StandardCharsets.ISO_8859_1);
         Files.write(file, original);
 
-        assertThat(set("max-players", "25").get("success").getAsBoolean()).isTrue();
+        assertThat(set("max-players", "25").isSuccess()).isTrue();
         assertOnlyLineChanged(original, Files.readAllBytes(file), 1, "max-players=25\n");
         assertThat(manager.getSafeProperties().get("motd")).isEqualTo("café");
 
-        assertThat(set("motd", "欢迎").get("success").getAsBoolean()).isTrue();
+        assertThat(set("motd", "欢迎").isSuccess()).isTrue();
         byte[] after = Files.readAllBytes(file);
         assertThat(readLikePaper(after).getProperty("motd")).isEqualTo("欢迎");
         assertThat(new String(after, StandardCharsets.ISO_8859_1)).startsWith("motd=\\u6B22\\u8FCE\n");
@@ -174,10 +166,10 @@ class ServerPropertiesOneLineWriteTest {
         byte[] original = ("max-players=20\n# a note\nmax-players=40\n").getBytes(StandardCharsets.UTF_8);
         Files.write(file, original);
 
-        JsonObject reply = set("max-players", "30");
+        ServerPropertiesManager.SetAllResult reply = set("max-players", "30");
 
-        assertThat(reply.get("success").getAsBoolean()).isFalse();
-        assertThat(reply.get("reason").getAsString()).contains("more than one line").contains("1").contains("3")
+        assertThat(reply.isSuccess()).isFalse();
+        assertThat(reply.getFailureReasons().get("max-players")).contains("more than one line").contains("1").contains("3")
                 .doesNotContain("20").doesNotContain("40").doesNotContain("30");
         assertThat(Files.readAllBytes(file)).isEqualTo(original);
         assertThat(warnings).hasSize(1);
@@ -190,16 +182,16 @@ class ServerPropertiesOneLineWriteTest {
         byte[] original = ("motd=hello \\\n    world\nmax-players=20\n").getBytes(StandardCharsets.UTF_8);
         Files.write(file, original);
 
-        JsonObject reply = set("motd", "plain");
+        ServerPropertiesManager.SetAllResult reply = set("motd", "plain");
 
-        assertThat(reply.get("success").getAsBoolean()).isFalse();
-        assertThat(reply.get("reason").getAsString()).contains("continues onto the next line").contains("1");
+        assertThat(reply.isSuccess()).isFalse();
+        assertThat(reply.getFailureReasons().get("motd")).contains("continues onto the next line").contains("1");
         assertThat(Files.readAllBytes(file)).isEqualTo(original);
 
         // A key inside another key's continued value is not a definition of that key.
         byte[] tricky = ("motd=a \\\nmax-players=5\nmax-players=20\n").getBytes(StandardCharsets.UTF_8);
         Files.write(file, tricky);
-        assertThat(set("max-players", "30").get("success").getAsBoolean()).isTrue();
+        assertThat(set("max-players", "30").isSuccess()).isTrue();
         assertOnlyLineChanged(tricky, Files.readAllBytes(file), 2, "max-players=30\n");
     }
 
@@ -252,8 +244,8 @@ class ServerPropertiesOneLineWriteTest {
             }
             return invocation.callRealMethod();
         })) {
-            JsonObject reply = set("max-players", "30");
-            assertThat(reply.get("success").getAsBoolean()).isFalse();
+            ServerPropertiesManager.SetAllResult reply = set("max-players", "30");
+            assertThat(reply.isSuccess()).isFalse();
         }
 
         assertThat(seen).as("the write went through the atomic config writer").contains("move", "openTarget");
@@ -292,16 +284,14 @@ class ServerPropertiesOneLineWriteTest {
         }
     }
 
-    private JsonObject set(String key, String value) {
-        Mockito.clearInvocations(socket);
-        JsonObject request = new JsonObject();
-        request.addProperty("action", "set");
-        request.addProperty("key", key);
-        request.addProperty("value", value);
-        manager.handleServerProperties(request);
-        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-        verify(socket).sendMessage(captor.capture());
-        return captor.getValue();
+    /**
+     * A panel edit of one key. The protocol v1 {@code set} message was removed in 6.4.0; the same one-line write is
+     * reached through {@link ServerPropertiesManager#applySetAll} with a single key.
+     */
+    private ServerPropertiesManager.SetAllResult set(String key, String value) {
+        JsonObject values = new JsonObject();
+        values.addProperty(key, value);
+        return manager.applySetAll(values);
     }
 
     /** Paper 1.21.11 {@code Settings#loadFromFile}: strict UTF-8, falling back to ISO-8859-1. */

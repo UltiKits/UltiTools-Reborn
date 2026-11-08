@@ -34,8 +34,8 @@ import java.util.Set;
  * direct {@code @ComponentScan} (or {@code @EnableAutoRegister}) therefore gets the direct one,
  * whatever order the two are written in (C45).
  * <p>
- * {@link com.ultikits.ultitools.utils.AnnotationUtils#findAnnotation} only walks one
- * meta-annotation level and never inspects {@link AliasFor} at all, which is why
+ * The legacy {@code AnnotationUtils.findAnnotation} (removed in 6.4.0) only walked one
+ * meta-annotation level and never inspected {@link AliasFor} at all, which is why
  * {@code @UltiToolsModule.scanBasePackages} works today (its call site hand-reads the
  * meta-annotation) while every other {@code @AliasFor} attribute on that same annotation is
  * declared but has no reader. Per-site special-casing was rejected (D-01) because it does not

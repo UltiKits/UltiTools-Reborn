@@ -1,12 +1,10 @@
 package com.ultikits.ultitools.manager;
 
-import com.google.gson.JsonObject;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -191,19 +189,19 @@ class CommandExecutionManagerSensitiveTest {
     }
 
     @Test
-    void theV1HandlerLogsAndRecordsTheCommandWithoutItsArguments() {
-        CommandExecutionManager manager = new CommandExecutionManager();
-        UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
-        manager.setWebSocketClient(client);
-        JsonObject data = new JsonObject();
-        data.addProperty("command", "/logadmin reset Steve " + SECRET);
-        data.addProperty("commandId", "v1-sensitive");
+    void aSensitiveCommandThatFailsIsLoggedWithoutItsArguments() {
+        // Ported from the v1-handler test when 6.4.0 removed executeCommand(JsonObject): the v1
+        // handler's failure lines went through loggedCommandLine; the surviving panel path logs a
+        // dispatch failure with the command name only, and that has to stay free of the arguments.
+        register("logadmin", (sender, args) -> {
+            throw new IllegalStateException("handler failed");
+        });
 
-        manager.executeCommand(data);
-        server.getScheduler().performOneTick();
+        execute("/logadmin reset Steve " + SECRET);
 
         assertThat(loggedLines()).isNotEmpty().noneMatch(line -> line.contains(SECRET));
         assertThat(loggedLines()).contains(FrameworkText.format("[远程命令] > %s", "logadmin ***"));
+        assertThat(loggedLines()).contains(FrameworkText.format("[远程命令] 命令执行异常: %s", "logadmin"));
         ArgumentCaptor<RemoteActionLog.Entry> entry = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
         verify(actionLog, atLeastOnce()).record(entry.capture());
         assertThat(entry.getAllValues()).extracting(RemoteActionLog.Entry::getTarget).containsOnly("logadmin ***");
