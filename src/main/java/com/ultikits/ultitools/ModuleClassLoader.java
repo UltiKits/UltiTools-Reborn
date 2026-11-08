@@ -17,18 +17,22 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
+import java.util.logging.Logger;
+
+import com.ultikits.ultitools.utils.PluginYmlReader;
 
 /**
  * The single, parent-first module loader. Only classes physically supplied by explicit module JAR
@@ -53,16 +57,20 @@ final class ModuleClassLoader extends URLClassLoader {
     private final Map<URL, JarFile> moduleJarFiles = new HashMap<>();
     private boolean closed;
 
-    /** Production foundation: deliberately no compatibility rules or additional logging. */
+    private final ConcurrentMap<URL, ConcurrentMap<String, Integer>> rewrittenClasses = new ConcurrentHashMap<>();
+    private final AtomicBoolean startupReported = new AtomicBoolean();
+
+    /** Production rules use this start's real parent, never the module loader itself. */
     ModuleClassLoader(URL[] urls, ClassLoader parent, URL serverJar) {
-        this(urls, parent, serverJar, Collections.emptyList(), null);
+        this(urls, parent, serverJar, Collections.<ClassRewriteRule>singletonList(
+                new InvokeKindAlignmentRule(new RuntimeServerApiProbe(parent))), null);
     }
 
     /** Internal test seam observes a copy of exactly the bytes about to be defined. */
     ModuleClassLoader(URL[] urls, ClassLoader parent, URL serverJar, List<ClassRewriteRule> rules,
             BiConsumer<String, byte[]> definitionObserver) {
         super(urls, parent);
-        moduleJars = new HashSet<>(Arrays.asList(urls));
+        moduleJars = new LinkedHashSet<>(Arrays.asList(urls));
         moduleJars.remove(serverJar);
         List<ClassRewriteRule> snapshot = new ArrayList<>(rules);
         for (ClassRewriteRule rule : snapshot) {
@@ -152,7 +160,9 @@ final class ModuleClassLoader extends URLClassLoader {
             if (definitionObserver != null) {
                 definitionObserver.accept(binaryName, rewritten.clone());
             }
-            return defineClass(binaryName, rewritten, 0, rewritten.length, new CodeSource(source, signers));
+            Class<?> defined = defineClass(binaryName, rewritten, 0, rewritten.length, new CodeSource(source, signers));
+            recordRewrite(source, binaryName);
+            return defined;
         } catch (IOException e) {
             throw new ClassNotFoundException("Could not read module class " + binaryName, e);
         }
@@ -221,6 +231,51 @@ final class ModuleClassLoader extends URLClassLoader {
             }
         }
         return current;
+    }
+
+    private void recordRewrite(URL source, String binaryName) {
+        int sites = 0;
+        for (ClassRewriteRule rule : rules) {
+            if (rule instanceof InvokeKindAlignmentRule) {
+                sites += ((InvokeKindAlignmentRule) rule).rewrittenSites(binaryName);
+            }
+        }
+        if (sites != 0) {
+            rewrittenClasses.computeIfAbsent(source, ignored -> new ConcurrentHashMap<>()).put(binaryName, sites);
+        }
+    }
+
+    /**
+     * One observed startup snapshot, after module initialization. Later lazy loads are not
+     * predictions in this count and do not print additional startup lines.
+     */
+    void logRewriteCounts(Logger logger) {
+        if (!startupReported.compareAndSet(false, true)) {
+            return;
+        }
+        for (URL source : moduleJars) {
+            if (!"file".equals(source.getProtocol()) || !source.getPath().endsWith(".jar")) {
+                continue;
+            }
+            String name = source.getPath().substring(source.getPath().lastIndexOf('/') + 1);
+            try {
+                File jar = new File(source.toURI());
+                String declared = PluginYmlReader.readFromJarFile(jar).getName();
+                if (declared != null) {
+                    name = declared;
+                }
+            } catch (java.net.URISyntaxException invalidSource) {
+                // The source URL still identifies this module when it is not a file URI.
+            }
+            ConcurrentMap<String, Integer> classes = rewrittenClasses.get(source);
+            List<Integer> counts = classes == null ? Collections.emptyList() : new ArrayList<>(classes.values());
+            long sites = 0;
+            for (int count : counts) {
+                sites += count;
+            }
+            logger.info("[UltiTools-API] " + name + " startup compatibility rewriting: " + counts.size()
+                    + " classes, " + sites + " call sites (R1: " + sites + ")");
+        }
     }
 
     private void ensurePackage(String binaryName, Manifest manifest, URL source) {
