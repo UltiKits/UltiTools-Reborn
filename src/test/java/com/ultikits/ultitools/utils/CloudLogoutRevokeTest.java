@@ -222,7 +222,7 @@ class CloudLogoutRevokeTest {
         try {
             new CloudLoginCommand().logout(sender());
             server.getScheduler().waitAsyncTasksFinished();
-            awaitWithin(10_000, () -> lines.size() >= 2, "the logout outcome line");
+            awaitWithin(10_000, () -> lines.size() >= 3, "both logout outcome lines");
         } finally {
             CredentialStore.setSimulateWriteFailureForTesting(false);
         }
