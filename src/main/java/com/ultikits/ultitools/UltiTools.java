@@ -313,25 +313,53 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // early boot reaches the panel too; released if the stream does not start in time. Not
         // attached at all when the logs capability is off (D-12).
         EarlyLogCapture.startIfLogsEnabled(getConfig().getStringList("ultipanel.logging.excluded-loggers"));
-        // The panel's log stream mirrors the server console (as of 6.3.0): Paper's own output goes
-        // through Log4j, which ConsoleMirror feeds into the same capture. Installed together with
-        // the capture so the vanilla start-up lines are kept as well.
-        if (Capability.LOGS.isEnabled()) {
-            ConsoleMirror.install();
-        }
-        // Plugin classloader initialization
-        URL serverJar = getServerJar();
+        // #571: onEnable schedules the capture's release, but it never runs when onLoad throws; the
+        // capture would then stay on the root logger, holding records and this class loader, until
+        // the next log line after its limit. Released here before the failure leaves onLoad.
         try {
-            if (serverJar != null) {
-                File serverFile = new File(serverJar.toURI());
-                String name = serverFile.getName().split("\\.jar")[0];
-                getLogger().info("Server Jar detected: " + name);
+            // The panel's log stream mirrors the server console (as of 6.3.0): Paper's own output goes
+            // through Log4j, which ConsoleMirror feeds into the same capture. Installed together with
+            // the capture so the vanilla start-up lines are kept as well.
+            if (Capability.LOGS.isEnabled()) {
+                ConsoleMirror.install();
             }
-        } catch (URISyntaxException e) {
-            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this is
-            // the core plugin itself failing during its own onLoad, the same category as a
-            // module's own load failure.
-            throw PluginModuleException.loadFailed("UltiTools", e);
+            // Plugin classloader initialization
+            URL serverJar = getServerJar();
+            try {
+                if (serverJar != null) {
+                    File serverFile = new File(serverJar.toURI());
+                    String name = serverFile.getName().split("\\.jar")[0];
+                    getLogger().info("Server Jar detected: " + name);
+                }
+            } catch (URISyntaxException e) {
+                // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this is
+                // the core plugin itself failing during its own onLoad, the same category as a
+                // module's own load failure.
+                throw PluginModuleException.loadFailed("UltiTools", e);
+            }
+        } catch (RuntimeException | Error failure) {
+            releaseStartUpLogging(failure);
+            throw failure;
+        }
+    }
+
+    /**
+     * Detaches the start-up log capture and removes the console mirror after {@link #onLoad()}
+     * failed (#571). A failure of either is added to {@code failure} as suppressed, so the original
+     * exception is the one the server reports.
+     */
+    // PMD.AvoidCatchingGenericException: the cleanup must not replace the onLoad failure.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static void releaseStartUpLogging(Throwable failure) {
+        try {
+            EarlyLogCapture.release();
+        } catch (RuntimeException | LinkageError cleanupFailure) {
+            failure.addSuppressed(cleanupFailure);
+        }
+        try {
+            ConsoleMirror.uninstall();
+        } catch (RuntimeException | LinkageError cleanupFailure) {
+            failure.addSuppressed(cleanupFailure);
         }
     }
 
@@ -656,9 +684,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
         try {
             String changed = keyBukkitWouldReadDifferently(configFile, loaded.fingerprint(), server, insert);
             if (changed != null) {
+                // #826: the whole file stays neutral; a named key also says why, with examples covering both
+                // layouts that produce it, so neither is reported as if it were the other.
+                String why = "the whole file".equals(changed)
+                        ? " Inserting the missing panel keys could not be verified to preserve how the server reads the"
+                        + " existing file."
+                        : " Inserting the missing panel keys would change how the server reads '" + changed + "' (for"
+                        + " example, the same setting written both as one dotted key and as a nested section, or a value"
+                        + " where the inserted keys need a section).";
                 logger.warning("Configuration file " + configFile.getAbsolutePath() + " was not written: capability"
-                        + " migration validation failed for '" + changed + "'. Inserting the missing panel keys could not"
-                        + " be verified to preserve how the server reads the existing file. The built-in defaults answer"
+                        + " migration validation failed for '" + changed + "'." + why + " The built-in defaults answer"
                         + " for the missing keys; the file is unchanged.");
                 return false;
             }

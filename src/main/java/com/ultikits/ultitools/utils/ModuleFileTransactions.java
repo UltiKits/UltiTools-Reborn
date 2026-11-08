@@ -2713,7 +2713,7 @@ public final class ModuleFileTransactions {
         public static final String REASON_INVALID_JAR = "下载的文件 %s 不是有效的模块 JAR";
         public static final String REASON_WRONG_IDENTITY = "下载的 %s 没有声明 identify-string %s 和版本号";
         /** Args: the staged file name, the metadata or content read error. */
-        public static final String REASON_STAGED_UNREADABLE = "the downloaded %s could not be read (%s)";
+        public static final String REASON_STAGED_UNREADABLE = "无法读取下载的 %s（%s）";
         public static final String REASON_WRONG_VERSION = "下载的 %s 声明的版本是 %s，不是云端给出的最新版本 %s";
         public static final String REASON_CANCELLED_WHILE_DOWNLOADING = "下载期间该模块已被卸载，本次更新已取消";
         public static final String REASON_NEEDS_OPERATOR =

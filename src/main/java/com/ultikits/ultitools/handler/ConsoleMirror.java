@@ -47,8 +47,8 @@ import com.ultikits.ultitools.manager.EarlyLogCapture;
  * <p>
  * <b>Asynchronous loggers.</b> If the server's Log4j configuration uses asynchronous loggers, the
  * appender runs on another thread, where neither the forwarder mark nor the re-entry guard holds.
- * The mirror is then not installed and a warning says so; the stream carries the plugin lines only,
- * as before 6.3.0.
+ * The mirror is then not installed and one warning per server run says so; the stream carries the
+ * plugin lines only, as before 6.3.0.
  * <p>
  * <b>No forwarder, no mirror (fail closed, UltiTools-Reborn#583 F1).</b> The appender can tell a
  * forwarded plugin line from a console line only through the forwarder it wrapped. When no root
@@ -91,6 +91,20 @@ public final class ConsoleMirror {
      */
     private static boolean forwarderMissingWarned;
 
+    /**
+     * Whether the WARNING for a failed install -- asynchronous loggers, or an exception or linkage
+     * error from Log4j -- was logged in this server run (#583 F4). Like the missing forwarder, the
+     * cause cannot change while the server runs, and {@link #install()} runs again on every panel
+     * reconnect. Guarded by {@link #LOCK}.
+     */
+    private static boolean installFailureWarned;
+
+    /**
+     * Test seam: run between the two handler-list calls of each forwarder swap, so a test can look
+     * at the root logger's handlers at that moment (#583 F2). {@code null} outside tests.
+     */
+    static volatile Runnable swapHook;
+
     private ConsoleMirror() {
     }
 
@@ -109,8 +123,8 @@ public final class ConsoleMirror {
             try {
                 return installLocked();
             } catch (RuntimeException | LinkageError e) {
-                warn("[UltiPanel] The panel's log stream could not mirror the server console, so it carries "
-                        + "plugin lines only: " + e);
+                warnInstallFailureOnce("[UltiPanel] The panel's log stream could not mirror the server console, "
+                        + "so it carries plugin lines only: " + e);
                 return false;
             }
         }
@@ -125,8 +139,8 @@ public final class ConsoleMirror {
         LoggerContext ctx = (LoggerContext) found;
         Configuration configuration = ctx.getConfiguration();
         if (usesAsyncLoggers(ctx, configuration)) {
-            warn("[UltiPanel] The server's Log4j configuration uses asynchronous loggers, so the panel's log "
-                    + "stream does not mirror the server console and carries plugin lines only.");
+            warnInstallFailureOnce("[UltiPanel] The server's Log4j configuration uses asynchronous loggers, so "
+                    + "the panel's log stream does not mirror the server console and carries plugin lines only.");
             return false;
         }
         if (wrapForwarders() == 0) {
@@ -200,6 +214,12 @@ public final class ConsoleMirror {
 
     /**
      * Wraps every Paper forwarder on the root logger.
+     * <p>
+     * {@code java.util.logging.Logger} has no "replace handler" operation, so each swap is two calls.
+     * The wrapper is added before the forwarder is removed (#583 F2): a record another thread logs
+     * between the two calls then reaches Log4j -- the console and {@code latest.log} -- twice, once
+     * through each, instead of not at all. A duplicated console line in that instant is the lesser
+     * harm; the appender is not installed yet, so the panel stream is not affected.
      *
      * @return how many were wrapped; {@code 0} means none was found and nothing was changed
      */
@@ -208,21 +228,35 @@ public final class ConsoleMirror {
         int wrapped = 0;
         for (Handler handler : root.getHandlers()) {
             if (FORWARD_LOG_HANDLER.equals(handler.getClass().getName())) {
-                root.removeHandler(handler);
                 root.addHandler(new ForwardScope(handler));
+                runSwapHook();
+                root.removeHandler(handler);
                 wrapped++;
             }
         }
         return wrapped;
     }
 
+    /**
+     * Puts each wrapped forwarder back, adding the original before removing the wrapper for the
+     * same reason as {@link #wrapForwarders()}; the appender is already removed by then, so the
+     * instant's duplicate again reaches only the console and {@code latest.log}.
+     */
     private static void unwrapForwarders() {
         Logger root = Logger.getLogger("");
         for (Handler handler : root.getHandlers()) {
             if (handler instanceof ForwardScope) {
-                root.removeHandler(handler);
                 root.addHandler(((ForwardScope) handler).delegate);
+                runSwapHook();
+                root.removeHandler(handler);
             }
+        }
+    }
+
+    private static void runSwapHook() {
+        Runnable hook = swapHook;
+        if (hook != null) {
+            hook.run();
         }
     }
 
@@ -267,6 +301,14 @@ public final class ConsoleMirror {
             return Level.FINE;
         }
         return Level.FINEST;
+    }
+
+    /** Logs a failed-install WARNING once per server run (#583 F4). Called under {@link #LOCK}. */
+    private static void warnInstallFailureOnce(String message) {
+        if (!installFailureWarned) {
+            installFailureWarned = true;
+            warn(message);
+        }
     }
 
     private static void warn(String message) {
