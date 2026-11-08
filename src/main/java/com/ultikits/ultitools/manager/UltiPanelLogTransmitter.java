@@ -2,34 +2,20 @@ package com.ultikits.ultitools.manager;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.entities.Capability;
-import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import lombok.Getter;
-import lombok.Setter;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -57,66 +43,18 @@ public class UltiPanelLogTransmitter {
     static final int MIN_INTERVAL_MS = 1000;
 
     /**
-     * Shortest time between two reports of records discarded on queue overflow (#486).
-     */
-    static final long DISCARD_REPORT_INTERVAL_MS = 60_000L;
-
-    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
-    private final UltiPanelWebSocketClient webSocketClient;
-    private final String serverId;
-
-    /**
-     * Where the v2 connection takes each redacted line (plan 22-22), or {@code null} for the v1 transmitter. When set,
-     * {@link #sendLog} and {@link #replayLog} hand every entry {@link #buildLogData} built to this sink and nothing
-     * else: no v1 queue, batch or frame is ever built.
+     * Where the v2 connection takes each redacted line (plan 22-22). {@link #sendLog} and {@link #replayLog} hand
+     * every entry {@link #buildLogData} built to this sink and nothing else: no queue, batch or frame is ever built.
      */
     private final AgentLineSink agentSink;
     private final AtomicBoolean logTransmissionEnabled = new AtomicBoolean(true);
 
-    /**
-     * Guards the batch-vs-immediate DISPATCH DECISION in {@link #sendLog} against the
-     * enabled-to-disabled TRANSITION in {@link #setBatchEnabled(boolean)} (Gate-2 finding,
-     * round 6). Before this lock, {@code setBatchEnabled(false)} wrote {@code this.batchEnabled
-     * = false} before {@link #flushLogs()} drained the existing queue, so a concurrent
-     * {@code sendLog()} call could read the new {@code false} value and send a NEWER record
-     * immediately while {@code flushLogs()} was still draining OLDER queued records -- the
-     * newer record then arrived at the panel before the older ones, breaking FIFO order.
-     * Holding this lock across both {@code sendLog}'s dispatch decision and the WHOLE disable
-     * transition means every {@code sendLog} call observes the transition as atomic: either
-     * entirely before it (queued, and included in the flush that is about to run) or entirely
-     * after it (flag already false, sent immediately) -- never during.
-     */
+    /** Makes {@link #takePending()} and {@link #adoptPending(JsonArray)} atomic with respect to each other. */
     private final Object batchModeLock = new Object();
 
     // External drain mode: when true, sendBatch() no longer sends automatically, and logs are
     // obtained externally by calling drainQueue()
     private final AtomicBoolean externalDrainMode = new AtomicBoolean(false);
-
-    /**
-     * Invoked from {@link #addToBatch(JsonObject)} whenever the queue reaches {@link #batchSize}
-     * WHILE {@link #externalDrainMode} is active (Gate-2 finding, round 6). Without this,
-     * reaching the size threshold under external drain mode had no effect at all --
-     * {@link #sendBatch()}'s own early-return for external drain mode silently swallowed the
-     * threshold crossing that would otherwise have triggered an immediate send, so a documented
-     * size threshold never actually shortened delivery latency while monitoring was active, and a
-     * sustained burst could fill {@link #MAX_QUEUE_SIZE} and start discarding old entries despite
-     * repeatedly crossing the threshold. {@code null} by default (no external owner wired up);
-     * {@link LogStreamManager#initialize} sets it alongside {@link #setExternalDrainMode(boolean)}.
-     */
-    private volatile Runnable externalSizeThresholdCallback;
-
-    /**
-     * External coordination lock for {@link #flushLogs()} (Gate-2 finding, round 9). {@code null}
-     * by default (no external owner wired up -- {@code flushLogs()} runs unsynchronized, its
-     * original behaviour). {@link LogStreamManager#initialize} wires this to
-     * {@code ServerMonitorManager}'s OWN {@code logDrainLock} (the same object
-     * {@link ServerMonitorManager#drainAndSendLogsOnly} and its inline {@code sendBatchUpdate}
-     * drain already synchronize on) alongside {@link #setExternalSizeThresholdCallback}. Without
-     * this, a live {@code batchConfig.enabled: false} update's flush ran entirely outside that
-     * lock, so it could still send NEWER records ahead of OLDER ones the monitor had already
-     * polled but not yet sent, even after round 7's monitor-side-only serialization.
-     */
-    private volatile Object externalDrainCoordinationLock;
 
     // Batch-send configuration. All three are written from the panel's WebSocket receive thread
     // (setBatchEnabled/setBatchSize/setIntervalMs, reachable live over the panel's `config`
@@ -136,7 +74,6 @@ public class UltiPanelLogTransmitter {
 
     // Batch-send queue and scheduler
     private final ConcurrentLinkedQueue<JsonObject> logQueue;
-    private final ScheduledExecutorService batchScheduler;
 
     /**
      * The one batch whose send failed, kept to be sent before anything newer (#486). Before 6.3.0
@@ -155,92 +92,6 @@ public class UltiPanelLogTransmitter {
      */
     private final AtomicReference<JsonArray> heldBatch = new AtomicReference<>();
 
-    /** Records discarded on queue overflow since the last report (#486). */
-    private final AtomicLong discardedRecords = new AtomicLong();
-
-    /** When the last overflow report was logged; {@code Long.MIN_VALUE} before the first. */
-    private final AtomicLong lastDiscardReportMs = new AtomicLong(Long.MIN_VALUE);
-
-    /**
-     * The currently-scheduled batch-send task, or {@code null} while batching is disabled.
-     * <p>
-     * Tracked so {@link #setIntervalMs(int)} and {@link #setBatchEnabled(boolean)} can cancel and
-     * resubmit it -- before #432, the interval was baked into the one
-     * {@code scheduleWithFixedDelay} call the constructor made, and the setter only mutated the
-     * field without ever touching the already-running task.
-     */
-    private volatile ScheduledFuture<?> batchSenderTask;
-
-    /**
-     * The start-up records the early capture replayed into this transmitter (#487), oldest first,
-     * not yet delivered. Guarded by {@link #batchModeLock}.
-     * <p>
-     * Kept apart from {@link #logQueue} because the replay has its own fixed chunking, independent
-     * of the live batch settings (as of 6.3.0): {@code log_batch} messages of at most
-     * {@link #REPLAY_CHUNK_MAX_BYTES}, the first at once and then one every
-     * {@link #REPLAY_SPACING_MS}. With live batching off, every replayed record used to be its own
-     * message -- about 350 at once on connect on a real server -- and the panel's per-client quota
-     * (50 messages in 10 seconds) rejected them. It is not bounded here: the early capture already
-     * bounds what it replays (2,000 records, about 512 KiB).
-     */
-    private final Deque<JsonObject> replayQueue = new ArrayDeque<>();
-
-    /**
-     * The most bytes one replay message may take, serialized as the client sends it.
-     * <p>
-     * Measured against the UltiPanel Worker ({@code websocket-server.ts}): its quota counts messages,
-     * 50 per 10 seconds per client, and a rejected message counts too; its {@code log_batch} handler
-     * accepts an array of any length and sets no size limit of its own; the Cloudflare platform caps
-     * one received WebSocket message at 1 MiB. 64 KiB stays a sixteenth of that cap, also for the copy
-     * the Worker broadcasts to each subscribed panel, and holds a few hundred typical start-up lines,
-     * so a full start-up buffer drains in about ten messages.
-     */
-    static final int REPLAY_CHUNK_MAX_BYTES = 64 * 1024;
-
-    /**
-     * The time between two replay messages: at most 10 of the panel's 50 messages per 10 seconds,
-     * leaving the rest for live traffic.
-     */
-    static final long REPLAY_SPACING_MS = 1000L;
-
-    /** Room kept in each replay message for its envelope: type, server ID, timestamp, brackets. */
-    private static final int REPLAY_FRAME_RESERVE_BYTES = 1024;
-
-    /** Appended to an entry shortened to fit one replay message. */
-    private static final String TRUNCATED_MARK = " [truncated]";
-
-    /** Serializes as {@code UltiPanelWebSocketClient} does, to measure what goes on the wire. */
-    private static final Gson WIRE_GSON = new GsonBuilder().disableHtmlEscaping().create();
-
-    /** The scheduled replay-send task, or {@code null} when nothing is left to replay. */
-    private volatile ScheduledFuture<?> replaySenderTask;
-
-    /**
-     * Constructor.
-     *
-     * @param webSocketClient the WebSocket client
-     * @param serverId the server ID
-     * @deprecated There is no replacement: the framework never calls it, and its own UltiCloud session
-     *     (protocol 2.1.0) streams the console through a transmitter it builds itself. Removed in
-     *     6.4.0.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.1", forRemoval = true)
-    @SuppressWarnings("removal") // takes the deprecated v1 client; kept until 6.4.0 (S-67)
-    public UltiPanelLogTransmitter(UltiPanelWebSocketClient webSocketClient, String serverId) {
-        this(webSocketClient, v1ServerId(serverId), null);
-    }
-
-    /**
-     * The v1 constructor's server ID, defaulted as in 6.3.0; also writes that constructor's one INFO
-     * line per run, here because nothing may precede its {@code this(...)} call.
-     */
-    private static String v1ServerId(String serverId) {
-        V1CloudNotice.once(UltiPanelLogTransmitter.class,
-                "UltiPanelLogTransmitter(UltiPanelWebSocketClient, String)");
-        return serverId != null ? serverId : getDefaultServerId();
-    }
-
     /**
      * The transmitter of the v2 connection (plan 22-22): every entry goes to {@code sink}, already redacted by
      * {@link #buildLogData}. No batch sender is started and no v1 client is held.
@@ -248,25 +99,8 @@ public class UltiPanelLogTransmitter {
      * @param sink receives each line; called on the logging thread, so it must not block
      */
     UltiPanelLogTransmitter(AgentLineSink sink) {
-        this(null, "", java.util.Objects.requireNonNull(sink, "sink"));
-    }
-
-    @SuppressWarnings("removal") // the kept v1 sender holds the deprecated v1 client until 6.4.0 (S-67)
-    private UltiPanelLogTransmitter(UltiPanelWebSocketClient webSocketClient, String serverId, AgentLineSink sink) {
-        this.webSocketClient = webSocketClient;
-        this.serverId = serverId;
-        this.agentSink = sink;
+        this.agentSink = java.util.Objects.requireNonNull(sink, "sink");
         this.logQueue = new ConcurrentLinkedQueue<>();
-        this.batchScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread thread = new Thread(r, "UltiPanel-LogTransmitter");
-            thread.setDaemon(true);
-            return thread;
-        });
-
-        if (sink == null) {
-            // Start the batch-send task (v1 only; a v2 transmitter never schedules, so its executor has no thread)
-            startBatchSender();
-        }
     }
 
     /**
@@ -300,38 +134,7 @@ public class UltiPanelLogTransmitter {
      * @param throwable the exception object (optional)
      */
     public void sendLog(String level, String message, String source, Throwable throwable) {
-        if (agentSink != null) {
-            offerToAgent(level, message, source, throwable, System.currentTimeMillis());
-            return;
-        }
-        if (!logTransmissionEnabled.get() || webSocketClient == null || !webSocketClient.isConnected()) {
-            return;
-        }
-        if (holdsExternalDrainLock()) {
-            return;
-        }
-        
-        try {
-            JsonObject logData = buildLogData(level, message, source, throwable, System.currentTimeMillis());
-
-            // Gate-2 finding (round 6): held across the read of batchEnabled AND the resulting
-            // call, matching setBatchEnabled(false)'s own lock -- see batchModeLock's javadoc.
-            synchronized (batchModeLock) {
-                if (batchEnabled) {
-                    // Batch-send mode
-                    addToBatch(logData);
-                } else {
-                    // Immediate-send mode
-                    sendLogImmediately(logData);
-                }
-            }
-
-        } catch (Exception e) {
-            // A panel-connection line, never streamed (#584): System.err is not a way around the
-            // logger on Paper -- SysoutCatcher re-logs it through the plugin logger, unmarked.
-            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("[UltiPanel] 发送日志失败: %s - %s",
-                    e.getMessage(), e.getClass().getSimpleName()));
-        }
+        offerToAgent(level, message, source, throwable, System.currentTimeMillis());
     }
 
     /**
@@ -444,113 +247,16 @@ public class UltiPanelLogTransmitter {
      *                  among the live ones that may arrive while the replay is still being sent
      */
     public void replayLog(String level, String message, String source, Throwable throwable, long timestamp) {
-        if (agentSink != null) {
-            offerToAgent(level, message, source, throwable, timestamp);
-            return;
-        }
-        if (holdsExternalDrainLock()) {
-            return;
-        }
-        if (!logTransmissionEnabled.get() || webSocketClient == null) {
-            return;
-        }
-        JsonObject logData = fitReplayEntry(buildLogData(level, message, source, throwable, timestamp));
-        synchronized (batchModeLock) {
-            replayQueue.addLast(logData);
-        }
-    }
-
-    private static int wireBytes(JsonElement element) {
-        return WIRE_GSON.toJson(element).getBytes(StandardCharsets.UTF_8).length;
+        offerToAgent(level, message, source, throwable, timestamp);
     }
 
     /**
-     * Shortens an entry that would not fit one replay message on its own -- the stack trace first,
-     * then the message -- so it is sent shortened rather than not at all.
-     */
-    private static JsonObject fitReplayEntry(JsonObject entry) {
-        int limit = REPLAY_CHUNK_MAX_BYTES - REPLAY_FRAME_RESERVE_BYTES;
-        for (String field : new String[] {"stackTrace", "message"}) {
-            int excess = wireBytes(entry) - limit;
-            if (excess <= 0) {
-                return entry;
-            }
-            JsonElement value = entry.get(field);
-            if (value == null || !value.isJsonPrimitive()) {
-                continue;
-            }
-            String text = value.getAsString();
-            // Each removed character removes at least one byte; the mark and JSON escaping need room too.
-            int keep = Math.max(0, text.length() - excess - TRUNCATED_MARK.length() * 2 - 16);
-            entry.addProperty(field, text.substring(0, keep) + TRUNCATED_MARK);
-        }
-        return entry;
-    }
-
-    /**
-     * Starts delivering the queued replay: the first message now, then one every
-     * {@link #REPLAY_SPACING_MS} until none is left, each holding as many records, oldest first, as
-     * fit in {@link #REPLAY_CHUNK_MAX_BYTES}. The live {@code batch.size} and {@code batch.interval}
-     * do not apply. A message that does not go out is kept, at the front, for the next attempt.
-     * <p>
-     * Live records are not held back while the replay is sent: with live batching off they still go
-     * out one by one at once, so a live line can reach the panel before the last replayed messages.
-     * Each replayed entry keeps the time its record was logged.
+     * Does nothing as of 6.4.0: {@link #replayLog} hands every replayed record to the sink at once,
+     * so no replay is ever queued. The protocol v1 replay sender this started was removed with the
+     * v1 client.
      */
     public void startReplay() {
-        sendReplayBatch();
-        synchronized (batchModeLock) {
-            if (!replayQueue.isEmpty() && replaySenderTask == null) {
-                replaySenderTask = batchScheduler.scheduleWithFixedDelay(this::sendReplayBatch,
-                        REPLAY_SPACING_MS, REPLAY_SPACING_MS, TimeUnit.MILLISECONDS);
-            }
-        }
-    }
-
-    /**
-     * Sends the next replay message -- as many queued records, oldest first, as fit in
-     * {@link #REPLAY_CHUNK_MAX_BYTES} -- if the panel is connected; stops the replay task once
-     * nothing is left. Package-private for tests.
-     */
-    void sendReplayBatch() {
-        synchronized (batchModeLock) {
-            if (replayQueue.isEmpty()) {
-                stopReplaySender();
-                return;
-            }
-            if (!webSocketClient.isConnected()) {
-                return;
-            }
-            JsonArray logs = new JsonArray();
-            int budget = REPLAY_CHUNK_MAX_BYTES - REPLAY_FRAME_RESERVE_BYTES;
-            int used = 0;
-            while (!replayQueue.isEmpty()) {
-                // + 1 for the comma between array elements.
-                int size = wireBytes(replayQueue.peekFirst()) + 1;
-                if (logs.size() > 0 && used + size > budget) {
-                    break;
-                }
-                logs.add(replayQueue.pollFirst());
-                used += size;
-            }
-            if (!deliverBatch(logs)) {
-                for (int i = logs.size() - 1; i >= 0; i--) {
-                    replayQueue.addFirst(logs.get(i).getAsJsonObject());
-                }
-                return;
-            }
-            if (replayQueue.isEmpty()) {
-                stopReplaySender();
-            }
-        }
-    }
-
-    private void stopReplaySender() {
-        ScheduledFuture<?> task = replaySenderTask;
-        if (task != null) {
-            task.cancel(false);
-            replaySenderTask = null;
-        }
+        // Nothing to replay: every replayed line goes straight to the sink (see replayLog).
     }
 
     /**
@@ -559,9 +265,7 @@ public class UltiPanelLogTransmitter {
      * @return the number of replayed records not yet delivered
      */
     public int getReplayQueueSize() {
-        synchronized (batchModeLock) {
-            return replayQueue.size();
-        }
+        return 0;
     }
 
     /**
@@ -582,162 +286,6 @@ public class UltiPanelLogTransmitter {
     public void debug(String message, String source) {
         sendLog("debug", message, source, null);
     }
-    
-    /**
-     * Sends a single log entry immediately.
-     */
-    private void sendLogImmediately(JsonObject logData) {
-        JsonObject wsMessage = new JsonObject();
-        wsMessage.addProperty("type", "log_stream");
-        wsMessage.addProperty("serverId", serverId);
-        wsMessage.add("data", logData);
-        wsMessage.addProperty("timestamp", System.currentTimeMillis());
-        
-        webSocketClient.sendMessage(wsMessage);
-    }
-    
-    /**
-     * Adds a log entry to the batch queue.
-     */
-    private void addToBatch(JsonObject logData) {
-        // Drop oldest entries if queue is full, counting each one so the gap is reported (#486)
-        while (logQueue.size() >= MAX_QUEUE_SIZE) {
-            if (logQueue.poll() != null) {
-                discardedRecords.incrementAndGet();
-            }
-        }
-
-        logQueue.offer(logData);
-
-        // If the queue is full, send immediately
-        if (logQueue.size() >= batchSize) {
-            sendBatch();
-            // Gate-2 finding (round 6): sendBatch() itself is a no-op under external drain mode
-            // (see its own early return), so the threshold crossing above would otherwise have
-            // no effect at all while monitoring is active. Notify the external owner instead, so
-            // it can perform its own immediate drain rather than waiting for its next scheduled
-            // tick -- see externalSizeThresholdCallback's own javadoc.
-            if (externalDrainMode.get() && externalSizeThresholdCallback != null) {
-                externalSizeThresholdCallback.run();
-            }
-        }
-    }
-
-    /**
-     * (Re)starts the batch-send task at the current {@link #intervalMs}. Cancels whatever task
-     * was previously scheduled first, so this is safe to call to both start fresh and reschedule
-     * (#432).
-     */
-    private void startBatchSender() {
-        if (batchSenderTask != null) {
-            batchSenderTask.cancel(false);
-        }
-        batchSenderTask = batchScheduler.scheduleWithFixedDelay(this::scheduledTick,
-            intervalMs, intervalMs, TimeUnit.MILLISECONDS);
-    }
-
-    /**
-     * One run of the batch-send task: send what is due, then report overflow discards. The report
-     * is made here, outside {@link #batchModeLock}, never from inside {@link #addToBatch}: logging
-     * from there would re-enter this pipeline while the lock is held.
-     */
-    private void scheduledTick() {
-        sendBatch();
-        reportDiscardedRecords(System.currentTimeMillis());
-    }
-
-    /**
-     * Logs one WARNING with the number of records discarded on queue overflow since the last
-     * report, at most once per {@link #DISCARD_REPORT_INTERVAL_MS} (#486). Nothing is logged when
-     * nothing was discarded. The count goes to the server log only; the panel protocol is unchanged.
-     *
-     * @param now the current time in milliseconds
-     */
-    void reportDiscardedRecords(long now) {
-        if (discardedRecords.get() == 0) {
-            return;
-        }
-        long last = lastDiscardReportMs.get();
-        if (last != Long.MIN_VALUE && now - last < DISCARD_REPORT_INTERVAL_MS) {
-            return;
-        }
-        if (!lastDiscardReportMs.compareAndSet(last, now)) {
-            return;
-        }
-        long discarded = discardedRecords.getAndSet(0);
-        // With the logs capability switched off the panel is not receiving the stream, so records
-        // the queue discards leave no gap an operator needs to hear about.
-        if (discarded == 0 || !Capability.LOGS.isEnabled()) {
-            return;
-        }
-        // A panel-connection line: logged locally, never streamed (it describes the stream itself).
-        PanelConnectionLog.log(Level.WARNING, String.format(
-                "[UltiPanel] The log stream queue was full (%d records): discarded %d record(s) since the "
-                        + "last report, so the panel's log view has a gap there.", MAX_QUEUE_SIZE, discarded));
-    }
-
-    /**
-     * Sends one frame and reports whether it went out: it did not if {@code sendMessage} threw, or
-     * if the client no longer reports itself connected afterwards -- the closed-socket path of
-     * {@code sendMessage} returns without sending (#486).
-     */
-    private boolean deliver(JsonObject frame) {
-        try {
-            webSocketClient.sendMessage(frame);
-        } catch (RuntimeException e) {
-            // A panel-connection line, never streamed (#584); see sendLog's catch.
-            PanelConnectionLog.log(Level.WARNING,
-                    "[UltiPanel] Log batch not sent, kept for the next attempt: " + e.getMessage());
-            return false;
-        }
-        return webSocketClient.isConnected();
-    }
-
-    /** Pulls up to {@link #batchSize} records off the queue, oldest first. */
-    private JsonArray pollBatch() {
-        JsonArray logs = new JsonArray();
-        for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
-            JsonObject log = logQueue.poll();
-            if (log != null) {
-                logs.add(log);
-            }
-        }
-        return logs;
-    }
-
-    /**
-     * Sends the batch held from a failed send, if there is one (#486).
-     *
-     * @return {@code true} when nothing is held any more (none was, or it went out), {@code false}
-     *         when the held batch could not be sent and is still held
-     */
-    private boolean sendHeldBatch() {
-        JsonArray held = heldBatch.getAndSet(null);
-        if (held != null && !deliverBatch(held)) {
-            heldBatch.set(held);
-            return false;
-        }
-        return true;
-    }
-
-    private boolean deliverBatch(JsonArray logs) {
-        JsonObject batchMessage = new JsonObject();
-        batchMessage.addProperty("type", "log_batch");
-        batchMessage.addProperty("serverId", serverId);
-        batchMessage.add("data", logs);
-        batchMessage.addProperty("timestamp", System.currentTimeMillis());
-        return deliver(batchMessage);
-    }
-
-    /**
-     * Cancels the currently-scheduled batch-send task, if any, and clears the reference.
-     */
-    private void stopBatchSender() {
-        if (batchSenderTask != null) {
-            batchSenderTask.cancel(false);
-            batchSenderTask = null;
-        }
-    }
 
     /**
      * Sets the batch-send interval, in milliseconds, and -- unlike the field it replaces as a
@@ -757,19 +305,13 @@ public class UltiPanelLogTransmitter {
             throw new IllegalArgumentException(
                     "Batch interval must be at least " + MIN_INTERVAL_MS + "ms, got: " + intervalMs);
         }
-        if (intervalMs == this.intervalMs) {
-            return;
-        }
         this.intervalMs = intervalMs;
-        if (batchSenderTask != null) {
-            startBatchSender();
-        }
     }
 
     /**
      * Sets the batch send-threshold size, rejecting anything below 1 (Gate-2 finding). A value of
-     * zero or negative would make {@link #sendBatch()}'s own {@code for (int i = 0; i < batchSize
-     * ...)} loop consume nothing on every scheduled run, while {@link #addToBatch(JsonObject)}'s
+     * zero or negative would make the former v1 sender's own {@code for (int i = 0; i < batchSize
+     * ...)} loop consume nothing on every scheduled run, while its
      * {@code logQueue.size() >= batchSize} check is simultaneously always true (any non-negative
      * queue size satisfies {@code >= 0} or {@code >= a negative number}) -- so every single
      * enqueued record would trigger an immediate {@code sendBatch()} call that dequeues nothing,
@@ -799,108 +341,7 @@ public class UltiPanelLogTransmitter {
      * @param batchEnabled whether batched delivery should be active
      */
     public void setBatchEnabled(boolean batchEnabled) {
-        if (batchEnabled == this.batchEnabled) {
-            return;
-        }
-        if (batchEnabled) {
-            this.batchEnabled = true;
-            startBatchSender();
-            return;
-        }
-
-        // Gate-2 finding, round 6: flush and the flag flip must be atomic against sendLog's own
-        // dispatch decision, via the SAME batchModeLock sendLog holds -- see its own javadoc.
-        // Before this lock, this.batchEnabled was written BEFORE flushLogs() drained the existing
-        // queue, so a concurrent sendLog() call could read the new false value and send a NEWER
-        // record immediately while flushLogs() was still draining OLDER queued records, arriving
-        // at the panel out of order. Flushing while batchEnabled is STILL true is safe -- flushLogs
-        // (via sendBatch) never reads batchEnabled at all, only externalDrainMode -- so any record
-        // enqueued by a concurrent sendLog() during the flush (which the lock forces to happen
-        // entirely before or entirely after this block, never during) is picked up by the SAME
-        // ConcurrentLinkedQueue-backed flush that is already running, still in FIFO order.
-        synchronized (batchModeLock) {
-            // Gate-2 finding: cancelling the scheduled sender with entries still queued (fewer
-            // than batchSize, so addToBatch's own size-threshold send never fired) used to strand
-            // them -- new records after this point go out immediately (batching is now off), while
-            // the older queued ones sat unsent until batching was re-enabled or shutdown() ran,
-            // arriving late and out of order. Flush whatever is already queued BEFORE cancelling
-            // its only consumer, so disabling batching means "deliver what's pending now, then send
-            // immediately from here on" rather than "silently defer some records indefinitely."
-            flushLogs();
-            this.batchEnabled = false;
-        }
-        stopBatchSender();
-    }
-
-    /**
-     * Sends the batched logs.
-     * When externalDrainMode is true, only drops entries that exceed the queue cap and does not send.
-     * <p>
-     * Gate-2 finding (round 10): this method is ALSO reached directly, on the scheduler's own
-     * thread, by the periodically-firing {@link #batchSenderTask}. Before this fix, that call was
-     * completely unsynchronized -- a live {@code batchConfig.enabled: false} update could hold
-     * {@link #batchModeLock} across its own {@link #flushLogs()} call while the scheduled task
-     * fired concurrently on the scheduler's thread and called this method too, both polling the
-     * SAME {@link #logQueue} and both calling {@code webSocketClient.sendMessage(...)}
-     * independently -- interleaving queue polls between two frames with no ordering guarantee
-     * between the two {@code sendMessage} calls. Synchronizing the whole body on
-     * {@link #batchModeLock} serializes the scheduled tick against {@code setBatchEnabled(false)}'s
-     * own flush, against {@link #flushLogs()} however else it is reached (it now also acquires
-     * this same lock, see its own javadoc), and against {@code sendLog}'s own dispatch decision
-     * (reentrant when this method is reached via {@code addToBatch}'s size-threshold trigger,
-     * since that call chain already holds the lock). No new deadlock risk: this method never
-     * acquires any OTHER lock, so it can only ever be the innermost link in any lock chain that
-     * reaches it.
-     */
-    private void sendBatch() {
-        synchronized (batchModeLock) {
-            if (logQueue.isEmpty() && heldBatch.get() == null) {
-                return;
-            }
-
-            // Under external drain mode, only enforce queue-overflow protection (already handled
-            // by addToBatch), do not send
-            if (externalDrainMode.get()) {
-                return;
-            }
-
-            if (!webSocketClient.isConnected()) {
-                return;
-            }
-
-            try {
-                // #486: a batch held from a failed send goes first; while it cannot be sent,
-                // nothing newer is drained.
-                if (!sendHeldBatch()) {
-                    return;
-                }
-
-                JsonArray logs = pollBatch();
-
-                // Send the batched-log message; keep it if the send failed (#486)
-                if (logs.size() > 0 && !deliverBatch(logs)) {
-                    heldBatch.set(logs);
-                }
-                // Gate-2 finding (round 6): this diagnostic USED to log via
-                // UltiTools.getInstance().getLogger() at Level.FINE. That logger is the shared
-                // PLUGIN logger (Bukkit's JavaPlugin#getLogger()), not a per-class logger named
-                // after this class -- so SystemLogHandler#shouldProcessRecord's class-name-based
-                // loop-prevention check (which matches on loggerName.contains("...")) could never
-                // catch it. Before this plan, that was harmless because the handler's own JUL
-                // level floor stayed at Level.INFO, silently dropping this FINE record before it
-                // ever reached shouldProcessRecord. #433/CR-02 (this same PR) made "debug"
-                // genuinely lower that floor to Level.FINEST -- so this record became reachable
-                // for the first time, and with batchConfig.size:1 it recursively re-triggered
-                // this very method (send -> log FINE -> SystemLogHandler -> sendLog -> addToBatch
-                // -> threshold reached -> sendBatch -> log FINE -> ...) until StackOverflowError.
-                // Removed rather than routed around the loop guard -- this line's information
-                // value (a batch-size count) does not justify carrying a self-recursion hazard.
-
-            } catch (Exception e) {
-                // A panel-connection line, never streamed (#584); see sendLog's catch.
-                PanelConnectionLog.log(Level.WARNING, FrameworkText.format("[UltiPanel] 发送批量日志失败: %s", e.getMessage()));
-            }
-        }
+        this.batchEnabled = batchEnabled;
     }
 
     /**
@@ -966,12 +407,6 @@ public class UltiPanelLogTransmitter {
     public JsonArray takePending() {
         synchronized (batchModeLock) {
             JsonArray pending = new JsonArray();
-            // Replayed start-up records not yet sent are the oldest of all, so they go first.
-            JsonObject replayed;
-            while ((replayed = replayQueue.pollFirst()) != null) {
-                pending.add(replayed);
-            }
-            stopReplaySender();
             JsonArray held = heldBatch.getAndSet(null);
             if (held != null) {
                 pending.addAll(held);
@@ -999,9 +434,7 @@ public class UltiPanelLogTransmitter {
         synchronized (batchModeLock) {
             for (JsonElement record : pending) {
                 while (logQueue.size() >= MAX_QUEUE_SIZE) {
-                    if (logQueue.poll() != null) {
-                        discardedRecords.incrementAndGet();
-                    }
+                    logQueue.poll();
                 }
                 logQueue.offer(record.getAsJsonObject());
             }
@@ -1034,7 +467,7 @@ public class UltiPanelLogTransmitter {
      *        {@link #sendLog(String, String, String, Throwable)} happened to run on
      */
     public void setExternalSizeThresholdCallback(Runnable callback) {
-        this.externalSizeThresholdCallback = callback;
+        // Nothing reaches a size threshold any more: no line is queued by this transmitter itself.
     }
 
     /**
@@ -1045,36 +478,7 @@ public class UltiPanelLogTransmitter {
      *        external code also drains this transmitter's queue (see this field's own javadoc)
      */
     public void setExternalDrainCoordinationLock(Object lock) {
-        this.externalDrainCoordinationLock = lock;
-    }
-
-    /**
-     * Whether the current thread holds {@link #externalDrainCoordinationLock}
-     * ({@code ServerMonitorManager}'s {@code logDrainLock}) -- and so must not take
-     * {@link #batchModeLock} (#584).
-     * <p>
-     * <b>The lock order.</b> Every path that holds both locks takes {@link #batchModeLock} first:
-     * {@link #flushLogs()} explicitly, and {@link #sendLog} through {@link #addToBatch}'s
-     * size-threshold callback ({@code ServerMonitorManager#drainLogsNow}). A thread holding the
-     * drain lock that then asked for {@link #batchModeLock} would invert that order and deadlock
-     * against either of them. The drain thread itself never calls into this class's locked methods
-     * -- {@link #drainQueue}, {@link #holdUndelivered} and the getters it uses take no lock -- so the
-     * only way it could reach {@link #batchModeLock} is a line logged on that thread while it holds
-     * the drain lock, re-entering through {@code SystemLogHandler}. On Paper that includes anything
-     * printed to {@code System.out}/{@code System.err}: {@code SysoutCatcher} re-logs it through
-     * the calling plugin's logger.
-     * <p>
-     * <b>Why such a line is dropped from the stream.</b> The framework's own lines on that thread
-     * are about the send in progress and are logged through {@code PanelConnectionLog}, which the
-     * stream never carries anyway; any other line still reaches the console, which is written by a
-     * different handler. Queuing or sending it without the lock instead would bypass the dispatch
-     * decision {@link #batchModeLock} serializes against {@link #setBatchEnabled(boolean)}'s flush.
-     *
-     * @return {@code true} when a drain lock is wired and the current thread holds it
-     */
-    private boolean holdsExternalDrainLock() {
-        Object coordinationLock = externalDrainCoordinationLock;
-        return coordinationLock != null && Thread.holdsLock(coordinationLock);
+        // Nothing is sent by this transmitter itself, so there is no drain to coordinate with.
     }
 
     /**
@@ -1111,17 +515,6 @@ public class UltiPanelLogTransmitter {
             return source;
         }
     }
-
-    /**
-     * Gets the default server ID.
-     */
-    private static String getDefaultServerId() {
-        try {
-            return CommonUtils.getUltiToolsUUID();
-        } catch (Exception e) {
-            return "unknown-server";
-        }
-    }
     
     /**
      * Enables/disables log transmission.
@@ -1151,108 +544,18 @@ public class UltiPanelLogTransmitter {
     }
 
     /**
-     * Immediately sends every log currently in the queue.
-     * Temporarily disables external drain mode to make sure the logs actually get sent.
-     * <p>
-     * Gate-2 finding (round 10): now ALSO acquires {@link #batchModeLock} as the OUTERMOST lock,
-     * before the external coordination lock below -- {@link #sendBatch()} (which this method
-     * reaches via {@link #doFlushLogs()}) is itself now synchronized on {@link #batchModeLock}
-     * (see its own javadoc), so without this method also acquiring it first, a caller that had NOT
-     * already taken {@link #batchModeLock} (e.g. {@link #shutdown()}, or {@link
-     * com.ultikits.ultitools.handler.SystemLogHandler#flush()}/{@code close()}) would acquire the
-     * coordination lock FIRST and only then try for {@link #batchModeLock} inside {@code
-     * sendBatch()} -- the reverse of the order every other path in this class already establishes
-     * ({@link #batchModeLock} before {@code logDrainLock}, see {@link
-     * #setExternalDrainCoordinationLock(Object)}'s own javadoc), and a reverse-order acquisition
-     * on two different threads is exactly how a lock-ordering deadlock happens. Taking {@link
-     * #batchModeLock} first here keeps every acquisition path in this class consistent with that
-     * one order, so this addition introduces no new deadlock risk -- verified by enumerating every
-     * lock-acquiring path in this class and {@code ServerMonitorManager} (see this plan's gate
-     * record).
+     * Does nothing as of 6.4.0: every line went to the sink when it was logged, and the protocol
+     * v1 sender that sent the queue was removed with the v1 client.
      */
     public void flushLogs() {
-        synchronized (batchModeLock) {
-            // Gate-2 finding (round 9): coordinate with ServerMonitorManager's own drain paths,
-            // when wired up, so a disable-time flush (setBatchEnabled(false)) cannot interleave
-            // with either of the monitor's own drains and reorder the backlog -- see
-            // externalDrainCoordinationLock's own javadoc.
-            Object coordinationLock = externalDrainCoordinationLock;
-            if (coordinationLock != null) {
-                synchronized (coordinationLock) {
-                    doFlushLogs();
-                }
-            } else {
-                doFlushLogs();
-            }
-        }
-    }
-
-    private void doFlushLogs() {
-        boolean wasExternalDrain = externalDrainMode.getAndSet(false);
-        try {
-            // The continuation condition must be "the queue actually got shorter", not just
-            // "the queue is non-empty".
-            //
-            // sendBatch() returns directly, **consuming no queue elements at all**, when the
-            // WebSocket is not connected (see the isConnected check inside sendBatch). Written as
-            // while (!logQueue.isEmpty()), that used to be an infinite loop -- and "the panel is
-            // unreachable, the queue has backed up, and the socket is already disconnected" is
-            // exactly the scenario most likely to be hit: an admin usually logs out or shuts the
-            // server down precisely because the panel is unreachable.
-            //
-            // This infinite loop predates disableCloud() (onDisable also reaches this path), but
-            // back then it only triggered on server shutdown; now logout reaches it from the
-            // command thread too, which would hang the server outright. See the PR review for
-            // issue #181 / #223.
-            // #486: a held batch counts as pending too, so a flush sends it even when the queue
-            // itself is empty; the progress check still ends the loop when a send keeps failing.
-            int previousSize = -1;
-            while (!logQueue.isEmpty() || heldBatch.get() != null) {
-                int currentSize = logQueue.size() + heldSize();
-                if (currentSize == previousSize) {
-                    // Nothing was sent out in the previous round -- looping any further will not make progress
-                    break;
-                }
-                previousSize = currentSize;
-                sendBatch();
-            }
-        } finally {
-            if (wasExternalDrain) {
-                externalDrainMode.set(true);
-            }
-        }
-    }
-
-    private int heldSize() {
-        JsonArray held = heldBatch.get();
-        return held == null ? 0 : held.size();
+        // Nothing to flush: every line went straight to the sink when it was logged.
     }
 
     /**
      * Shuts down the log transmitter.
      */
     public void shutdown() {
-        try {
-            // Send the remaining logs
-            flushLogs();
-
-            // Shut down the scheduler
-            batchScheduler.shutdown();
-
-            // Wait for the scheduler to shut down
-            if (!batchScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                batchScheduler.shutdownNow();
-            }
-
-            logTransmissionEnabled.set(false);
-            PanelConnectionLog.log(Level.INFO, FrameworkText.text("[UltiPanel] 日志传输器已关闭"));
-
-        } catch (InterruptedException e) {
-            batchScheduler.shutdownNow();
-            Thread.currentThread().interrupt();
-        } catch (Exception e) {
-            // A panel-connection line, never streamed (#584); see sendLog's catch.
-            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("[UltiPanel] 关闭日志传输器时发生错误: %s", e.getMessage()));
-        }
+        logTransmissionEnabled.set(false);
+        PanelConnectionLog.log(Level.INFO, FrameworkText.text("[UltiPanel] 日志传输器已关闭"));
     }
 }
