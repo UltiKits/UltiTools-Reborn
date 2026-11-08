@@ -1821,6 +1821,9 @@ public abstract class AbstractConfigEntity {
         for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
     }
 
+    /** Undeclared keys named one per line in a file's start-up diagnostic before the rest are counted (#829). */
+    private static final int UNDECLARED_KEYS_LISTED = 10;
+
     /**
      * Reports annotation ownership against the original read, before any default/comment write (#499).
      * A complete declared value owns its subtree, including converter-defined and dynamic container keys.
@@ -1846,11 +1849,17 @@ public abstract class AbstractConfigEntity {
         }
         List<List<String>> unknown = new ArrayList<>();
         collectUndeclaredRoots(read, Collections.emptyList(), owned, structural, unknown);
-        for (List<String> path : unknown) {
+        // #829: at most UNDECLARED_KEYS_LISTED lines name a key; one more line counts the rest.
+        for (List<String> path : unknown.subList(0, Math.min(unknown.size(), UNDECLARED_KEYS_LISTED))) {
             // Dots are split conservatively for secret-key display only, never for ownership identity.
             LOGGER.warning("Module '" + diagnosticLine(ultiToolsPlugin.getPluginName()) + "', file '"
                     + diagnosticLine(configFilePath) + "', key " + diagnosticLine(describeUndeclared(String.join(".", path)))
                     + ": no @ConfigEntry declaration for this key/subtree; left unchanged");
+        }
+        if (unknown.size() > UNDECLARED_KEYS_LISTED) {
+            LOGGER.warning("Module '" + diagnosticLine(ultiToolsPlugin.getPluginName()) + "', file '"
+                    + diagnosticLine(configFilePath) + "': " + (unknown.size() - UNDECLARED_KEYS_LISTED)
+                    + " more keys have no @ConfigEntry declaration (not listed); left unchanged");
         }
     }
 
@@ -2191,7 +2200,8 @@ public abstract class AbstractConfigEntity {
             }
             parentSecret |= isSecretShapedFieldName(part);
         }
-        String key = located.toString();
+        // #825: a quoted map key can hold an escaped line separator, so the key follows the value's single-line policy.
+        String key = singleLineDiagnostic(located.toString());
         boolean secret = isSecretShapedFieldName(field.getName());
         for (String part : path) { secret |= isSecretShapedFieldName(part); }
         String found = raw instanceof Map ? "a map" : raw instanceof List ? "a list"

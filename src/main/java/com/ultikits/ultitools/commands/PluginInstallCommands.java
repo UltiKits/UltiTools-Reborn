@@ -570,6 +570,12 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         if (updateManager != null && updateManager.isCheckComplete()) {
             return false;
         }
+        if (updateManager != null && updateManager.isCheckFailed()) {
+            // #838: a check that died will not complete this run; do not promise that it will.
+            sendStringMessage(sender, ChatColor.YELLOW
+                    + UltiTools.getInstance().i18n("更新检查失败，详情见控制台；重启服务器后会再次检查。"));
+            return true;
+        }
         sendStringMessage(sender, ChatColor.YELLOW + UltiTools.getInstance().i18n("更新检查仍在进行，请稍后重试。"));
         return true;
     }
