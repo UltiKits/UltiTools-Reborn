@@ -36,8 +36,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@code /ultilogin:Login} match. Names are stored in that normalised form, so registering
  * {@code ultilogin:login} registers {@code login}.
  * <p>
- * <b>The table starts empty.</b> The framework registers nothing on its own; a module that owns a
- * secret-carrying command registers it, and every alias, from its enable hook:
+ * <b>The table starts empty</b> when constructed. The framework's own registry
+ * ({@code UltiTools#getSensitiveCommandRegistry()}) is built by {@link #withFrameworkCommands()} and, as of 6.4.0,
+ * holds the framework's one secret-carrying command, {@code ulticloud} ({@code /ulticloud login <code>} carries a
+ * single-use re-pair code). A module that owns a secret-carrying command registers it, and every alias, from its
+ * enable hook:
  * <pre>{@code
  * public boolean registerSelf() {
  *     UltiTools.getInstance().getSensitiveCommandRegistry()
@@ -60,6 +63,13 @@ public final class SensitiveCommandRegistry {
     /** What replaces a registered command's arguments. */
     private static final String REDACTED = " ***";
 
+    /**
+     * The framework's own secret-carrying commands: {@code ulticloud}, whose {@code login <code>} form carries the
+     * single-use re-pair code of the panel's "Revoke and re-pair" action (issue #869). Its other subcommands carry
+     * no arguments, so redacting the whole command loses nothing.
+     */
+    static final String[] FRAMEWORK_COMMANDS = {"ulticloud"};
+
     /** The registered names, normalised by {@link #normalize(String)}. */
     private final Set<String> names = ConcurrentHashMap.newKeySet();
 
@@ -67,7 +77,21 @@ public final class SensitiveCommandRegistry {
      * Creates an empty registry.
      */
     public SensitiveCommandRegistry() {
-        // Starts empty by design: the framework registers no command of its own.
+        // Starts empty by design; the framework's own registry comes from withFrameworkCommands().
+    }
+
+    /**
+     * Creates the framework's registry: a new registry with {@link #FRAMEWORK_COMMANDS} registered, so a player who
+     * types {@code /ulticloud login <code>} by mistake (the command is console-only and refuses, but the server
+     * still logs the line) does not stream the code to UltiCloud.
+     *
+     * @return a new registry holding the framework's own commands
+     * @since 6.4.0
+     */
+    public static SensitiveCommandRegistry withFrameworkCommands() {
+        SensitiveCommandRegistry registry = new SensitiveCommandRegistry();
+        registry.register(FRAMEWORK_COMMANDS);
+        return registry;
     }
 
     /**

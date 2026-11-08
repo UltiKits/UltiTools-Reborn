@@ -123,6 +123,12 @@ final class CloudSession {
      */
     private static final long STATE_FLUSH_INTERVAL_MS = 30_000L;
 
+    /** Logged when the re-pair code of {@code /ulticloud login <code>} is used, unknown or expired. */
+    static final String REPAIR_CODE_EXPIRED = "UltiCloud: this re-pair code has expired or was already used. "
+        + "Create a new one in the panel (server settings > Revoke and re-pair), or run /ulticloud login without a code.";
+    /** Logged when UltiCloud answers {@code access_denied} to a re-pair code. */
+    static final String REPAIR_CODE_DENIED = "UltiCloud: the re-pair code was refused. Create a new one in the panel "
+        + "(server settings > Revoke and re-pair), or run /ulticloud login without a code.";
     /**
      * The language-catalogue key of the one SEVERE line printed when the gateway's welcome names a
      * different server id than the linked one (contract answer 21, SEMANTICS 16).
@@ -945,9 +951,13 @@ final class CloudSession {
                 rejectionReported = true;
                 try {
                     if (ServerCredentialStore.deleteIfMatches(attemptCredentialId)) {
+                        // Issue #869: after the panel's "Revoke and re-pair" the owner holds a code for the same
+                        // server record, so both ways back are named.
                         PanelConnectionLog.log(Level.WARNING,
                                 "UltiCloud rejected this server's credential (it was revoked or is no longer valid). "
-                                + "The saved credential was deleted. Run /ulticloud login to link this server again."
+                                + "The saved credential was deleted. If you used \"Revoke and re-pair\" in the panel, "
+                                + "run /ulticloud login <code> with the code it shows; otherwise run /ulticloud login "
+                                + "to link this server again."
                                 + requestSuffix(requestId));
                     } else {
                         PanelConnectionLog.log(Level.WARNING,
@@ -1174,6 +1184,26 @@ final class CloudSession {
     }
 
     /**
+     * Exchanges a device code UltiCloud has already approved -- the re-pair code of {@code /ulticloud login <code>}
+     * (issue #869) -- on this session's poll executor: the first {@code POST /v1/device/token} poll runs at once, and
+     * every outcome is handled exactly as for a normal device login's poll, except that the terminal notices name
+     * the re-pair code. Schedules nothing on an invalidated session.
+     *
+     * @param deviceCode the well-formed code; never logged
+     * @param listener   receives the outcome; called on the poll executor's thread
+     * @since 6.4.0
+     */
+    synchronized void beginCodeLogin(String deviceCode, CloudAuthManager.DeviceLoginListener listener) {
+        if (invalidated) {
+            return;
+        }
+        DeviceAuthorizationClient.Grant grant = DeviceAuthorizationClient.approvedGrant(deviceCode);
+        DevicePoll poll = new DevicePoll(grant, listener, now() + grant.expiresInSeconds() * 1000L,
+            grant.intervalSeconds() * 1000L, true);
+        scheduleDeviceStep(() -> pollDeviceOnce(poll), 0L);
+    }
+
+    /**
      * Polls {@code POST /v1/device/token} for {@code grant} on this session's poll executor until it
      * reaches a terminal outcome. Schedules nothing on an invalidated session: a late call after
      * {@code /ulticloud logout} -- the device-code request returned after the logout -- creates no
@@ -1189,7 +1219,7 @@ final class CloudSession {
         }
         // The deadline is fixed once, when the device code arrived: now + expiresIn.
         DevicePoll poll = new DevicePoll(grant, listener, now() + grant.expiresInSeconds() * 1000L,
-            grant.intervalSeconds() * 1000L);
+            grant.intervalSeconds() * 1000L, false);
         scheduleDeviceStep(() -> pollDeviceOnce(poll), poll.intervalMillis);
     }
 
@@ -1276,6 +1306,10 @@ final class CloudSession {
             return;
         }
         Logger logger = UltiTools.getInstance().getLogger();
+        if (poll.supplied) {
+            finishCodeLogin(poll, kind, code, message, logger);
+            return;
+        }
         if (kind == DeviceAuthorizationClient.PollResult.Kind.DENIED) {
             logger.log(Level.WARNING,
                 "UltiCloud: linking was denied on the confirmation page. Run /ulticloud login to try again.");
@@ -1287,6 +1321,22 @@ final class CloudSession {
         } else {
             logger.log(Level.WARNING,
                 "UltiCloud: the device code expired before it was confirmed. Run /ulticloud login to get a new code.");
+            poll.listener.onExpired();
+        }
+    }
+
+    /** The terminal notices of {@link #beginCodeLogin}: they name the re-pair code, never its value. */
+    private static void finishCodeLogin(DevicePoll poll, DeviceAuthorizationClient.PollResult.Kind kind,
+            String code, String message, Logger logger) {
+        if (kind == DeviceAuthorizationClient.PollResult.Kind.DENIED) {
+            logger.log(Level.WARNING, REPAIR_CODE_DENIED);
+            poll.listener.onDenied();
+        } else if (kind == DeviceAuthorizationClient.PollResult.Kind.REJECTED) {
+            logger.log(Level.WARNING, "UltiCloud: the re-pair code was rejected (" + code + "): " + message
+                + ". Run /ulticloud login to link this server instead.");
+            poll.listener.onRejected(code, message);
+        } else {
+            logger.log(Level.WARNING, REPAIR_CODE_EXPIRED);
             poll.listener.onExpired();
         }
     }
@@ -1363,13 +1413,16 @@ final class CloudSession {
         private final long deadline;
         /** The current interval; grows by {@link #DEVICE_SLOW_DOWN_INCREMENT_MS} per slow_down. */
         private long intervalMillis;
+        /** {@code true} for the operator-supplied re-pair code of {@link #beginCodeLogin}. */
+        private final boolean supplied;
 
         DevicePoll(DeviceAuthorizationClient.Grant grant, CloudAuthManager.DeviceLoginListener listener,
-                long deadline, long intervalMillis) {
+                long deadline, long intervalMillis, boolean supplied) {
             this.grant = grant;
             this.listener = listener;
             this.deadline = deadline;
             this.intervalMillis = intervalMillis;
+            this.supplied = supplied;
         }
     }
 }

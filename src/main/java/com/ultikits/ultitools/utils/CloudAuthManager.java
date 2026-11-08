@@ -42,6 +42,8 @@ public class CloudAuthManager {
     static final int MAX_SUGGESTED_NAME_CODE_POINTS = 64;
     /** The message a login reports when an overlapping login already replaced its session. */
     static final String LOGIN_IN_PROGRESS = "Another login attempt is already in progress; please try again";
+    /** The reason {@link #loginWithCode} reports for a code that does not have the contract's shape. */
+    static final String INVALID_REPAIR_CODE = "the code is not a valid UltiCloud re-pair code";
     private static final long RECONNECT_COOLDOWN_MS = 10_000L;
 
     private CloudAuthManager() {
@@ -66,6 +68,49 @@ public class CloudAuthManager {
      */
     public static void login(DeviceLoginListener listener) {
         Objects.requireNonNull(listener, "listener");
+        start(listener, session -> session.beginDeviceLogin(listener));
+    }
+
+    /**
+     * Links this server with a device code UltiCloud has already approved: the single-use code the panel's
+     * "Revoke and re-pair" action shows, typed as {@code /ulticloud login <code>} (issue #869). No new device code
+     * is requested; the code is exchanged through the same {@code POST /v1/device/token} poll a normal login uses,
+     * and a grant is stored, and the connection started, exactly as for a normal login. The credential it yields
+     * belongs to the server record the code was bound to, so the server keeps its id, name and history.
+     * <p>
+     * The already-linked check, the rate limit and the session replacement are those of
+     * {@link #login(DeviceLoginListener)}; {@link DeviceLoginListener#onCode} is never called. A code that does not
+     * have the contract's shape is refused through {@link DeviceLoginListener#onRequestFailed} before anything else,
+     * and never sent. A used, unknown or expired code ends in {@link DeviceLoginListener#onExpired}. The code is a
+     * bearer secret: it is never logged or echoed.
+     *
+     * @param deviceCode the code from the panel
+     * @param listener   receives every outcome; must not be {@code null}
+     * @since 6.4.0
+     */
+    public static void loginWithCode(String deviceCode, DeviceLoginListener listener) {
+        Objects.requireNonNull(listener, "listener");
+        if (!isWellFormedRepairCode(deviceCode)) {
+            listener.onRequestFailed(INVALID_REPAIR_CODE);
+            return;
+        }
+        start(listener, session -> session.beginCodeLogin(deviceCode, listener));
+    }
+
+    /**
+     * @param code the text an operator typed after {@code /ulticloud login}, or {@code null}
+     * @return {@code true} when it has the shape of an UltiCloud device code ({@code ^[A-Za-z0-9_-]{43,128}$})
+     * @since 6.4.0
+     */
+    public static boolean isWellFormedRepairCode(String code) {
+        return DeviceAuthorizationClient.isWellFormedDeviceCode(code);
+    }
+
+    /**
+     * The checks and the session replacement shared by both logins; {@code begin} then starts the network part on
+     * the new session.
+     */
+    private static void start(DeviceLoginListener listener, Consumer<CloudSession> begin) {
         CloudSession sessionAtCheck = CloudSession.current();
         ServerCredential linked = linkedCredential(sessionAtCheck);
         if (linked != null) {
@@ -112,9 +157,9 @@ public class CloudAuthManager {
                 newSession = CloudSession.startNew();
             }
         }
-        // The device-code request is a network call: it stays outside both locks and off the
-        // caller's thread, on the new session's own executor.
-        newSession.beginDeviceLogin(listener);
+        // The device-code request (or the code exchange) is a network call: it stays outside both
+        // locks and off the caller's thread, on the new session's own executor.
+        begin.accept(newSession);
     }
 
     /**
@@ -454,7 +499,10 @@ public class CloudAuthManager {
         /** @param seconds the remaining cooldown before another login attempt is allowed */
         void onRateLimited(long seconds);
 
-        /** The device-code request is about to be made. */
+        /**
+         * The device-code request is about to be made -- or, for {@link #loginWithCode}, the exchange of the
+         * supplied code.
+         */
         void onRequesting();
 
         /**
