@@ -108,6 +108,13 @@ Login, Panel Integration, Player Link) explain each part in prose.
   32-hex `uuid` entry is kept byte for byte and is sent as `legacyServerUuid` with the device login, so
   the panel can offer to re-attach the existing server. A file with no `cloud_token` is not
   rewritten. The old token is never sent anywhere again.
+- **A server that lost its files keeps its panel record.** The server's identity on UltiCloud is its server record
+  in the panel, not a file on disk. If `<server root>/.ultikits/credentials.json` is lost (a wiped plugin folder, a
+  reinstall), run `/ulticloud login` again and, on the panel's confirmation page, choose to attach the server to
+  your existing server instead of creating a new one: the panel record and its history stay with the server.
+  If the panel answers that the existing server still has an active credential, revoke that credential in the
+  panel first, then confirm again. Do not copy `credentials.json` between servers: two servers using one credential
+  replace each other's connection (close 4000), and after three replacements the framework stops reconnecting.
 - `UltiCloudRequests.post` and `.get`, the 6.3.0 helper that made UltiLogin's `/panel` magic-link calls,
   answer every call with `PATH_NOT_ALLOWED` and send nothing (one INFO line per run). UltiLogin 2.0.0's
   `/panel` therefore stops working on 6.3.1; its `/login` keeps working. UltiLogin 2.1.0, released with
@@ -159,7 +166,18 @@ what an `error.report` names in `moduleName`. `moduleName` is `null` unless the 
 A module whose `identify-string` is missing or is not a valid identifier (a lower-case letter first, segments of
 lower-case letters and digits joined by one `.` or `-`, at most 64 characters) is addressed by its `plugin.yml`
 name trimmed and lower-cased instead, as in 6.3.0, when that is a valid identifier; if neither is, its
-responders are not declared and one WARNING says so. Its error reports then carry `moduleName` `null`.
+responders are not declared and one WARNING says so. Error reports never use that fallback: a module whose
+`identify-string` is not a valid identifier sends its error reports with `moduleName` `null`, even when its
+responders are reachable under the `plugin.yml` name. This is deliberate: the `plugin.yml` name may match no
+catalogue entry, and the panel would then attribute the error to a module that does not exist. Give the module a
+valid `identify-string` to have its errors attributed.
+
+The version in `modules:<identifier>@<X.Y.Z>` is always three numbers. The framework takes the first three runs of
+digits in the `plugin.yml` version and pads missing ones with `0`, so a pre-release or build suffix is not carried:
+`2.0` becomes `2.0.0`, but `2.0-rc1` becomes `2.0.1` and `2.0.0-SNAPSHOT` becomes `2.0.0`. UltiCloud's protocol
+accepts only `X.Y.Z` in a capability name (no pre-release tag), so a `2.0.0-rc1` form would make the gateway
+refuse the whole `hello`. Module authors who want the panel to show the version they ship should use a plain
+three-number `plugin.yml` version; a pre-release should not reuse the number of a later release.
 
 A `module.request { module, action, params, actor }` is dispatched only to a responder of the module whose
 identifier equals `module`, registered under `<identifier>.<action>`. New registrations should use that form.
@@ -481,6 +499,19 @@ take.
   8192 characters, a list over 500 items or an item over 1024 characters, an integer outside the safe-integer
   range) is left out of `config.entries` instead of being truncated, and a module lists at most the contract's
   entry cap. Edit such a setting in the file.
+- **A panel edit that names one key twice keeps the last value.** A `config.update` whose `changes` list the same
+  key more than once answers every item `ok` and applies them in order, so the file ends with the last value. The
+  official panel never sends a key twice; a custom client should send each key once.
+- **Map-valued settings are not shown in the panel's configuration view.** `config.entries` lists only settings
+  of a type the contract can carry (text, whole number, number, true/false, a list of text, an enum). A setting
+  declared as a map, an object, a Bukkit value or a list of anything but text is left out and cannot be edited from
+  the panel. Edit it in the module's file and run `/ul reload`.
+- **Configuration values are visible to the panel under the file-read switch, secrets included.** Reading a
+  module's configuration through the panel (`config:read`) is governed by `ultipanel.capabilities.file-read`, the
+  same switch as reading files, and the values are sent as the file holds them: a password or token kept in a
+  module's configuration is shown to whoever can read that server in the panel. The framework does not mask values
+  by key name, because a name-based guess is unreliable. Keep `file-read` off on servers whose configuration holds
+  secrets you do not want in the panel.
 - **An editable root equal to the server root is not listed.** `files.list` with an empty path lists the editable
   roots by their path relative to the server root; the server root itself has no such path and is omitted, although
   requests for paths inside it are still judged normally. Use sub-directories (`plugins`, `logs`) as editable roots.
@@ -3159,7 +3190,11 @@ Each corrects behaviour that contradicted the documentation or left state held b
   each validator that passed; its default does nothing, so existing validators are unaffected, and a
   refused dispatch runs no `onComplete`, so it applies no cooldown. Every `onRefused` and every
   `onComplete` hook now runs even when an earlier validator's hook throws; the first exception is
-  rethrown afterwards.
+  rethrown afterwards. Because command bodies run at dispatch, that exception reaches the caller: a
+  player or the console sees Bukkit's "An internal error occurred while attempting to perform this
+  command", and in a nested dispatch (a command body that runs another command) the outer command
+  fails too. The rule is kept on purpose (every hook runs, so no cooldown or
+  lock is left half-applied); a validator's `onComplete` and `onRefused` should therefore not throw.
 - **`@Scheduled` methods declared on a superclass of a bean are scheduled** (#532), as the annotation's
   javadoc always said. An overridden method is scheduled once, with the most derived declaration's
   annotation; an override without `@Scheduled` is not scheduled. A method that previously never ran
