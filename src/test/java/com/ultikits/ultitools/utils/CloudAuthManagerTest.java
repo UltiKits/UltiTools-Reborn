@@ -33,8 +33,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 
-import com.ultikits.ultitools.entities.TokenEntity;
-
 /**
  * CloudAuthManager 测试类
  * Tests for the UltiCloud authentication facade and the {@link CloudSession} it delegates to.
@@ -45,7 +43,7 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * Plan 16-09 (D-17/D-18) went further and removed every fine-grained public static this class used
  * to expose: only {@link CloudAuthManager#login}, {@link CloudAuthManager#logout} and
  * {@link CloudAuthManager#status} remain public, and none of the three accepts or returns a
- * {@link TokenEntity} or a generation. The former {@code MethodSignatureTests} nested class, which
+ * {@code TokenEntity} (removed in 6.4.0) or a generation. The former {@code MethodSignatureTests} nested class, which
  * asserted the now-removed statics' signatures, is gone with them --
  * {@code CredentialStaticSurfaceInvariantTest} (buildtools) is the structural test that now proves
  * the surface stays this narrow. Every other nested class below reaches {@link CloudSession}'s
@@ -104,29 +102,40 @@ class CloudAuthManagerTest {
     }
 
     /**
-     * Build a TokenEntity where the exp claim places expiry at the given offset
-     * from the current time (in seconds).
-     *
-     * @param offsetSeconds positive = future expiry, negative = already expired
+     * The 6.3.0 five-callback form of {@code login}, removed in 6.4.0, rebuilt here over the surviving
+     * {@link CloudAuthManager#login(CloudAuthManager.DeviceLoginListener)} exactly as the removed adapter did,
+     * so the login behaviour these cases pin is exercised through the surviving entry point.
      */
-    private static TokenEntity buildTokenWithExp(long offsetSeconds) {
-        long expEpochSeconds = (System.currentTimeMillis() / 1000L) + offsetSeconds;
-        TokenEntity token = new TokenEntity();
-        token.setAccess_token("dummy.access.token");
-        token.setRefresh_token("dummy-refresh-token");
-        token.setExp(expEpochSeconds);
-        return token;
-    }
+    private static void legacyLogin(Runnable onAlreadyLoggedIn, java.util.function.Consumer<Long> onRateLimited,
+            Runnable onRequesting, java.util.function.Consumer<String> onSuccess,
+            java.util.function.Consumer<String> onError) {
+        CloudAuthManager.login(new CloudAuthManager.DeviceLoginListener() {
+            @Override
+            public void onAlreadyLinked(String serverName) {
+                onAlreadyLoggedIn.run();
+            }
 
-    /**
-     * Build a TokenEntity with no exp field set (exp remains null).
-     */
-    private static TokenEntity buildTokenWithNullExp() {
-        TokenEntity token = new TokenEntity();
-        token.setAccess_token("dummy.access.token");
-        token.setRefresh_token("dummy-refresh-token");
-        // exp intentionally left null
-        return token;
+            @Override
+            public void onRateLimited(long seconds) {
+                onRateLimited.accept(seconds);
+            }
+
+            @Override
+            public void onRequesting() {
+                onRequesting.run();
+            }
+
+            @Override
+            public void onCode(String verificationUri, String userCode, String verificationUriComplete,
+                    long expiresInSeconds) {
+                onSuccess.accept(verificationUriComplete);
+            }
+
+            @Override
+            public void onRequestFailed(String reason) {
+                onError.accept(reason);
+            }
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -213,7 +222,8 @@ class CloudAuthManagerTest {
             java.util.List<String> names = new java.util.ArrayList<>();
             for (Field field : CloudSession.class.getDeclaredFields()) {
                 names.add(field.getName());
-                assertThat(field.getType()).as(field.getName()).isNotEqualTo(TokenEntity.class);
+                assertThat(field.getType().getName()).as(field.getName())
+                        .isNotEqualTo("com.ultikits.ultitools.entities.TokenEntity");
             }
             assertThat(names).doesNotContain("token", "predecessorToken", "tokenStore", "refreshExecutor",
                     "refreshTask", "TOKEN_REFRESH_CHECK_INTERVAL_MS", "TOKEN_REFRESH_THRESHOLD_SECONDS",
@@ -236,73 +246,6 @@ class CloudAuthManagerTest {
         void deviceSlowDownIncrementIsFiveSeconds() throws Exception {
             long value = getSessionStaticLong("DEVICE_SLOW_DOWN_INCREMENT_MS");
             assertThat(value).isEqualTo(5000L);
-        }
-    }
-
-    // =========================================================================
-    // 5. TokenEntity Helper Tests — TokenEntity 辅助测试
-    // =========================================================================
-
-    @Nested
-    @DisplayName("TokenEntity 过期状态测试")
-    class TokenEntityExpiryTests {
-
-        @Test
-        @DisplayName("exp 在未来时 isExpired 应返回 false / isExpired returns false for future exp")
-        void isExpiredShouldReturnFalseForFutureExp() {
-            TokenEntity token = buildTokenWithExp(7200L); // 2 hours from now
-
-            assertThat(token.isExpired()).isFalse();
-        }
-
-        @Test
-        @DisplayName("exp 在过去时 isExpired 应返回 true / isExpired returns true for past exp")
-        void isExpiredShouldReturnTrueForPastExp() {
-            TokenEntity token = buildTokenWithExp(-1L); // 1 second ago
-
-            assertThat(token.isExpired()).isTrue();
-        }
-
-        @Test
-        @DisplayName("exp 为 null 时 isExpired 应返回 false / isExpired returns false when exp is null")
-        void isExpiredShouldReturnFalseWhenExpIsNull() {
-            TokenEntity token = buildTokenWithNullExp();
-
-            assertThat(token.isExpired()).isFalse();
-        }
-
-        @Test
-        @DisplayName("过期了1小时的令牌 isExpired 应为 true / 1-hour-old token should be expired")
-        void isExpiredShouldBeTrueForOneHourOldToken() {
-            TokenEntity token = buildTokenWithExp(-3600L);
-
-            assertThat(token.isExpired()).isTrue();
-        }
-
-        @Test
-        @DisplayName("访问令牌为 null 时 getAccess_token 为 null / a null access_token stays null")
-        void nullAccessTokenMeansInvalid() {
-            TokenEntity token = new TokenEntity();
-            token.setAccess_token(null);
-            token.setExp((System.currentTimeMillis() / 1000L) + 3600L);
-
-            assertThat(token.getAccess_token()).isNull();
-        }
-
-        @Test
-        @DisplayName("TokenEntity 的 getExpirationDate 在 exp 不为 null 时应返回非 null Date")
-        void getExpirationDateShouldReturnNonNullWhenExpSet() {
-            TokenEntity token = buildTokenWithExp(3600L);
-
-            assertThat(token.getExpirationDate()).isNotNull();
-        }
-
-        @Test
-        @DisplayName("TokenEntity 的 getExpirationDate 在 exp 为 null 时应返回 null")
-        void getExpirationDateShouldReturnNullWhenExpNotSet() {
-            TokenEntity token = buildTokenWithNullExp();
-
-            assertThat(token.getExpirationDate()).isNull();
         }
     }
 
@@ -387,7 +330,7 @@ class CloudAuthManagerTest {
             AtomicBoolean alreadyLoggedInCalled = new AtomicBoolean(false);
             AtomicBoolean anythingElseCalled = new AtomicBoolean(false);
 
-            CloudAuthManager.login(
+            legacyLogin(
                 () -> alreadyLoggedInCalled.set(true),
                 remaining -> anythingElseCalled.set(true),
                 () -> anythingElseCalled.set(true),
@@ -404,13 +347,13 @@ class CloudAuthManagerTest {
         @DisplayName("限流命中时调用 onRateLimited，剩余秒数大于 0")
         void rateLimitedReportsPositiveRemaining() throws Exception {
             // First call consumes the rate-limit window (network-free: base URL is forced empty).
-            CloudAuthManager.login(() -> { }, remaining -> { }, () -> { }, url -> { }, error -> { });
+            legacyLogin(() -> { }, remaining -> { }, () -> { }, url -> { }, error -> { });
 
             // Second call, immediately after, must be rate-limited.
             AtomicLong remainingSeconds = new AtomicLong(-1);
             AtomicBoolean requestingCalled = new AtomicBoolean(false);
 
-            CloudAuthManager.login(
+            legacyLogin(
                 () -> { },
                 remainingSeconds::set,
                 () -> requestingCalled.set(true),
@@ -431,7 +374,7 @@ class CloudAuthManagerTest {
             AtomicBoolean successCalled = new AtomicBoolean(false);
             CountDownLatch errorReported = new CountDownLatch(1);
 
-            CloudAuthManager.login(
+            legacyLogin(
                 () -> { },
                 remaining -> { },
                 () -> requestingCalled.set(true),
@@ -462,7 +405,7 @@ class CloudAuthManagerTest {
                 init.when(() -> PluginInitiationUtils.disableCloud(any(CloudSession.class)))
                         .thenReturn(sessionBeforeLogin);
 
-                CloudAuthManager.login(() -> { }, remaining -> { }, () -> { }, url -> { }, error -> { });
+                legacyLogin(() -> { }, remaining -> { }, () -> { }, url -> { }, error -> { });
 
                 // 必须拆的是登录发生时那个（已过期）会话本身，而不是随便一个会话；且必须发生在
                 // startNew() 换上新会话之前——sessionBeforeLogin 在这一刻还是 current()。
@@ -487,7 +430,7 @@ class CloudAuthManagerTest {
                 AtomicBoolean alreadyLoggedInCalled = new AtomicBoolean(false);
                 AtomicBoolean anythingElseCalled = new AtomicBoolean(false);
 
-                CloudAuthManager.login(
+                legacyLogin(
                     () -> alreadyLoggedInCalled.set(true),
                     remaining -> anythingElseCalled.set(true),
                     () -> anythingElseCalled.set(true),
@@ -556,7 +499,7 @@ class CloudAuthManagerTest {
                 });
 
                 AtomicBoolean alreadyLoggedInCalled = new AtomicBoolean(false);
-                CloudAuthManager.login(
+                legacyLogin(
                         () -> alreadyLoggedInCalled.set(true),
                         remaining -> { },
                         () -> { },
@@ -605,7 +548,7 @@ class CloudAuthManagerTest {
             CountDownLatch releaseT1 = new CountDownLatch(1);
 
             AtomicReference<String> t1ErrorMessage = new AtomicReference<>();
-            Thread t1 = new Thread(() -> CloudAuthManager.login(
+            Thread t1 = new Thread(() -> legacyLogin(
                     () -> { },
                     remaining -> { },
                     () -> {
@@ -639,7 +582,7 @@ class CloudAuthManagerTest {
             AtomicReference<String> t2ErrorMessage = new AtomicReference<>();
             Thread t2 = new Thread(() -> {
                 t2Attempted.countDown();
-                CloudAuthManager.login(
+                legacyLogin(
                         () -> t2AlreadyLoggedInCalled.set(true),
                         remaining -> { },
                         () -> { },
@@ -998,8 +941,6 @@ class CloudAuthManagerTest {
             CloudAuthManager.CloudStatus status = CloudAuthManager.status();
 
             assertThat(status.isConnected()).isFalse();
-            assertThat(status.getUserName()).isNull();
-            assertThat(status.getExpirationDate()).isNull();
         }
 
         @Test
@@ -1020,8 +961,6 @@ class CloudAuthManagerTest {
             assertThat(status.isConnected()).isTrue();
             assertThat(status.isLinked()).isTrue();
             assertThat(status.getServerName()).isEqualTo("Survival");
-            assertThat(status.getUserName()).isNull();
-            assertThat(status.getExpirationDate()).isNull();
             assertThat(status.getConnectionDescription()).isEqualTo("connected");
         }
 
@@ -1033,7 +972,6 @@ class CloudAuthManagerTest {
             assertThat(status.isLinked()).isTrue();
             assertThat(status.isConnected()).isFalse();
             assertThat(status.getServerName()).isNull();
-            assertThat(status.getUserName()).isNull();
             assertThat(status.getConnectionDescription()).isEqualTo("not connected");
         }
 
@@ -1238,21 +1176,6 @@ class CloudAuthManagerTest {
             assertThat(credentialOnDisk()).isFalse();
             assertThat(listener.events).noneMatch(event -> event.startsWith("linked:"));
             assertThat(second.events).containsExactly("requesting");
-        }
-
-        @Test
-        @DisplayName("the 6.3.0 five-argument login still works: onSuccess receives the complete verification URI")
-        void legacyOverloadReceivesTheCompleteUri() {
-            CloudSession.setDeviceSeamsForTesting(grantedClient(600, 5), scheduler, clock);
-            AtomicReference<String> url = new AtomicReference<>();
-            AtomicBoolean requesting = new AtomicBoolean();
-
-            CloudAuthManager.login(() -> { }, remaining -> { }, () -> requesting.set(true), url::set, error -> { });
-            scheduler.runNext();
-
-            assertThat(requesting).isTrue();
-            assertThat(url.get()).isEqualTo("https://panel.ultikits.com/device?code=BCDF-GHJK");
-            assertThat(scheduler.pending()).as("polling started").isEqualTo(1);
         }
 
         @Test

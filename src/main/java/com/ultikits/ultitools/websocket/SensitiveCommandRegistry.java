@@ -17,9 +17,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * everything after it with {@code ***}. A player-command event never carries arguments at all,
  * registered or not: it carries {@link #commandName(String)} only.
  * <p>
- * <b>Only data sent to UltiCloud is redacted.</b> The server's own console, its log files and the
- * {@link java.util.logging.LogRecord} objects other handlers see keep the original text: the
- * operator who can read the local console can already read what the players typed.
+ * <b>Data sent to UltiCloud is redacted, and so are the framework's own remote-command
+ * records.</b> As of 6.4.0, when the panel's remote console runs a registered command, the
+ * framework's own lines about it (the {@code [Remote command] > ...} echo and the refusal and
+ * failure lines, which reach the server console, {@code latest.log} and the panel's log stream)
+ * and its entry in the remote-action log ({@code plugins/UltiTools/security/action.log.*}) show
+ * the command followed by {@code ***} instead of its arguments, for example
+ * {@code [Remote command] > logadmin ***}. Before 6.4.0 those local records carried the full
+ * command line. Everything else written locally keeps the original text: lines other plugins
+ * log, a player's own {@code issued server command} line in the local log files, and the
+ * {@link java.util.logging.LogRecord} objects other handlers see. The command itself is always
+ * dispatched with its arguments.
  * <p>
  * <b>Matching.</b> A command line matches when its first word, with one leading {@code /} and a
  * {@code namespace:} prefix removed, equals a registered name, compared case-insensitively

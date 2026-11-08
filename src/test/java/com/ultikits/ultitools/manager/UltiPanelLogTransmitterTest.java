@@ -1,1366 +1,233 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.doThrow;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.CountDownLatch;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
-import org.mockbukkit.mockbukkit.ServerMock;
 
 /**
- * UltiPanelLogTransmitter 测试
+ * UltiPanelLogTransmitter after the protocol v1 removal (6.4.0): its only constructor takes the protocol v2
+ * {@link UltiPanelLogTransmitter.AgentLineSink}, and every line goes to that sink at once. The v1 batch sender,
+ * replay sender and their scheduling were removed with the v1 client; what is pinned here is what is left.
  */
-@DisplayName("UltiPanelLogTransmitter 测试")
+@DisplayName("UltiPanelLogTransmitter (protocol v2 sink)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-@SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.SingularField"}) // Test requires reflection for mocking internal state
 class UltiPanelLogTransmitterTest {
 
-    private ServerMock server;
-    private UltiPanelLogTransmitter logTransmitter;
-    private UltiPanelWebSocketClient mockWebSocketClient;
-    private Logger mockLogger;
+    /** One line as the sink received it. */
+    private static final class Line {
+        final long timestamp;
+        final Level level;
+        final String message;
 
-    /**
-     * 本测试里造出来的所有 transmitter，tearDown 统一关掉。
-     *
-     * <p>UltiPanelLogTransmitter 的构造函数就会起一条 "UltiPanel-LogTransmitter" 守护
-     * 调度线程（{@code scheduleWithFixedDelay}，5 秒一次），只有 shutdown() 停得掉。
-     * 这个类有 55 个用例，直接 new 而不关的话，跑完就有几十条线程活到 fork 结束——
-     * surefire 这里没配 forkCount/reuseForks，是单个 JVM 跑完整个测试套件。这些线程会周期性调
-     * {@code UltiTools.getInstance().getLogger()}，撞上别的测试类正在给静态 mock 打桩，
-     * 就把 answer 抢走了。issue #250 里 LogStreamManagerTest 的间歇性
-     * ClassCastException 就是这么来的：失败那次运行里本类排在它前面 250 个类。
-     */
-    private final java.util.List<UltiPanelLogTransmitter> createdTransmitters =
-            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
-
-    /**
-     * 统一的创建入口。不要在用例里直接 {@code new UltiPanelLogTransmitter(...)}，
-     * 那样造出来的线程没人关。
-     */
-    private UltiPanelLogTransmitter newTransmitter(UltiPanelWebSocketClient client, String serverId) {
-        UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(client, serverId);
-        createdTransmitters.add(transmitter);
-        return transmitter;
+        Line(long timestamp, Level level, String message) {
+            this.timestamp = timestamp;
+            this.level = level;
+            this.message = message;
+        }
     }
+
+    private final List<Line> lines = new ArrayList<>();
+    private final AtomicBoolean accepting = new AtomicBoolean(true);
+    private UltiPanelLogTransmitter transmitter;
 
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
-        MockBukkit.createMockPlugin();
-
-        // Mock logger
-        mockLogger = mock(Logger.class);
-
-        // 这个桩要在 mock 发布到静态单例之前打完，否则别的线程可能在打桩中途调进来
-        // 把 answer 抢走。见 issue #250。
+        MockBukkit.mock();
+        Logger logger = mock(Logger.class);
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
-                ultiTools -> lenient().when(ultiTools.getLogger()).thenReturn(mockLogger));
+                ultiTools -> lenient().when(ultiTools.getLogger()).thenReturn(logger));
+        transmitter = new UltiPanelLogTransmitter(new UltiPanelLogTransmitter.AgentLineSink() {
+            @Override
+            public void offer(long timestamp, Level level, String message) {
+                lines.add(new Line(timestamp, level, message));
+            }
 
-        // Mock WebSocket client
-        mockWebSocketClient = mock(UltiPanelWebSocketClient.class);
-        when(mockWebSocketClient.isConnected()).thenReturn(true);
-        when(mockWebSocketClient.getServerId()).thenReturn("test-server");
-
-        logTransmitter = newTransmitter(mockWebSocketClient, "test-server");
+            @Override
+            public boolean accepting() {
+                return accepting.get();
+            }
+        });
     }
 
     @AfterEach
     void tearDown() {
-        // 关掉本用例造出来的每一条调度线程。漏一条就活到 fork 结束，见上面 createdTransmitters 的注释。
-        for (UltiPanelLogTransmitter transmitter : createdTransmitters) {
-            try {
-                transmitter.shutdown();
-            } catch (Exception ignored) {
-                // shutdown 内部自己吞异常，这里只是兜底；重点是每条都调到
-            }
-        }
-        createdTransmitters.clear();
+        transmitter.shutdown();
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
-    @Nested
-    @DisplayName("构造函数测试")
-    class ConstructorTests {
-
-        @Test
-        @DisplayName("应该使用提供的 serverId")
-        void shouldUseProvidedServerId() throws Exception {
-            // Arrange & Act
-            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "custom-server-id");
-
-            // Assert
-            Field serverIdField = UltiPanelLogTransmitter.class.getDeclaredField("serverId");
-            serverIdField.setAccessible(true);
-            assertThat(serverIdField.get(transmitter)).isEqualTo("custom-server-id");
-        }
-
-        @Test
-        @DisplayName("serverId 为 null 时应该使用默认值")
-        void shouldUseDefaultServerIdWhenNull() throws Exception {
-            // Arrange & Act
-            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, null);
-
-            // Assert
-            Field serverIdField = UltiPanelLogTransmitter.class.getDeclaredField("serverId");
-            serverIdField.setAccessible(true);
-            assertThat(serverIdField.get(transmitter)).isNotNull();
-        }
-
-        @Test
-        @DisplayName("应该初始化日志队列")
-        void shouldInitializeLogQueue() throws Exception {
-            // Arrange & Act
-            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "test");
-
-            // Assert
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            assertThat(queueField.get(transmitter)).isNotNull();
-        }
-
-        @Test
-        @DisplayName("应该初始化批量调度器")
-        void shouldInitializeBatchScheduler() throws Exception {
-            // Arrange & Act
-            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "test");
-
-            // Assert
-            Field schedulerField = UltiPanelLogTransmitter.class.getDeclaredField("batchScheduler");
-            schedulerField.setAccessible(true);
-            assertThat(schedulerField.get(transmitter)).isNotNull();
-        }
+    private static JsonObject record(String message) {
+        JsonObject log = new JsonObject();
+        log.addProperty("message", message);
+        return log;
     }
 
-    @Nested
-    @DisplayName("sendLog 测试")
-    class SendLogTests {
-
-        @Test
-        @DisplayName("WebSocket 未连接时不应该发送")
-        void shouldNotSendWhenNotConnected() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(false);
-
-            // Act & Assert - 不会立即发送，且不抛出异常
-            assertDoesNotThrow(() -> logTransmitter.sendLog("info", "test message", "server", null));
-        }
-
-        @Test
-        @DisplayName("WebSocket 为 null 时不应该抛出异常")
-        void shouldNotThrowWhenWebSocketNull() {
-            // Arrange
-            UltiPanelLogTransmitter transmitter = newTransmitter(null, "test");
-
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> transmitter.sendLog("info", "test message", "server", null));
-        }
-
-        @Test
-        @DisplayName("level 为 null 时应该使用默认值 info")
-        void shouldUseDefaultLevelWhenNull() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act
-            logTransmitter.sendLog(null, "test message", "server", null);
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("source 为 null 时应该使用默认值 server")
-        void shouldUseDefaultSourceWhenNull() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act
-            logTransmitter.sendLog("info", "test message", null, null);
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("应该包含异常堆栈跟踪")
-        void shouldIncludeStackTrace() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            Exception testException = new RuntimeException("Test exception");
-
-            // Act
-            logTransmitter.sendLog("error", "error message", "server", testException);
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
+    private static List<String> messagesOf(JsonArray logs) {
+        List<String> messages = new ArrayList<>();
+        logs.forEach(e -> messages.add(e.getAsJsonObject().get("message").getAsString()));
+        return messages;
     }
 
-    @Nested
-    @DisplayName("便捷方法测试")
-    class ConvenienceMethodsTests {
-
-        @Test
-        @DisplayName("info 方法应该调用 sendLog")
-        void infoShouldCallSendLog() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act
-            logTransmitter.info("test info", "server");
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("warning 方法应该调用 sendLog")
-        void warningShouldCallSendLog() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act
-            logTransmitter.warning("test warning", "server");
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("error 方法应该调用 sendLog")
-        void errorShouldCallSendLog() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act
-            logTransmitter.error("test error", "server", null);
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("debug 方法应该调用 sendLog")
-        void debugShouldCallSendLog() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act
-            logTransmitter.debug("test debug", "server");
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
+    @Test
+    @DisplayName("the sink is required")
+    void sinkIsRequired() {
+        assertThatThrownBy(() -> new UltiPanelLogTransmitter(null)).isInstanceOf(NullPointerException.class);
     }
 
-    @Nested
-    @DisplayName("批量发送测试")
-    class BatchSendingTests {
+    @Test
+    @DisplayName("sendLog hands the line to the sink at once, with the panel level mapped to a JUL level")
+    void sendLogHandsEachLineToTheSink() {
+        transmitter.sendLog("info", "an info line", "server", null);
+        transmitter.sendLog("warning", "a warning", "server", null);
+        transmitter.sendLog("error", "an error", "server", null);
+        transmitter.sendLog("debug", "a debug line", "server", null);
+        transmitter.sendLog(null, "no level", null, null);
 
-        @Test
-        @DisplayName("batchEnabled 默认应该为 true")
-        void batchEnabledShouldBeTrue() {
-            // Assert
-            assertThat(logTransmitter.isBatchEnabled()).isTrue();
-        }
-
-        @Test
-        @DisplayName("应该能够设置 batchEnabled")
-        void shouldSetBatchEnabled() {
-            // Act
-            logTransmitter.setBatchEnabled(false);
-
-            // Assert
-            assertThat(logTransmitter.isBatchEnabled()).isFalse();
-        }
-
-        @Test
-        @DisplayName("batchSize 默认应该为 10")
-        void batchSizeShouldBe10() {
-            // Assert
-            assertThat(logTransmitter.getBatchSize()).isEqualTo(10);
-        }
-
-        @Test
-        @DisplayName("应该能够设置 batchSize")
-        void shouldSetBatchSize() {
-            // Act
-            logTransmitter.setBatchSize(20);
-
-            // Assert
-            assertThat(logTransmitter.getBatchSize()).isEqualTo(20);
-        }
-
-        @Test
-        @DisplayName("intervalMs 默认应该为 5000")
-        void intervalMsShouldBe5000() {
-            // Assert
-            assertThat(logTransmitter.getIntervalMs()).isEqualTo(5000);
-        }
-
-        @Test
-        @DisplayName("应该能够设置 intervalMs")
-        void shouldSetIntervalMs() {
-            // Act
-            logTransmitter.setIntervalMs(10000);
-
-            // Assert
-            assertThat(logTransmitter.getIntervalMs()).isEqualTo(10000);
-        }
-
-        @Test
-        @DisplayName("队列满时应该触发发送")
-        void shouldSendWhenQueueFull() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchSize(3);
-
-            // Act - 发送超过 batchSize 的日志
-            for (int i = 0; i < 5; i++) {
-                logTransmitter.sendLog("info", "message " + i, "server", null);
-            }
-
-            // 等待批量发送
-            Thread.sleep(200);
-
-            // 不应该抛出异常 - test passes if we reach here
-            assertThat(true).isTrue();
-        }
+        assertThat(lines).extracting(l -> l.message)
+                .containsExactly("an info line", "a warning", "an error", "a debug line", "no level");
+        assertThat(lines).extracting(l -> l.level)
+                .containsExactly(Level.INFO, Level.WARNING, Level.SEVERE, Level.FINE, Level.INFO);
     }
 
-    // ==================== batch 调度器重调度测试 (issue #432) ====================
-    @Nested
-    @DisplayName("batch 调度器重调度测试 -- 修改 interval/batchEnabled 必须实际驱动调度器，而不只是改字段")
-    class BatchSchedulerReschedulingTests {
+    @Test
+    @DisplayName("the convenience methods send at their own level")
+    void convenienceMethodsSendAtTheirLevel() {
+        transmitter.info("i", "server");
+        transmitter.warning("w", "server");
+        transmitter.error("e", "server", null);
+        transmitter.debug("d", "server");
 
-        /**
-         * Typed {@code Object}, not {@code ScheduledFuture}, so every assertion below resolves
-         * AssertJ's plain {@code assertThat(Object)} overload rather than colliding with its
-         * separate, ambiguity-causing {@code assertThat(Future)} overload.
-         */
-        private Object currentTask() throws Exception {
-            Field field = UltiPanelLogTransmitter.class.getDeclaredField("batchSenderTask");
-            field.setAccessible(true);
-            return field.get(logTransmitter);
-        }
-
-        private boolean isCancelled(Object task) {
-            return ((java.util.concurrent.Future<?>) task).isCancelled();
-        }
-
-        @Test
-        @DisplayName("设置新的 interval 会取消旧的调度任务并提交一个新的 -- 观察任务本身，而不是读回字段")
-        void settingNewIntervalCancelsAndResubmitsTheScheduledTask() throws Exception {
-            Object before = currentTask();
-            assertThat(before).isNotNull();
-            assertThat(isCancelled(before)).isFalse();
-
-            logTransmitter.setIntervalMs(10000);
-
-            Object after = currentTask();
-            assertThat(after).isNotSameAs(before);
-            assertThat(isCancelled(before)).isTrue();
-            assertThat(after).isNotNull();
-            assertThat(isCancelled(after)).isFalse();
-        }
-
-        @Test
-        @DisplayName("设置成当前已有的 interval 值不应该扰动调度器 -- 同一个任务实例")
-        void settingSameIntervalDoesNotChurnTheScheduler() throws Exception {
-            Object before = currentTask();
-
-            logTransmitter.setIntervalMs(logTransmitter.getIntervalMs());
-
-            Object after = currentTask();
-            assertThat(after).isSameAs(before);
-        }
-
-        @Test
-        @DisplayName("非正数的 interval 被拒绝，并保留之前生效的值")
-        void nonPositiveIntervalIsRejectedAndThePreviousValueSurvives() {
-            int before = logTransmitter.getIntervalMs();
-
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(0))
-                    .isInstanceOf(IllegalArgumentException.class);
-            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
-
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(-500))
-                    .isInstanceOf(IllegalArgumentException.class);
-            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
-        }
-
-        @Test
-        @DisplayName("WR-01: 低于共享下限（1000ms）但仍为正数的 interval 同样被拒绝，并保留之前生效的值")
-        void positiveIntervalBelowTheSharedFloorIsRejectedAndThePreviousValueSurvives() {
-            int before = logTransmitter.getIntervalMs();
-
-            // 1ms is positive -- the OLD `intervalMs <= 0` check alone would have accepted this,
-            // driving the scheduler to a roughly 1000-sends/second cadence (16-REVIEW-panel.md
-            // WR-01's exact repro value).
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(1))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("1000");
-            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
-
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(999))
-                    .isInstanceOf(IllegalArgumentException.class);
-            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
-        }
-
-        @Test
-        @DisplayName("WR-01: 恰好等于共享下限（1000ms）的 interval 被接受")
-        void intervalExactlyAtTheSharedFloorIsAccepted() {
-            logTransmitter.setIntervalMs(1000);
-            assertThat(logTransmitter.getIntervalMs()).isEqualTo(1000);
-        }
-
-        @Test
-        @DisplayName("禁用批量发送会停止调度任务；重新以当前 interval 启用会重新启动它")
-        void disablingBatchingStopsTheSenderReEnablingStartsItAgain() throws Exception {
-            assertThat(currentTask()).isNotNull();
-
-            logTransmitter.setBatchEnabled(false);
-            assertThat(currentTask()).isNull();
-
-            logTransmitter.setBatchEnabled(true);
-            Object restarted = currentTask();
-            assertThat(restarted).isNotNull();
-            assertThat(isCancelled(restarted)).isFalse();
-        }
-
-        @Test
-        @DisplayName("Gate-2 P2: 禁用批量发送前，会先把已排队（未达 batchSize 阈值）的记录发出去，而不是丢在队列里")
-        void disablingBatchingFlushesAlreadyQueuedEntriesFirst() throws Exception {
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            // batchSize defaults to 10; queue fewer than that so addToBatch's own size-threshold
-            // send never fires on its own.
-            logTransmitter.sendLog("info", "queued-1", "test", null);
-            logTransmitter.sendLog("info", "queued-2", "test", null);
-
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            assertThat(((java.util.Collection<?>) queueField.get(logTransmitter)))
-                    .as("precondition: entries are genuinely queued, not yet sent")
-                    .isNotEmpty();
-
-            logTransmitter.setBatchEnabled(false);
-
-            assertThat(((java.util.Collection<?>) queueField.get(logTransmitter)))
-                    .as("Gate-2 P2: the queue must be empty after disabling -- nothing left stranded")
-                    .isEmpty();
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("Gate-2 round 6: 在 external drain mode 下，队列达到 batchSize 时会触发 externalSizeThresholdCallback")
-        void reachingBatchSizeUnderExternalDrainModeInvokesTheSizeThresholdCallback() {
-            logTransmitter.setExternalDrainMode(true);
-            logTransmitter.setBatchSize(2);
-            AtomicInteger callbackCount = new AtomicInteger(0);
-            logTransmitter.setExternalSizeThresholdCallback(callbackCount::incrementAndGet);
-
-            logTransmitter.sendLog("info", "line-1", "test", null);
-            assertThat(callbackCount.get()).as("threshold (2) not yet reached").isZero();
-
-            logTransmitter.sendLog("info", "line-2", "test", null);
-            assertThat(callbackCount.get()).as("threshold reached on the 2nd enqueue").isEqualTo(1);
-        }
-
-        @Test
-        @DisplayName("Gate-2 round 6 对照: external drain mode 关闭时，达到 batchSize 不会调用 externalSizeThresholdCallback（走的是真实 sendBatch）")
-        void reachingBatchSizeWithoutExternalDrainModeDoesNotInvokeTheCallback() {
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchSize(2);
-            AtomicInteger callbackCount = new AtomicInteger(0);
-            logTransmitter.setExternalSizeThresholdCallback(callbackCount::incrementAndGet);
-
-            logTransmitter.sendLog("info", "line-1", "test", null);
-            logTransmitter.sendLog("info", "line-2", "test", null);
-
-            assertThat(callbackCount.get()).isZero();
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("Gate-2 round 6: setBatchEnabled(false) 持有 batchModeLock 期间，并发的 sendLog 必须等待 -- 证明锁真的挡住了")
-        void disablingBatchingHoldsTheLockAcrossFlushBlockingConcurrentSendLog() throws Exception {
-            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
-            lockField.setAccessible(true);
-            Object lock = lockField.get(logTransmitter);
-
-            CountDownLatch workerStarted = new CountDownLatch(1);
-            CountDownLatch workerDone = new CountDownLatch(1);
-            Thread worker = new Thread(() -> {
-                workerStarted.countDown();
-                logTransmitter.sendLog("info", "concurrent", "test", null);
-                workerDone.countDown();
-            });
-
-            try {
-                synchronized (lock) {
-                    worker.start();
-                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
-                    // The worker's sendLog() call must NOT be able to proceed past its own
-                    // synchronized(batchModeLock) block while this thread holds the same lock.
-                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
-                            .as("sendLog() must block on batchModeLock while it is held elsewhere")
-                            .isFalse();
-                }
-                // Released -- the worker should now complete promptly.
-                assertThat(workerDone.await(5, TimeUnit.SECONDS))
-                        .as("sendLog() must proceed once the lock is released")
-                        .isTrue();
-            } finally {
-                worker.join(5000);
-            }
-        }
-
-        @Test
-        @DisplayName("Gate-2 P2 (round 10): sendBatch() 现在也持有 batchModeLock -- 证明调度线程自己触发的 tick 会被并发的 flush 挡住")
-        void sendBatchNowHoldsBatchModeLockBlockingAConcurrentScheduledTickWhileFlushing() throws Exception {
-            // Arrange: a queued record, and a direct handle on the private sendBatch() method --
-            // standing in for the scheduler's own periodic call to it.
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            java.util.Queue<JsonObject> queue = (java.util.Queue<JsonObject>) queueField.get(logTransmitter);
-            JsonObject entry = new JsonObject();
-            entry.addProperty("message", "queued");
-            queue.offer(entry);
-
-            Method sendBatchMethod = UltiPanelLogTransmitter.class.getDeclaredMethod("sendBatch");
-            sendBatchMethod.setAccessible(true);
-
-            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
-            lockField.setAccessible(true);
-            Object lock = lockField.get(logTransmitter);
-
-            CountDownLatch workerStarted = new CountDownLatch(1);
-            CountDownLatch workerDone = new CountDownLatch(1);
-            Thread worker = new Thread(() -> {
-                workerStarted.countDown();
-                try {
-                    sendBatchMethod.invoke(logTransmitter);
-                } catch (Exception e) {
-                    org.junit.jupiter.api.Assertions.fail(e);
-                }
-                workerDone.countDown();
-            });
-
-            try {
-                synchronized (lock) {
-                    worker.start();
-                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
-                    // Before round 10, sendBatch() was completely unsynchronized -- the scheduler's
-                    // own tick could run concurrently with a disable-time flush (which holds
-                    // batchModeLock across its own doFlushLogs()/sendBatch() loop) and interleave
-                    // queue polls between the two, sending frames in an unrecoverable order.
-                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
-                            .as("sendBatch() must block on batchModeLock while it is held elsewhere")
-                            .isFalse();
-                    verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
-                }
-                assertThat(workerDone.await(5, TimeUnit.SECONDS))
-                        .as("sendBatch() must proceed once the lock is released")
-                        .isTrue();
-                verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
-            } finally {
-                worker.join(5000);
-            }
-        }
-
-        @Test
-        @DisplayName("Gate-2 P2 (round 10): flushLogs() 现在也把 batchModeLock 当作最外层锁获取 -- 即便没有外部 coordination lock")
-        void flushLogsNowAcquiresBatchModeLockAsTheOutermostLockEvenWithoutAnExternalCoordinationLock() throws Exception {
-            // No setExternalDrainCoordinationLock call -- proves batchModeLock alone, not the
-            // round-9 coordination lock, is what now guards flushLogs()/sendBatch() against the
-            // scheduler's own concurrent tick.
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-
-            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
-            lockField.setAccessible(true);
-            Object lock = lockField.get(logTransmitter);
-
-            CountDownLatch workerStarted = new CountDownLatch(1);
-            CountDownLatch workerDone = new CountDownLatch(1);
-            Thread worker = new Thread(() -> {
-                workerStarted.countDown();
-                logTransmitter.flushLogs();
-                workerDone.countDown();
-            });
-
-            try {
-                synchronized (lock) {
-                    worker.start();
-                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
-                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
-                            .as("flushLogs() must block on batchModeLock while it is held elsewhere, "
-                                    + "even with no external coordination lock wired up")
-                            .isFalse();
-                }
-                assertThat(workerDone.await(5, TimeUnit.SECONDS))
-                        .as("flushLogs() must proceed once the lock is released")
-                        .isTrue();
-            } finally {
-                worker.join(5000);
-            }
-        }
+        assertThat(lines).extracting(l -> l.level)
+                .containsExactly(Level.INFO, Level.WARNING, Level.SEVERE, Level.FINE);
     }
 
-    @Nested
-    @DisplayName("addToBatch 测试")
-    class AddToBatchTests {
+    @Test
+    @DisplayName("a stack trace follows the message on the following lines (log.lines has no stack-trace field)")
+    void stackTraceIsAppendedToTheMessage() {
+        transmitter.sendLog("error", "it failed", "server", new IllegalStateException("the cause"));
 
-        @Test
-        @DisplayName("应该将日志添加到队列")
-        void shouldAddLogToQueue() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-
-            // Act
-            logTransmitter.sendLog("info", "test", "server", null);
-
-            // Assert
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
-            // 队列可能已被清空（如果触发了批量发送），但队列对象应该存在
-            assertThat(queue).isNotNull();
-        }
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0).message).startsWith("it failed\n").contains("IllegalStateException: the cause");
     }
 
-    @Nested
-    @DisplayName("sendLogImmediately 测试")
-    class SendLogImmediatelyTests {
+    @Test
+    @DisplayName("a replayed record keeps the time it was logged")
+    void replayKeepsTheRecordTime() {
+        transmitter.replayLog("info", "early", "server", null, 42L);
 
-        @Test
-        @DisplayName("应该直接发送消息")
-        void shouldSendMessageDirectly() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("sendLogImmediately", JsonObject.class);
-            method.setAccessible(true);
-
-            JsonObject logData = new JsonObject();
-            logData.addProperty("message", "test");
-
-            // Act
-            method.invoke(logTransmitter, logData);
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0).timestamp).isEqualTo(42L);
+        assertThat(lines.get(0).message).isEqualTo("early");
     }
 
-    @Nested
-    @DisplayName("logTransmissionEnabled 测试")
-    class LogTransmissionEnabledTests {
+    @Test
+    @DisplayName("nothing is handed over while transmission is off, while the sink is not accepting, or after shutdown")
+    void nothingIsHandedOverWhenSwitchedOff() {
+        assertThat(transmitter.isLogTransmissionEnabled()).isTrue();
 
-        @Test
-        @DisplayName("默认应该启用")
-        void shouldBeEnabledByDefault() throws Exception {
-            // Assert
-            Field field = UltiPanelLogTransmitter.class.getDeclaredField("logTransmissionEnabled");
-            field.setAccessible(true);
-            AtomicBoolean enabled = (AtomicBoolean) field.get(logTransmitter);
-            assertThat(enabled.get()).isTrue();
-        }
+        transmitter.setLogTransmissionEnabled(false);
+        transmitter.info("while off", "server");
+        transmitter.setLogTransmissionEnabled(true);
+        accepting.set(false);
+        transmitter.info("while not accepting", "server");
+        accepting.set(true);
+        transmitter.info("sent", "server");
+        transmitter.shutdown();
+        transmitter.info("after shutdown", "server");
 
-        @Test
-        @DisplayName("禁用时不应该发送日志")
-        void shouldNotSendWhenDisabled() throws Exception {
-            // Arrange
-            Field field = UltiPanelLogTransmitter.class.getDeclaredField("logTransmissionEnabled");
-            field.setAccessible(true);
-            AtomicBoolean enabled = (AtomicBoolean) field.get(logTransmitter);
-            enabled.set(false);
-
-            // Act
-            logTransmitter.sendLog("info", "test", "server", null);
-
-            // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
-        }
+        assertThat(lines).extracting(l -> l.message).containsExactly("sent");
+        assertThat(transmitter.isLogTransmissionEnabled()).isFalse();
     }
 
-    @Nested
-    @DisplayName("getStackTrace 测试")
-    class GetStackTraceTests {
+    @Test
+    @DisplayName("a sink that throws does not break the logging call")
+    void throwingSinkDoesNotPropagate() {
+        UltiPanelLogTransmitter throwing = new UltiPanelLogTransmitter((timestamp, level, message) -> {
+            throw new IllegalStateException("sink down");
+        });
 
-        @Test
-        @DisplayName("应该返回异常堆栈字符串")
-        void shouldReturnStackTraceString() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("getStackTrace", Throwable.class);
-            method.setAccessible(true);
-
-            Exception testException = new RuntimeException("Test");
-
-            // Act
-            String result = (String) method.invoke(logTransmitter, testException);
-
-            // Assert
-            assertThat(result).contains("RuntimeException");
-            assertThat(result).contains("Test");
-        }
+        assertThatCode(() -> throwing.info("line", "server")).doesNotThrowAnyException();
     }
 
-    @Nested
-    @DisplayName("determineLoggerName 测试")
-    class DetermineLoggerNameTests {
+    @Test
+    @DisplayName("the replay and flush entry points are no-ops: nothing is ever queued for replay")
+    void replayAndFlushAreNoOps() {
+        transmitter.startReplay();
+        transmitter.flushLogs();
 
-        @Test
-        @DisplayName("应该返回正确的 logger 名称")
-        void shouldReturnCorrectLoggerName() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("determineLoggerName", String.class);
-            method.setAccessible(true);
-
-            // Act
-            String result = (String) method.invoke(logTransmitter, "plugin:TestPlugin");
-
-            // Assert
-            assertThat(result).isNotNull();
-        }
-
-        @Test
-        @DisplayName("source 为 server 时应该返回 MinecraftServer")
-        void shouldReturnMinecraftServerForServerSource() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("determineLoggerName", String.class);
-            method.setAccessible(true);
-
-            // Act
-            String result = (String) method.invoke(logTransmitter, "server");
-
-            // Assert
-            assertThat(result).isEqualTo("MinecraftServer");
-        }
-
-        @Test
-        @DisplayName("source 为 null 时应该返回 unknown")
-        void shouldReturnUnknownForNullSource() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("determineLoggerName", String.class);
-            method.setAccessible(true);
-
-            // Act
-            String result = (String) method.invoke(logTransmitter, (String) null);
-
-            // Assert
-            assertThat(result).isEqualTo("unknown");
-        }
+        assertThat(transmitter.getReplayQueueSize()).isZero();
+        assertThat(transmitter.getQueueSize()).isZero();
+        assertThat(lines).isEmpty();
     }
 
-    @Nested
-    @DisplayName("flushLogs 测试")
-    class FlushLogsTests {
-
-        @Test
-        @DisplayName("应该清空队列并发送所有日志")
-        void shouldFlushQueueAndSendAll() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            
-            // 添加一些日志到队列
-            for (int i = 0; i < 5; i++) {
-                logTransmitter.sendLog("info", "message " + i, "server", null);
-            }
-
-            // Act
-            logTransmitter.flushLogs();
-
-            // Assert - 队列应该被清空
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
-            assertThat(queue.isEmpty()).isTrue();
-        }
-
-        @Test
-        @DisplayName("WebSocket 未连接时不应该发送")
-        void shouldNotSendWhenNotConnected() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(false);
-
-            // 添加日志
-            logTransmitter.sendLog("info", "test", "server", null);
-
-            // Act
-            logTransmitter.flushLogs();
-
-            // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("Gate-2 P2 (round 9): 设置了 externalDrainCoordinationLock 后，flushLogs() 会持有该锁 -- 与 monitor 自己的排空路径共享同一把互斥锁")
-        void flushLogsHoldsTheExternalCoordinationLockWhenOneIsWired() throws Exception {
-            // Arrange -- a standalone lock object standing in for
-            // ServerMonitorManager's own logDrainLock, wired exactly the way
-            // LogStreamManager#initialize() wires the real one.
-            Object coordinationLock = new Object();
-            logTransmitter.setExternalDrainCoordinationLock(coordinationLock);
-
-            for (int i = 0; i < 5; i++) {
-                logTransmitter.sendLog("info", "message " + i, "server", null);
-            }
-
-            CountDownLatch workerStarted = new CountDownLatch(1);
-            CountDownLatch workerDone = new CountDownLatch(1);
-            Thread worker = new Thread(() -> {
-                workerStarted.countDown();
-                logTransmitter.flushLogs();
-                workerDone.countDown();
-            });
-
-            try {
-                synchronized (coordinationLock) {
-                    worker.start();
-                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
-                    // flushLogs() must not be able to proceed past its own
-                    // synchronized(externalDrainCoordinationLock) while this thread holds the
-                    // SAME lock object -- proves flushLogs() actually participates in the
-                    // external coordination lock rather than running unsynchronized.
-                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
-                            .as("flushLogs() must block on the wired coordination lock while it is held elsewhere")
-                            .isFalse();
-                }
-                // Released -- the worker should now complete promptly and the queue drained.
-                assertThat(workerDone.await(5, TimeUnit.SECONDS))
-                        .as("flushLogs() must proceed once the coordination lock is released")
-                        .isTrue();
-            } finally {
-                worker.join(5000);
-            }
-
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
-            assertThat(queue.isEmpty()).as("the queue must still have been drained once released").isTrue();
-        }
-
-        @Test
-        @DisplayName("Gate-2 P2 (round 9) 对照: 未设置 externalDrainCoordinationLock（默认 null）时 flushLogs() 照常不加锁运行")
-        void flushLogsRunsUnsynchronizedWhenNoCoordinationLockIsWired() throws Exception {
-            // Control: no setExternalDrainCoordinationLock call -- must behave exactly as before
-            // this fix, i.e. no external lock participation at all.
-            for (int i = 0; i < 3; i++) {
-                logTransmitter.sendLog("info", "message " + i, "server", null);
-            }
-
-            logTransmitter.flushLogs();
-
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
-            assertThat(queue.isEmpty()).isTrue();
-        }
+    @Test
+    @DisplayName("batch settings below their floors are refused")
+    void batchSettingsBelowTheirFloorsAreRefused() {
+        assertThatThrownBy(() -> transmitter.setIntervalMs(UltiPanelLogTransmitter.MIN_INTERVAL_MS - 1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> transmitter.setBatchSize(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatCode(() -> {
+            transmitter.setIntervalMs(UltiPanelLogTransmitter.MIN_INTERVAL_MS);
+            transmitter.setBatchSize(1);
+        }).doesNotThrowAnyException();
     }
 
-    @Nested
-    @DisplayName("shutdown 测试")
-    class ShutdownTests {
+    @Test
+    @DisplayName("an undelivered batch is handed back first, before anything adopted later")
+    void heldBatchIsDrainedFirst() {
+        transmitter.adoptPending(new JsonArray());
+        JsonArray adopted = new JsonArray();
+        adopted.add(record("queued"));
+        transmitter.adoptPending(adopted);
+        JsonArray undelivered = new JsonArray();
+        undelivered.add(record("held"));
+        transmitter.holdUndelivered(undelivered);
 
-        @Test
-        @DisplayName("应该关闭调度器")
-        void shouldShutdownScheduler() { // NOPMD - uses Mockito verify()
-            // Act
-            logTransmitter.shutdown();
-
-            // Assert - 不应该抛出异常
-            // 再次调用也不应该抛出异常
-            logTransmitter.shutdown();
-        }
-
-        @Test
-        @DisplayName("关闭后不应该发送日志")
-        void shouldNotSendLogsAfterShutdown() {
-            // Arrange
-            logTransmitter.shutdown();
-
-            // Act
-            logTransmitter.sendLog("info", "test", "server", null);
-
-            // Assert - 关闭后日志传输应该被禁用
-            assertThat(logTransmitter.isLogTransmissionEnabled()).isFalse();
-        }
+        assertThat(messagesOf(transmitter.drainQueue(10))).containsExactly("held");
+        assertThat(messagesOf(transmitter.drainQueue(10))).containsExactly("queued");
+        assertThat(transmitter.drainQueue(10).size()).isZero();
     }
 
-    @Nested
-    @DisplayName("getQueueSize 测试")
-    class GetQueueSizeTests {
+    @Test
+    @DisplayName("takePending returns the held batch, then the queue, oldest first")
+    void takePendingReturnsHeldThenQueued() {
+        JsonArray adopted = new JsonArray();
+        adopted.add(record("q1"));
+        adopted.add(record("q2"));
+        transmitter.adoptPending(adopted);
+        JsonArray undelivered = new JsonArray();
+        undelivered.add(record("h1"));
+        transmitter.holdUndelivered(undelivered);
 
-        @Test
-        @DisplayName("初始队列大小应该为 0")
-        void initialQueueSizeShouldBeZero() {
-            // Assert
-            assertThat(logTransmitter.getQueueSize()).isEqualTo(0);
-        }
-
-        @Test
-        @DisplayName("添加日志后队列大小应该增加")
-        void queueSizeShouldIncreaseAfterAddingLogs() throws Exception {
-            // Arrange - 禁用批量发送以保持日志在队列中
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            
-            // 使用反射禁用 logTransmissionEnabled 以防止立即发送
-            Field enabledField = UltiPanelLogTransmitter.class.getDeclaredField("logTransmissionEnabled");
-            enabledField.setAccessible(true);
-            AtomicBoolean enabled = (AtomicBoolean) enabledField.get(logTransmitter);
-            enabled.set(false);
-
-            // 启用后添加日志
-            enabled.set(true);
-            
-            // 由于批量逻辑，实际测试需要检查队列增加
-            int initialSize = logTransmitter.getQueueSize();
-            
-            // Assert
-            assertThat(initialSize).isGreaterThanOrEqualTo(0);
-        }
+        assertThat(messagesOf(transmitter.takePending())).containsExactly("h1", "q1", "q2");
+        assertThat(transmitter.getQueueSize()).isZero();
     }
 
-    @Nested
-    @DisplayName("setLogTransmissionEnabled 测试")
-    class SetLogTransmissionEnabledTests {
-
-        @Test
-        @DisplayName("应该能够启用日志传输")
-        void shouldEnableLogTransmission() throws Exception {
-            // Arrange
-            Field enabledField = UltiPanelLogTransmitter.class.getDeclaredField("logTransmissionEnabled");
-            enabledField.setAccessible(true);
-
-            // Act
-            logTransmitter.setLogTransmissionEnabled(true);
-
-            // Assert
-            AtomicBoolean enabled = (AtomicBoolean) enabledField.get(logTransmitter);
-            assertThat(enabled.get()).isTrue();
-        }
-
-        @Test
-        @DisplayName("应该能够禁用日志传输")
-        void shouldDisableLogTransmission() throws Exception {
-            // Arrange
-            Field enabledField = UltiPanelLogTransmitter.class.getDeclaredField("logTransmissionEnabled");
-            enabledField.setAccessible(true);
-
-            // Act
-            logTransmitter.setLogTransmissionEnabled(false);
-
-            // Assert
-            AtomicBoolean enabled = (AtomicBoolean) enabledField.get(logTransmitter);
-            assertThat(enabled.get()).isFalse();
-        }
-    }
-
-    @Nested
-    @DisplayName("isLogTransmissionEnabled 测试")
-    class IsLogTransmissionEnabledTests {
-
-        @Test
-        @DisplayName("默认应该返回 true")
-        void shouldReturnTrueByDefault() {
-            // Assert
-            assertThat(logTransmitter.isLogTransmissionEnabled()).isTrue();
-        }
-
-        @Test
-        @DisplayName("禁用后应该返回 false")
-        void shouldReturnFalseWhenDisabled() {
-            // Arrange
-            logTransmitter.setLogTransmissionEnabled(false);
-
-            // Assert
-            assertThat(logTransmitter.isLogTransmissionEnabled()).isFalse();
-        }
-    }
-
-    @Nested
-    @DisplayName("sendBatch 测试")
-    class SendBatchTests {
-
-        @Test
-        @DisplayName("应该批量发送日志")
-        void shouldSendLogsInBatch() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("sendBatch");
-            method.setAccessible(true);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-
-            // 先添加一些日志到队列
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            ConcurrentLinkedQueue<JsonObject> queue = (ConcurrentLinkedQueue<JsonObject>) queueField.get(logTransmitter);
-            
-            JsonObject log1 = new JsonObject();
-            log1.addProperty("message", "test1");
-            queue.add(log1);
-
-            JsonObject log2 = new JsonObject();
-            log2.addProperty("message", "test2");
-            queue.add(log2);
-
-            // Act
-            method.invoke(logTransmitter);
-
-            // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("队列为空时不应该发送")
-        void shouldNotSendWhenQueueEmpty() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("sendBatch");
-            method.setAccessible(true);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-
-            // 确保队列为空
-            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
-            queueField.setAccessible(true);
-            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
-            queue.clear();
-
-            // Act
-            method.invoke(logTransmitter);
-
-            // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
-        }
-    }
-
-    @Nested
-    @DisplayName("发送消息格式测试")
-    class SendMessageFormatTests {
-
-        @Test
-        @DisplayName("发送的消息应该包含正确的类型")
-        void sentMessageShouldHaveCorrectType() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act
-            logTransmitter.sendLog("info", "test message", "server", null);
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("错误日志应该包含堆栈跟踪")
-        void errorLogShouldContainStackTrace() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-            RuntimeException exception = new RuntimeException("Test error");
-
-            // Act
-            logTransmitter.sendLog("error", "test", "server", exception);
-
-            // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-    }
-
-    @Nested
-    @DisplayName("WebSocket 客户端测试")
-    class WebSocketClientTests {
-
-        @Test
-        @DisplayName("webSocketClient 为 null 时应该安全处理")
-        void shouldHandleNullWebSocketClient() {
-            // Arrange
-            UltiPanelLogTransmitter transmitter = newTransmitter(null, "test");
-
-            // Act - 不应该抛出异常
-            transmitter.sendLog("info", "test", "server", null);
-            transmitter.flushLogs();
-            transmitter.shutdown();
-
-            // If we reach here, test passes
-            assertThat(true).isTrue();
-        }
-
-        @Test
-        @DisplayName("WebSocket 断开连接后再连接应该正常工作")
-        void shouldWorkAfterReconnect() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(false);
-            logTransmitter.sendLog("info", "test1", "server", null);
-
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act
-            logTransmitter.sendLog("info", "test2", "server", null);
-
-            // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
-        }
-    }
-
-    @Nested
-    @DisplayName("日志级别测试")
-    class LogLevelTests {
-
-        @Test
-        @DisplayName("所有有效级别都应该被接受")
-        void allValidLevelsShouldBeAccepted() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-            String[] levels = {"info", "warning", "error", "debug", "INFO", "WARNING", "ERROR", "DEBUG"};
-
-            // Act & Assert - 所有级别都不应该抛出异常
-            for (String level : levels) {
-                logTransmitter.sendLog(level, "test", "server", null);
-            }
-            // 验证日志传输器仍然正常运行
-            assertThat(logTransmitter).isNotNull();
-        }
-
-        @Test
-        @DisplayName("空字符串级别应该使用默认值")
-        void emptyLevelShouldUseDefault() {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(false);
-
-            // Act - 不应该抛出异常
-            logTransmitter.sendLog("", "test", "server", null);
-
-            // Assert - 日志传输器应该仍然正常
-            assertThat(logTransmitter).isNotNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("多线程安全测试")
-    class ThreadSafetyTests {
-
-        @Test
-        @DisplayName("并发发送日志不应该抛出异常")
-        void concurrentSendShouldNotThrow() throws Exception { // NOPMD - uses Mockito verify()
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            int threadCount = 10;
-            int logsPerThread = 50;
-            Thread[] threads = new Thread[threadCount];
-
-            // Act
-            for (int i = 0; i < threadCount; i++) {
-                final int threadIndex = i;
-                threads[i] = new Thread(() -> {
-                    for (int j = 0; j < logsPerThread; j++) {
-                        logTransmitter.sendLog("info", "Thread " + threadIndex + " Log " + j, "server", null);
-                    }
-                });
-                threads[i].start();
-            }
-
-            // 等待所有线程完成
-            for (Thread thread : threads) {
-                thread.join();
-            }
-
-            // Assert - 没有异常就是成功
-        }
-    }
-
-    @Nested
-    @DisplayName("determineLoggerName 边缘情况测试")
-    class DetermineLoggerNameEdgeCasesTests {
-
-        @Test
-        @DisplayName("普通 source 应该直接返回")
-        void shouldReturnSourceDirectlyForOtherSources() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("determineLoggerName", String.class);
-            method.setAccessible(true);
-
-            // Act
-            String result = (String) method.invoke(logTransmitter, "custom-source");
-
-            // Assert - 既不是 "server" 也不是 "plugin:" 前缀，应该直接返回 source
-            assertThat(result).isEqualTo("custom-source");
-        }
-
-        @Test
-        @DisplayName("plugin: 前缀应该被移除")
-        void shouldRemovePluginPrefix() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("determineLoggerName", String.class);
-            method.setAccessible(true);
-
-            // Act
-            String result = (String) method.invoke(logTransmitter, "plugin:MyPlugin");
-
-            // Assert
-            assertThat(result).isEqualTo("MyPlugin");
-        }
-    }
-
-    @Nested
-    @DisplayName("getDefaultServerId 异常测试")
-    class GetDefaultServerIdExceptionTests {
-
-        @Test
-        @DisplayName("CommonUtils.getUltiToolsUUID 抛出异常时应该返回 unknown-server")
-        void shouldReturnUnknownServerOnException() throws Exception {
-            // 这个测试验证 getDefaultServerId 的异常处理
-            // 由于 serverId 为 null 时会调用 getDefaultServerId
-            // 如果 CommonUtils.getUltiToolsUUID() 抛出异常，应该返回 "unknown-server"
-            
-            // Arrange - 使用 null serverId 创建新的 transmitter
-            // 在正常情况下，getDefaultServerId 会尝试获取 UUID
-            // 我们验证即使有异常也能正常工作
-            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, null);
-
-            // Assert
-            Field serverIdField = UltiPanelLogTransmitter.class.getDeclaredField("serverId");
-            serverIdField.setAccessible(true);
-            String serverId = (String) serverIdField.get(transmitter);
-            assertThat(serverId).isNotNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("getStackTrace 边缘情况测试")
-    class GetStackTraceEdgeCasesTests {
-
-        @Test
-        @DisplayName("throwable 为 null 时应该返回 null")
-        void shouldReturnNullForNullThrowable() throws Exception {
-            // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("getStackTrace", Throwable.class);
-            method.setAccessible(true);
-
-            // Act
-            String result = (String) method.invoke(logTransmitter, (Throwable) null);
-
-            // Assert
-            assertThat(result).isNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("shutdown 边缘情况测试")
-    class ShutdownEdgeCasesTests {
-
-        @Test
-        @DisplayName("shutdown 超时应该强制关闭")
-        void shouldForceShutdownOnTimeout() throws Exception {
-            // Arrange
-            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "test");
-            
-            // 添加一些日志来确保有数据
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            transmitter.sendLog("info", "test", "server", null);
-
-            // Act - shutdown 应该正常完成
-            transmitter.shutdown();
-
-            // Assert - 不应该抛出异常
-            assertThat(transmitter.isLogTransmissionEnabled()).isFalse();
-        }
-
-        @Test
-        @DisplayName("多次 shutdown 不应该抛出异常")
-        void multipleShutdownShouldNotThrow() {
-            // Arrange
-            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "test");
-
-            // Act - 多次 shutdown
-            transmitter.shutdown();
-            transmitter.shutdown();
-
-            // Assert - 多次 shutdown 后仍然是禁用状态
-            assertThat(transmitter.isLogTransmissionEnabled()).isFalse();
-        }
-    }
-
-    @Nested
-    @DisplayName("sendLog 异常处理测试")
-    class SendLogExceptionHandlingTests {
-
-        @Test
-        @DisplayName("WebSocket 发送异常时应该输出到 stderr")
-        void shouldOutputToStderrOnSendException() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            doThrow(new RuntimeException("Send failed"))
-                .when(mockWebSocketClient).sendMessage(any(JsonObject.class));
-            logTransmitter.setBatchEnabled(false);
-
-            // Act & Assert - 异常被捕获，没有抛出
-            assertDoesNotThrow(() -> logTransmitter.sendLog("info", "test", "server", null));
-        }
-    }
-
-    @Nested
-    @DisplayName("sendBatch 异常测试")
-    class SendBatchExceptionTests {
-
-        @Test
-        @DisplayName("sendBatch 异常时应该安全处理")
-        void shouldHandleSendBatchException() throws Exception { // NOPMD - uses Mockito verify()
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            logTransmitter.setBatchEnabled(true);
-            logTransmitter.setBatchSize(1);
-            
-            // 模拟第二次发送时抛出异常
-            org.mockito.Mockito.doNothing()
-                .doThrow(new RuntimeException("Batch send failed"))
-                .when(mockWebSocketClient).sendMessage(any(JsonObject.class));
-
-            // Act - 发送多条日志触发批量发送
-            logTransmitter.sendLog("info", "message1", "server", null);
-            logTransmitter.sendLog("info", "message2", "server", null);
-
-            // Assert - 不应该抛出异常
-        }
+    @Test
+    @DisplayName("external drain mode is a plain switch")
+    void externalDrainModeIsASwitch() {
+        assertThat(transmitter.isExternalDrainMode()).isFalse();
+        transmitter.setExternalDrainMode(true);
+        assertThat(transmitter.isExternalDrainMode()).isTrue();
     }
 }

@@ -2,7 +2,10 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mockStatic;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -23,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
 import com.google.gson.JsonArray;
@@ -33,8 +37,13 @@ import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Size;
+import com.ultikits.ultitools.config.convert.ConfigConverter;
+import com.ultikits.ultitools.config.convert.ConfigConverterFor;
+import com.ultikits.ultitools.config.convert.ConversionContext;
+import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
+import com.ultikits.ultitools.utils.PackageScanUtils;
 
 /**
  * #630 with the maintainer decision of 2026-10-06 (option A): when an empty {@code @NotEmpty} list or map is replaced by
@@ -77,11 +86,30 @@ class NotEmptyDefaultConstraintsTest {
         TooLongDefault(String path) { super(path); }
     }
 
-    /** A @NotEmpty @Size set whose legacy parser writes it as one map entry ({@code joined: 'a,b'}) - PR #632 Codex run 1. */
+    /** A module converter that writes a set as one map entry ({@code joined: 'a,b'}) - PR #632 Codex run 1. */
+    @ConfigConverterFor(value = Set.class, exact = true)
+    public static class JoinedSetConverter implements ConfigConverter<Set<String>> {
+        @Override
+        public Object toPlain(Set<String> value, ConversionContext ctx) {
+            return new LinkedHashMap<>(Collections.singletonMap("joined", String.join(",", value)));
+        }
+
+        @Override
+        public Set<String> fromPlain(Object plain, ConversionContext ctx) {
+            Set<String> result = new LinkedHashSet<>();
+            Object joined = plain instanceof Map ? ((Map<?, ?>) plain).get("joined") : null;
+            for (String part : String.valueOf(joined == null ? "" : joined).split(",")) {
+                if (!part.isEmpty()) { result.add(part); }
+            }
+            return result;
+        }
+    }
+
+    /** A @NotEmpty @Size set whose converter writes it as one map entry ({@code joined: 'a,b'}) - PR #632 Codex run 1. */
     static class ParserShapedDefault extends AbstractConfigEntity {
         @NotEmpty
         @Size(min = 2, max = 3)
-        @ConfigEntry(path = "tags", parser = ConfigBindingEdgeCaseTest.JoinedSetParser.class)
+        @ConfigEntry(path = "tags")
         Set<String> tags = new LinkedHashSet<>(Arrays.asList("a", "b"));
 
         ParserShapedDefault(String path) { super(path); }
@@ -91,7 +119,7 @@ class NotEmptyDefaultConstraintsTest {
     static class ParserShapedShortDefault extends AbstractConfigEntity {
         @NotEmpty
         @Size(min = 2, max = 3)
-        @ConfigEntry(path = "tags", parser = ConfigBindingEdgeCaseTest.JoinedSetParser.class)
+        @ConfigEntry(path = "tags")
         Set<String> tags = new LinkedHashSet<>(Collections.singletonList("a"));
 
         ParserShapedShortDefault(String path) { super(path); }
@@ -286,8 +314,14 @@ class NotEmptyDefaultConstraintsTest {
     }
 
     @Test
-    @DisplayName("the default's size is the Java value's, not its serialized shape: a parser writing it as one map entry loads")
+    @DisplayName("the default's size is the Java value's, not its serialized shape: a converter writing it as one map entry loads")
     void defaultIsMeasuredOnTheJavaValue() throws Exception {
+        try (MockedStatic<PackageScanUtils> scanner = mockStatic(PackageScanUtils.class)) {
+            scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(any(), anyString(), any()))
+                    .thenAnswer(call -> call.getArgument(0) == ConfigConverterFor.class
+                            ? Collections.singleton(JoinedSetConverter.class) : Collections.emptySet());
+            ConverterRegistry.prepareModule(plugin, new String[]{"fixture.joined"}, getClass().getClassLoader());
+        }
         write("tags:\n  joined: x,y\n");
         ParserShapedDefault config = new ParserShapedDefault("sidebar.yml");
         config.init(plugin);

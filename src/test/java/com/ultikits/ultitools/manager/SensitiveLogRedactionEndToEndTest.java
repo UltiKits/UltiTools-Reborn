@@ -3,11 +3,7 @@ package com.ultikits.ultitools.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -16,20 +12,15 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
-import org.bukkit.configuration.file.FileConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.mockito.ArgumentCaptor;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 
@@ -39,9 +30,10 @@ import org.mockbukkit.mockbukkit.MockBukkit;
  * and the entry the panel receives shows {@code /login ***} while the record itself, what the local
  * console and log files print, keeps the original text.
  * <p>
- * Uses the harness of {@link LogStreamManagerCommandCaptureTest}: the real
- * {@link LogStreamManager#initialize} handler on the JUL root logger and a mocked socket capturing
- * {@code sendMessage}, in immediate-send mode.
+ * Harness (re-pointed in 6.4.0, when the protocol v1 stream was removed): a real
+ * {@link SystemLogHandler} on the JUL root logger over the protocol v2 transmitter,
+ * {@link UltiPanelLogTransmitter#UltiPanelLogTransmitter(UltiPanelLogTransmitter.AgentLineSink)},
+ * whose sink records each line exactly as it would be handed to the {@code log.lines} feed.
  */
 @DisplayName("Sensitive-command redaction of the cloud log stream (end to end)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -51,79 +43,63 @@ class SensitiveLogRedactionEndToEndTest {
     private static final String REDACTED_LOG_MESSAGE = "Steve issued server command: /login ***";
 
     private final SensitiveCommandRegistry registry = new SensitiveCommandRegistry();
-    private LogStreamManager logStreamManager;
-    private UltiPanelWebSocketClient mockWebSocketClient;
+    private final List<String> sent = new ArrayList<>();
+    private UltiPanelLogTransmitter transmitter;
+    private SystemLogHandler streamHandler;
     private LocalRecordCapture localCapture;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         MockBukkit.createMockPlugin();
 
         Logger mockLogger = mock(Logger.class);
-        FileConfiguration mockConfig = mock(FileConfiguration.class);
-        when(mockConfig.contains("ultipanel.logging.batch.enabled")).thenReturn(true);
-        when(mockConfig.getBoolean("ultipanel.logging.batch.enabled", true)).thenReturn(false);
-
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
             lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
-            lenient().when(ultiTools.getConfig()).thenReturn(mockConfig);
             lenient().when(ultiTools.getSensitiveCommandRegistry()).thenReturn(registry);
         });
-
-        mockWebSocketClient = mock(UltiPanelWebSocketClient.class);
-        when(mockWebSocketClient.isConnected()).thenReturn(true);
-        when(mockWebSocketClient.getServerId()).thenReturn("redaction-e2e-server");
-
-        resetSingleton();
-        logStreamManager = LogStreamManager.getInstance();
 
         localCapture = new LocalRecordCapture();
         Logger.getLogger("").addHandler(localCapture);
     }
 
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-    private void resetSingleton() throws Exception {
-        Field instanceField = LogStreamManager.class.getDeclaredField("instance");
-        instanceField.setAccessible(true);
-        instanceField.set(null, null);
-    }
-
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         Logger rootLogger = Logger.getLogger("");
         rootLogger.removeHandler(localCapture);
-        if (logStreamManager != null) {
-            try {
-                logStreamManager.shutdown();
-            } catch (Exception ignored) {
-                // shutdown() itself logs; a mocked environment failing that is not this test's concern.
-            }
+        if (streamHandler != null) {
+            rootLogger.removeHandler(streamHandler);
         }
-        for (Handler handler : rootLogger.getHandlers()) {
-            if (handler instanceof SystemLogHandler) {
-                rootLogger.removeHandler(handler);
-            }
+        if (transmitter != null) {
+            transmitter.shutdown();
         }
-        resetSingleton();
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
-    /** Starts the live stream and forgets what initialize() itself sent. */
+    /** Starts the live stream: the v2 transmitter's handler on the root logger. */
     private void startStream() {
-        logStreamManager.initialize(mockWebSocketClient);
-        reset(mockWebSocketClient);
-        when(mockWebSocketClient.isConnected()).thenReturn(true);
-        when(mockWebSocketClient.getServerId()).thenReturn("redaction-e2e-server");
+        transmitter = new UltiPanelLogTransmitter((timestamp, level, message) -> {
+            synchronized (sent) {
+                sent.add(message);
+            }
+        });
+        streamHandler = new SystemLogHandler(transmitter);
+        Logger.getLogger("").addHandler(streamHandler);
     }
 
-    /** Publishes one record through the root logger and returns the message the panel received. */
+    /** The lines handed to the panel so far. */
+    private List<String> sentLines() {
+        synchronized (sent) {
+            return new ArrayList<>(sent);
+        }
+    }
+
+    /** Publishes one record through the root logger and returns the line the panel received. */
     private String publishAndCapture(String message) {
         Logger.getLogger("").log(new LogRecord(Level.INFO, message));
-        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-        verify(mockWebSocketClient).sendMessage(captor.capture());
-        return captor.getValue().getAsJsonObject("data").get("message").getAsString();
+        assertThat(sentLines()).as("exactly one line handed to the panel").hasSize(1);
+        return sentLines().get(0);
     }
 
     /** Registers the way a module's enable hook does: through the framework accessor. */
@@ -176,10 +152,10 @@ class SensitiveLogRedactionEndToEndTest {
         record.setThrown(new IllegalStateException("while running /login hunter2"));
         Logger.getLogger("").log(record);
 
-        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-        verify(mockWebSocketClient).sendMessage(captor.capture());
-        String stackTrace = captor.getValue().getAsJsonObject("data").get("stackTrace").getAsString();
-        assertThat(stackTrace).contains("while running /login ***").doesNotContain("hunter2");
+        // log.lines has no stack-trace field: the redacted trace follows the message.
+        assertThat(sentLines()).hasSize(1);
+        assertThat(sentLines().get(0)).startsWith("command failed")
+                .contains("while running /login ***").doesNotContain("hunter2");
     }
 
     @Test
@@ -190,17 +166,9 @@ class SensitiveLogRedactionEndToEndTest {
         // enabled between the capture and the stream opening.
         registerLoginLikeAModule();
 
-        UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
         transmitter.replayLog("info", COMMAND_LOG_MESSAGE, "server", null, 1L);
-        transmitter.sendReplayBatch();
 
-        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-        verify(mockWebSocketClient).sendMessage(captor.capture());
-        JsonObject frame = captor.getValue();
-        assertThat(frame.get("type").getAsString()).isEqualTo("log_batch");
-        JsonArray logs = frame.getAsJsonArray("data");
-        assertThat(logs.size()).isEqualTo(1);
-        assertThat(logs.get(0).getAsJsonObject().get("message").getAsString()).isEqualTo(REDACTED_LOG_MESSAGE);
+        assertThat(sentLines()).containsExactly(REDACTED_LOG_MESSAGE);
     }
 
     @Test
@@ -215,10 +183,7 @@ class SensitiveLogRedactionEndToEndTest {
 
         feedback.accept(net.kyori.adventure.text.Component.text(COMMAND_LOG_MESSAGE));
 
-        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-        verify(mockWebSocketClient).sendMessage(captor.capture());
-        assertThat(captor.getValue().getAsJsonObject("data").get("message").getAsString())
-                .isEqualTo(REDACTED_LOG_MESSAGE);
+        assertThat(sentLines()).containsExactly(REDACTED_LOG_MESSAGE);
         assertThat(localCapture.messages())
                 .as("the local console keeps the line as the command printed it")
                 .contains(COMMAND_LOG_MESSAGE);

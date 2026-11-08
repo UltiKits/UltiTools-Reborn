@@ -155,6 +155,18 @@ public class ComponentScanner {
     }
 
     /**
+     * The production JAR scan's package predicate, also used by module audit classification.
+     * The entry name is slash-separated; the base package has the scanner's normal dotted form.
+     *
+     * @param entryName class or entry name, in internal slash-separated form
+     * @param basePackage requested scan package
+     * @return whether the entry is in the requested scan scope
+     */
+    public static boolean matchesPackage(String entryName, String basePackage) {
+        return entryName.startsWith(basePackage.replace('.', '/') + "/");
+    }
+
+    /**
      * Scan inside a JAR file for class files.
      */
     private void scanJar(URL resource, String basePackage, ClassLoader classLoader,
@@ -162,14 +174,12 @@ public class ComponentScanner {
         try {
             JarURLConnection jarConnection = (JarURLConnection) resource.openConnection();
             JarFile jarFile = jarConnection.getJarFile();
-            String packagePath = basePackage.replace('.', '/');
-
             Enumeration<JarEntry> entries = jarFile.entries();
             while (entries.hasMoreElements()) {
                 JarEntry entry = entries.nextElement();
                 String entryName = entry.getName();
 
-                if (entryName.startsWith(packagePath + "/") && entryName.endsWith(".class") && !entry.isDirectory()) {
+                if (matchesPackage(entryName, basePackage) && entryName.endsWith(".class") && !entry.isDirectory()) {
                     String className = entryName
                             .replace('/', '.')
                             .replace(".class", "");

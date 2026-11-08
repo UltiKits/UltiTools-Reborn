@@ -502,70 +502,28 @@ class TempListenerTest {
     class SimpleTempListenerTests {
 
         @Test
-        @DisplayName("无参构造函数应该创建空实例")
-        void noArgsConstructorShouldCreateEmptyInstance() {
-            // Act
-            SimpleTempListener<PlayerJoinEvent> listener = new SimpleTempListener<>();
-
-            // Assert
-            assertThat(listener.getEventClass()).isNull();
-            assertThat(listener.getPriority()).isEqualTo(EventPriority.NORMAL);
-            assertThat(listener.getEventHandler()).isNull();
-        }
-
-        @Test
-        @DisplayName("两参数构造函数应该正确设置")
-        void twoArgsConstructorShouldSetCorrectly() {
+        @DisplayName("四参数构造函数应该正确设置")
+        void fourArgsConstructorShouldSetCorrectly() {
             // Arrange
             TempEventHandler<PlayerJoinEvent> handler = event -> false;
 
             // Act
             SimpleTempListener<PlayerJoinEvent> listener = new SimpleTempListener<>(
-                    PlayerJoinEvent.class, handler);
-
-            // Assert
-            assertThat(listener.getEventClass()).isEqualTo(PlayerJoinEvent.class);
-            assertThat(listener.getEventHandler()).isEqualTo(handler);
-            assertThat(listener.getPriority()).isEqualTo(EventPriority.NORMAL);
-        }
-
-        @Test
-        @DisplayName("三参数构造函数（带 filter）应该正确设置")
-        void threeArgsConstructorWithFilterShouldSetCorrectly() {
-            // Arrange
-            TempEventHandler<PlayerJoinEvent> handler = event -> false;
-
-            // Act
-            SimpleTempListener<PlayerJoinEvent> listener = new SimpleTempListener<>(
-                    PlayerJoinEvent.class, handler, event -> true);
-
-            // Assert
-            assertThat(listener.getEventClass()).isEqualTo(PlayerJoinEvent.class);
-            assertThat(listener.getEventHandler()).isEqualTo(handler);
-            assertThat(listener.getFilter()).isNotNull();
-        }
-
-        @Test
-        @DisplayName("三参数构造函数（带 priority）应该正确设置")
-        void threeArgsConstructorWithPriorityShouldSetCorrectly() {
-            // Arrange
-            TempEventHandler<PlayerJoinEvent> handler = event -> false;
-
-            // Act
-            SimpleTempListener<PlayerJoinEvent> listener = new SimpleTempListener<>(
-                    PlayerJoinEvent.class, handler, EventPriority.HIGHEST);
+                    PlayerJoinEvent.class, EventPriority.HIGHEST, handler, event -> true);
 
             // Assert
             assertThat(listener.getEventClass()).isEqualTo(PlayerJoinEvent.class);
             assertThat(listener.getEventHandler()).isEqualTo(handler);
             assertThat(listener.getPriority()).isEqualTo(EventPriority.HIGHEST);
+            assertThat(listener.getFilter()).isNotNull();
         }
 
         @Test
         @DisplayName("setter 方法应该正确工作")
         void settersShouldWork() {
             // Arrange
-            SimpleTempListener<PlayerJoinEvent> listener = new SimpleTempListener<>();
+            SimpleTempListener<PlayerJoinEvent> listener = new SimpleTempListener<>(
+                    null, EventPriority.NORMAL, null, null);
             TempEventHandler<PlayerJoinEvent> handler = event -> false;
 
             // Act

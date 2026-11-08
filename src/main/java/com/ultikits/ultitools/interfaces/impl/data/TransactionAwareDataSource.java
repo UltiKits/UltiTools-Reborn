@@ -9,6 +9,7 @@ import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 
 /**
@@ -35,7 +36,7 @@ class TransactionAwareDataSource implements DataSource {
     public Connection getConnection() throws SQLException {
         TransactionManager tm = transactionManagerSupplier.get();
         if (tm != null && tm.hasActiveTransaction()) {
-            return new NonClosingConnectionProxy(tm.getConnection());
+            return new NonClosingConnectionProxy(transactionConnection(tm));
         }
         return delegate.getConnection();
     }
@@ -44,9 +45,23 @@ class TransactionAwareDataSource implements DataSource {
     public Connection getConnection(String username, String password) throws SQLException {
         TransactionManager tm = transactionManagerSupplier.get();
         if (tm != null && tm.hasActiveTransaction()) {
-            return new NonClosingConnectionProxy(tm.getConnection());
+            return new NonClosingConnectionProxy(transactionConnection(tm));
         }
         return delegate.getConnection(username, password);
+    }
+
+    /**
+     * The active transaction's connection. Only a {@link JdbcTransactionManager} has one; any other
+     * manager is refused with the same {@link UnsupportedOperationException} the base interface's
+     * deprecated {@code getConnection()} default threw before it was removed in 6.4.0.
+     */
+    private static Connection transactionConnection(TransactionManager tm) {
+        if (tm instanceof JdbcTransactionManager) {
+            return ((JdbcTransactionManager) tm).getConnection();
+        }
+        throw new UnsupportedOperationException(
+                "getConnection() is JDBC-specific and not supported by this TransactionManager. "
+                        + "Implement " + JdbcTransactionManager.class.getName() + " to provide it.");
     }
 
     @Override

@@ -370,7 +370,6 @@ class CloudConnectionLifecycleTest {
         });
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
         PluginInitiationUtils.initWebsocket();
-        PluginInitiationUtils.startTokenRefreshScheduler();
         PluginInitiationUtils.stopCredentialSchedulers();
         Thread.sleep(150);
         assertThat(raw.requests).isEmpty();
