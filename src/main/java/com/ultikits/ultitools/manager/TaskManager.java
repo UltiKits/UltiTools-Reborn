@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 
@@ -263,6 +264,10 @@ public class TaskManager {
                     Bukkit.getLogger().log(Level.FINE,
                             "[UltiTools-API] Task already cancelled: " + handle.task.getTaskId());
                 }
+                for (BukkitRunnable worker : handle.asyncRuns) {
+                    worker.cancel();
+                }
+                handle.asyncRuns.clear();
             }
         }
         List<BukkitTask> tasks = pluginTasks.remove(plugin);
@@ -313,9 +318,9 @@ public class TaskManager {
     /**
      * Schedules {@code handle}'s method with its current timing, first running after
      * {@code firstDelay} ticks. Each call builds a new runnable -- a {@link BukkitRunnable} can be
-     * scheduled only once. Always on the main thread: a bound task cannot be {@code async}
-     * ({@link ConfigBindings#checkShape(String, Scheduled)}), so its run is observed exactly where
-     * the reload step also runs.
+     * scheduled only once. The trigger always runs on the main thread, where the reload step also
+     * runs. An async binding records that observed fire before handing only its method body to an
+     * async worker, one heartbeat later (#535).
      */
     private BukkitTask arm(BoundTask handle, long firstDelay) {
         BukkitRunnable runnable = new BukkitRunnable() {
@@ -323,11 +328,10 @@ public class TaskManager {
             public void run() {
                 handle.lastFireTick = Bukkit.getCurrentTick();
                 handle.hasRun = true;
-                try {
-                    handle.method.invoke(handle.bean);
-                } catch (Exception e) {
-                    Bukkit.getLogger().log(Level.WARNING,
-                            String.format("[UltiTools-API] Error executing @Scheduled method '%s'", handle.owner), e);
+                if (handle.scheduled.async()) {
+                    dispatchAsync(handle);
+                } else {
+                    invokeBound(handle);
                 }
             }
         };
@@ -335,6 +339,37 @@ public class TaskManager {
             return runnable.runTaskLater(hostPlugin, firstDelay);
         }
         return runnable.runTaskTimer(hostPlugin, firstDelay, handle.periodTicks);
+    }
+
+    /** Dispatches a due body without letting worker start/completion change the trigger's phase. */
+    private void dispatchAsync(BoundTask handle) {
+        BukkitRunnable worker = new BukkitRunnable() {
+            @Override
+            public void run() {
+                try {
+                    invokeBound(handle);
+                } finally {
+                    handle.asyncRuns.remove(this);
+                }
+            }
+        };
+        // Record before submission: a worker may finish before its scheduler call returns.
+        handle.asyncRuns.add(worker);
+        try {
+            worker.runTaskLaterAsynchronously(hostPlugin, 1L);
+        } catch (RuntimeException failure) {
+            handle.asyncRuns.remove(worker);
+            throw failure;
+        }
+    }
+
+    private static void invokeBound(BoundTask handle) {
+        try {
+            handle.method.invoke(handle.bean);
+        } catch (Exception e) {
+            Bukkit.getLogger().log(Level.WARNING,
+                    String.format("[UltiTools-API] Error executing @Scheduled method '%s'", handle.owner), e);
+        }
     }
 
     /**
@@ -356,11 +391,11 @@ public class TaskManager {
      * ({@code < 1} second, {@code null}, or too large) is not applied: the running value is kept
      * and one WARNING names the module, the key, the rejected value and the value kept.
      * <p>
-     * <b>Where "the last run" comes from.</b> A bound task is always sync, so it runs on the main
-     * thread, and its last run is observed at the moment it starts -- the same thread this step
-     * runs on, so the two cannot race. An {@code async} binding is refused at load instead of
-     * predicting when the server dispatches async work: that prediction was wrong for tasks armed
-     * at boot (#531 gate-1 round 2, WR-01).
+     * <b>Where "the last run" comes from.</b> Every bound task's trigger is sync, and its last fire
+     * is observed at the moment the trigger starts -- the same thread this step runs on, so the
+     * two cannot race. For an async binding, worker start and completion do not affect this stamp.
+     * Reload cancels only the trigger, leaving already-dispatched work alone (#535). No server
+     * dispatch time or boot-time scheduler clock is predicted.
      * <p>
      * Must run on the main thread, where {@link TaskManager}'s collections live; from any other
      * thread it throws before reading them ({@code PluginManager} checks first and logs instead).
@@ -563,7 +598,8 @@ public class TaskManager {
     /**
      * Per-method record of one config-bound {@link Scheduled} task: what to invoke, where its
      * bound values come from, its current timing in ticks, when it was armed and last ran, and
-     * its current Bukkit task. Mutated only on the main thread: a bound task is never async.
+     * its current sync Bukkit trigger. Timing is mutated only on the main thread. Async workers
+     * access only immutable invocation fields and the concurrent outstanding-work set.
      */
     static final class BoundTask {
         final Object bean;
@@ -572,6 +608,8 @@ public class TaskManager {
         final String owner;
         final ConfigBindings.Source periodSource;
         final ConfigBindings.Source delaySource;
+        /** Outstanding async bodies, removed on completion and cancelled on module unload. */
+        final Set<BukkitRunnable> asyncRuns = ConcurrentHashMap.newKeySet();
         long periodTicks;
         long delayTicks;
         /** Tick the task was first armed at load; the anchor for "arm tick + new delay". */

@@ -342,6 +342,31 @@ class CatalogueClientPagingTest {
     }
 
     @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    void anOversizeVersionPageIsReportedAsTooLargeNotAsUnreached(int page) {
+        // #764: the internal reason matches the other two catalogue lookups; the /upm chat reply stays generic.
+        bodies.put(page, repeat(' ', JSON_LIMIT + 1));
+        List<CatalogueClient.Version> collected = new ArrayList<>();
+
+        VersionLookup lookup = CatalogueClient.lookUpVersions(MODULE, LEVEL, collected);
+
+        assertThat(lookup.getOutcome()).isEqualTo(VersionLookup.Outcome.FAILED);
+        assertThat(lookup.getFailure()).isEqualTo("response too large");
+        assertThat(collected).isEmpty();
+    }
+
+    @Test
+    void anUnreachableVersionPageIsReportedAsNotReached() {
+        // Control for the test above: a transport failure keeps its own reason.
+        disconnectedPage = 1;
+
+        VersionLookup lookup = CatalogueClient.lookUpVersions(MODULE, LEVEL, new ArrayList<>());
+
+        assertThat(lookup.getOutcome()).isEqualTo(VersionLookup.Outcome.FAILED);
+        assertThat(lookup.getFailure()).isEqualTo("not reached");
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"missing", "null", "-1", "1.5", "\"12\"", "true", "{}"})
     void missingNegativeOrNonIntegerTotalFailsOnAnyPage(String total) {
         for (int page : new int[]{1, 2}) {
