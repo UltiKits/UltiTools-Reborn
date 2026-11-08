@@ -564,6 +564,23 @@ public final class UltiCloudStub {
         }
 
         /** @return the fingerprints of the credentials that would pass the credential step now */
+        /**
+         * Revokes every credential the stub knows for {@code serverId}.
+         *
+         * @param serverId the server whose credentials to revoke
+         * @param why      the access-log reason
+         * @return how many credentials were revoked
+         */
+        public synchronized int revokeServer(String serverId, String why) {
+            int count = 0;
+            for (Map.Entry<String, String> entry : serverIds.entrySet()) {
+                if (entry.getValue().equals(serverId) && revoke(entry.getKey(), why)) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
         public synchronized List<String> validFingerprints() {
             List<String> valid = new ArrayList<>();
             for (String credential : serverIds.keySet()) {

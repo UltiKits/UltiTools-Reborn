@@ -138,8 +138,8 @@ class CloudReconnectCommandTest {
         List<String> lines = new ArrayList<>();
         doAnswer(call -> { lines.add(call.getArgument(0)); return null; }).when(sender).sendMessage(anyString());
         new CloudLoginCommand().handleHelp(sender);
-        assertThat(lines).hasSize(5);
-        assertThat(lines.subList(3, 5)).containsExactly(
+        assertThat(lines).hasSize(6);
+        assertThat(lines.subList(4, 6)).containsExactly(
                 ChatColor.WHITE + "/ulticloud status" + ChatColor.GRAY + " - Show link and connection status",
                 ChatColor.WHITE + "/ulticloud reconnect" + ChatColor.GRAY + " - Retry the UltiCloud connection now");
     }

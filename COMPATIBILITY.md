@@ -5,6 +5,31 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## UltiCloud: re-pair with a code (as of 6.4.0)
+
+- **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
+  action, for a server whose credential may have leaked, revokes every credential of the server, closes its
+  connection with 4401 and shows the owner a single-use code, valid for 10 minutes, bound to the **same** server
+  record. Running `/ulticloud login <code>` on the server exchanges that code for a new credential through the
+  unchanged `POST /v1/device/token`, stores it exactly as a device login does, and reconnects; the server keeps
+  its server ID, name and history. No device code is requested and nothing has to be confirmed in the panel.
+- The code is a secret: the console shows `Redeeming the re-pair code with UltiCloud...` and never the code.
+  Text that cannot be a code (not 43 to 128 characters of `A-Z a-z 0-9 _ -`) is refused with one red line and
+  is not sent. A used, unknown or expired code is answered `expired_token` by UltiCloud and logged as "UltiCloud:
+  this re-pair code has expired or was already used. Create a new one in the panel (server settings > Revoke and
+  re-pair), or run /ulticloud login without a code."
+- A server that is still linked refuses the code exactly as it refuses `/ulticloud login` ("already linked",
+  naming `/ulticloud logout`). A server that was offline when the owner used "Revoke and re-pair" deletes its
+  revoked credential at the next connection attempt (HTTP 401), after which the code can be used while it is
+  still valid. Without an argument, `/ulticloud login` behaves exactly as in 6.3.x.
+- The 4401/401 warning now names both ways back (see "Connection outcomes an operator sees" below). No protocol,
+  REST contract or configuration change; on 6.3.x the panel's two-step fallback (run `/ulticloud login`, then
+  attach the server to the existing record on the confirmation page) still works.
+- New internal entry points (`CloudAuthManager#loginWithCode`, `#isWellFormedRepairCode`, both
+  `@ApiStatus.Internal` like the rest of the class) are additive; no existing signature changed.
+
+中文补充：面板的“撤销并重新配对”会撤销该服务器的全部凭据、以 4401 断开连接，并给出一次性代码（10 分钟内有效，绑定同一服务器记录）。在服务器控制台运行 `/ulticloud login <code>` 即可换取新凭据并重连，服务器 ID、名称和历史保持不变；控制台不会显示代码本身。代码已使用、未知或过期时会提示到面板重新生成，或直接运行不带参数的 `/ulticloud login`。
+
 ## SQLite lock waits under native profiling (planned for 6.3.2)
 
 The pending fix for [#645](https://github.com/UltiKits/UltiTools-Reborn/issues/645) measures SQLite busy waits with a monotonic elapsed-time budget. It preserves the 3000 ms default, DEFERRED transactions, and JDBC statement timeout selection; native profiler signals no longer consume the budget merely by interrupting requested sleeps. This change is intended for 6.3.2.
@@ -235,7 +260,7 @@ retry. The gateway's refusals and closes end in these states:
 
 | Signal | Outcome |
 |---|---|
-| HTTP 401 at the upgrade, or close 4401 (credential revoked or the server deleted) | Reconnecting stops, the local credential and the reliable-delivery state are deleted, and the console says: "UltiCloud rejected this server's credential (it was revoked or is no longer valid). The saved credential was deleted. Run /ulticloud login to link this server again." |
+| HTTP 401 at the upgrade, or close 4401 (credential revoked or the server deleted) | Reconnecting stops, the local credential and the reliable-delivery state are deleted, and the console says: "UltiCloud rejected this server's credential (it was revoked or is no longer valid). The saved credential was deleted. If you used "Revoke and re-pair" in the panel, run /ulticloud login <code> with the code it shows; otherwise run /ulticloud login to link this server again." (as of 6.4.0; 6.3.x names only `/ulticloud login`) |
 | HTTP 426, or close 4426 | Reconnecting stops, the credential is kept, and the console says this UltiTools version is no longer accepted, with the minimum version when the gateway names one. Upgrade UltiTools and restart. |
 | HTTP 402, or close 4402 (plan limit) | The credential is kept; the framework retries quietly every 15 minutes and prints the reason, the end of the grace period and the plan's manage link once. `/ulticloud status` shows the pause; `/ulticloud reconnect` retries at once. The connection resumes on the next retry after the plan is renewed. |
 | HTTP 429, close 4400 or 4429, any other 4xx | Long backoff, from 60 seconds up to 15 minutes; a 429 waits at least its `Retry-After`, at most one hour. |

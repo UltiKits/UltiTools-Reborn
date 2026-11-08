@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.commands;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
@@ -200,6 +201,105 @@ class CloudLoginCommandTest {
         }
     }
 
+    /** A well-formed re-pair code: 43 characters of the contract's device-code alphabet. */
+    private static final String REPAIR_CODE = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE";
+
+    /** Runs {@code login(sender, code)} with {@code outcome} applied to the listener the command passes. */
+    private static void loginWithCode(CommandSender sender, String code,
+            Consumer<CloudAuthManager.DeviceLoginListener> outcome) {
+        try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class)) {
+            auth.when(() -> CloudAuthManager.isWellFormedRepairCode(anyString())).thenCallRealMethod();
+            auth.when(() -> CloudAuthManager.loginWithCode(anyString(),
+                    any(CloudAuthManager.DeviceLoginListener.class)))
+                    .thenAnswer(invocation -> {
+                        outcome.accept(invocation.getArgument(1));
+                        return null;
+                    });
+            new CloudLoginCommand().login(sender, code);
+            auth.verify(() -> CloudAuthManager.login(any(CloudAuthManager.DeviceLoginListener.class)), never());
+        }
+    }
+
+    @Nested
+    @DisplayName("login <code> (issue #869)")
+    class LoginWithCode {
+
+        @Test
+        @DisplayName("console: the code goes to loginWithCode and the redeeming line is shown, the code never")
+        void consoleRedeems() {
+            ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
+            String[] passed = new String[1];
+            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class)) {
+                auth.when(() -> CloudAuthManager.isWellFormedRepairCode(anyString())).thenCallRealMethod();
+                auth.when(() -> CloudAuthManager.loginWithCode(anyString(),
+                        any(CloudAuthManager.DeviceLoginListener.class)))
+                        .thenAnswer(invocation -> {
+                            passed[0] = invocation.getArgument(0);
+                            ((CloudAuthManager.DeviceLoginListener) invocation.getArgument(1)).onRequesting();
+                            return null;
+                        });
+                new CloudLoginCommand().login(sender, REPAIR_CODE);
+            }
+
+            assertThat(passed[0]).isEqualTo(REPAIR_CODE);
+            verify(sender).sendMessage(ChatColor.AQUA + "Redeeming the re-pair code with UltiCloud...");
+            verify(sender, times(1)).sendMessage(anyString());
+            verify(logger, never()).log(any(Level.class), anyString());
+        }
+
+        @Test
+        @DisplayName("RCON: the remote redeeming notice, and the plain line in the console log")
+        void rconRedeems() {
+            RemoteConsoleCommandSender rcon = mock(RemoteConsoleCommandSender.class);
+
+            loginWithCode(rcon, REPAIR_CODE, CloudAuthManager.DeviceLoginListener::onRequesting);
+
+            verify(rcon).sendMessage(ChatColor.AQUA
+                    + "Redeeming the re-pair code with UltiCloud. The result will be printed in the server console.");
+            verify(logger).log(Level.INFO, "Redeeming the re-pair code with UltiCloud...");
+        }
+
+        @Test
+        @DisplayName("already linked: the same yellow line as the plain login")
+        void alreadyLinked() {
+            ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
+
+            loginWithCode(sender, REPAIR_CODE, listener -> listener.onAlreadyLinked("Survival"));
+
+            verify(sender).sendMessage(ChatColor.YELLOW
+                    + "This server is already linked to UltiCloud as Survival. Use /ulticloud logout first to link it again.");
+        }
+
+        @Test
+        @DisplayName("request failed: names the re-pair code, not a device-code request")
+        void requestFailed() {
+            ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
+
+            loginWithCode(sender, REPAIR_CODE, listener -> listener.onRequestFailed("UltiCloud could not be reached"));
+
+            verify(sender).sendMessage(ChatColor.RED + "Could not use the re-pair code: UltiCloud could not be reached");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"short", "has space in it and is long enough to pass the length check ok",
+            "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCd", "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbC+E"})
+        @DisplayName("malformed: one red line without the input, and nothing is sent")
+        void malformed(String input) {
+            ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
+            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class)) {
+                auth.when(() -> CloudAuthManager.isWellFormedRepairCode(anyString())).thenCallRealMethod();
+
+                new CloudLoginCommand().login(sender, input);
+
+                auth.verify(() -> CloudAuthManager.loginWithCode(anyString(),
+                        any(CloudAuthManager.DeviceLoginListener.class)), never());
+            }
+            verify(sender).sendMessage(ChatColor.RED
+                    + "That is not a valid UltiCloud re-pair code. Copy the whole code from the panel and try again.");
+            verify(sender, times(1)).sendMessage(anyString());
+        }
+    }
+
     @Nested
     @DisplayName("login from a player")
     class PlayerSender {
@@ -277,7 +377,7 @@ class CloudLoginCommandTest {
     class Help {
 
         @Test
-        @DisplayName("the header and the four subcommand lines")
+        @DisplayName("the header and the five subcommand lines")
         void helpLines() {
             CommandSender sender = mock(CommandSender.class);
 
@@ -287,6 +387,8 @@ class CloudLoginCommandTest {
             order.verify(sender).sendMessage(ChatColor.AQUA + "=== UltiCloud Commands ===");
             order.verify(sender).sendMessage(ChatColor.WHITE + "/ulticloud login" + ChatColor.GRAY
                     + " - Link this server to UltiCloud");
+            order.verify(sender).sendMessage(ChatColor.WHITE + "/ulticloud login <code>" + ChatColor.GRAY
+                    + " - Reattach this server with the re-pair code from the panel");
             order.verify(sender).sendMessage(ChatColor.WHITE + "/ulticloud logout" + ChatColor.GRAY
                     + " - Unlink this server and revoke its credential");
             order.verify(sender).sendMessage(ChatColor.WHITE + "/ulticloud status" + ChatColor.GRAY
