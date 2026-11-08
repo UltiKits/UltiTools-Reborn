@@ -227,7 +227,7 @@ class SimpleContainerLinkageResilienceTest {
         assertThat(message)
                 .contains("test-module")
                 .contains(HasMethodReferencingMissingType.class.getName())
-                .contains("COMPATIBILITY.md");
+                .contains(ModuleScanDiagnostics.COMPATIBILITY_POINTER);
     }
 
     @Test

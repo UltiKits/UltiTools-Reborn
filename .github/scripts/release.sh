@@ -13,6 +13,16 @@
 # absent release. At worst this creates a second draft for the operator to delete; the
 # retained-byte checks and readback still prevent publishing the wrong bytes.
 #
+# After publication (publish-packages.yml, triggered by the published release):
+# - GitHub Packages: an interrupted deploy can leave a partial package version. The job then fails
+#   closed on every re-run ("unexpected GitHub Packages state") and never overwrites it. Recovery is
+#   manual: delete that package version (com.ultikits:ultitools-api) in the repository's Packages
+#   settings, then re-run the failed job; it deploys the retained bytes again.
+# - Maven Central: the job re-checks its local inputs, not what repo1.maven.org serves; Central can
+#   take a while to sync. Read the coordinate back by hand until it reports STATE=identical:
+#     python3 -I .github/scripts/release_artifacts.py repository-state \
+#       --manifest <retained manifest> --base-url https://repo1.maven.org/maven2 --artifact-id UltiTools-API
+#
 # Usage:
 #   .github/scripts/release.sh --prepare <new-retention-dir> [--branch <name>]
 #   .github/scripts/release.sh --publish-approved <manifest> --authority-receipt <file> \
@@ -191,6 +201,20 @@ gh auth status >/dev/null 2>&1 || die "gh is not logged in; run gh auth login fi
 
 helper() { python3 -I "$HELPER" "$@"; }
 
+# Every gh call names origin's GitHub repository explicitly. Without --repo, gh uses its own default
+# repository (gh repo set-default), which may be a fork while every git check here reads origin.
+GH_REPO=""
+resolve_gh_repo() {
+    local url name
+    url="$(git config --get remote.origin.url || true)"
+    if [[ "$url" =~ github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/?$ ]]; then
+        name="${BASH_REMATCH[2]}"
+        GH_REPO="${BASH_REMATCH[1]}/${name%.git}"
+    else
+        die "origin (${url:-unset}) is not a GitHub repository URL; the release could not name its repository."
+    fi
+}
+
 # ---------------------------------------------------------------- checkout
 
 check_checkout() {
@@ -198,6 +222,7 @@ check_checkout() {
         die "The working tree is not clean. A release must come from a clean tree, otherwise the JAR does not match the commit the tag points at.
 $(git status --porcelain --untracked-files=normal)"
     fi
+    resolve_gh_repo
 
     CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
     if [ "$CURRENT_BRANCH" != "$RELEASE_BRANCH" ]; then
@@ -255,7 +280,7 @@ check_tag_free() {
     if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
         die "Tag ${TAG} already exists on the remote."
     fi
-    if gh release view "$TAG" >/dev/null 2>&1; then
+    if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
         die "A GitHub release ${TAG} already exists (possibly a draft)."
     fi
     echo "▶ Checks passed: ${TAG} is not taken"
@@ -393,8 +418,10 @@ while IFS='=' read -r key value; do
         PRIMARY_FILENAME) PRIMARY_FILENAME="$value" ;;
         PRIMARY_BYTES)    PRIMARY_BYTES="$value" ;;
         PRIMARY_SHA256)   PRIMARY_SHA256="$value" ;;
+        REPO)             MANIFEST_REPO="$value" ;;
     esac
 done <<< "$FIELDS"
+[ "${MANIFEST_REPO:-}" = "$GH_REPO" ] || die "The manifest names ${MANIFEST_REPO:-no repository}, but origin is ${GH_REPO}; nothing was published."
 ACCEPTED_BLOCKED_UAT_COUNT="$(python3 -I -c 'import json,sys; uat=next(g for g in json.load(open(sys.argv[1]))["gates"] if g["gate"] == "uat"); print(len(uat["blocked_rows"]) if uat["status"] == "blocked" else 0)' "$UAT_RECEIPT")" \
     || die "Could not read the validated blocked UAT row count; nothing was published."
 echo "Maintainer-accepted blocked UAT rows: $ACCEPTED_BLOCKED_UAT_COUNT"
@@ -443,14 +470,14 @@ inspect_release() {
     COMPARE_STATUS="absent"
     RELEASE_DRAFT="false"
     MISSING=()
-    if ! gh release view "$TAG" --json tagName,targetCommitish,isDraft,assets > "${dir}.json" 2>/dev/null; then
+    if ! gh release view "$TAG" --repo "$GH_REPO" --json tagName,targetCommitish,isDraft,assets > "${dir}.json" 2>/dev/null; then
         return 0
     fi
     RELEASE_EXISTS=1
     mkdir "$dir"
     # A release with no assets has nothing to download; compare reports any listed asset that
     # did not arrive, so a failed download can never pass as an empty release.
-    gh release download "$TAG" --dir "$dir" >/dev/null 2>&1 || true
+    gh release download "$TAG" --repo "$GH_REPO" --dir "$dir" >/dev/null 2>&1 || true
     if out="$(helper compare --manifest "$MANIFEST" --remote-dir "$dir" --release-json "${dir}.json" --shell)"; then
         rc=0
     else
@@ -547,7 +574,7 @@ confirm
 recheck_before_write
 
 if [ "$RELEASE_EXISTS" = 0 ]; then
-    GH_ARGS=(release create "$TAG"
+    GH_ARGS=(release create "$TAG" --repo "$GH_REPO"
              --target "$SOURCE_HEAD"
              --title "Release ${TAG}"
              --notes "$NOTES")
@@ -565,10 +592,15 @@ else
         done
     done
     if [ "${#UPLOAD[@]}" -gt 0 ]; then
-        gh release upload "$TAG" "${UPLOAD[@]}" || die "Uploading the missing files failed; run the same command again."
+        gh release upload "$TAG" --repo "$GH_REPO" "${UPLOAD[@]}" || die "Uploading the missing files failed; run the same command again."
     fi
     if [ "$RELEASE_DRAFT" = true ]; then
-        gh release edit "$TAG" --draft=false || die "Publishing the draft failed; run the same command again."
+        # The draft gets this run's notes and prerelease flag, as a fresh create would.
+        gh release edit "$TAG" --repo "$GH_REPO" --notes "$NOTES" \
+            --prerelease="$([ "$PRERELEASE" = 1 ] && echo true || echo false)" --draft=false \
+            || die "Publishing the draft failed; run the same command again."
+    else
+        note "${TAG} is already published: its notes and prerelease flag are left as they are."
     fi
 fi
 

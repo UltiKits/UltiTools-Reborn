@@ -695,10 +695,10 @@ class ConfigBindingValidationTest {
         }
 
         @Test
-        @DisplayName("a bound async @Scheduled is refused at load, telling the author to bind a sync task")
-        void boundAsyncScheduledIsRefused() {
-            assertMentions(refusalOf(new BoundAsyncBean()), "BoundAsyncBean.tick", "async",
-                    "runTaskAsynchronously");
+        @DisplayName("a bound async @Scheduled passes the same load-time binding validation")
+        void boundAsyncScheduledLoads() {
+            assertDoesNotThrow(() -> PluginManager.validateConfigBindings(module,
+                    containerWith(new BoundAsyncBean())));
         }
 
         @Test

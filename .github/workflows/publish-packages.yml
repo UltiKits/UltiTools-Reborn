@@ -122,7 +122,7 @@ jobs:
           (
             # Outside the checkout, so no project POM is read.
             cd "$RUNNER_TEMP"
-            mvn -B deploy:deploy-file -s "$SETTINGS" \
+            mvn -B org.apache.maven.plugins:maven-deploy-plugin:3.1.4:deploy-file -s "$SETTINGS" \
               -DgroupId=com.ultikits -DartifactId=ultitools-api -Dversion="$VERSION" -Dpackaging=jar \
               -Dfile="$INPUTS/${BASE}.jar" -DpomFile="$INPUTS/${BASE}-github-packages.pom" -DgeneratePom=false \
               -DrepositoryId=github -Durl="$REPOSITORY"
@@ -165,7 +165,10 @@ jobs:
 
   publish-central:
     name: 📤 Maven Central
-    timeout-minutes: 20
+    # Longer than the publisher's own wait below (-DwaitMaxTime, 60 minutes) plus the other steps, so a slow
+    # Central deployment ends with the publisher's verdict and the re-check still runs. The 6.3.1 run hit the
+    # former 20-minute limit while Central was still publishing an accepted deployment (issue #813).
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     needs: validate
     permissions:
@@ -190,9 +193,6 @@ jobs:
         server-password-env-var: SONATYPE_PASSWORD
         gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
         gpg-passphrase-env-var: MAVEN_GPG_PASSPHRASE
-
-    - name: Set up pinned Maven for Central staging
-      run: bash .github/scripts/setup-pinned-maven.sh
 
     - name: 🔑 Check GPG key expiry
       # Placed after the key is imported and before anything is signed. The key is already in the
@@ -259,6 +259,12 @@ jobs:
             exit 1 ;;
         esac
 
+    - name: Set up pinned Maven for Central staging
+      # Only when there is something to publish: a re-run that finds these exact bytes on Central is a
+      # no-op and must not depend on downloading Maven. Every step that runs Maven comes after this one.
+      if: steps.central-state.outputs.publish == 'true'
+      run: bash .github/scripts/setup-pinned-maven.sh
+
     - name: ✍️ Sign the retained files
       # Detached signatures beside the retained files; the files themselves are never modified. Central
       # requires a signature for the POM and for each JAR.
@@ -309,7 +315,10 @@ jobs:
       # so that POM is what is staged and uploaded, unchanged; it assigns the retained primary JAR and attaches
       # the sources and javadoc JARs and the four signatures. The scratch directories are cleared, which is why
       # the retained inputs live elsewhere. The source POM's publisher configuration (server id, autoPublish,
-      # waitUntil) equals the command-line values below.
+      # waitUntil) equals the command-line values below. -DwaitMaxTime bounds how long the publisher waits for
+      # Central to report the deployment published (the plugin default is 30 minutes); it stays below the job's
+      # timeout-minutes, so a deployment slower than that fails here with the publisher's own message instead of
+      # the runner cancelling the job.
       if: steps.central-state.outputs.publish == 'true'
       env:
         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
@@ -327,7 +336,8 @@ jobs:
           -Dmaven.ext.class.path="$HELPER_JAR" -DretainedArtifacts.properties="$PROPERTIES" \
           -DstagingDirectory="$STAGING_DIR" -DdeferredDirectory="$DEFERRED_DIR" -DoutputDirectory="$OUTPUT_DIR" \
           org.sonatype.central:central-publishing-maven-plugin:0.9.0:publish \
-          -DpublishingServerId=ultikits-sonatype -DautoPublish=true -DwaitUntil=published -Dchecksums=all
+          -DpublishingServerId=ultikits-sonatype -DautoPublish=true -DwaitUntil=published -DwaitMaxTime=3600 \
+          -Dchecksums=all
 
     - name: 🔁 Re-check the retained files after publication
       if: steps.central-state.outputs.publish == 'true'

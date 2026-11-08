@@ -650,30 +650,39 @@ public final class StubGateway {
 
     // ------------------------------------------------------------------ sending
 
-    /** Sends one frame on a connection, after checking it against its schema; caller holds the connection. */
+    /**
+     * Sends one frame on a connection, after checking it against its schema; caller holds the connection.
+     *
+     * <p>The frame is recorded and its {@code WS-OUT} line written <em>before</em> it goes on the wire, so a
+     * client that has received the frame always finds both (#865). When the send then fails because the
+     * connection has closed, the record is withdrawn and a {@code WS-NOTE} line says the frame was not sent.
+     */
     void sendFrame(Connection connection, JsonObject frame) {
         String type = string(frame, "type");
         String issue = contract.firstIssue(UltiCloudStub.Contract.frameSchema(type), frame);
         if (issue != null) {
             log.log("WS-SELF-INVALID", connection + " " + type + " " + issue);
         }
+        Frame recorded = record("out", connection, frame);
+        log.log("WS-OUT", connection + " " + describe(frame));
         try {
             connection.socket.send(frame.toString());
         } catch (WebsocketNotConnectedException closedMeanwhile) {
+            synchronized (frames) {
+                frames.remove(recorded);
+            }
             log.log("WS-NOTE", connection + " " + type + " not sent: the connection is closed");
-            return;
         }
-        record("out", connection, frame);
-        log.log("WS-OUT", connection + " " + describe(frame));
     }
 
+    /** Sends a text frame; like {@link #sendFrame}, its {@code WS-OUT} line is written before the send. */
     private void sendText(Connection connection, String text) {
+        log.log("WS-OUT", connection + " " + text);
         try {
             connection.socket.send(text);
         } catch (WebsocketNotConnectedException closedMeanwhile) {
-            return;
+            log.log("WS-NOTE", connection + " " + text + " not sent: the connection is closed");
         }
-        log.log("WS-OUT", connection + " " + text);
     }
 
     /** Closes a connection with a close frame; caller holds the connection. */
@@ -704,12 +713,14 @@ public final class StubGateway {
         return closed;
     }
 
-    private void record(String direction, Connection connection, JsonObject frame) {
+    private Frame record(String direction, Connection connection, JsonObject frame) {
         JsonObject masked = JsonParser.parseString(StubAccessLog.mask(frame.toString())).getAsJsonObject();
+        Frame recorded = new Frame(System.currentTimeMillis(), connection.id, direction, masked);
         synchronized (frames) {
-            frames.add(new Frame(System.currentTimeMillis(), connection.id, direction, masked));
+            frames.add(recorded);
             frames.notifyAll();
         }
+        return recorded;
     }
 
     private static String describe(JsonObject frame) {

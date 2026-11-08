@@ -109,13 +109,14 @@
 #
 #   --allowlist <path>     Path to the allowlist file (default: .github/cjk-allowlist.txt)
 #   --scope <path>         Repeatable. Overrides the three default scopes entirely when given.
+#                           A value flag given without its value exits 2.
 #   --report-only          Print violations, exit 0 after a successful scan (errors still exit 2).
 #   --max-violations <n>   Non-negative decimal integer. Exit 0 while the violation count is at or
 #                           below n (migration aid). Default 0; invalid or missing values exit 2.
 #   --self-test             Run the fixture self-test (see .github/scripts/testdata/) and exit.
 #
 # Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
-#             2 = invalid threshold, matcher/helper/read, enumeration, sort, count or output failure;
+#             2 = missing flag value, invalid threshold, matcher/helper/read, enumeration, sort, count or output failure;
 #             64 = unknown flag.
 #
 # Wired into maven-ci.yml (see the "CJK Comment/Javadoc Scope Gate" step, plan 08-18) — invoked
@@ -181,13 +182,23 @@ Usage: check-cjk-scope.sh [--allowlist <path>] [--scope <path> ...]
 USAGE
 }
 
+# Every value flag goes through need_value first: a missing value is an invalid invocation (exit 2
+# with ERROR:), never an "unbound variable" abort under set -u, whose status 1 reads as "over threshold".
+need_value() {
+    if [ "$2" -lt 2 ]; then
+        echo "ERROR: $1 requires a value." >&2
+        exit 2
+    fi
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --allowlist)      ALLOWLIST="$2"; shift 2 ;;
-        --scope)          SCOPES+=("$2"); shift 2 ;;
+        --allowlist)      need_value "$1" $#; ALLOWLIST="$2"; shift 2 ;;
+        --scope)          need_value "$1" $#; SCOPES+=("$2"); shift 2 ;;
         --report-only)    REPORT_ONLY=1; shift ;;
         --max-violations)
-            if [ $# -lt 2 ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
+            need_value "$1" $#
+            if [[ ! "$2" =~ ^[0-9]+$ ]]; then
                 echo "ERROR: --max-violations requires a non-negative decimal integer." >&2
                 exit 2
             fi

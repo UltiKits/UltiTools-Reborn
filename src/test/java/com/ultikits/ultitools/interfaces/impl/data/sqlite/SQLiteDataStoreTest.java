@@ -6,6 +6,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -163,6 +165,27 @@ class SQLiteDataStoreTest {
                 assertThat(operator).isNotNull();
                 assertThat(mockedOperator.constructed()).hasSize(1);
                 assertThat(operator).isSameAs(mockedOperator.constructed().get(0));
+            }
+        }
+
+        @Test
+        @DisplayName("#823: the pool takes its connections only from the busy-wait data source, with no dead URL or driver settings")
+        void poolIsConfiguredOnlyThroughTheBusyWaitDataSource() {
+            when(mockPlugin.getPluginName()).thenReturn("pool-config-plugin");
+            SQLiteDataStore store = new SQLiteDataStore();
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+                store.getOperator(mockPlugin, TestDataEntity.class);
+
+                assertThat(mockedConfig.constructed()).hasSize(1);
+                HikariConfig config = mockedConfig.constructed().get(0);
+                // Hikari ignores jdbcUrl and driverClassName once a data source is set, so setting
+                // them would be configuration that silently has no effect.
+                verify(config).setDataSource(any(SQLiteBusyDataSource.class));
+                verify(config, never()).setJdbcUrl(any());
+                verify(config, never()).setDriverClassName(any());
             }
         }
 

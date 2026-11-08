@@ -13,6 +13,8 @@ Earlier builds can exhaust a nominal 3 s busy wait in about 0.4 s on the server 
 
 A read-before-write transaction can still fail immediately when upgrading its read lock would deadlock with another transaction. A busy handler does not remove that SQLite behavior: do not assume every SQLITE_BUSY waits for the full timeout, or retry an entire transaction blindly. The framework does not switch transactions to IMMEDIATE to hide it. Direct changes to SQLite-owned busy handlers or PRAGMA busy_timeout by module code are outside the framework-managed wait policy.
 
+The elapsed-time busy handler is built for the SQLite JDBC driver UltiTools ships (#823). If another plugin or a fork places a different `org.sqlite` driver where UltiTools' classes resolve it, the wait budget can behave differently without a warning. Do not replace or shadow the shipped SQLite driver.
+
 ## Upgrade checklist: moving a module from 6.2.5 to 6.3.0
 
 What a module author has to do, in the order you would do it. Each item is one action and links to the section that
@@ -106,6 +108,13 @@ Login, Panel Integration, Player Link) explain each part in prose.
   32-hex `uuid` entry is kept byte for byte and is sent as `legacyServerUuid` with the device login, so
   the panel can offer to re-attach the existing server. A file with no `cloud_token` is not
   rewritten. The old token is never sent anywhere again.
+- **A server that lost its files keeps its panel record.** The server's identity on UltiCloud is its server record
+  in the panel, not a file on disk. If `<server root>/.ultikits/credentials.json` is lost (a wiped plugin folder, a
+  reinstall), run `/ulticloud login` again and, on the panel's confirmation page, choose to attach the server to
+  your existing server instead of creating a new one: the panel record and its history stay with the server.
+  If the panel answers that the existing server still has an active credential, revoke that credential in the
+  panel first, then confirm again. Do not copy `credentials.json` between servers: two servers using one credential
+  replace each other's connection (close 4000), and after three replacements the framework stops reconnecting.
 - `UltiCloudRequests.post` and `.get`, the 6.3.0 helper that made UltiLogin's `/panel` magic-link calls,
   answer every call with `PATH_NOT_ALLOWED` and send nothing (one INFO line per run). UltiLogin 2.0.0's
   `/panel` therefore stops working on 6.3.1; its `/login` keeps working. UltiLogin 2.1.0, released with
@@ -115,7 +124,7 @@ Login, Panel Integration, Player Link) explain each part in prose.
 
 | API | Since | Purpose |
 |---|---|---|
-| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged. The table starts empty, matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
+| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged, except the framework's own records of a remote-console command as of 6.4.0 (see [Sensitive commands in the remote console's local records](#sensitive-commands-in-the-remote-consoles-local-records-as-of-640)). The table starts empty, matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
 | `websocket.CloudPlayerLinks`, `UltiTools#getCloudPlayerLinks()` | 6.3.1 | The player-link API that replaces the magic-link calls: `create(...)` returns a one-time link valid for 600 seconds; one module-owned `LinkEventHandler` receives completions and expiries on a framework worker thread; the framework persists each result before it answers the gateway, so a completion redelivered after a restart is answered without calling the module again. `getCloudPlayerLinks()` returns `null` only before the framework has enabled. |
 | `PanelResponderRegistry#ownerModuleOf(String)`, `#ownerModules()` | 6.3.1 | Read-only views of responder ownership. |
 | `websocket.CloudChannel`, `CloudRequest`, `CloudRequestHandler`, `CloudLimits` | 6.3.1, `@ApiStatus.Internal` | The framework's internal request and reply seam. Public only because handlers live in two packages; not for module use, and they may change without notice. |
@@ -157,7 +166,18 @@ what an `error.report` names in `moduleName`. `moduleName` is `null` unless the 
 A module whose `identify-string` is missing or is not a valid identifier (a lower-case letter first, segments of
 lower-case letters and digits joined by one `.` or `-`, at most 64 characters) is addressed by its `plugin.yml`
 name trimmed and lower-cased instead, as in 6.3.0, when that is a valid identifier; if neither is, its
-responders are not declared and one WARNING says so. Its error reports then carry `moduleName` `null`.
+responders are not declared and one WARNING says so. Error reports never use that fallback: a module whose
+`identify-string` is not a valid identifier sends its error reports with `moduleName` `null`, even when its
+responders are reachable under the `plugin.yml` name. This is deliberate: the `plugin.yml` name may match no
+catalogue entry, and the panel would then attribute the error to a module that does not exist. Give the module a
+valid `identify-string` to have its errors attributed.
+
+The version in `modules:<identifier>@<X.Y.Z>` is always three numbers. The framework takes the first three runs of
+digits in the `plugin.yml` version and pads missing ones with `0`, so a pre-release or build suffix is not carried:
+`2.0` becomes `2.0.0`, but `2.0-rc1` becomes `2.0.1` and `2.0.0-SNAPSHOT` becomes `2.0.0`. UltiCloud's protocol
+accepts only `X.Y.Z` in a capability name (no pre-release tag), so a `2.0.0-rc1` form would make the gateway
+refuse the whole `hello`. Module authors who want the panel to show the version they ship should use a plain
+three-number `plugin.yml` version; a pre-release should not reuse the number of a later release.
 
 A `module.request { module, action, params, actor }` is dispatched only to a responder of the module whose
 identifier equals `module`, registered under `<identifier>.<action>`. New registrations should use that form.
@@ -348,6 +368,43 @@ of the disable a read (`files.read`, `files.list`, `properties.get`) is still an
 a `snapshot.request` needs the server thread and is dropped unanswered, writing no line (see the shutdown window
 below). No line ever holds file content or a configuration value.
 
+### Sensitive commands in the remote console's local records (as of 6.4.0)
+
+**Behaviour change in 6.4.0: local log content changes.** When the panel's remote console (`command.execute`) runs a
+command a module registered with `UltiTools#getSensitiveCommandRegistry()`, the framework's own records of that
+request no longer carry its arguments. The `[Remote command] > ...` echo, the `[Remote command] Blocked: ...` line and
+the failure lines show the command followed by `***`, and so do the server console, `logs/latest.log` and the panel's
+log stream, which all receive those lines; the request's line in `plugins/UltiTools/security/action.log.<n>` has the
+same text as its `target`. For example, with UltiLogin registering `logadmin`, the panel command
+`logadmin reset Steve <password>` is logged as `[Remote command] > logadmin ***` and recorded with
+`"target":"logadmin ***"`. In 6.3.1 and 6.3.2 the local console, `latest.log` and the action log carried the whole
+command line, password included, and the panel's log stream did too, because the echo line has no leading `/` for the
+text redaction to find.
+
+- The registered name is matched against the command as it is dispatched (one leading `/` and surrounding or repeated
+  whitespace, no-break spaces included, removed; a `namespace:` prefix and letter case ignored), so `/ logadmin ...`
+  or a no-break space after the name does not hide it. The command keeps the spelling it was sent with
+  (`/UltiLogin:LogAdmin reset ...` is logged as `UltiLogin:LogAdmin ***`).
+- The command itself is still dispatched with its arguments, and its reply (`command.result`) is unchanged: what the
+  command prints is the module's own output, and redacting it is the module's decision.
+- A command that is not registered is logged and recorded exactly as received, as before.
+- No API changes. A module that already registers its commands gets this without a change; a module that does not
+  register any gets nothing new. A log reader or audit script that parsed the arguments of a registered command out
+  of these lines, or out of the action log, finds only `***` from 6.4.0 on.
+- Out of scope: a player's own `issued server command` line in the local log files (written by Paper, unchanged
+  locally and redacted on the way to UltiCloud as before), and lines other plugins write.
+
+中文补充：**6.4.0 行为变更：本地日志内容改变。** 面板远程控制台（`command.execute`）运行模块通过
+`UltiTools#getSensitiveCommandRegistry()` 注册的命令时，框架为该请求写下的记录不再包含参数：`[Remote command] > ...`
+回显行、`[Remote command] Blocked: ...` 行和失败行都只显示命令名加 `***`，服务器控制台、`logs/latest.log` 和面板日志流
+（它们都收到这些行）同样如此；`plugins/UltiTools/security/action.log.<n>` 中该请求的 `target` 也是这段文字。例如 UltiLogin
+注册了 `logadmin` 后，面板命令 `logadmin reset Steve <密码>` 记为 `[Remote command] > logadmin ***`，动作日志为
+`"target":"logadmin ***"`。6.3.1 与 6.3.2 中本地控制台、`latest.log` 和动作日志会记下包括密码在内的整行命令，面板日志流也会，
+因为回显行没有可供文本脱敏识别的前导 `/`。注册名按实际分发的命令匹配（去掉一个前导 `/`、首尾和重复空白（含不换行空格），
+忽略 `namespace:` 前缀和大小写）；命令本身仍带参数分发，回复（`command.result`）不变；未注册的命令照原样记录。没有 API 变化；
+解析这些行或动作日志中已注册命令参数的脚本从 6.4.0 起只会看到 `***`。玩家自己的 `issued server command` 行（由 Paper 写入）
+和其他插件写的行不在此列。
+
 ### Shutdown window
 
 From the first step of UltiTools' disable, every request that would change server state is refused with an
@@ -439,6 +496,65 @@ take.
   `rate_limited`, and a switch turned off while a request already waits does not stop that request.
 - **Error-report attribution.** `error.report.moduleName` names a module only when the report names a loaded
   module; errors of command executors and AOP beans are reported as the framework's own (`null`).
+- **A panel command's audit line follows `language`, and a refusal is in `message`.** The console audit line is
+  written through the framework's text catalogue, so it reads `[UltiTools] [Remote command] > <command>` in English
+  and `[UltiTools] [远程命令] > <command>` with the default `language: zh`. The text of a refused command (for
+  example a blocklisted one) is the `message` of the `command_failed` error reply, not `data.output` of a
+  `command.result`.
+- **The command blocklist is read when the request is admitted.** A request is checked against the blocklist at
+  admission, before it waits for the server thread, so a `ul reload` that changes `ultipanel.commands.blocklist`
+  in that moment does not affect a request already admitted. A command that throws an `Error` (not an `Exception`)
+  after its acknowledgement gets no `command.result`; the panel sees its own timeout.
+- **`server.power` is acknowledged before it is scheduled.** Its `ok` reply is sent first, and the stop or restart
+  is scheduled to begin one second later. If UltiTools starts disabling between the reply and the scheduling, the
+  action is dropped with only a FINE log line although the panel saw `ok`. Check the console and send the request
+  again if the server is still running.
+- **A teleport that never completes is answered by the gateway's timeout.** A `player.action` teleport waits for
+  the server's asynchronous teleport to finish; if it never does, the framework sends no reply and the panel sees
+  its own timeout. There is no local deadline.
+- **Player-link ordering has gaps.** These need a lost answer, a closed connection or a very early event, and a
+  server restart clears every one of them:
+  - a completion held while its link-create answer is outstanding stays marked busy if the connection closes or an
+    error reply arrives first, so the gateway's redelivery is ignored until the next start (a module that needs the
+    result meanwhile asks the panel again);
+  - checking the saved result and marking a completion busy are two steps, so two simultaneous redeliveries of one
+    completion can both reach the handler (the same effect as the crash case above);
+  - an expiry for a link whose create has not been answered is delivered first, so a module should correlate by
+    link id, not by arrival order;
+  - an expiry that arrives before any module has registered a handler is consumed and not delivered, so register
+    the handler before asking for a link.
+- **Some malformed backend answers look like other failures.** A device-login grant that is `200` but unusable (for
+  example an invalid `userId` or `serverId`) is logged as a WARNING without values and polling continues, so the
+  operator finally sees the device code expire although the backend issued a credential: run `/ulticloud login`
+  again and revoke the orphaned credential in the panel. A revoke answered `200` without `revoked: true` is counted
+  as revoked. Neither happens with a contract-valid backend.
+- **While a logout's revoke is in flight, `status` and `login` still see the server as linked.** The revoke has a
+  15-second read timeout after a 10-second connect timeout (25 seconds at most); during it `/ulticloud status`
+  shows the link and `/ulticloud login` answers that the server is already linked. Wait for the logout outcome
+  line before logging in again.
+- **Configuration the panel cannot show.** A module setting whose value is outside the contract bounds (text over
+  8192 characters, a list over 500 items or an item over 1024 characters, an integer outside the safe-integer
+  range) is left out of `config.entries` instead of being truncated, and a module lists at most the contract's
+  entry cap. Edit such a setting in the file.
+- **A panel edit that names one key twice keeps the last value.** A `config.update` whose `changes` list the same
+  key more than once answers every item `ok` and applies them in order, so the file ends with the last value. The
+  official panel never sends a key twice; a custom client should send each key once.
+- **Map-valued settings are not shown in the panel's configuration view.** `config.entries` lists only settings
+  of a type the contract can carry (text, whole number, number, true/false, a list of text, an enum). A setting
+  declared as a map, an object, a Bukkit value or a list of anything but text is left out and cannot be edited from
+  the panel. Edit it in the module's file and run `/ul reload`.
+- **Configuration values are visible to the panel under the file-read switch, secrets included.** Reading a
+  module's configuration through the panel (`config:read`) is governed by `ultipanel.capabilities.file-read`, the
+  same switch as reading files, and the values are sent as the file holds them: a password or token kept in a
+  module's configuration is shown to whoever can read that server in the panel. The framework does not mask values
+  by key name, because a name-based guess is unreliable. Keep `file-read` off on servers whose configuration holds
+  secrets you do not want in the panel.
+- **An editable root equal to the server root is not listed.** `files.list` with an empty path lists the editable
+  roots by their path relative to the server root; the server root itself has no such path and is omitted, although
+  requests for paths inside it are still judged normally. Use sub-directories (`plugins`, `logs`) as editable roots.
+- **A log line with a negative timestamp invalidates its `log.lines` frame.** The framework forwards the line's
+  timestamp unchanged, and the contract requires `ts` of at least 0, so a system clock set before 1970 makes the
+  gateway refuse the frame. Keep the system clock correct.
 
 ## Config layer (6.3.0)
 
@@ -598,6 +714,10 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
 - a comment that closes a section after a blank line, indented deeper than the key that follows it, and any comment
   indented deeper than the key below it (including in a comment-only file);
 - two indentation widths in one file (two spaces in one section, four in another);
+- raw non-ASCII text and double-quoted `\u`, `\U` or `\x` escapes mixed in one file: the renderer keeps one
+  Unicode spelling per file, so the other spelling's line is named and the write refused (behaviour unchanged since
+  6.3.0, [#836](https://github.com/UltiKits/UltiTools-Reborn/issues/836)). Use one spelling per file - raw UTF-8
+  (recommended) or escapes throughout;
 - mixed line endings (CRLF on some lines, LF on others);
 - a plain value continued onto the next line, a tab inside a value, an explicit `? key`, an explicit tag (`!!str`);
 - a file holding only a byte-order mark (an emptied file saved as UTF-8 with BOM; the reason names the mark);
@@ -605,7 +725,7 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
   library cannot emit the comment there, so the write is refused naming that key
   ([#624](https://github.com/UltiKits/UltiTools-Reborn/issues/624), pinned by `WriteGateRuntimeFailureTest`).
 
-Ordinary plain string keys longer than 128 characters are another ownership-dependent refusal
+Long ordinary plain string keys (about 123 characters and above with the current SnakeYAML 2.2 options) are another ownership-dependent refusal
 ([#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 1): SnakeYAML emits the key in explicit `? key` form.
 A write to another setting is refused at that line because the long key's bytes are outside its owned paths; the original
 file remains unchanged. The effective boundary can be shorter than 128 characters because the emitter also counts tag
@@ -931,6 +1051,17 @@ condition that failed, and `getReason()` names the entry's key path, never a val
 `null` as the first argument, `saveOperatorMapEntry(null, "path", "key")`, does not compile, because it is ambiguous
 between them; cast the `null` to the intended type (it then throws `IllegalArgumentException`).
 
+**Known limitation retained (#626): a new map key that contains a dot is written unquoted and named
+by its dotted path.** A map entry added through the write gate (for example `saveOperatorMapEntry` with
+the key `x.y`) is rendered as a plain `x.y:` line; an existing key keeps the quoting the operator gave
+it. The framework always reads such a key back as one whole key, but Bukkit's own `YamlConfiguration`
+splits it into `x` and `y`, so a plugin that reads the file through Bukkit sees a nested section
+instead. Warnings and refusal reasons join the path with dots, so `'autoreply.rules.x.y'` can mean the
+whole key `x.y` or the nested keys `x` and `y`. Read map settings through the framework, not
+through Bukkit, and prefer map keys without dots (for example `-` or `_` as a separator) when an
+entry name is chosen by a command or the panel; when a diagnostic names a dotted path, check the file
+for both forms.
+
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
 keeps declared defaults and logs one SEVERE naming the file and safe cause. As of 6.3.0 (#589) a
 failed reload keeps running fields and the file unchanged and throws `ConfigurationException`
@@ -1157,7 +1288,8 @@ A file whose own put-back failed is left as the SEVERE describes, with its frame
 it again, and its configuration refuses every write until the operator compares the two and reloads.
 Recovery errors are attached as suppressed exceptions; persistently unavailable storage can prevent
 restoration and is not falsely reported as a successful rollback. Semantic no-ops write nothing.
-This is not a crash-safe multi-file transaction: a JVM crash between moves remains deferred to #545.
+This is not a crash-safe multi-file transaction: a JVM crash between moves can leave a partial batch.
+The single-file opt-in helper added for #545 in 6.4.0 does not change this limitation or the panel's writer.
 The panel message shape and public `loadFromJson` signatures are unchanged. Internal staged-entity
 coordination bridges are not a module transaction API.
 
@@ -1171,8 +1303,85 @@ Object>)` writes only the named whole keys (a key containing `.` is one key), th
 only while the file still holds the snapshot's bytes, and returns `WRITTEN`, `UNCHANGED`, `FILE_CHANGED` or `REFUSED`
 (a layout the gate cannot keep byte for byte, or anchors, with one WARNING naming the file, the keys and the reason).
 Values must be plain data - serialize an `ItemStack` first; anything else throws `IllegalArgumentException` before
-the file is touched. It never creates, deletes or renames a file, is not a general file API (UltiKits/UltiTools-Reborn#545
-stays a later feature), and is not for `@ConfigEntity` files, which keep their own save rules.
+the file is touched. It never creates, deletes or renames a file and is not for `@ConfigEntity` files, which keep
+their own save rules. Its publication, live-link handling and backed in-place fallback are unchanged by the separate
+6.4.0 opt-in API below.
+
+### Strict single-file module YAML publication (6.4.0, opt-in)
+
+`com.ultikits.ultitools.config.CrashSafeYamlFiles` is an additive, YAML-only helper for a module's **explicit operator
+create/edit action** (#545). It does not automatically migrate any module, `OperatorFiles.write`, `@ConfigEntity`,
+framework state or credential file. It is not an arbitrary byte writer, a whole-file overwrite API, a repair tool,
+a delete/rename API or a multi-file transaction.
+
+```java
+OperatorFiles.Snapshot snapshot = OperatorFiles.read(kitFile);
+OperatorFiles.WriteResult edited = CrashSafeYamlFiles.write(snapshot,
+        Collections.singletonMap(Collections.singletonList("items"), serializedItems));
+// Or, for an explicit create action (the parent directory already exists):
+OperatorFiles.WriteResult created = CrashSafeYamlFiles.create(newKitFile,
+        Collections.singletonMap("items", serializedItems));
+// A module updates live state only after WRITTEN (or UNCHANGED for an edit).
+```
+
+- `write(OperatorFiles.Snapshot, Map<List<String>, Object>) throws IOException` owns only the named complete key
+  paths. It reuses the config gate's plain-data validation, snapshot fingerprint, parse/render/reparse checks and
+  exact unowned-byte protection (comments, unknown keys, BOM and line endings included). A later operator save is
+  `FILE_CHANGED`; malformed, anchored or unpreservable YAML is `REFUSED`, never repaired. A missing target is
+  `FILE_CHANGED`, not recreated. An empty edit and a semantic no-op are `UNCHANGED` without staging or metadata changes.
+- `create(File, Map<String, Object>) throws IOException` validates and copies the complete plain-data root map.
+  Keys containing dots are literal keys, null values are valid, and an empty map is a valid creation. Any existing
+  entry, including a directory or dangling symlink, is `FILE_CHANGED` even with identical bytes. It never claims an
+  empty final path and then fills it. It returns `WRITTEN`, `FILE_CHANGED` or `REFUSED`, never `UNCHANGED`.
+- Both methods copy and validate arguments before I/O. Null arguments/keys, invalid write paths and non-plain values
+  throw `IllegalArgumentException`; serialize Bukkit objects first. Neither helper changes the module's live objects.
+
+**Support and metadata are deliberately bounded.** The supported entry points take `File` (a snapshot also comes from
+`OperatorFiles.read(File)`) and therefore use the JVM's default filesystem. This first version requires ordinary files
+on a local default POSIX filesystem with native atomic rename/link semantics, working POSIX attributes and an already
+existing parent. The real parent is resolved before appending the final basename, so a parent symlink followed by `..`
+keeps filesystem meaning. There is no path sandbox; modules supply trusted paths. An existing final symlink is refused,
+live or dangling; directories/devices and other nonregular write targets are refused, not followed or replaced.
+
+Existing files preserve exactly the nine POSIX permission bits, owner and group, applied and verified on the staged
+inode before commit. Failure to reproduce a promised attribute aborts publication. A file the process cannot write, or
+with no POSIX write bit, is refused even if directory permissions would permit replacement. Staging is exclusively
+created at 0600 before any content, written through that created channel, narrowed to 0000 before any necessary
+owner/group transition, then given its final mode and verified. New files keep the process-created owner/group and
+0600: **this is a new API default, not a change to old writers**. Non-POSIX providers (normal Windows included) and a
+Java-exposed ACL view on parent/target/stage cause refusal. Attribute lookup failures are not evidence of no ACL.
+
+No ACL copier is supplied. The absence of a Java ACL view does **not** establish the absence of Linux `setfacl` or
+default ACLs, SELinux labels or other metadata Java does not expose. Do not adopt this helper for a file whose layout
+requires preserving those, xattrs, alternate streams, special mode bits, inode identity, hard-link relationships,
+creation timestamps or arbitrary flags. Replacement creates a new inode; existing hard-link aliases keep old content.
+Unknown metadata follows replacement/new-file semantics; the helper cannot detect every incompatible layout.
+
+**Publication and interruption.** A random same-directory `<name>.ultitools-stage-<32 lower-case hex>.tmp` receives
+all UTF-8 bytes and metadata, `FileChannel.force(true)` and successful close **before** publication. Existing-file
+commit is successful `Files.move(stage, target, ATOMIC_MOVE)`; unsupported atomic replacement throws (including
+`AtomicMoveNotSupportedException` unchanged). Creation uses `Files.createLink(target, completedStage)`, not an atomic
+move pretending to be exclusive create. Native POSIX `link` creates a new entry atomically or fails on an existing
+entry (including symlinks); this is not a blanket atomicity claim for every NIO provider. Unsupported link publication
+throws `IOException`. There is **no** copy, ordinary move, in-place truncation or journal fallback in this helper.
+
+Directory forcing is best effort after publication (creation: after link, and again after temp unlink); a failure warns
+once per directory/reason and does not misreport committed data as unchanged. `WRITTEN` means complete publication,
+not universal power-loss durability. With a functioning OS/filesystem, a process crash leaves old/absent or complete-new
+final content; OS crash, sudden power loss, remote storage, device/controller failure and filesystem recovery remain
+outside that guarantee. Same-JVM config writes share a lock and recheck bytes/kind/promised metadata before commit,
+but there is no cross-process lock and an external editor/rename/chmod can race the final check-to-publication window.
+Do not share these files with concurrent uncoordinated writers.
+
+**No automatic recovery.** There is no startup scan, journal, replay, promotion or rollback. Cleanup touches only the
+exact temp this invocation created, and only while a non-null file key and regular-file kind still prove its identity.
+Unknown/changed/unreadable identities and failed cleanup leave a warning naming the retained temp. A pre-commit cleanup
+failure does not mask the original error; a post-commit one still returns `WRITTEN`. Later invocations never reuse or
+remove a prior temp, and strict reads never run the legacy temp/backup maintenance. After stopping the server and
+competing writers, inspect the target and named leftovers; do not assume a temp is newer or authoritative or promote it
+automatically. Remove only a temp recognized as no longer needed, otherwise keep it and use an independently trusted
+backup or the module's explicit recreate action. Retained temps may contain new data with the declared final POSIX mode;
+protect them like the YAML file itself. Module adoption and bilingual developer documentation are separate follow-ups.
 
 ### Migrating legacy parsers to converters
 
@@ -1302,15 +1511,15 @@ touched files with in-process rollback.
 Known limits remain explicit, not guaranteed away: [#578](https://github.com/UltiKits/UltiTools-Reborn/issues/578)
 records a remaining temporary-file identity limit through a symlink followed by `..`. Avoid that path combination and
 use the same resolved real path when staging and loading configuration files. Its quadratic style-detection finding is
-fixed: scalar mark offsets no longer rescan the text from the beginning for each scalar. Its anchored-container and
+fixed as of 6.3.2: scalar mark offsets no longer rescan the text from the beginning for each scalar. Its anchored-container and
 alias-comment items cannot occur, because no write path writes a file that uses anchors, aliases or merge keys.
 A valid block anchor with a comment before
 its first child key cannot be read and the file is protected as unparseable
 ([#580](https://github.com/UltiKits/UltiTools-Reborn/issues/580), closed by documenting it; see "Layouts the reader
 cannot read"). A file that uses anchors, aliases or merge keys is never written; one warning per file per run names it.
 No general alias-preservation guarantee is claimed, and apart from putting back the in-place write that just failed
-(#622), nothing is restored from an earlier backup. [#545](https://github.com/UltiKits/UltiTools-Reborn/issues/545) remains the
-separate crash-safe multi-file transaction limit.
+(#622), nothing is restored from an earlier backup. Crash-safe multi-file transactions remain unsupported;
+the single-file opt-in helper for [#545](https://github.com/UltiKits/UltiTools-Reborn/issues/545) does not solve that limit.
 
 Three YAML spellings fail the write gate's check (6.3.0). A framework write changes only the keys it owns and verifies
 that every other line of the file keeps its bytes and its value; these spellings cannot pass that check. None of them blocks
@@ -1347,9 +1556,9 @@ such spelling: keep binary values out of the keys of a file the framework writes
 - 框架自己的 `plugins/UltiTools/config.yml` 启动时补入缺少的面板键（能力开关、`ultipanel.commands.blocklist`、`ultipanel.files.editable-roots`、操作日志轮转键）同样经过写入闸门，只插入（#605）。补键迁移是 6.3.0 新增的（6.2.x 只在 `config.yml` 不存在时写入它）；它在本周期较早的 6.3.0 快照中的第一个版本会整份重写文件：十六进制数变成十进制、锚点被展开、`o.O` 这样的含点键被拆成嵌套映射、显式 `null` 被替换。现在其余每个字节保持不变（已在每个已发布的 6.2.x `config.yml` 上实测）；闸门无法逐字节写回的文件（手工对齐、锚点）保持原样，警告一次列出这些键，由 jar 自带 `config.yml` 中的默认值（现在也列出命令黑名单和可编辑根目录）生效。若文件以扁平含点键（如 `ultipanel.capabilities.logs: false`）或含点的节键保存其中某个设置，而插入的嵌套节会在服务器读取时取代它，同样不写入：警告一次，指出文件和该设置（不含任何值），缺少的键使用 jar 默认值。较早版本实测：6.0.9 和 6.1.x 的 `config.yml` 同样只插入；6.0.9 之前各个 6.0.x 版本（6.0.0 至 6.0.8）的 `config.yml` 含 `trustIp: [ ]`（方括号内侧有空格），每次启动都被拒绝并警告一次、指出第 14 行，缺少的键使用 jar 默认值，不写入任何内容——只有从 6.0.8 或更早版本直接升级才会遇到；改成 `trustIp: []` 或手工补上这些键即可消除警告。
 - UltiTools 只在 `plugins/bStats/config.yml` 不存在、或已含 `serverUuid` 时启动 bStats（#606）。该文件由所有使用 bStats 的插件共用；此前无法解析的文件被当作空文件，bStats 的默认值会写在它上面。现在无法读取、无法解析或缺少 `serverUuid` 的文件逐字节保持不变，记一行日志说明，本次运行 UltiTools 不发送统计。在 Paper 上，服务器自带的统计代码会在任何插件加载之前读取该文件，并用新的默认值重写无法解析或缺少 `serverUuid` 的文件（在 Paper 1.21.11 上实测），因此这类文件是被服务器本身替换的，而不是被 UltiTools 替换的，UltiTools 只会看到有效的文件。
 - 面板编辑 `server.properties` 时只替换它指定的那个键所在行的值文字（#607）：键、分隔符、注释、顺序和其它每个字节保持不变（含 UTF-8 的 `motd`），按服务器读取该文件的方式解码和编码（严格 UTF-8，不是 UTF-8 时用 ISO-8859-1），校验后原子写入。同一个键定义在多行、或定义续到下一行时拒绝，原因注明行号（不含值）；`set_all` 回复把它列在 `failed` 中，并在新增的 `failureReasons` 字段中给出原因，服务器日志对每个被拒的键只记一次。服务器自己下次启动时仍会整份重写该文件（在 Paper 1.21.11 上实测）。
-- 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API（#545 仍是以后的功能），也不用于 `@ConfigEntity` 文件。
+- 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API，也不用于 `@ConfigEntity` 文件。6.4.0 的独立选择性入口 `CrashSafeYamlFiles`（#545）提供已有 YAML 指定键编辑与完整新映射的排他创建；不改变旧入口的链接或 fallback 行为。新入口仅支持默认本地 POSIX 文件系统的原生 rename/link 发布，保留九位权限和 owner/group，新文件 0600；非 POSIX 或 Java 暴露 ACL view 时拒绝，原子替换/link 不支持时失败且无退路，不保留所有隐藏 ACL/xattr/安全标签或硬链接关系。无自动恢复或遗留文件扫描，不保证断电与多文件事务；完整边界、并发限制和服主清理步骤见上方英文 6.4.0 小节。
 - 面板编辑复合值（Bukkit `Vector`、`Location`，或映射条目中的此类值）内的一个字段时，写入的是文件中原样的整个值、只改该字段，其余字段保持服主写下的字节（`y: 64`、`pitch: 0` 不会变成 `64.0`）。面板发送的整数、或文件中该值其它字段里的整数，在模块自身的值为浮点数的位置按浮点数转换（Bukkit 的 `Vector` 自己不放宽），被编辑的字段按该类型写入（`7` 写成 `7.0`），因此编辑后的文件能被重新加载（#609）。文件中 `Vector` 或 `BlockVector` 坐标里的整数（`y: 64`）现在按该数字加载：Bukkit 的 `Vector` 只接受 `Double` 坐标，此前这样的值会以 SEVERE 堆栈失败并使用声明默认值；框架现在只在内存中把 `Vector` 的 `x`、`y`、`z` 放宽为浮点数——文件保持 `y: 64`，未改动的保存不写入，其它类型不放宽。模块在内存中删除且未保存的映射分组，编辑其下的键会被拒绝，注明“not found in memory”。
-- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件只提示一次（6.2.5 在加载时就会重写它：启动时写入声明默认值，重载时写入运行中的值；关闭时再用模块内存中的值重写一次）。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不会阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。6.2.5 及以前在服务器关闭时由 `saveAll()` 用模块内存中的值重写所有已注册的配置文件，6.3.0 直接取消，没有过渡期。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载时释放该模块的配置实体（6.2.5 不释放）。已知限制：#578 中仍适用的是符号链接后跟 `..` 的临时文件路径和 Unicode 文件的样式检测耗时；锚点容器与别名注释两项不会发生，因为任何写入路径都不写入使用锚点、别名或合并键的文件。#580（见上文读取器无法读取的排版）和多文件崩溃限制 #545 仍存在。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
+- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件只提示一次（6.2.5 在加载时就会重写它：启动时写入声明默认值，重载时写入运行中的值；关闭时再用模块内存中的值重写一次）。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不会阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。6.2.5 及以前在服务器关闭时由 `saveAll()` 用模块内存中的值重写所有已注册的配置文件，6.3.0 直接取消，没有过渡期。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载时释放该模块的配置实体（6.2.5 不释放）。已知限制：#578 中仍适用的是符号链接后跟 `..` 的临时文件路径和 Unicode 文件的样式检测耗时；锚点容器与别名注释两项不会发生，因为任何写入路径都不写入使用锚点、别名或合并键的文件。#580（见上文读取器无法读取的排版）和多文件崩溃限制仍存在（#545 的 6.4.0 单文件 helper 不解决多文件事务）。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
 
 ## What the version number means
 
@@ -1465,6 +1674,14 @@ version number is used for:
 So: the *ordering* of module version numbers is consumed by machines, while the *meaning* of
 MAJOR/MINOR/PATCH is not — that part is addressed to server owners. On the framework side both are
 machine-consumed, which is why its version number does not have the same freedom.
+
+Libraries the framework delivers at runtime through its `plugin.yml` `libraries:` block (XSeries,
+HikariCP, ByteBuddy and the others in [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
+are not covered by the framework's version number either. They keep their own versioning, and a
+framework MINOR or PATCH release may move one of them to a new major version; that release's notes
+and its entry in this file name the library's removals (for example XSeries 13.7.1 to 14.0.0 in
+6.3.1). A module that calls such a library directly declares it itself and checks those notes when
+the framework moves it.
 
 ## Declaring the dependency
 
@@ -2028,6 +2245,9 @@ This section governs the third kind.
   cleanup failures are attached as suppressed exceptions and do not stop the remaining cleanup attempts. If a
   cleanup operation itself fails, some of its resources may remain until restart; inspect the suppressed exceptions
   before reconnecting. This does not roll back arbitrary side effects performed by plugin code during initialization.
+  The cleanup is keyed by plugin name: a second `registerExternal` call for a plugin that is still registered is
+  accepted, and if it then fails in one of these stages, its cleanup also removes the first registration's tasks,
+  EventBus handlers, commands and listeners. Call `unregisterExternal` before registering the same plugin again.
 - Naming a missing required plugin instead of printing a class-not-found trace (#554). A module
   that cannot load because a plugin in its `plugin.yml` `depend:` list is not installed or not
   enabled used to log `Cannot initialize plugin for <main class>: <missing class>` with a
@@ -2207,6 +2427,12 @@ This section governs the third kind.
   Modules without a dependency between them already loaded in alphabetical order of their class names
   and still do. An install that relied on one copy winning by listing order may see the other one win
   after upgrading, once, and then the same one on every start and file system.
+- As of 6.4.0, when two or more modules share a main-class simple name (for example two different `Main`
+  classes) and another module names that simple name in `@PluginDependency` (`depends`, `softDepends`,
+  `loadBefore`) or a `plugin.yml` `loadAfter`, one start-up WARNING lists every fully qualified class and the
+  module the name resolves to - the last discovered, unchanged from earlier releases
+  ([#841](https://github.com/UltiKits/UltiTools-Reborn/issues/841)). Name the intended module by its
+  `plugin.yml` `name:` instead. A shared simple name that nothing references is not reported.
 - Two or more JARs in the modules folder declaring the same `plugin.yml` `main:` class are reported by
   one start-up WARNING naming every one of them and the JAR the classes load from (UltiTools-Dev-Doc#96).
   The copies are not loaded side by side: the classes come from the first such JAR in file-name order. A JAR
@@ -2473,7 +2699,11 @@ This section governs the third kind.
   `IllegalArgumentException` is not normalised to `DataAccessException`; a missing-row `updateIf`
   returns `false` before evaluating its condition. Module authors must use finite query values,
   including for `EQUAL` and `updateIf`, rather than rely on a common rejection type or retry a
-  non-finite threshold. A numeric field's column that holds non-numeric text,
+  non-finite threshold. **Known limitation (#815): a null comparison value is not portable either.** JSON refuses a
+  non-`EQUAL` condition whose value is null with `DataAccessException` (`DATA_ENTITY_INVALID`), while SQLite and MySQL
+  compare it with the text `null`; on JSON an `EQUAL` condition whose value is null, and `del(WhereCondition.empty())`,
+  throw `NullPointerException`. Module authors must not pass a null comparison value or an empty condition to `del`.
+  A numeric field's column that holds non-numeric text,
   written by hand or by another program, compares on SQLite as its leading number (`'abc'` as 0,
   `'12abc'` as 12), while JSON compares that row as text. See `ultitools.storage.where-comparisons`
   in `FEATURES.md`.
@@ -2697,9 +2927,9 @@ This section governs the third kind.
   around the atomic rename, which adds the cost of two disk syncs to each credential write.
   When both the pre-6.3.0 `plugins/UltiTools/data.json` and the current `.ultikits/credentials.json` under the server
   root exist, the old copy is removed only after the current file has been read as a credential document - any JSON
-  object, `{}` included ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672)); the current file's content
+  object, `{}` included, and also a JSON array such as `[]`, which the reader parses as the empty document ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672)); the current file's content
   wins and is never overwritten with the old one's. A current file that is empty, whitespace-only, the JSON literal
-  `null`, not valid JSON, a string or a number instead of an object, or not a regular file does not count: both files are
+  `null`, not valid JSON, a string or a number instead of an object or array, or not a regular file does not count: both files are
   kept unchanged, one WARNING names both paths (never any content), no server UUID is generated and no UltiCloud token is
   written or cleared, and `CredentialStore.write` refuses with a `DataAccessException` while a readable pre-6.3.0 copy
   waits behind such a file. The next access after the current file is fixed - restored from a backup, or moved out of the
@@ -2708,7 +2938,7 @@ This section governs the third kind.
   unreadable current file left no readable credential at all. Migration to a current file that does not exist yet is
   unchanged: the copy is written, read back and compared with the old data before the old file is removed.
 
-  中文补充：两份凭据文件并存时，只有当前文件（服务器根目录下的 `.ultikits/credentials.json`）能被读成凭据文档（任何 JSON 对象，包括 `{}`）之后，才会删除 6.3.0 之前的旧副本（`plugins/UltiTools/data.json`）（#672）；以当前文件的内容为准，不会被旧内容覆盖。当前文件为空、只含空白、为 `null`、不是合法 JSON、是字符串或数字而不是对象，或不是普通文件时，两个文件都原样保留，一条 WARNING 写明两个路径（不含任何文件内容），不生成服务器 UUID，也不写入或清除 UltiCloud 令牌；旧副本可读而当前文件不可读期间，`CredentialStore.write` 以 `DataAccessException` 拒绝。修好当前文件（从备份恢复，或把它移开让旧副本迁移）之后的下一次访问会完成清理。当前文件无法打开（权限不足）时同样保留两个文件，并使这次访问失败。此前只要当前文件存在就会删除旧副本，当前文件不可读时就不剩任何可读的凭据。当前文件尚不存在时的迁移不变：先写入、读回并与旧数据比较，之后才删除旧文件。
+  中文补充：两份凭据文件并存时，只有当前文件（服务器根目录下的 `.ultikits/credentials.json`）能被读成凭据文档（任何 JSON 对象，包括 `{}`；JSON 数组如 `[]` 也一样，读取器把它解析为空文档）之后，才会删除 6.3.0 之前的旧副本（`plugins/UltiTools/data.json`）（#672）；以当前文件的内容为准，不会被旧内容覆盖。当前文件为空、只含空白、为 `null`、不是合法 JSON、是字符串或数字而不是对象或数组，或不是普通文件时，两个文件都原样保留，一条 WARNING 写明两个路径（不含任何文件内容），不生成服务器 UUID，也不写入或清除 UltiCloud 令牌；旧副本可读而当前文件不可读期间，`CredentialStore.write` 以 `DataAccessException` 拒绝。修好当前文件（从备份恢复，或把它移开让旧副本迁移）之后的下一次访问会完成清理。当前文件无法打开（权限不足）时同样保留两个文件，并使这次访问失败。此前只要当前文件存在就会删除旧副本，当前文件不可读时就不剩任何可读的凭据。当前文件尚不存在时的迁移不变：先写入、读回并与旧数据比较，之后才删除旧文件。
 - **A remote file request uses the object it authorizes** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
   as of v6.3.0). The remote file API (`read`, `write`, `list`, `delete`) used to judge one form of the requested path and
   use another: the check ran on the path with every `name/..` pair removed textually, while the I/O used the path as
@@ -2746,7 +2976,27 @@ This section governs the third kind.
   case is treated as an entry rather than as a real directory: a non-empty directory requested in the wrong case is
   refused ("directory not empty") and not deleted, and an empty one is deleted without `recursive`.
 
+  More known limitations of the remote file API (#691), documented rather than defended. The 6.3.1 `files.delete`
+  never deletes a directory (it answers `is_directory`), so the directory cases in this list concern only the
+  deprecated v1 file handler, which is scheduled for removal.
+  - Windows junctions are covered by a unit test with an injected link lookup, not by a run on a real Windows host.
+    On Windows, try a panel delete of a junction on a throw-away tree before relying on it.
+  - A file name that the platform cannot map to a path (for example a name that is not valid in a non-UTF-8 file
+    name encoding) makes the deprecated v1 recursive delete refuse the whole request with a failure reply, recorded
+    as `ALLOWED`. The protected-descendant check finishes before anything is removed, so nothing is half-deleted.
+    Run the server with a UTF-8 file name encoding.
+  - A path string that cannot be parsed as a path (for example one containing a NUL character) reaches the
+    deprecated v1 handler before its error handling: it gets no reply and writes no action-log line. The 6.3.1
+    `files.*` handlers validate the path first and answer `invalid_message`.
+  - The deprecated v1 recursive delete uses recursion, so a directory tree thousands of levels deep can end in a
+    `StackOverflowError`. The 6.3.1 `files.delete` cannot recurse because it refuses directories.
+  - If the read-back of a migrated credential file does not match what was written, the old copy is kept and one
+    WARNING is logged; no automated test reaches that branch (the test seams cover only a failing path and a failing
+    write), so it is verified by code reading. Do not edit credential files while the server runs.
+
   中文补充：**远程文件请求使用的就是被授权的那个对象**（自 6.3.0 起，#672）。远程文件 API（`read`、`write`、`list`、`delete`）原来判断的是路径的一种形式，实际使用的却是另一种：检查时先把路径中每个 `名称/..` 在文本上消去，I/O 却用原样的路径，所以符号链接后面的 `..` 可能到达检查从未看过的可编辑根之外的文件，向悬空链接写入还会创建链接指向的目标。现在每个请求只在文件系统上解析一次，这一个结果既是被判断的对象，也是被读取、写入、列出或删除的对象。服主和面板作者会看到：真实目标在所有可编辑根之外的请求，以可配置的 `ultipanel.files.editable-roots` 拒绝，`list` 会把这样的条目标为 `accessible: false`、`reason: OUTSIDE_ROOTS`（指向根外文件的别名原来被列为可访问）；无法被安全定位的路径一律拒绝且无法通过配置放行——路径中尚不存在的部分里的 `.` 或 `..`、悬空或循环的符号链接、无法搜索的目录，以及不指向任何普通条目的 `delete`（`/`、`.`、`dir/.`、`dir/..`，这些原来会清掉它们所折叠到的目录的内容）；根内指向受保护文件（凭据文件、远程操作日志目录）的符号链接，与该文件本身一样被拒绝，`list` 将其标为 `PROTECTED_CREDENTIAL`；对末端符号链接的 `delete`——无论指向文件、指向目录（`recursive` 缺省、`false` 或 `true`）还是什么都不指向——只删除链接本身，目标及其下的一切不动（带 `recursive: true` 删除指向目录的链接，原来会先清空链接所指的目录）；对真实目录的递归 `delete` 也绝不跟随被删目录树内部的符号链接：该链接作为链接被删除，其目标不动（树内指向根外目录或操作日志目录的链接，原来会让其目标被清空；指向凭据目录的链接，原来会使整个删除被拒绝）。链接与 junction 无论是删除目标本身还是位于被删除的树内，都不会被跟随；受保护位置按真实路径判断，与请求匹配到哪个可编辑根、根的配置顺序无关（根为 `[plugins/shadow, plugins]` 且 `plugins/shadow` 链接到 `plugins/UltiTools` 时，经哪个根都到不了操作日志目录），因此 `list` 也像对待其他别名一样按目标标记指向目录的链接。每次拒绝都在远程操作日志里记为一条 `DENIED`；此前在磁盘上解析路径时才发生的拒绝被记为 `ALLOWED`。获准之后因普通原因失败的请求（文件不存在、类型不符、写入不带内容）仍是一条 `ALLOWED` 加一条失败回复，`list` 仍只为目录记一条，不会每行一条。只在根内活动的面板看不到差别；通过链接后面的 `..` 到达文件的面板现在会被拒绝，想让那些内容可达的服主，请把真实目录加入 `ultipanel.files.editable-roots`。已知限制：另一个本地进程若在检查与使用之间把路径中的某一段换成链接，仍可改变这一次请求的去向（面板本身无法创建链接）；服主以其他名称放进可编辑根的、指向凭据文件的硬链接，按路径无法与普通文件区分，所以不要把凭据文件硬链接进可编辑根；在不区分大小写的 macOS 文件系统上，受保护的 `plugins/UltiTools/security` 目录名的大小写变体不会被无条件拒绝层识别。在这类文件系统上，以错误大小写指定目录的请求会被当作普通条目而非真实目录处理：以错误大小写请求删除非空目录会被拒绝（“directory not empty”）而不会被删除，空目录则无需 `recursive` 即被删除。
+
+  中文补充（远程文件 API 的更多已知限制，#691，只写文档不做防御）：6.3.1 的 `files.delete` 从不删除目录（以 `is_directory` 回复），所以下面涉及目录的几条只与计划移除的已弃用 v1 文件处理器有关。Windows junction 只由注入链接查询的单元测试覆盖，没有在真实 Windows 主机上跑过，在 Windows 上依赖它之前请先在一次性目录树上试删一个 junction。平台无法映射成路径的文件名（例如在非 UTF-8 文件名编码下无效的名称）会让已弃用的 v1 递归删除以失败回复拒绝整个请求并记为 `ALLOWED`；受保护后代检查在删除任何东西之前完成，所以不会删到一半，请让服务器使用 UTF-8 文件名编码。无法解析为路径的字符串（例如含 NUL 字符）会在已弃用 v1 处理器的错误处理之前出错：没有回复，也不写操作日志行；6.3.1 的 `files.*` 处理器先校验路径并回复 `invalid_message`。已弃用的 v1 递归删除使用递归，数千层深的目录树可能以 `StackOverflowError` 结束；6.3.1 的 `files.delete` 拒绝目录，不会递归。迁移后的凭据文件读回与写入内容不一致时，保留旧副本并记一条 WARNING；没有自动化测试覆盖这个分支（测试接缝只覆盖路径失败和写入失败），只靠阅读代码验证；服务器运行期间不要编辑凭据文件。
 - **`update_config` is gated by the target it routes to** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
   as of v6.3.0). The message was gated by `ultipanel.capabilities.file-write` whatever it carried, although a `fileName` of
   `server_properties` is handed to the server-properties editor (a read without content, a write with it). A message for
@@ -2792,7 +3042,10 @@ This section governs the third kind.
   `config.yml` (which now also lists the blocklist and the editable roots) answer for them. A file that holds one of
   these settings as a flat dotted key (`ultipanel.capabilities.logs: false`) or a dotted section key, where the
   inserted nested section would replace it as the server reads the file, is not written either: one WARNING names the
-  file and that setting (never a value), and the jar defaults answer for the missing keys. Measured on older
+  file and that setting (never a value), and the jar defaults answer for the missing keys. If the file changes on disk while this check runs, or the
+  inserted text cannot be read back the way the server reads it, that WARNING names `the whole file` instead of a
+  setting; nothing is written and the next start retries
+  ([#828](https://github.com/UltiKits/UltiTools-Reborn/issues/828)). Measured on older
   releases: a 6.0.9 or 6.1.x `config.yml` is written insert-only too; the `config.yml` of every 6.0.x release before 6.0.9
   (6.0.0 to 6.0.8) holds `trustIp: [ ]` (spaces inside flow brackets), so it is refused at every start with that one
   WARNING naming line 14, the missing keys run on the jar's defaults, and nothing is written - only a direct upgrade
@@ -2811,14 +3064,15 @@ This section governs the third kind.
   the field and its constraint; the operator's file is not rewritten to a default. In 6.2.5,
   validation first tried to construct a default instance of the config class through its `(String)`
   constructor, passing the config path. If that succeeded, a violating value was reset to its
-  declared default and the file saved; if construction failed (including a missing constructor),
+  declared default, and the file was saved only when a value had been reset and the entity had an
+  owning plugin; if construction failed (including a missing constructor),
   validation was skipped with only a FINE diagnostic. The in-memory default for an empty
   `@NotEmpty` list, set or map is a separate case, described in the next entry.
 
   中文补充：**配置约束违规时拒绝加载或重载，不再改写文件**（自 6.3.0 起）。违反 `@Range`、`@Size`、
   `@Pattern` 或文本上 `@NotEmpty` 的值会让模块在加载时被拒绝；`/ul reload` 时拒绝这次重载并保留运行中的值，
   错误会写明字段和约束，不会把服主的文件改写成默认值。6.2.5 会先通过配置类的 `(String)` 构造器传入配置路径来
-  创建默认实例：成功时才会校验、把违规值重置为声明默认值并保存文件；构造失败（包括没有这个构造器）时跳过校验，
+  创建默认实例：成功时才会校验并把违规值重置为声明默认值，只有确实重置了值且实体有所属插件时才保存文件；构造失败（包括没有这个构造器）时跳过校验，
   只记录 FINE 诊断。空的 `@NotEmpty` 列表、集合或映射在内存中使用默认值，属于下一条说明的独立情况。
 - **`@NotEmpty` on a list, set or map now acts** ([#630](https://github.com/UltiKits/UltiTools-Reborn/issues/630), as of
   v6.3.0, maintainer decision of 2026-10-06). Before 6.3.0 the check read only the value's text, so an empty list (`[]`)
@@ -2905,6 +3159,30 @@ This section governs the third kind.
   现在帧内请求的重建在下一帧执行。**已知限制：**这样的坏页面只要还开着，仍会每个 tick 重试一次，每次失败都会记录日志。
   请修复该组件：`State` 不应从 `initState` 抛出异常，应在其中捕获失败并渲染错误状态。
 
+### Behavioral changes that do need one
+
+- A documented default value flipping.
+- Moving from silent degradation to failure (for example, a missing optional dependency was
+  previously skipped and is now rejected at load time).
+- A change in return-value semantics (previously an empty collection, now `null`, or the reverse).
+- A change in the timing or thread of a side effect (previously synchronous, now asynchronous).
+
+The migration period runs in two steps:
+
+- **Version N**: keep the old behaviour, but emit a **one-shot** WARNING when the path is taken. The
+  warning text must name the target version and a feedback issue link, for example:
+
+  ```
+  [UltiTools] Module <name> relies on the old behaviour of X (<one-line description>).
+  This behaviour will change to <new behaviour> in 6.4.0. See <issue link> to migrate.
+  This warning is printed once per startup.
+  ```
+
+- **Version N+1**: switch to the new behaviour and remove the warning.
+
+This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
+tell people which floor they are standing on before removing it.
+
 ### Declarative GUI known limitations and author guidance
 
 The limitations collected in [#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)
@@ -2945,8 +3223,10 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   propagate to its caller. A task that keeps requeuing itself can keep that drain running.
   Use normal scheduled frames in production, not `flush()` to force an update.
 - **A queued task's `Error` is not isolated like an `Exception`.** The per-task handler catches
-  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the server
-  scheduler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
+  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the caller of
+  the frame: the server scheduler, or, when the frame runs inline (a `scheduleFrame` or `setState` call
+  on the main thread with no frame running and no delay pending), the code that made that call, such as
+  an event handler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
   ordinary module failure handling or assume every throwable is caught by the GUI scheduler.
 - **One `GridView` cell must produce one rendered leaf.** A wrapper may contain that leaf at
   any depth, but several leaves under the same cell all receive the same computed slot and
@@ -2954,29 +3234,13 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   computed slot wins, including in a multi-leaf cell. Put separately displayed items in separate
   cells instead of relying on collision or click-handler ordering.
 
-### Behavioral changes that do need one
-
-- A documented default value flipping.
-- Moving from silent degradation to failure (for example, a missing optional dependency was
-  previously skipped and is now rejected at load time).
-- A change in return-value semantics (previously an empty collection, now `null`, or the reverse).
-- A change in the timing or thread of a side effect (previously synchronous, now asynchronous).
-
-The migration period runs in two steps:
-
-- **Version N**: keep the old behaviour, but emit a **one-shot** WARNING when the path is taken. The
-  warning text must name the target version and a feedback issue link, for example:
-
-  ```
-  [UltiTools] Module <name> relies on the old behaviour of X (<one-line description>).
-  This behaviour will change to <new behaviour> in 6.4.0. See <issue link> to migrate.
-  This warning is printed once per startup.
-  ```
-
-- **Version N+1**: switch to the new behaviour and remove the warning.
-
-This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
-tell people which floor they are standing on before removing it.
+  中文补充：**声明式 GUI 的已知限制与编写建议**（[#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)）。
+  `initState` 先调用 `setState` 再抛出异常时，页面开着就会每帧重试并记录日志，请在组件内捕获失败并渲染错误状态；
+  需要保留 State 时请为同级子组件使用稳定且互不重复的 `SlotKey`；`State.dispose()` 应可重复调用且不抛异常；
+  单子组件包装器里替换失败后请关闭并重新打开界面；不要在 `build` 中关闭界面；首次构建的异常会从
+  `DeclarativeGui.onOpen` 抛出；`GuiScheduler.flush()` 仅供测试；队列任务抛出的 JVM `Error` 不会被逐任务捕获，
+  会抛给这一帧的调用方（服务器调度器，或帧在主线程内联执行时发起 `scheduleFrame`/`setState` 调用的代码）；
+  `GridView` 的每个格子只应渲染一个叶子组件。
 
 ### Command bodies run at dispatch (6.3.0) — changed without a migration period
 
@@ -3047,7 +3311,11 @@ Each corrects behaviour that contradicted the documentation or left state held b
   each validator that passed; its default does nothing, so existing validators are unaffected, and a
   refused dispatch runs no `onComplete`, so it applies no cooldown. Every `onRefused` and every
   `onComplete` hook now runs even when an earlier validator's hook throws; the first exception is
-  rethrown afterwards.
+  rethrown afterwards. Because command bodies run at dispatch, that exception reaches the caller: a
+  player or the console sees Bukkit's "An internal error occurred while attempting to perform this
+  command", and in a nested dispatch (a command body that runs another command) the outer command
+  fails too. The rule is kept on purpose (every hook runs, so no cooldown or
+  lock is left half-applied); a validator's `onComplete` and `onRefused` should therefore not throw.
 - **`@Scheduled` methods declared on a superclass of a bean are scheduled** (#532), as the annotation's
   javadoc always said. An overridden method is scheduled once, with the most derived declaration's
   annotation; an override without `@Scheduled` is not scheduled. A method that previously never ran
@@ -3109,7 +3377,8 @@ Each corrects behaviour that contradicted the documentation or left state held b
     down - one built with `new` and registered by hand, outside the container - keeps a shared
     validator registered while that executor remains reachable. Garbage collection alone does not
     trigger unregister: a later executor teardown prunes cleared executor references before deciding
-    which validators to release. The effect is delayed cleanup, never a wrong verdict.
+    which validators to release. The effect is delayed cleanup, never a wrong verdict; if no other
+    executor sharing the validator is torn down later, it can stay registered until shutdown.
     **Let the module container own its executors.**
   - **The inherited `@CmdTarget` check isolates a missing signature dependency to one class.** The
     load check for a method-level `@CmdTarget` that widens or switches the class-level value covers
@@ -3134,7 +3403,7 @@ Each corrects behaviour that contradicted the documentation or left state held b
   且恰在另一个共用它的模块卸载的同一时刻，卸载可能释放共享的锁校验器，而那条命令仍在执行。请勿在执行器之间共用同一个自定义链，
   尤其不要跨模块共用；每个执行器使用自己的链。(2) 共享校验器在最后一个共用它的执行器被销毁前一直登记在玩家缓存管理器中；不由模块容器
   销毁的执行器（用 `new` 创建并手动注册）在仍可达时会让它保持登记。垃圾回收本身不会触发注销；后续执行器销毁时才会清理失效的弱引用，
-  再决定释放哪些校验器。只是清理延后，不会产生错误的判定。请让容器持有执行器。(3) 继承的 `@CmdTarget` 检查在组件扫描时读取整条父类链：
+  再决定释放哪些校验器。只是清理延后，不会产生错误的判定；如果之后没有其他共用它的执行器被销毁，它会一直登记到服务器关闭。请让容器持有执行器。(3) 继承的 `@CmdTarget` 检查在组件扫描时读取整条父类链：
   父类方法签名引用了缺失的可选依赖时，目录和 JAR 扫描都会逐类捕获 `NoClassDefFoundError`，跳过该命令类并记录警告与扫描摘要，
   继续扫描其余类，不会中断整个组件扫描。请让可选依赖的类型不出现在命令基类的方法签名中，或只在依赖存在时加载相应的命令类。
   (4) 后续参数的补全只在加入字面量时检查是否已有相同字符串，不会对最终合并列表去重；参数补全器返回与已提供字面量相同的字符串时，
@@ -3519,8 +3788,9 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   the directory <directory> to disk ...`). A commit made while that happens is committed and survives a server
   crash; it survives a power loss only once the next flush has completed. A flush or a start-up recovery that
   meets the failure fails and is repeated; records are retained until their deletion step. If the final force
-  after journal unlinking fails, the records are already absent, and a retry finding an empty journal does not
-  force that directory again.
+  after journal unlinking fails, the records are already absent, and a start-up recovery retry finding an empty
+  journal does not force that directory again. After a failed checkpoint, the next flush writes a new checkpoint
+  record, and that write forces the journal directory, which also persists the earlier unlinks.
 - Reopening an empty journal can reuse internal sequence numbers. Reuse alone does not lose data: the risk of
   an old deleted record reappearing requires an unsupported or failed durability barrier and an additional
   power-loss window before a successful directory force establishes the new state. The empty-retry caveat
@@ -4114,12 +4384,19 @@ So **a module that uses either binding must declare `api-version: 630`** in its 
 floor makes an older framework refuse the module at load, rather than run it with the wrong timing.
 Raising the `pom.xml` pin alone does not do this, for the reason given above. So that the mistake
 surfaces on the version you develop against, 6.3.0 itself refuses a module that uses a binding while
-declaring a lower `api-version`, naming the module, the binding and the required floor. A bound
-`@Scheduled` must also be synchronous: `async = true` together with a binding is refused at load,
-because a reload can keep an async task's place in its cycle only by predicting when the server
-dispatches async work (#535 tracks a design that observes it instead). The binding is
-additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
+declaring a lower `api-version`, naming the module, the binding and the required floor. The binding
+is additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
 and need no change.
+
+**Config-bound async scheduling (#535).** `async = true` can be combined with a binding. A synchronous
+trigger records its fire tick on the main thread, where `/ul reload` also runs, before dispatching the
+method body with a one-tick async delay. The body starts one scheduler heartbeat after its trigger,
+or later under load. Reload preserves the trigger's cycle (last observed fire + new period, or next
+tick if overdue), not the worker's start/completion time, and leaves work already dispatched alone.
+Slow async bodies may overlap and must not use thread-unsafe Bukkit APIs. Unload cancels the trigger
+and queued workers; a body already executing may finish. Literal async scheduling and sync bindings
+are unchanged. Older framework versions that support only sync bindings refuse the async combination
+at load rather than silently running it synchronously.
 
 **A bound field must not also carry a module `@Range`.** The binding's own range is the field's
 range: 1 to `Integer.MAX_VALUE / 20` seconds for a period or delay, and 0 (no cooldown) to
@@ -4169,6 +4446,65 @@ descriptor change can no longer pass CI unnoticed.
 SnakeYAML 1.32 compatibility harness; the cited Paper 1.19.2 boot comparison used build 307,
 not build 163. This distinguishes those measurements without changing the supported floor.
 
+### Supporting servers below 1.21 (as of v6.4.0)
+
+The 6.4.0-line UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade target the same
+**Paper 1.19.2 build 163+** floor as the framework. Below Minecraft 1.21 these modules require
+**UltiTools 6.4.0+**; once their module-side version gates land, they refuse to start with an
+upgrade message on an older framework rather than run without adaptation.
+On Minecraft 1.21+ they retain compatibility with UltiTools 6.3.x. This is a conditional runtime
+requirement, not an instruction to raise every module's `api-version` unconditionally.
+
+**Binary shape, not missing capabilities.** At module-class load time the framework uses one generic
+invoke-kind alignment rule against the running server's API, not a per-type compatibility list.
+In particular, `InventoryView` is an abstract class on Paper 1.19.2–1.20.6 and an interface from
+1.21: the loader aligns virtual/interface calls and method-handle references without changing the
+receiver, member name or descriptor. No operator switch is needed or provided. A missing method
+remains missing; an incompatible superclass/interface declaration or affected special invocation is
+refused rather than partially rewritten. This adaptation applies to framework-loaded module classes,
+not to standalone Bukkit plugins loaded by Paper. See [the invoke-kind change](https://github.com/UltiKits/UltiTools-Reborn/pull/809).
+
+**Warnings do not mean recovery.** At startup the linkage audit emits **one WARNING per unresolved
+reference in the module's own component-scanned packages** when no rewrite rule covers that reference.
+Unresolved references in bundled third-party classes are grouped into **one INFO summary line per
+top-level library package**. The audit continues loading the module; it does not reject the
+module merely because the audit found a reference. If the container actually skips a bean because it
+references an absent server class, a separate warning names the module, bean, missing class and all
+lost event handlers, including inherited handlers. Those handlers remain unregistered. The framework
+neither substitutes missing capabilities nor renames events, and it does not isolate individual
+handlers inside one class. See [the audit and skipped-bean diagnostics](https://github.com/UltiKits/UltiTools-Reborn/pull/810).
+
+**Module-author pattern for optional events.** Keep required handlers in a class whose signatures do
+not refer to optional server types. Put optional handlers in separate classes outside **every**
+`@UltiToolsModule.scanBasePackages` **string prefix** for compatibility with older frameworks
+(before the 6.3.2 scan fix), which match the raw prefix rather than a complete Java package:
+for a scan root `com.ultikits.plugins.login`, `com.ultikits.plugins.logincompat` is unsafe on those
+older frameworks, while `com.ultikits.plugins.compat.login` is outside that prefix. From the 6.3.2
+scan fix onward, sibling packages sharing only a textual prefix are not scanned. Check all declared
+roots. Probe the optional
+event with `Class.forName` before loading/constructing and explicitly registering its listener; do not
+make it an automatically scanned IoC component. Unregister manually registered listeners on module
+unload. One absent parameter type can prevent reflection of the entire class, so a probe does not
+protect required handlers left in that same class. UltiLogin's [equipment-swap isolation](https://github.com/UltiKits/UltiLogin/pull/84)
+and [older-event selection](https://github.com/UltiKits/UltiLogin/pull/85) demonstrate this layout.
+
+The modules, not the framework, choose and document these remaining differences:
+
+- **UltiTrade:** on Paper 1.19.2–1.19.3 an already-open trade window's title does not refresh until
+  reopened; its contents still redraw. When an offline partner has no usable last location, their
+  cancelled stake goes to the original trade initiator, immediately if online or stored for the
+  initiator's next login otherwise — never to a synthetic world-spawn location. See
+  [the module's return policy and title limitation](https://github.com/UltiKits/UltiTrade/pull/92).
+- **UltiLogin:** the module selects the modern Bukkit mount event when available, otherwise the legacy
+  Spigot event, never both. Paper 1.20.4 builds before 386 need the legacy event; from build 386 the
+  server fires the modern event even though both classes exist. Pick-item and sign-editor-open hooks
+  are probed independently; where no complete equivalent event exists, only that protection is
+  unavailable and a named warning is emitted. The dedicated equipment-slot-swap hook is absent on
+  measured Paper 1.21.1–1.21.4 too; off-hand swaps are not an equivalent, and ordinary right-click
+  equipping remains guarded by the core interaction listener. Separate optional classes preserve the
+  remaining protections. See [UltiLogin's isolation](https://github.com/UltiKits/UltiLogin/pull/84) and
+  [capability-specific fallback](https://github.com/UltiKits/UltiLogin/pull/85).
+
 ### Where runtime dependencies come from
 
 The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and UniversalScheduler
@@ -4191,8 +4527,8 @@ delivered at all; the framework uses Paper's native Adventure (see the plan 18-3
 above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
 delivered through the `libraries:` route in the table instead, the same way HikariCP already
 was. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
-along for the ride: declare it yourself (`com.github.cryptomorin:XSeries:13.7.1`, or your own
-pinned version) if your module uses it.
+along for the ride: declare it yourself (the version in the framework's `plugin.yml` `libraries:` block,
+`com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1, or your own pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
 category, pinning a version in this repository is an effective fix. For anything in the second, the

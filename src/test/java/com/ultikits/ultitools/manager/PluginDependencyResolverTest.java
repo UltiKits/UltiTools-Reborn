@@ -369,6 +369,60 @@ class PluginDependencyResolverTest {
             assertTrue(result.indexOf(alpha) < result.indexOf(before));
         }
 
+        private List<String> warningsWhileResolving(List<Class<? extends UltiToolsPlugin>> input) throws Exception {
+            List<String> warnings = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    if (record.getLevel().intValue() >= Level.WARNING.intValue()) {
+                        warnings.add(record.getMessage());
+                    }
+                }
+
+                @Override
+                public void flush() {
+                    // No-op: records are captured synchronously in publish().
+                }
+
+                @Override
+                public void close() {
+                    // No-op: nothing held open that needs releasing.
+                }
+            };
+            testLogger.addHandler(handler);
+            try {
+                resolver.resolve(input);
+            } finally {
+                testLogger.removeHandler(handler);
+            }
+            return warnings;
+        }
+
+        @Test
+        @DisplayName("#841: a referenced simple name shared by two modules is named once with every class and the winner")
+        void ambiguousReferencedSimpleNameIsWarnedOnce() throws Exception {
+            List<String> warnings = warningsWhileResolving(Arrays.asList(alpha, beta, ConsumerOfMain.class));
+
+            List<String> ambiguous = new ArrayList<>();
+            for (String warning : warnings) {
+                if (warning.contains("main class simple name 'Main'")) {
+                    ambiguous.add(warning);
+                }
+            }
+            assertEquals(1, ambiguous.size(), "warnings: " + warnings);
+            String line = ambiguous.get(0);
+            assertTrue(line.contains(alpha.getName()) && line.contains(beta.getName()), line);
+            assertTrue(line.contains("resolve this name to '" + beta.getName() + "'"), line);
+        }
+
+        @Test
+        @DisplayName("#841: a shared simple name that no module references is not warned about")
+        void unreferencedSharedSimpleNameIsNotWarned() throws Exception {
+            List<String> warnings = warningsWhileResolving(Arrays.asList(alpha, beta));
+
+            assertTrue(warnings.stream().noneMatch(w -> w.contains("main class simple name")), warnings.toString());
+        }
+
         @Test
         void simpleAliasKeepsItsPreviousLastDiscoveredTarget() throws Exception {
             List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
