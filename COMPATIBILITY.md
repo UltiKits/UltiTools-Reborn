@@ -598,6 +598,10 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
 - a comment that closes a section after a blank line, indented deeper than the key that follows it, and any comment
   indented deeper than the key below it (including in a comment-only file);
 - two indentation widths in one file (two spaces in one section, four in another);
+- raw non-ASCII text and double-quoted `\u`, `\U` or `\x` escapes mixed in one file: the renderer keeps one
+  Unicode spelling per file, so the other spelling's line is named and the write refused (behaviour unchanged since
+  6.3.0, [#836](https://github.com/UltiKits/UltiTools-Reborn/issues/836)). Use one spelling per file - raw UTF-8
+  (recommended) or escapes throughout;
 - mixed line endings (CRLF on some lines, LF on others);
 - a plain value continued onto the next line, a tab inside a value, an explicit `? key`, an explicit tag (`!!str`);
 - a file holding only a byte-order mark (an emptied file saved as UTF-8 with BOM; the reason names the mark);
@@ -1313,7 +1317,7 @@ touched files with in-process rollback.
 Known limits remain explicit, not guaranteed away: [#578](https://github.com/UltiKits/UltiTools-Reborn/issues/578)
 records a remaining temporary-file identity limit through a symlink followed by `..`. Avoid that path combination and
 use the same resolved real path when staging and loading configuration files. Its quadratic style-detection finding is
-fixed: scalar mark offsets no longer rescan the text from the beginning for each scalar. Its anchored-container and
+fixed as of 6.3.2: scalar mark offsets no longer rescan the text from the beginning for each scalar. Its anchored-container and
 alias-comment items cannot occur, because no write path writes a file that uses anchors, aliases or merge keys.
 A valid block anchor with a comment before
 its first child key cannot be read and the file is protected as unparseable
@@ -2803,7 +2807,10 @@ This section governs the third kind.
   `config.yml` (which now also lists the blocklist and the editable roots) answer for them. A file that holds one of
   these settings as a flat dotted key (`ultipanel.capabilities.logs: false`) or a dotted section key, where the
   inserted nested section would replace it as the server reads the file, is not written either: one WARNING names the
-  file and that setting (never a value), and the jar defaults answer for the missing keys. Measured on older
+  file and that setting (never a value), and the jar defaults answer for the missing keys. If the file changes on disk while this check runs, or the
+  inserted text cannot be read back the way the server reads it, that WARNING names `the whole file` instead of a
+  setting; nothing is written and the next start retries
+  ([#828](https://github.com/UltiKits/UltiTools-Reborn/issues/828)). Measured on older
   releases: a 6.0.9 or 6.1.x `config.yml` is written insert-only too; the `config.yml` of every 6.0.x release before 6.0.9
   (6.0.0 to 6.0.8) holds `trustIp: [ ]` (spaces inside flow brackets), so it is refused at every start with that one
   WARNING naming line 14, the missing keys run on the jar's defaults, and nothing is written - only a direct upgrade
@@ -2916,6 +2923,30 @@ This section governs the third kind.
   现在帧内请求的重建在下一帧执行。**已知限制：**这样的坏页面只要还开着，仍会每个 tick 重试一次，每次失败都会记录日志。
   请修复该组件：`State` 不应从 `initState` 抛出异常，应在其中捕获失败并渲染错误状态。
 
+### Behavioral changes that do need one
+
+- A documented default value flipping.
+- Moving from silent degradation to failure (for example, a missing optional dependency was
+  previously skipped and is now rejected at load time).
+- A change in return-value semantics (previously an empty collection, now `null`, or the reverse).
+- A change in the timing or thread of a side effect (previously synchronous, now asynchronous).
+
+The migration period runs in two steps:
+
+- **Version N**: keep the old behaviour, but emit a **one-shot** WARNING when the path is taken. The
+  warning text must name the target version and a feedback issue link, for example:
+
+  ```
+  [UltiTools] Module <name> relies on the old behaviour of X (<one-line description>).
+  This behaviour will change to <new behaviour> in 6.4.0. See <issue link> to migrate.
+  This warning is printed once per startup.
+  ```
+
+- **Version N+1**: switch to the new behaviour and remove the warning.
+
+This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
+tell people which floor they are standing on before removing it.
+
 ### Declarative GUI known limitations and author guidance
 
 The limitations collected in [#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)
@@ -2956,8 +2987,10 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   propagate to its caller. A task that keeps requeuing itself can keep that drain running.
   Use normal scheduled frames in production, not `flush()` to force an update.
 - **A queued task's `Error` is not isolated like an `Exception`.** The per-task handler catches
-  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the server
-  scheduler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
+  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the caller of
+  the frame: the server scheduler, or, when the frame runs inline (a `scheduleFrame` or `setState` call
+  on the main thread with no frame running and no delay pending), the code that made that call, such as
+  an event handler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
   ordinary module failure handling or assume every throwable is caught by the GUI scheduler.
 - **One `GridView` cell must produce one rendered leaf.** A wrapper may contain that leaf at
   any depth, but several leaves under the same cell all receive the same computed slot and
@@ -2965,29 +2998,13 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   computed slot wins, including in a multi-leaf cell. Put separately displayed items in separate
   cells instead of relying on collision or click-handler ordering.
 
-### Behavioral changes that do need one
-
-- A documented default value flipping.
-- Moving from silent degradation to failure (for example, a missing optional dependency was
-  previously skipped and is now rejected at load time).
-- A change in return-value semantics (previously an empty collection, now `null`, or the reverse).
-- A change in the timing or thread of a side effect (previously synchronous, now asynchronous).
-
-The migration period runs in two steps:
-
-- **Version N**: keep the old behaviour, but emit a **one-shot** WARNING when the path is taken. The
-  warning text must name the target version and a feedback issue link, for example:
-
-  ```
-  [UltiTools] Module <name> relies on the old behaviour of X (<one-line description>).
-  This behaviour will change to <new behaviour> in 6.4.0. See <issue link> to migrate.
-  This warning is printed once per startup.
-  ```
-
-- **Version N+1**: switch to the new behaviour and remove the warning.
-
-This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
-tell people which floor they are standing on before removing it.
+  中文补充：**声明式 GUI 的已知限制与编写建议**（[#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)）。
+  `initState` 先调用 `setState` 再抛出异常时，页面开着就会每帧重试并记录日志，请在组件内捕获失败并渲染错误状态；
+  需要保留 State 时请为同级子组件使用稳定且互不重复的 `SlotKey`；`State.dispose()` 应可重复调用且不抛异常；
+  单子组件包装器里替换失败后请关闭并重新打开界面；不要在 `build` 中关闭界面；首次构建的异常会从
+  `DeclarativeGui.onOpen` 抛出；`GuiScheduler.flush()` 仅供测试；队列任务抛出的 JVM `Error` 不会被逐任务捕获，
+  会抛给这一帧的调用方（服务器调度器，或帧在主线程内联执行时发起 `scheduleFrame`/`setState` 调用的代码）；
+  `GridView` 的每个格子只应渲染一个叶子组件。
 
 ### Command bodies run at dispatch (6.3.0) — changed without a migration period
 
