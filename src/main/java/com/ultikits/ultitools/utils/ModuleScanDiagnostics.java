@@ -120,7 +120,7 @@ public final class ModuleScanDiagnostics {
         String message = "Module '" + moduleName + "' skipped " + skipped.size()
                 + " class(es) that failed to load during startup and continued loading without "
                 + "them: " + String.join(", ", skipped)
-                + ". See https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md for compatibility guidance.";
+                + " -- " + COMPATIBILITY_POINTER + ".";
         DIAGNOSTICS_LOGGER.log(Level.SEVERE, message);
     }
 
