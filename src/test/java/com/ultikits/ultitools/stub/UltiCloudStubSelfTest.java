@@ -322,8 +322,12 @@ class UltiCloudStubSelfTest {
 
     @Test
     void connectionAcceptedOnASwitchedOffListenerIsResetAndNeverServed() throws Exception {
+        // Loopback-only plain sockets in a test: no transport security or outbound request is involved.
+        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         try (ServerSocket stale = new ServerSocket()) {
+            // nosemgrep: java_ssrf_rule-SSRF
             stale.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+            // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
             try (Socket client = new Socket(InetAddress.getLoopbackAddress(), stale.getLocalPort());
                  Socket accepted = stale.accept()) {
                 assertThat(stub.frontDoor().admit(stale, accepted))

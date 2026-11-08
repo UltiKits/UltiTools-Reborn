@@ -239,6 +239,7 @@ public final class StubFrontDoor {
      * @param client the accepted connection
      * @return whether the connection is to be served
      */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // The current listener is meant by identity, not an equal one.
     synchronized boolean admit(ServerSocket source, Socket client) {
         if (source != listener) {
             try {
