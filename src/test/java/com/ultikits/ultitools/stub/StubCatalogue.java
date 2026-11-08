@@ -89,8 +89,14 @@ public final class StubCatalogue implements AutoCloseable {
     public static final String MODULE_NAME = "Demo";
     /** The newest compatible version, {@code apiLevel} 630, publicly downloadable. */
     public static final String VERSION = "1.1.0";
-    /** The version marked {@code license_required}, {@code apiLevel} 640. */
+    /** The version marked {@code license_required}, at {@link #LICENSED_API_LEVEL}. */
     public static final String LICENSED_VERSION = "2.0.0";
+    /**
+     * The {@code apiLevel} of {@link #LICENSED_VERSION}: above every real framework build, so a stub row that
+     * expects "this version cannot be installed" keeps meaning that as the framework's own level rises
+     * (it was 640, which the 6.4.0 build itself reaches).
+     */
+    public static final int LICENSED_API_LEVEL = 9990;
 
     /**
      * The API origin the vendored catalogue fixtures name in their URLs. The stub answers on a
@@ -579,7 +585,7 @@ public final class StubCatalogue implements AutoCloseable {
 
     /** {@link #LICENSED_VERSION}: the vendored licence-required version, re-addressed. */
     private static JsonObject licensedVersion() {
-        return versionObject(LICENSED_VERSION_FIXTURE, LICENSED_VERSION, false, 640, null);
+        return versionObject(LICENSED_VERSION_FIXTURE, LICENSED_VERSION, false, LICENSED_API_LEVEL, null);
     }
 
     private String moduleBody() {
