@@ -3,8 +3,8 @@ package com.ultikits.ultitools.interfaces;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mockStatic;
 
 import java.io.File;
 import java.lang.reflect.Method;
@@ -17,14 +17,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.mockito.MockedStatic;
 
+import org.mockito.MockedStatic;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.manager.DataScope;
 
 /**
  * Tests for the {@link DataStore} interface.
@@ -59,25 +60,25 @@ class DataStoreTest {
         }
 
         @Test
-        @DisplayName("Should have getOperator method")
-        void shouldHaveGetOperatorMethod() throws NoSuchMethodException {
-            Method method = DataStore.class.getMethod("getOperator", UltiToolsPlugin.class, Class.class);
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isAbstract(method.getModifiers())).isTrue();
+        @DisplayName("The legacy getOperator(UltiToolsPlugin, Class) and getOperator(File, Class) overloads are gone (6.4.0)")
+        void legacyGetOperatorOverloadsAreRemoved() {
+            assertThatThrownBy(() -> DataStore.class.getMethod("getOperator", UltiToolsPlugin.class, Class.class))
+                    .isInstanceOf(NoSuchMethodException.class);
+            assertThatThrownBy(() -> DataStore.class.getMethod("getOperator", File.class, Class.class))
+                    .isInstanceOf(NoSuchMethodException.class);
         }
 
         @Test
-        @DisplayName("getOperator should return DataOperator")
+        @DisplayName("getOperator(DataScope, Class) should return DataOperator")
         void getOperatorShouldReturnDataOperator() throws NoSuchMethodException {
-            Method method = DataStore.class.getMethod("getOperator", UltiToolsPlugin.class, Class.class);
+            Method method = DataStore.class.getMethod("getOperator", com.ultikits.ultitools.manager.DataScope.class, Class.class);
             assertThat(method.getReturnType()).isEqualTo(DataOperator.class);
         }
 
         @Test
-        @DisplayName("getOperator should have generic type parameter")
+        @DisplayName("getOperator(DataScope, Class) should have generic type parameter")
         void getOperatorShouldHaveGenericTypeParameter() throws NoSuchMethodException {
-            Method method = DataStore.class.getMethod("getOperator", UltiToolsPlugin.class, Class.class);
+            Method method = DataStore.class.getMethod("getOperator", com.ultikits.ultitools.manager.DataScope.class, Class.class);
             TypeVariable<?>[] typeParams = method.getTypeParameters();
             assertThat(typeParams).hasSize(1);
             assertThat(typeParams[0].getName()).isEqualTo("T");
@@ -100,38 +101,17 @@ class DataStoreTest {
         }
 
         @Test
-        @DisplayName("Should have exactly 9 methods (3 abstract + 6 default)")
-        void shouldHaveExactlyNineMethods() {
-            // 02-01: added default getDataSource(DataScope) (D-01/D-17), alongside the existing
-            // default getOperator(File, Class). 02-07 Task 2: added default
-            // getOperator(DataScope, Class) (D-14/D-17), the fail-closed, ownership-checked entry
-            // point. 02-12 Task 1: added the two checkOwnership(...) default methods extracting
-            // the ownership check into one reusable member, called by both this interface's own
-            // getOperator(File, Class) default body and, as their first statement, by every
-            // concrete store's own getOperator overrides (D-14/D-18). 02-13 Task 1: added default
-            // getOperatorUnchecked(DataScope, Class) (CR-01/CR-03) -- the internal, unchecked
-            // construction path getOperator(DataScope, Class) now delegates to instead of the
-            // public, previously ownership-exempt getOperator(File, Class) overload.
+        @DisplayName("Should have exactly 7 methods (2 abstract + 5 default)")
+        void shouldHaveExactlySevenMethods() {
+            // 6.4.0 removed the legacy getOperator(UltiToolsPlugin, Class) / getOperator(File, Class)
+            // overloads. The two public checkOwnership(...) defaults were never deprecated and stay.
+            // What remains: getStoreType and destroyAllOperators (abstract); both checkOwnership,
+            // getDataSource(DataScope), getOperator(DataScope, Class) and
+            // getOperatorUnchecked(DataScope, Class) (default).
             long count = java.util.Arrays.stream(DataStore.class.getDeclaredMethods())
                     .filter(m -> !m.isSynthetic())
                     .count();
-            assertThat(count).isEqualTo(9);
-        }
-
-        @Test
-        @DisplayName("Should have checkOwnership(UltiToolsPlugin, Class) as a default method (D-14/D-18, 02-12)")
-        void shouldHaveCheckOwnershipPluginMethod() throws NoSuchMethodException {
-            Method method = DataStore.class.getMethod("checkOwnership", UltiToolsPlugin.class, Class.class);
-            assertThat(method).isNotNull();
-            assertThat(method.isDefault()).isTrue();
-        }
-
-        @Test
-        @DisplayName("Should have checkOwnership(File, Class) as a default method (D-14/D-18, 02-12)")
-        void shouldHaveCheckOwnershipFileMethod() throws NoSuchMethodException {
-            Method method = DataStore.class.getMethod("checkOwnership", File.class, Class.class);
-            assertThat(method).isNotNull();
-            assertThat(method.isDefault()).isTrue();
+            assertThat(count).isEqualTo(7);
         }
 
         @Test
@@ -176,7 +156,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -187,7 +167,7 @@ class DataStoreTest {
             };
 
             assertThat(dataStore.getStoreType()).isEqualTo("test");
-            assertThat(dataStore.getOperator((UltiToolsPlugin) null, null)).isNull();
+            assertThat(dataStore.getOperatorUnchecked(null, null)).isNull();
         }
 
         @Test
@@ -200,7 +180,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -216,7 +196,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -232,7 +212,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -258,7 +238,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -292,7 +272,7 @@ class DataStoreTest {
 
                 @Override
                 @SuppressWarnings("unchecked")
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
                     DataOperator<T> operator = mock(DataOperator.class);
                     operators.put(dataEntity, operator);
                     return operator;
@@ -318,10 +298,10 @@ class DataStoreTest {
 
             // Simulate getting operators for different entity types
             // In real usage, these would be actual entity classes
-            store.getOperator((UltiToolsPlugin) null, TestEntity1.class);
+            store.getOperatorUnchecked(null, TestEntity1.class);
             assertThat(store.getOperatorCount()).isEqualTo(1);
 
-            store.getOperator((UltiToolsPlugin) null, TestEntity2.class);
+            store.getOperatorUnchecked(null, TestEntity2.class);
             assertThat(store.getOperatorCount()).isEqualTo(2);
 
             assertThat(store.isDestroyed()).isFalse();
@@ -345,7 +325,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -371,7 +351,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -386,12 +366,19 @@ class DataStoreTest {
         }
     }
 
+    // Test entity classes for testing generic methods
+    static class TestEntity1 extends BaseDataEntity<String> {
+    }
+
+    static class TestEntity2 extends BaseDataEntity<String> {
+    }
+
+
     /**
      * Task 1 (02-12): the extracted {@code checkOwnership} default methods, exercised directly on
-     * a bare stub {@code DataStore} that implements only the three abstract methods -- proving the
-     * refusal is inherited from the interface itself, not from any one store's own code. Before
-     * this task, {@code getOperator(UltiToolsPlugin, Class)} carried no check at all (D-14/D-18's
-     * disclosed gap); {@code checkOwnership(UltiToolsPlugin, Class)} did not exist to call.
+     * a bare stub {@code DataStore} that implements only the abstract methods -- proving the
+     * refusal is inherited from the interface itself, not from any one store's own code. They stay
+     * public API in 6.4.0 although the legacy {@code getOperator} overloads that called them are gone.
      */
     @Nested
     @DisplayName("checkOwnership default methods (D-14/D-18, 02-12 Task 1)")
@@ -402,11 +389,6 @@ class DataStoreTest {
                 @Override
                 public String getStoreType() {
                     return "checkownership-stub";
-                }
-
-                @Override
-                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
-                    return null;
                 }
 
                 @Override
@@ -517,12 +499,5 @@ class DataStoreTest {
                         .hasMessageContaining("UltiToolsAPI.connect");
             }
         }
-    }
-
-    // Test entity classes for testing generic methods
-    static class TestEntity1 extends BaseDataEntity<String> {
-    }
-
-    static class TestEntity2 extends BaseDataEntity<String> {
     }
 }

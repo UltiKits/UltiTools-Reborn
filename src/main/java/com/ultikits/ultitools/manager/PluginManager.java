@@ -153,6 +153,44 @@ public class PluginManager {
                 && index >= ((ReloadSummary) summary).headlineCount && index < summary.size();
     }
 
+    /**
+     * The lines {@code /ul reload} replies to the native console: the headlines of an unmodified
+     * reload summary, without the per-module details each module has already logged there (#665).
+     * When per-module details follow the headlines, the last headline
+     * introduces them with a colon; the console reply drops that trailing colon, because the
+     * details it introduced are not repeated beneath it (#824). Unknown lists carry no metadata
+     * and are returned unchanged. Internal command-output metadata, not a module API.
+     *
+     * @param summary the list returned by {@link #reloadAllAndReport()}
+     * @return the lines to send to the native console
+     * @since 6.4.0
+     */
+    @ApiStatus.Internal
+    public static List<String> nativeConsoleReloadReply(List<String> summary) {
+        if (!(summary instanceof ReloadSummary)) {
+            return new ArrayList<>(summary);
+        }
+        int headlines = ((ReloadSummary) summary).headlineCount;
+        List<String> reply = new ArrayList<>(summary.subList(0, Math.min(headlines, summary.size())));
+        if (headlines < summary.size() && !reply.isEmpty()) {
+            int last = reply.size() - 1;
+            reply.set(last, withoutTrailingColon(reply.get(last)));
+        }
+        return reply;
+    }
+
+    /** Code point of the full-width colon the Chinese catalogue ends a headline with. */
+    private static final int FULL_WIDTH_COLON = 0xFF1A;
+
+    /** A headline without the ASCII or full-width colon that introduced the lines below it. */
+    private static String withoutTrailingColon(String headline) {
+        if (headline.isEmpty()) {
+            return headline;
+        }
+        int last = headline.charAt(headline.length() - 1);
+        return last == ':' || last == FULL_WIDTH_COLON ? headline.substring(0, headline.length() - 1) : headline;
+    }
+
     /** Retains normal List behavior while carrying the boundary between headlines and details. */
     private static final class ReloadSummary extends ArrayList<String> {
         private static final long serialVersionUID = 1L;
@@ -250,9 +288,10 @@ public class PluginManager {
 
     /**
      * External plugin data folder (canonical path) -&gt; the {@link DataScope} minted for it,
-     * populated by {@link #registerExternal(ExternalPluginAdapter, Class[])}. Lets {@code
-     * DataStore.getOperator(File, Class)} resolve its caller back to a scope (D-18), for the
-     * default body a third-party {@code DataStore} that does not override that method inherits.
+     * populated by {@link #registerExternal(ExternalPluginAdapter, Class[])}. Backs {@link
+     * #findScopeForDataFolder} and the folder-collision refusal in {@code registerExternalScope}.
+     * (Before 6.4.0 it also let the removed {@code DataStore.getOperator(File, Class)} overload
+     * resolve its caller back to a scope, D-18.)
      */
     private final Map<String, DataScope> externalScopesByFolder = new ConcurrentHashMap<>();
 
@@ -2371,8 +2410,7 @@ public class PluginManager {
 
     /**
      * Records an external plugin's {@link DataScope} under its data folder's canonical path, so
-     * {@link #findScopeForDataFolder} can resolve the caller of {@code DataStore.getOperator(File,
-     * Class)} back to a scope (D-18) -- the same canonical-path keying 02-02's Task 2 used for the
+     * {@link #findScopeForDataFolder} can resolve a data folder back to a scope (D-18) -- the same canonical-path keying 02-02's Task 2 used for the
      * SQLite pool map, so two spellings of the same folder resolve to one entry.
      * <p>
      * Refuses (02-14 Task 2) rather than silently replacing when the canonical path already maps
@@ -2380,7 +2418,7 @@ public class PluginManager {
      * before this, so wrapping another plugin (all public calls -- {@code new
      * ExternalPluginAdapter(Bukkit.getPluginManager().getPlugin("Victim"))}) and calling the
      * public {@code registerExternal} would displace the victim's legitimate scope here, poisoning
-     * the D-18 reverse lookup {@code checkOwnership(File, Class)} depends on. Re-registration by
+     * the D-18 reverse lookup {@link #findScopeForDataFolder} answers. Re-registration by
      * the SAME plugin (matched by name) is idempotent, not refused -- a plugin reconnecting after
      * {@link #unregisterExternal(ExternalPluginAdapter)} must not be permanently locked out.
      *

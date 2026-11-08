@@ -239,8 +239,43 @@ class ConfigBindingReloadReportTest {
         if (all) {
             assertThat(returnedSummary).anySatisfy(line -> assertThat(line)
                     .contains("TimingModule", "cooldown.wild", "-1", "60"));
-            assertThat(consoleReplies).contains(returnedSummary.get(0));
+            String headline = returnedSummary.get(0);
+            assertThat(headline).as("the logged headline introduces the details below it").endsWith(":");
+            // #824: the console reply keeps the headline, without a colon that introduces nothing.
+            assertThat(consoleReplies).containsExactly(headline.substring(0, headline.length() - 1));
         }
+        assertThat(consoleReplies).noneSatisfy(line -> assertThat(line).endsWith(":"));
+    }
+
+    @Test
+    @DisplayName("#824: a failed and a partial module leave no console reply line ending with a colon")
+    void nativeConsoleMixedSummaryEndsWithoutColon() throws Exception {
+        prepareCommandReload();
+        UltiToolsPlugin broken = mock(UltiToolsPlugin.class);
+        when(broken.getPluginName()).thenReturn("BrokenModule");
+        doThrow(new IllegalStateException("hook unavailable")).when(broken).reloadWithReport();
+        PluginListSeeding.add(pluginManager, broken);
+
+        runReloadCommand(server.getConsoleSender(), true);
+
+        List<String> consoleReplies = new ArrayList<>();
+        String reply;
+        while ((reply = server.getConsoleSender().nextMessage()) != null) {
+            consoleReplies.add(reply);
+        }
+        assertThat(returnedSummary).hasSize(3);
+        assertThat(consoleReplies).hasSize(2);
+        assertThat(consoleReplies.get(0)).isEqualTo(returnedSummary.get(0)).contains("BrokenModule");
+        assertThat(consoleReplies.get(1)).isEqualTo(returnedSummary.get(1).substring(0,
+                returnedSummary.get(1).length() - 1)).doesNotEndWith(":");
+    }
+
+    @Test
+    @DisplayName("#824: a list without reload metadata is replied unchanged on the native console")
+    void unknownSummaryKeepsEveryLine() {
+        List<String> plain = java.util.Arrays.asList("Reloaded 2 modules; 1 only partially:", "detail");
+
+        assertThat(PluginManager.nativeConsoleReloadReply(plain)).containsExactlyElementsOf(plain);
     }
 
     @ParameterizedTest

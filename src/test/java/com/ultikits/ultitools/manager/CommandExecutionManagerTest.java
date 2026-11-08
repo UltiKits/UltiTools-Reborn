@@ -3,7 +3,6 @@ package com.ultikits.ultitools.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -40,12 +39,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.mockito.invocation.Invocation;
 
-import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.TestHelper;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -59,7 +56,6 @@ class CommandExecutionManagerTest {
 
     private ServerMock server;
     private CommandExecutionManager manager;
-    private UltiPanelWebSocketClient mockWebSocketClient;
     private Logger mockLogger;
 
     /**
@@ -100,17 +96,49 @@ class CommandExecutionManagerTest {
             when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
         });
 
-        // Mock WebSocket client
-        mockWebSocketClient = mock(UltiPanelWebSocketClient.class);
-        when(mockWebSocketClient.getServerId()).thenReturn("test-server-id");
-
         manager = new CommandExecutionManager();
-        manager.setWebSocketClient(mockWebSocketClient);
     }
 
     @AfterEach
     void tearDown() {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+    }
+
+    /**
+     * Records what {@link CommandExecutionManager#execute} reports through its protocol v2 sink (the v1
+     * {@code command_result} sender was removed in 6.4.0).
+     */
+    private static final class RecordingSink implements CommandExecutionManager.CommandResultSink {
+        String blockedMatched;
+        String blockedMessage;
+        String failedMessage;
+        List<String> completedLines;
+
+        @Override
+        public void blocked(String matched, String message) {
+            blockedMatched = matched;
+            blockedMessage = message;
+        }
+
+        @Override
+        public void completed(List<String> lines, boolean truncated, long executionMs) {
+            completedLines = lines;
+        }
+
+        @Override
+        public void failed(String message) {
+            failedMessage = message;
+        }
+    }
+
+    /** A main-thread executor that only counts what it is handed, so a refusal can be shown never to dispatch. */
+    private static final class CountingExecutor implements java.util.concurrent.Executor {
+        int handed;
+
+        @Override
+        public void execute(Runnable task) {
+            handed++;
+        }
     }
 
     /**
@@ -145,519 +173,6 @@ class CommandExecutionManagerTest {
 
             // Assert
             assertThat(newManager).isNotNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("setWebSocketClient 测试")
-    class SetWebSocketClientTests {
-
-        @Test
-        @DisplayName("应该正确设置 WebSocket 客户端")
-        void shouldSetWebSocketClient() {
-            // Arrange
-            CommandExecutionManager newManager = new CommandExecutionManager();
-            UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
-
-            // Act
-            newManager.setWebSocketClient(client);
-
-            // Assert - 通过后续操作验证设置成功
-            assertThat(newManager).isNotNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("executeCommand 测试")
-    class ExecuteCommandTests {
-
-        @Test
-        @DisplayName("空命令应该发送错误结果")
-        void emptyCommandShouldSendError() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "test-cmd-id");
-
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("null 命令应该发送错误结果")
-        void nullCommandShouldSendError() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.add("command", com.google.gson.JsonNull.INSTANCE);
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "test-cmd-id");
-
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("有效命令应该被调度执行")
-        void validCommandShouldBeScheduled() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "help");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "test-cmd-id");
-
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert - 命令被调度
-            assertThat(server.getScheduler().getPendingTasks()).isNotEmpty();
-        }
-
-        @Test
-        @DisplayName("异步命令应该异步执行")
-        void asyncCommandShouldExecuteAsync() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "help");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", true);
-            commandData.addProperty("commandId", "test-async-cmd");
-
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert - 任务被调度
-            assertThat(server.getScheduler().getPendingTasks()).isNotEmpty();
-        }
-
-        @Test
-        @DisplayName("console 执行者应该使用控制台发送者")
-        void consoleExecutorShouldUseConsoleSender() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "version");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "test-console-cmd");
-
-            // Act
-            manager.executeCommand(commandData);
-            server.getScheduler().performOneTick();
-
-            // Assert - 命令被执行
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
-        }
-    }
-
-    @Nested
-    @DisplayName("CommandResult 测试")
-    class CommandResultTests {
-
-        @Test
-        @DisplayName("应该正确存储成功结果")
-        void shouldStoreSuccessResult() {
-            // Act
-            CommandExecutionManager.CommandResult result = 
-                new CommandExecutionManager.CommandResult(true, "Success output", 100L);
-
-            // Assert
-            assertThat(result.isSuccess()).isTrue();
-            assertThat(result.getOutput()).isEqualTo("Success output");
-            assertThat(result.getExecutionTime()).isEqualTo(100L);
-        }
-
-        @Test
-        @DisplayName("应该正确存储失败结果")
-        void shouldStoreFailureResult() {
-            // Act
-            CommandExecutionManager.CommandResult result = 
-                new CommandExecutionManager.CommandResult(false, "Error message", 50L);
-
-            // Assert
-            assertThat(result.isSuccess()).isFalse();
-            assertThat(result.getOutput()).isEqualTo("Error message");
-            assertThat(result.getExecutionTime()).isEqualTo(50L);
-        }
-
-        @Test
-        @DisplayName("应该处理空输出")
-        void shouldHandleEmptyOutput() {
-            // Act
-            CommandExecutionManager.CommandResult result = 
-                new CommandExecutionManager.CommandResult(true, "", 0L);
-
-            // Assert
-            assertThat(result.isSuccess()).isTrue();
-            assertThat(result.getOutput()).isEmpty();
-            assertThat(result.getExecutionTime()).isZero();
-        }
-
-        @Test
-        @DisplayName("应该处理 null 输出")
-        void shouldHandleNullOutput() {
-            // Act
-            CommandExecutionManager.CommandResult result = 
-                new CommandExecutionManager.CommandResult(true, null, 0L);
-
-            // Assert
-            assertThat(result.isSuccess()).isTrue();
-            assertThat(result.getOutput()).isNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("异常处理测试")
-    class ExceptionHandlingTests {
-
-        @Test
-        @DisplayName("JSON 解析异常应该被捕获")
-        void jsonParseExceptionShouldBeCaught() {
-            // Arrange
-            JsonObject invalidData = new JsonObject();
-            // 缺少必要字段
-
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> manager.executeCommand(invalidData));
-        }
-
-        @Test
-        @DisplayName("WebSocket 客户端为 null 时不应该崩溃")
-        void nullWebSocketClientShouldNotCrash() {
-            // Arrange
-            CommandExecutionManager newManager = new CommandExecutionManager();
-            // 不设置 WebSocket 客户端
-
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "");
-            commandData.addProperty("commandId", "test");
-
-            // Act & Assert - 不应该抛出 NPE
-            // 由于没有设置 webSocketClient，sendCommandResult 会抛出 NPE
-            // 但这被 try-catch 捕获了
-            try {
-                newManager.executeCommand(commandData);
-                // If we reach here, the command was handled gracefully
-                assertThat(newManager).isNotNull();
-            } catch (NullPointerException e) {
-                // 预期的行为，因为 webSocketClient 是 null
-                assertThat(e).isNotNull();
-            }
-        }
-    }
-
-    @Nested
-    @DisplayName("多命令测试")
-    class MultipleCommandsTests {
-
-        @Test
-        @DisplayName("多个命令应该独立执行")
-        void multipleCommandsShouldExecuteIndependently() {
-            // Arrange
-            JsonObject cmd1 = new JsonObject();
-            cmd1.addProperty("command", "help");
-            cmd1.addProperty("executor", "console");
-            cmd1.addProperty("async", false);
-            cmd1.addProperty("commandId", "cmd-1");
-
-            JsonObject cmd2 = new JsonObject();
-            cmd2.addProperty("command", "version");
-            cmd2.addProperty("executor", "console");
-            cmd2.addProperty("async", false);
-            cmd2.addProperty("commandId", "cmd-2");
-
-            // Act
-            manager.executeCommand(cmd1);
-            manager.executeCommand(cmd2);
-
-            // Assert - 两个任务都被调度
-            assertThat(server.getScheduler().getPendingTasks().size()).isGreaterThanOrEqualTo(2);
-        }
-    }
-
-    @Nested
-    @DisplayName("executeCommandInternal 详细测试")
-    class ExecuteCommandInternalTests {
-
-        @Test
-        @DisplayName("玩家执行者应该回退到控制台")
-        void playerExecutorShouldFallbackToConsole() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "help");
-            commandData.addProperty("executor", "player-uuid-12345"); // 非 "console"
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "player-cmd");
-
-            // Act
-            manager.executeCommand(commandData);
-            server.getScheduler().performOneTick();
-
-            // Assert - 命令应该被执行（使用控制台作为回退）
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("命令执行成功应该发送正确的结果")
-        void successfulCommandShouldSendCorrectResult() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "help");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "success-cmd");
-
-            // Act
-            manager.executeCommand(commandData);
-            server.getScheduler().performOneTick();
-
-            // Assert
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockWebSocketClient).sendMessage(captor.capture());
-            
-            JsonObject result = captor.getValue();
-            assertThat(result.get("type").getAsString()).isEqualTo("command_result");
-        }
-
-        @Test
-        @DisplayName("空输出应该显示默认消息")
-        void emptyOutputShouldShowDefaultMessage() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "nonexistent_command_that_wont_have_output");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "empty-output-cmd");
-
-            // Act
-            manager.executeCommand(commandData);
-            server.getScheduler().performOneTick();
-
-            // Assert
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
-        }
-    }
-
-    @Nested
-    @DisplayName("sendCommandResult 详细测试")
-    class SendCommandResultTests {
-
-        @Test
-        @DisplayName("结果消息应该包含所有必要字段")
-        void resultShouldContainAllFields() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "field-test");
-
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockWebSocketClient).sendMessage(captor.capture());
-            
-            JsonObject result = captor.getValue();
-            assertThat(result.has("type")).isTrue();
-            assertThat(result.has("data")).isTrue();
-            assertThat(result.has("serverId")).isTrue();
-            
-            JsonObject data = result.getAsJsonObject("data");
-            assertThat(data.has("commandId")).isTrue();
-            assertThat(data.has("success")).isTrue();
-            assertThat(data.has("output")).isTrue();
-            assertThat(data.has("executionTime")).isTrue();
-        }
-
-        @Test
-        @DisplayName("serverId 应该从 WebSocket 客户端获取")
-        void serverIdShouldBeFromWebSocketClient() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "");
-            commandData.addProperty("commandId", "serverid-test");
-
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockWebSocketClient).sendMessage(captor.capture());
-            
-            assertThat(captor.getValue().get("serverId").getAsString()).isEqualTo("test-server-id");
-        }
-    }
-
-    @Nested
-    @DisplayName("pendingCommands 测试")
-    class PendingCommandsTests {
-
-        @Test
-        @DisplayName("pendingCommands 应该初始化为 ConcurrentHashMap")
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void pendingCommandsShouldBeConcurrentHashMap() throws Exception {
-            // Arrange
-            CommandExecutionManager newManager = new CommandExecutionManager();
-            
-            // Act - 使用反射获取 pendingCommands
-            java.lang.reflect.Field field = CommandExecutionManager.class.getDeclaredField("pendingCommands");
-            field.setAccessible(true);
-            Object pendingCommands = field.get(newManager);
-            
-            // Assert
-            assertThat(pendingCommands).isInstanceOf(java.util.concurrent.ConcurrentHashMap.class);
-            assertThat(((java.util.concurrent.ConcurrentHashMap<?, ?>) pendingCommands)).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("webSocketClient 字段测试")
-    class WebSocketClientFieldTests {
-
-        @Test
-        @DisplayName("webSocketClient 初始值应该为 null")
-        void webSocketClientInitialValueShouldBeNull() throws Exception {
-            // Arrange
-            CommandExecutionManager newManager = new CommandExecutionManager();
-            
-            // Act
-            java.lang.reflect.Field field = CommandExecutionManager.class.getDeclaredField("webSocketClient");
-            field.setAccessible(true);
-            Object client = field.get(newManager);
-            
-            // Assert
-            assertThat(client).isNull();
-        }
-
-        @Test
-        @DisplayName("setWebSocketClient 应该正确设置字段")
-        void setWebSocketClientShouldSetField() throws Exception {
-            // Arrange
-            CommandExecutionManager newManager = new CommandExecutionManager();
-            UltiPanelWebSocketClient mockClient = mock(UltiPanelWebSocketClient.class);
-            
-            // Act
-            newManager.setWebSocketClient(mockClient);
-            
-            // Assert
-            java.lang.reflect.Field field = CommandExecutionManager.class.getDeclaredField("webSocketClient");
-            field.setAccessible(true);
-            assertThat(field.get(newManager)).isEqualTo(mockClient);
-        }
-    }
-
-    @Nested
-    @DisplayName("日志记录测试")
-    class LoggingTests {
-
-        @Test
-        @DisplayName("执行命令时应该记录 INFO 日志")
-        void shouldLogInfoOnCommandExecution() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "test");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "log-test");
-
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert
-            verify(mockLogger).log(any(Level.class), anyString());
-        }
-    }
-
-    @Nested
-    @DisplayName("executeCommand 异常场景测试")
-    class ExecuteCommandExceptionTests {
-
-        @Test
-        @DisplayName("executeCommand 异常时应该发送错误结果")
-        void shouldSendErrorResultOnException() throws Exception {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "test");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "exception-test");
-
-            // 模拟 getScheduler() 抛出异常
-            CommandExecutionManager newManager = new CommandExecutionManager();
-            newManager.setWebSocketClient(mockWebSocketClient);
-            
-            // 使用反射设置 webSocketClient 字段以模拟异常场景
-            java.lang.reflect.Field field = CommandExecutionManager.class.getDeclaredField("webSocketClient");
-            field.setAccessible(true);
-            
-            // 创建一个会在 sendMessage 时记录调用的 mock
-            UltiPanelWebSocketClient specialMock = mock(UltiPanelWebSocketClient.class);
-            when(specialMock.getServerId()).thenReturn("test-server");
-            field.set(newManager, specialMock);
-
-            // Act & Assert - 不应该抛出异常，命令应该被调度
-            assertDoesNotThrow(() -> newManager.executeCommand(commandData));
-        }
-
-        @Test
-        @DisplayName("commandData 包含 null commandId 时异常处理应该正确")
-        void shouldHandleNullCommandIdInException() throws Exception {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "test");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.add("commandId", com.google.gson.JsonNull.INSTANCE);
-
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> manager.executeCommand(commandData));
-        }
-
-        @Test
-        @DisplayName("commandData 缺少 commandId 字段时异常处理应该正确")
-        void shouldHandleMissingCommandIdInException() throws Exception {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "test");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            // 不添加 commandId
-
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> manager.executeCommand(commandData));
-        }
-    }
-
-    @Nested
-    @DisplayName("非 console 执行者测试")
-    class NonConsoleExecutorTests {
-
-        @Test
-        @DisplayName("非 console 执行者应该回退到控制台发送者")
-        void nonConsoleExecutorShouldFallbackToConsoleSender() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "help");
-            commandData.addProperty("executor", "player-uuid-12345");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "player-executor-test");
-
-            // Act
-            manager.executeCommand(commandData);
-            server.getScheduler().performOneTick();
-
-            // Assert - 命令应该被执行
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -766,51 +281,29 @@ class CommandExecutionManagerTest {
         }
 
         @Test
-        @DisplayName("blocked command should send error result via WebSocket")
+        @DisplayName("blocked command should be reported to the sink as blocked, naming the config key")
         void blockedCommandShouldSendErrorResult() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "op hacker123");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "blocked-cmd-test");
+            RecordingSink sink = new RecordingSink();
 
-            // Act
-            manager.executeCommand(commandData);
+            manager.execute("op hacker123", "console", new CountingExecutor(), sink);
 
-            // Assert - should send error message, not schedule the command
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockWebSocketClient).sendMessage(captor.capture());
-
-            JsonObject result = captor.getValue();
-            assertThat(result.get("type").getAsString()).isEqualTo("command_result");
-
-            JsonObject data = result.getAsJsonObject("data");
-            assertThat(data.get("success").getAsBoolean()).isFalse();
-            // D-05: the refusal now names its cause and remedy — the config key and the file —
+            assertThat(sink.blockedMatched).isEqualTo("op");
+            // D-05: the refusal names its cause and remedy — the config key and the file —
             // instead of the old bare "blocked by security policy" text.
-            assertThat(data.get("output").getAsString())
+            assertThat(sink.blockedMessage)
                     .contains("ultipanel.commands.blocklist")
                     .contains("plugins/UltiTools/config.yml");
+            assertThat(sink.completedLines).isNull();
         }
 
         @Test
-        @DisplayName("blocked command should not be scheduled")
+        @DisplayName("blocked command should not be handed to the main thread")
         void blockedCommandShouldNotBeScheduled() {
-            // Arrange
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "stop");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "stop-cmd-test");
+            CountingExecutor mainThread = new CountingExecutor();
 
-            int initialTaskCount = server.getScheduler().getPendingTasks().size();
+            manager.execute("stop", "console", mainThread, new RecordingSink());
 
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert - no new task should be scheduled
-            assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
+            assertThat(mainThread.handed).isZero();
         }
 
         @Test
@@ -861,27 +354,15 @@ class CommandExecutionManagerTest {
         }
 
         @Test
-        @DisplayName("namespace-prefixed blocked command should not be scheduled via executeCommand")
+        @DisplayName("namespace-prefixed blocked command should not be handed to the main thread")
         void namespacePrefixedBlockedCommandShouldNotBeScheduled() {
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "bukkit:op hacker");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "namespace-bypass-test");
+            CountingExecutor mainThread = new CountingExecutor();
+            RecordingSink sink = new RecordingSink();
 
-            int initialTaskCount = server.getScheduler().getPendingTasks().size();
+            manager.execute("bukkit:op hacker", "console", mainThread, sink);
 
-            manager.executeCommand(commandData);
-
-            assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
-
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockWebSocketClient).sendMessage(captor.capture());
-
-            JsonObject result = captor.getValue();
-            JsonObject data = result.getAsJsonObject("data");
-            assertThat(data.get("success").getAsBoolean()).isFalse();
-            assertThat(data.get("output").getAsString()).contains("blocklist");
+            assertThat(mainThread.handed).isZero();
+            assertThat(sink.blockedMessage).contains("blocklist");
         }
     }
 
@@ -900,14 +381,15 @@ class CommandExecutionManagerTest {
          */
         private CommandExecutionManager createManagerWithMockedActionLog() {
             mockRemoteActionLog = mock(RemoteActionLog.class);
+            // The protocol v2 entry point checks the commands capability itself (default off).
+            YamlConfiguration config = new YamlConfiguration();
+            config.set(Capability.COMMANDS.getConfigPath(), true);
             TestHelper.mockUltiToolsInstance(ultiTools -> {
                 when(ultiTools.getLogger()).thenReturn(mockLogger);
-                when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+                when(ultiTools.getConfig()).thenReturn(config);
                 when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
             });
-            CommandExecutionManager newManager = new CommandExecutionManager();
-            newManager.setWebSocketClient(mockWebSocketClient);
-            return newManager;
+            return new CommandExecutionManager();
         }
 
         @Test
@@ -915,16 +397,12 @@ class CommandExecutionManagerTest {
         void deniedCommandShouldRecordExactlyOneDeniedActionLogEntry() {
             // Arrange
             CommandExecutionManager newManager = createManagerWithMockedActionLog();
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "op hacker123");
-            commandData.addProperty("executor", "some-admin");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "action-log-denied-test");
+            RecordingSink sink = new RecordingSink();
 
             // Act
-            newManager.executeCommand(commandData);
+            newManager.execute("op hacker123", "some-admin", new CountingExecutor(), sink);
 
-            // Assert — exactly one entry, DENIED, and its reason equals what was sent to the panel
+            // Assert — exactly one entry, DENIED, and its reason equals what was reported to the panel
             ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
             verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
             RemoteActionLog.Entry entry = entryCaptor.getValue();
@@ -934,11 +412,7 @@ class CommandExecutionManagerTest {
             assertThat(entry.getAction()).isEqualTo("execute_command");
             assertThat(entry.getTarget()).isEqualTo("op hacker123");
             assertThat(entry.getActor()).isEqualTo("some-admin");
-
-            ArgumentCaptor<JsonObject> panelCaptor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockWebSocketClient).sendMessage(panelCaptor.capture());
-            String panelMessage = panelCaptor.getValue().getAsJsonObject("data").get("output").getAsString();
-            assertThat(entry.getReason()).isEqualTo(panelMessage);
+            assertThat(entry.getReason()).isEqualTo(sink.blockedMessage);
         }
 
         @Test
@@ -946,13 +420,10 @@ class CommandExecutionManagerTest {
         void allowedCommandShouldRecordExactlyOneAllowedActionLogEntry() {
             // Arrange
             CommandExecutionManager newManager = createManagerWithMockedActionLog();
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "say hello");
-            commandData.addProperty("commandId", "action-log-allowed-test");
-            // No "executor" field — actor should fall back to the literal "panel"
+            CountingExecutor mainThread = new CountingExecutor();
 
-            // Act
-            newManager.executeCommand(commandData);
+            // Act — no actor: it falls back to the literal "panel"
+            newManager.execute("say hello", null, mainThread, new RecordingSink());
 
             // Assert
             ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
@@ -964,26 +435,22 @@ class CommandExecutionManagerTest {
             assertThat(entry.getAction()).isEqualTo("execute_command");
             assertThat(entry.getTarget()).isEqualTo("say hello");
             assertThat(entry.getActor()).isEqualTo("panel");
+            assertThat(mainThread.handed).as("the decision is recorded before dispatch is handed over").isEqualTo(1);
         }
 
         @Test
         @DisplayName("an allowed command whose dispatch fails should still yield exactly one ALLOWED entry")
         void allowedCommandWhoseDispatchFailsShouldStillYieldExactlyOneAllowedEntry() {
-            // Arrange — a command no registered handler will accept, so Bukkit.dispatchCommand
-            // returns false once the scheduled task actually runs
+            // Arrange — a command no registered handler will accept, so the dispatch is refused
             CommandExecutionManager newManager = createManagerWithMockedActionLog();
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "definitely-not-a-real-command-xyz");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "action-log-dispatch-fail-test");
+            RecordingSink sink = new RecordingSink();
 
-            // Act — record the decision, then let the scheduled dispatch actually run and fail
-            newManager.executeCommand(commandData);
-            server.getScheduler().performOneTick();
+            // Act — record the decision, then run the dispatch at once on this (main) thread
+            newManager.execute("definitely-not-a-real-command-xyz", "console", Runnable::run, sink);
 
             // Assert — the policy decision, not the execution result, drives the log: still
             // exactly one entry, still ALLOWED
+            assertThat(sink.failedMessage).as("control: the dispatch really was refused").isNotNull();
             ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
             verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
             assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
@@ -998,17 +465,11 @@ class CommandExecutionManagerTest {
                 when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
             });
             CommandExecutionManager newManager = new CommandExecutionManager();
-            newManager.setWebSocketClient(mockWebSocketClient);
-
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "op hacker");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "null-action-log-test");
+            RecordingSink sink = new RecordingSink();
 
             // Act & Assert — no exception, command still refused normally
-            assertDoesNotThrow(() -> newManager.executeCommand(commandData));
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
+            assertDoesNotThrow(() -> newManager.execute("op hacker", "console", new CountingExecutor(), sink));
+            assertThat(sink.blockedMessage).isNotNull();
         }
     }
 
@@ -1087,25 +548,17 @@ class CommandExecutionManagerTest {
     @Test
     @DisplayName("a command refused by isCommandAllowed should never reach dispatch, through any code path")
     void refusedCommandShouldNeverReachDispatch() {
-        // Arrange — the only production call site for isCommandAllowed is executeCommand's
-        // own refusal branch; no other public method on this manager consults the blocklist
+        // Arrange — the only production call site for the blocklist decision is execute's own
+        // refusal branch; no other public method on this manager consults the blocklist
         CommandExecutionManager configuredManager =
                 createManagerWithConfiguredBlocklist(Collections.singletonList("help"));
-        configuredManager.setWebSocketClient(mockWebSocketClient);
-
-        JsonObject commandData = new JsonObject();
-        commandData.addProperty("command", "help");
-        commandData.addProperty("executor", "console");
-        commandData.addProperty("async", false);
-        commandData.addProperty("commandId", "guard-test");
-
-        int initialTaskCount = server.getScheduler().getPendingTasks().size();
+        CountingExecutor mainThread = new CountingExecutor();
 
         // Act
-        configuredManager.executeCommand(commandData);
+        configuredManager.execute("help", "console", mainThread, new RecordingSink());
 
         // Assert
-        assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
+        assertThat(mainThread.handed).isZero();
     }
 
     @Test
@@ -1356,27 +809,20 @@ class CommandExecutionManagerTest {
 
     @ParameterizedTest
     @EnumSource(InvalidBlocklist.class)
-    @DisplayName("after an invalid reload, executeCommand still refuses stop with exactly one DENIED entry")
+    @DisplayName("after an invalid reload, execute still refuses stop with exactly one DENIED entry")
     void invalidReloadStillRefusesStopWithOneDeniedEntry(InvalidBlocklist shape) throws IOException {
         CommandExecutionManager loaded = loadThroughEntry(shape.yaml, BlocklistEntry.RELOAD);
-        loaded.setWebSocketClient(mockWebSocketClient);
-        JsonObject commandData = new JsonObject();
-        commandData.addProperty("command", "stop");
-        commandData.addProperty("executor", "some-admin");
-        commandData.addProperty("async", false);
-        commandData.addProperty("commandId", "invalid-reload-stop");
+        RecordingSink sink = new RecordingSink();
+        CountingExecutor mainThread = new CountingExecutor();
 
-        loaded.executeCommand(commandData);
+        loaded.execute("stop", "some-admin", mainThread, sink);
 
         ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
         verify(rawActionLog, times(1)).record(entryCaptor.capture());
         assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
         assertThat(entryCaptor.getValue().getCapability()).isEqualTo(Capability.COMMANDS.name());
-        ArgumentCaptor<JsonObject> panelCaptor = ArgumentCaptor.forClass(JsonObject.class);
-        verify(mockWebSocketClient).sendMessage(panelCaptor.capture());
-        JsonObject result = panelCaptor.getValue().getAsJsonObject("data");
-        assertThat(result.get("success").getAsBoolean()).isFalse();
-        assertThat(result.get("output").getAsString()).contains(BLOCKLIST_KEY);
+        assertThat(mainThread.handed).isZero();
+        assertThat(sink.blockedMessage).contains(BLOCKLIST_KEY);
     }
 
     static Stream<Arguments> everyBlocklistRow() {
@@ -1503,64 +949,6 @@ class CommandExecutionManagerTest {
             this.file = file;
             this.config = config;
             this.ultiTools = ultiTools;
-        }
-    }
-
-    @Nested
-    @DisplayName("command_result is honest about where the output goes (console mirror, as of 6.3.0)")
-    class HonestResultTests {
-
-        private JsonObject runAndCaptureResultData(String command, String commandId) {
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", command);
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("commandId", commandId);
-
-            manager.executeCommand(commandData);
-            server.getScheduler().performOneTick();
-
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockWebSocketClient).sendMessage(captor.capture());
-            return captor.getValue().getAsJsonObject("data");
-        }
-
-        @Test
-        @DisplayName("an accepted command runs as the server console and the result says it was dispatched, "
-                + "not that it succeeded with output")
-        void acceptedCommand_saysDispatchedAndPointsToLogStream() {
-            java.util.concurrent.atomic.AtomicReference<org.bukkit.command.CommandSender> seen =
-                    new java.util.concurrent.atomic.AtomicReference<>();
-            server.getCommandMap().register("mirrortest", new org.bukkit.command.Command("mirrortest") {
-                @Override
-                public boolean execute(org.bukkit.command.CommandSender sender, String label, String[] args) {
-                    seen.set(sender);
-                    sender.sendMessage("Cannot delete the default world!");
-                    return true;
-                }
-            });
-
-            JsonObject data = runAndCaptureResultData("mirrortest", "honest-accepted");
-
-            // Console identity is kept: the module sees the server's own console sender.
-            assertThat(seen.get()).isSameAs(server.getConsoleSender());
-            assertThat(data.get("success").getAsBoolean()).isTrue();
-            assertThat(data.get("output").getAsString())
-                    .isEqualTo(CommandExecutionManager.DISPATCHED_OUTPUT)
-                    .contains("dispatched to the server console")
-                    .contains("server log stream")
-                    .doesNotContain("executed successfully");
-        }
-
-        @Test
-        @DisplayName("a command the console does not accept is reported as not accepted, still pointing to the log stream")
-        void rejectedCommand_saysNotAcceptedAndPointsToLogStream() {
-            JsonObject data = runAndCaptureResultData("definitely_not_a_registered_command", "honest-rejected");
-
-            assertThat(data.get("success").getAsBoolean()).isFalse();
-            assertThat(data.get("output").getAsString())
-                    .isEqualTo(CommandExecutionManager.NOT_ACCEPTED_OUTPUT)
-                    .contains("server log stream")
-                    .doesNotContain("Command execution failed");
         }
     }
 }

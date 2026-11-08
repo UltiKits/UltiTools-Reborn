@@ -23,7 +23,6 @@ import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.annotations.I18n;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.exceptions.ContainerException;
-import com.ultikits.ultitools.utils.AnnotationUtils;
 
 /**
  * Resolver-level coverage for {@link MergedAnnotationResolver} (WIRE-08).
@@ -105,14 +104,23 @@ class MergedAnnotationResolverTest {
     }
 
     @Test
-    @DisplayName("Control: AnnotationUtils.findAnnotation still returns the un-merged annotation for the same fixture")
-    void controlAnnotationUtilsFindAnnotationIsUnaffected() {
+    @DisplayName("Control: a plain meta-annotation read still returns the un-merged annotation for the same fixture")
+    void controlPlainMetaAnnotationReadIsUnaffected() {
         // This is the proof that the behaviour change comes from the resolver, not from an edit
         // to the fixture or to @UltiToolsModule -- without this control, a test suite that only
         // asserted the merged result could pass for the wrong reason (e.g. the fixture itself
         // being rewritten).
-        EnableAutoRegister unmerged =
-                AnnotationUtils.findAnnotation(CmdExecutorDisabledFixture.class, EnableAutoRegister.class);
+        // A plain two-level read (direct annotation, then one meta-annotation level), the lookup
+        // the removed AnnotationUtils.findAnnotation performed.
+        EnableAutoRegister unmerged = CmdExecutorDisabledFixture.class.getAnnotation(EnableAutoRegister.class);
+        if (unmerged == null) {
+            for (java.lang.annotation.Annotation ann : CmdExecutorDisabledFixture.class.getAnnotations()) {
+                unmerged = ann.annotationType().getAnnotation(EnableAutoRegister.class);
+                if (unmerged != null) {
+                    break;
+                }
+            }
+        }
 
         assertNotNull(unmerged);
         assertTrue(unmerged.cmdExecutor(),

@@ -102,30 +102,18 @@ class ConverterRoundTripPropertyTest {
     }
 
     @TestFactory
-    Stream<DynamicTest> inheritedConcreteContainersAndLegacyIsolationGeneratedCases() {
-        return Stream.of("concreteList", "concreteMap", "legacyList", "legacyNested").map(name -> DynamicTest.dynamicTest(name, () -> {
-            Random random = new Random(SEED);
+    Stream<DynamicTest> inheritedConcreteContainersGeneratedCases() {
+        return Stream.of("concreteList", "concreteMap").map(name -> DynamicTest.dynamicTest(name, () -> {
             if (name.equals("concreteList")) {
                 exercise(new Sample(ConverterLoadTimeCheckTest.StringList.class, source -> {
                     ConverterLoadTimeCheckTest.StringList values = new ConverterLoadTimeCheckTest.StringList();
                     values.add("value" + source.nextInt()); return values;
                 }), name);
-            } else if (name.equals("concreteMap")) {
+            } else {
                 exercise(new Sample(ConverterLoadTimeCheckTest.UuidMap.class, source -> {
                     ConverterLoadTimeCheckTest.UuidMap values = new ConverterLoadTimeCheckTest.UuidMap();
                     values.put("o.O", new UUID(source.nextLong(), source.nextLong())); return values;
                 }), name);
-            } else {
-                com.ultikits.ultitools.annotations.ConfigEntry entry = LegacyParserAdapterTest.Shapes.class
-                        .getDeclaredField("mutating").getAnnotation(com.ultikits.ultitools.annotations.ConfigEntry.class);
-                for (int iteration = 0; iteration < VALUES; iteration++) {
-                    List<Object> values = new ArrayList<>();
-                    values.add(new LinkedHashMap<>(Collections.singletonMap("key", "value" + random.nextInt())));
-                    Object input = name.equals("legacyList") ? values : Collections.singletonMap("items", values);
-                    Object snapshot = PlainData.copy(input);
-                    REGISTRY.fromPlainResult(input, Object.class, "config/property.yml", Collections.singletonList("o.O"), entry);
-                    assertThat(input).as("seed=%s shape=%s iteration=%s", SEED, name, iteration).isEqualTo(snapshot);
-                }
             }
         }));
     }

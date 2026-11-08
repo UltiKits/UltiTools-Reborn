@@ -951,10 +951,10 @@ class JsonTransactionTest {
         }
 
         @Test
-        @DisplayName("JsonTransactionManager refuses getConnection; it accepts every isolation level the JSON "
+        @DisplayName("JsonTransactionManager is not a JDBC manager; it accepts every isolation level the JSON "
                 + "engine serves, refuses an unknown one, and accepts read-only")
         void doesNotImplementJdbcMethods() {
-            assertThatThrownBy(manager::getConnection).isInstanceOf(UnsupportedOperationException.class);
+            assertThat(manager).isNotInstanceOf(com.ultikits.ultitools.interfaces.JdbcTransactionManager.class);
             for (int level : new int[] {-1, java.sql.Connection.TRANSACTION_READ_UNCOMMITTED,
                     java.sql.Connection.TRANSACTION_READ_COMMITTED, java.sql.Connection.TRANSACTION_REPEATABLE_READ,
                     java.sql.Connection.TRANSACTION_SERIALIZABLE}) {

@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.utils;
 
 import java.io.IOException;
-import java.util.Date;
 import java.util.Objects;
 import java.util.function.Consumer;
 
@@ -12,23 +11,22 @@ import org.bukkit.plugin.PluginDescriptionFile;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.entities.TokenEntity;
 
 /**
  * The three command-facing entry points behind {@code /ulticloud login|logout|status}.
  * <p>
  * As of plan 16-09 (D-17) this class owns no state of its own and exposes no generation-shaped or
- * {@link TokenEntity}-shaped public surface -- everything that used to be a fine-grained public
+ * {@code TokenEntity}-shaped public surface -- everything that used to be a fine-grained public
  * static (the generation triple, {@code saveToken}/{@code clearToken}/{@code refreshToken}/
  * {@code loadSavedToken}, the start/stop pairs for polling and refresh) is gone outright, not
  * deprecated: {@link CloudSession} instance methods now carry that behaviour, reached only through
- * {@link #login(Runnable, Consumer, Runnable, Consumer, Consumer)}, {@link #logout()} and
+ * {@link #login(DeviceLoginListener)}, {@link #logout()} and
  * {@link #status()} below. Keeping a delegating shim for any of them would leave the generation
  * convention callable, which is exactly what issue #298's second acceptance criterion requires to
  * stop being true (see plan 16-08's {@link CloudSession} javadoc for the mechanism this replaced).
  * <p>
  * {@code CredentialStaticSurfaceInvariantTest} enforces this structurally: no public static method
- * anywhere in this package may accept or return a {@link TokenEntity} or a generation (D-18), so a
+ * anywhere in this package may accept or return a {@code TokenEntity} or a generation (D-18), so a
  * static bypass of the session's credential commit cannot be reintroduced unnoticed. As of 6.3.1 the
  * 6.3.0 user token is neither stored nor sent (plan 22-24 removed its store); the server credential is
  * committed only through {@link CloudSession#commitCredential(ServerCredential)}.
@@ -221,53 +219,6 @@ public class CloudAuthManager {
     }
 
     /**
-     * The 6.3.0 callback form of {@link #login(DeviceLoginListener)}, kept with its signature for
-     * compatibility. It now runs the device authorization: {@code onSuccess} receives the
-     * verification URI with the code filled in ({@code verificationUriComplete}); the later outcome
-     * (linked, denied, expired) is reported only in the server log.
-     *
-     * @param onAlreadyLoggedIn invoked, with nothing else attempted, if this server is already linked
-     * @param onRateLimited     invoked with the remaining cooldown in seconds if the login attempt
-     *                          is currently rate-limited
-     * @param onRequesting      invoked right before the device-code request is made
-     * @param onSuccess         invoked with the complete verification URI once a code was issued
-     * @param onError           invoked with an error message if the request fails
-     * @deprecated Use {@link #login(DeviceLoginListener)} instead; removed in 6.4.0.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.1", forRemoval = true)
-    public static void login(Runnable onAlreadyLoggedIn, Consumer<Long> onRateLimited,
-            Runnable onRequesting, Consumer<String> onSuccess, Consumer<String> onError) {
-        login(new DeviceLoginListener() {
-            @Override
-            public void onAlreadyLinked(String serverName) {
-                onAlreadyLoggedIn.run();
-            }
-
-            @Override
-            public void onRateLimited(long seconds) {
-                onRateLimited.accept(seconds);
-            }
-
-            @Override
-            public void onRequesting() {
-                onRequesting.run();
-            }
-
-            @Override
-            public void onCode(String verificationUri, String userCode, String verificationUriComplete,
-                    long expiresInSeconds) {
-                onSuccess.accept(verificationUriComplete);
-            }
-
-            @Override
-            public void onRequestFailed(String reason) {
-                onError.accept(reason);
-            }
-        });
-    }
-
-    /**
      * Tears down cloud features unconditionally, then asynchronously revokes and deletes the
      * protocol v2 credential. The revoke and delete finish after this method returns; use
      * {@link #logoutReporting(Consumer)} to observe their outcome. In both forms teardown must run
@@ -429,7 +380,7 @@ public class CloudAuthManager {
 
     /**
      * An immutable view of {@link #status()}'s result. Deliberately carries only the fields
-     * {@code /ulticloud status} actually prints -- never a {@link TokenEntity} reference -- so this
+     * {@code /ulticloud status} actually prints -- never a {@code TokenEntity} reference -- so this
      * type cannot become a second way to leak the token past the D-18 guard.
      */
     public static final class CloudStatus {
@@ -459,26 +410,6 @@ public class CloudAuthManager {
         /** @return {@code true} only while the current agent connection is open */
         public boolean isConnected() {
             return connected;
-        }
-
-        /**
-         * @return {@code null}; protocol v2 holds no user token
-         * @deprecated Use {@link #getServerName()} or {@link #getServerId()} instead; removed in 6.4.0.
-         * @removeIn 6.4.0
-         */
-        @Deprecated(since = "6.3.1", forRemoval = true)
-        public String getUserName() {
-            return null;
-        }
-
-        /**
-         * @return {@code null}; the server credential never expires
-         * @deprecated Use {@link #getServerName()} or {@link #getServerId()} for identity instead; removed in 6.4.0.
-         * @removeIn 6.4.0
-         */
-        @Deprecated(since = "6.3.1", forRemoval = true)
-        public Date getExpirationDate() {
-            return null;
         }
 
         /**

@@ -348,6 +348,7 @@ final class AgentProtocol {
 
     private void onWelcome(Envelope envelope, List<Runnable> after) {
         List<Listener> notify = null;
+        Set<String> notAccepted;
         synchronized (lock) {
             if (closed || welcomeSeen) {
                 log.accept(Level.FINE, "UltiCloud: ignored a repeated welcome.");
@@ -373,6 +374,8 @@ final class AgentProtocol {
             Set<String> granted = new LinkedHashSet<>(welcome.accepted);
             granted.retainAll(declared);
             accepted = Collections.unmodifiableSet(granted);
+            notAccepted = new LinkedHashSet<>(declared);
+            notAccepted.removeAll(granted);
             gatewayClockOffsetMillis = welcome.serverTime - clock.getAsLong();
             applyLimits(welcome.limits);
             established = true;
@@ -382,6 +385,11 @@ final class AgentProtocol {
             notify = new ArrayList<>(lifecycleListeners);
         }
         log.accept(Level.INFO, "UltiCloud: connected.");
+        if (!notAccepted.isEmpty()) {
+            // #753: one line per connect, only when the cloud left out something the hello offered.
+            log.accept(Level.INFO, "UltiCloud: the cloud did not accept these offered capabilities: "
+                    + String.join(", ", notAccepted) + ".");
+        }
         for (Listener listener : notify) {
             after.add(() -> listener.established(channel));
         }

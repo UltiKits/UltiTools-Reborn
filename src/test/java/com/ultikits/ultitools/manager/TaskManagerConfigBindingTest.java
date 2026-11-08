@@ -170,6 +170,14 @@ class TaskManagerConfigBindingTest {
         }
     }
 
+    /** Literal async one-shot -- it must not inherit the bound trigger's extra tick. */
+    public static class LiteralAsyncOneShotBean {
+        @Scheduled(delay = 11, async = true)
+        public void once() {
+            // Scheduling is what is asserted.
+        }
+    }
+
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
@@ -332,17 +340,21 @@ class TaskManagerConfigBindingTest {
                 when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
                         .thenReturn(task);
                 when(scheduler.runTaskLater(any(Plugin.class), any(Runnable.class), anyLong())).thenReturn(task);
+                when(scheduler.runTaskLaterAsynchronously(any(Plugin.class), any(Runnable.class), anyLong()))
+                        .thenReturn(task);
                 when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
                         anyLong())).thenReturn(task);
 
                 taskManager.registerScheduledMethods(module, new LiteralBean());
                 taskManager.registerScheduledMethods(module, new LiteralOneShotBean());
                 taskManager.registerScheduledMethods(module, new LiteralAsyncBean());
+                taskManager.registerScheduledMethods(module, new LiteralAsyncOneShotBean());
 
                 verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(7L), eq(20L));
                 verify(scheduler).runTaskLater(eq(host), any(Runnable.class), eq(100L));
                 verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(0L), eq(40L));
-                assertEquals(3, taskManager.getTaskCount(module));
+                verify(scheduler).runTaskLaterAsynchronously(eq(host), any(Runnable.class), eq(11L));
+                assertEquals(4, taskManager.getTaskCount(module));
             }
         }
 
@@ -873,33 +885,24 @@ class TaskManagerConfigBindingTest {
     @DisplayName("a binding outside a module is refused")
     class OutsideModules {
 
-        /**
-         * Round 2 of gate-1 WR-01 (orchestrator ruling): a config-bound {@code @Scheduled} cannot be
-         * {@code async}. Keeping an async task's phase across a reload needs either a prediction of
-         * the server's scheduler clock (which proved wrong for tasks armed at boot) or a sync trigger
-         * that dispatches the work -- the capability is withdrawn instead, and the author binds a sync
-         * task and dispatches heavy work to the async scheduler themselves.
-         */
         @Test
-        @DisplayName("a bound async @Scheduled is refused when scheduled, naming the method, and nothing is scheduled")
-        void aBoundAsyncMethodIsRefusedAndNothingIsScheduled() {
-            PluginModuleException refused = assertThrows(PluginModuleException.class,
-                    () -> taskManager.registerScheduledMethods(module, new BoundAsyncBean()));
+        @DisplayName("a bound async @Scheduled with both keys registers one synchronous trigger (#535)")
+        void aBoundAsyncMethodRegistersOneSyncTrigger() {
+            taskManager.registerScheduledMethods(module, new BoundAsyncBean());
 
-            assertTrue(refused.getMessage().contains("BoundAsyncBean.tick"), refused.getMessage());
-            assertTrue(refused.getMessage().contains("async"), refused.getMessage());
-            assertTrue(refused.getMessage().contains("runTaskAsynchronously"), refused.getMessage());
-            assertEquals(0, taskManager.getTaskCount(module));
-            assertTrue(pendingTaskIds().isEmpty());
+            assertEquals(1, taskManager.getTaskCount(module));
+            assertEquals(1, pendingTaskIds().size());
+            assertTrue(Bukkit.getScheduler().getPendingTasks().stream().allMatch(BukkitTask::isSync));
         }
 
         @Test
-        @DisplayName("a bound async @Scheduled with only periodKey is refused too")
-        void aBoundAsyncPeriodOnlyMethodIsRefused() {
-            assertThrows(PluginModuleException.class,
-                    () -> taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean()));
+        @DisplayName("a bound async @Scheduled with only periodKey also registers one sync trigger (#535)")
+        void aBoundAsyncPeriodOnlyMethodRegistersOneSyncTrigger() {
+            taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean());
 
-            assertEquals(0, taskManager.getTaskCount(module));
+            assertEquals(1, taskManager.getTaskCount(module));
+            assertEquals(1, pendingTaskIds().size());
+            assertTrue(Bukkit.getScheduler().getPendingTasks().stream().allMatch(BukkitTask::isSync));
         }
 
         @Test
