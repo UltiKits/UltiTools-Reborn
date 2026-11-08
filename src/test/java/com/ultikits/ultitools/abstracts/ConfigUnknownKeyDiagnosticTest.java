@@ -248,6 +248,40 @@ class ConfigUnknownKeyDiagnosticTest {
     }
 
     @Test
+    void manyUndeclaredKeysAreCappedPerFileWithOneSummaryLine() throws Exception {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < 25; i++) {
+            text.append("retired").append(i).append(": ").append(i).append('\n');
+        }
+        write(text.toString());
+        byte[] before = Files.readAllBytes(file());
+        try (ConfigWarningCapture capture = ConfigWarningCapture.install()) {
+            new EmptyValues(PATH).init(plugin);
+            List<String> lines = diagnostics(capture);
+            assertThat(lines).as("#829: ten keys are named, then one summary line").hasSize(11);
+            for (int i = 0; i < 10; i++) {
+                assertThat(lines.get(i)).contains("key 'retired" + i + "'");
+            }
+            assertThat(lines.get(10)).isEqualTo("Module 'DiagnosticModule', file '" + PATH
+                    + "': 15 more keys have no @ConfigEntry declaration (not listed); left unchanged");
+        }
+        assertThat(Files.readAllBytes(file())).isEqualTo(before);
+    }
+
+    @Test
+    void exactlyTheCapIsListedWithoutASummaryLine() throws Exception {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < 10; i++) {
+            text.append("retired").append(i).append(": ").append(i).append('\n');
+        }
+        write(text.toString());
+        try (ConfigWarningCapture capture = ConfigWarningCapture.install()) {
+            new EmptyValues(PATH).init(plugin);
+            assertThat(diagnostics(capture)).hasSize(10).noneMatch(line -> line.contains("more keys"));
+        }
+    }
+
+    @Test
     void anEntityWithNoDeclarationsReportsItsTopLevelKeys() throws Exception {
         write("old: {child: preserved}\nother: null\n");
         byte[] before = Files.readAllBytes(file());
