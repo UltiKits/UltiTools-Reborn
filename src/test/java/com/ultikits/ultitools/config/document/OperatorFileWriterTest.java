@@ -331,6 +331,41 @@ class OperatorFileWriterTest {
         assertThat(warnings).isEmpty();
     }
 
+    /** #842: a bare list item ({@code -}) has no text either; an insert right after it keeps the list's bytes. */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("insertionsAfterABareListItem")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through the shared #628 test body
+    void insertsAfterABareListItemWithoutChangingAnyOperatorBytes(String name, String before, List<String> path,
+            boolean commented, String expected) throws Exception {
+        insertsAfterAnEmptySiblingWithoutChangingAnyOperatorBytes(name, before, path, commented, expected);
+    }
+
+    static Stream<Arguments> insertionsAfterABareListItem() {
+        List<Arguments> cases = new ArrayList<>();
+        String[][] layouts = {
+            {"top-level", "a:\n- 1\n-", "", "b"},
+            {"indented-items", "a:\n  - 1\n  -", "", "b"},
+            {"only-item", "a:\n-", "", "b"},
+            {"nested", "s:\n  l:\n  - 1\n  -", "  ", "s/d"}
+        };
+        for (String[] layout : layouts) {
+            for (String ending : Arrays.asList("\n", "\r\n", "")) {
+                String separator = ending.isEmpty() ? "\n" : ending;
+                for (boolean commented : new boolean[] {false, true}) {
+                    List<String> path = Arrays.asList(layout[3].split("/"));
+                    String before = layout[1].replace("\n", separator);
+                    String inserted = (commented ? layout[2] + "# D" + separator : "")
+                            + layout[2] + path.get(path.size() - 1) + ": 2";
+                    String name = layout[0] + "/comment=" + commented
+                            + "/ending=" + ending.replace("\r", "CR").replace("\n", "LF");
+                    cases.add(Arguments.of(name, before + ending, path, commented,
+                            before + separator + inserted + ending));
+                }
+            }
+        }
+        return cases.stream();
+    }
+
     /** The same zero-text value must not extend an owned key over the next sibling's key or comment. */
     @ParameterizedTest(name = "remove={0}")
     @ValueSource(booleans = {false, true})
