@@ -90,7 +90,7 @@ final class ModuleClassLoader extends URLClassLoader {
     }
 
     /** Emits a cached audit only when normal assembly has obtained the module's real scan roots. */
-    void reportModule(Class<?> mainClass, String[] roots, java.util.logging.Logger logger) {
+    void reportModule(Class<?> mainClass, String[] roots, Logger logger) {
         CodeSource codeSource = mainClass.getProtectionDomain().getCodeSource();
         if (codeSource == null) {
             return;
@@ -105,7 +105,7 @@ final class ModuleClassLoader extends URLClassLoader {
     }
 
     /** Pre-scans each explicit module once; classification waits for normal container assembly. */
-    void auditModules(java.util.logging.Logger logger) {
+    void auditModules(Logger logger) {
         for (URL source : getURLs()) {
             if (!moduleJars.contains(source) || !auditedModules.add(source)) {
                 continue;
