@@ -2218,6 +2218,12 @@ This section governs the third kind.
   Modules without a dependency between them already loaded in alphabetical order of their class names
   and still do. An install that relied on one copy winning by listing order may see the other one win
   after upgrading, once, and then the same one on every start and file system.
+- As of 6.4.0, when two or more modules share a main-class simple name (for example two different `Main`
+  classes) and another module names that simple name in `@PluginDependency` (`depends`, `softDepends`,
+  `loadBefore`) or a `plugin.yml` `loadAfter`, one start-up WARNING lists every fully qualified class and the
+  module the name resolves to - the last discovered, unchanged from earlier releases
+  ([#841](https://github.com/UltiKits/UltiTools-Reborn/issues/841)). Name the intended module by its
+  `plugin.yml` `name:` instead. A shared simple name that nothing references is not reported.
 - Two or more JARs in the modules folder declaring the same `plugin.yml` `main:` class are reported by
   one start-up WARNING naming every one of them and the JAR the classes load from (UltiTools-Dev-Doc#96).
   The copies are not loaded side by side: the classes come from the first such JAR in file-name order. A JAR
