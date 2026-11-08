@@ -2451,6 +2451,20 @@ class PublishWorkflowTests(unittest.TestCase):
                 self.assertEqual(fixture.entries("mvn"), [])
                 kill_agent(fixture.gnupg)
 
+    def test_central_job_outlasts_the_publishers_own_wait(self):
+        # The 6.3.1 run was cancelled by the job timeout (20 minutes) while the publisher was still
+        # waiting for Central to report "published"; the re-check step never ran (issue #813). The
+        # publisher's wait bound is explicit and the job timeout leaves room for it and the other steps.
+        job = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-central"]
+        publish = step_named(job, "📤 Publish the retained files to Maven Central")
+        match = re.search(r"-DwaitMaxTime=(\d+)(?:\s|$)", publish["run"])
+        self.assertIsNotNone(match, "the publisher's wait bound is not explicit")
+        wait_minutes = int(match.group(1)) / 60.0
+        self.assertGreaterEqual(wait_minutes, 45)
+        self.assertGreaterEqual(int(job["timeout-minutes"]), wait_minutes + 20)
+        recheck = step_named(job, "🔁 Re-check the retained files after publication")
+        self.assertNotIn("timeout-minutes", recheck)
+
     def test_github_job_explicitly_depends_on_central(self):
         job = load_workflow(PUBLISH_WORKFLOW)["jobs"]["publish-github"]
         self.assertEqual(job["needs"], ["validate", "publish-central"])

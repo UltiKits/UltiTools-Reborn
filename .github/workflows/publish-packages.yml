@@ -165,7 +165,10 @@ jobs:
 
   publish-central:
     name: 📤 Maven Central
-    timeout-minutes: 20
+    # Longer than the publisher's own wait below (-DwaitMaxTime, 60 minutes) plus the other steps, so a slow
+    # Central deployment ends with the publisher's verdict and the re-check still runs. The 6.3.1 run hit the
+    # former 20-minute limit while Central was still publishing an accepted deployment (issue #813).
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     needs: validate
     permissions:
@@ -309,7 +312,10 @@ jobs:
       # so that POM is what is staged and uploaded, unchanged; it assigns the retained primary JAR and attaches
       # the sources and javadoc JARs and the four signatures. The scratch directories are cleared, which is why
       # the retained inputs live elsewhere. The source POM's publisher configuration (server id, autoPublish,
-      # waitUntil) equals the command-line values below.
+      # waitUntil) equals the command-line values below. -DwaitMaxTime bounds how long the publisher waits for
+      # Central to report the deployment published (the plugin default is 30 minutes); it stays below the job's
+      # timeout-minutes, so a deployment slower than that fails here with the publisher's own message instead of
+      # the runner cancelling the job.
       if: steps.central-state.outputs.publish == 'true'
       env:
         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
@@ -327,7 +333,8 @@ jobs:
           -Dmaven.ext.class.path="$HELPER_JAR" -DretainedArtifacts.properties="$PROPERTIES" \
           -DstagingDirectory="$STAGING_DIR" -DdeferredDirectory="$DEFERRED_DIR" -DoutputDirectory="$OUTPUT_DIR" \
           org.sonatype.central:central-publishing-maven-plugin:0.9.0:publish \
-          -DpublishingServerId=ultikits-sonatype -DautoPublish=true -DwaitUntil=published -Dchecksums=all
+          -DpublishingServerId=ultikits-sonatype -DautoPublish=true -DwaitUntil=published -DwaitMaxTime=3600 \
+          -Dchecksums=all
 
     - name: 🔁 Re-check the retained files after publication
       if: steps.central-state.outputs.publish == 'true'
