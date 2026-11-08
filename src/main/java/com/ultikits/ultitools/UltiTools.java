@@ -673,9 +673,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
         try {
             String changed = keyBukkitWouldReadDifferently(configFile, loaded.fingerprint(), server, insert);
             if (changed != null) {
+                // #826: the whole file stays neutral; a named key also says why, with examples covering both
+                // layouts that produce it, so neither is reported as if it were the other.
+                String why = "the whole file".equals(changed)
+                        ? " Inserting the missing panel keys could not be verified to preserve how the server reads the"
+                        + " existing file."
+                        : " Inserting the missing panel keys would change how the server reads '" + changed + "' (for"
+                        + " example, the same setting written both as one dotted key and as a nested section, or a value"
+                        + " where the inserted keys need a section).";
                 logger.warning("Configuration file " + configFile.getAbsolutePath() + " was not written: capability"
-                        + " migration validation failed for '" + changed + "'. Inserting the missing panel keys could not"
-                        + " be verified to preserve how the server reads the existing file. The built-in defaults answer"
+                        + " migration validation failed for '" + changed + "'." + why + " The built-in defaults answer"
                         + " for the missing keys; the file is unchanged.");
                 return false;
             }
