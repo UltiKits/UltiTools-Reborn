@@ -199,9 +199,9 @@ public class SQLiteDataStore implements DataStore {
     private HikariDataSource poolFor(String dbPath) {
         return dataSourceMap.computeIfAbsent(dbPath, path -> {
             HikariConfig config = new HikariConfig();
-            config.setJdbcUrl("jdbc:sqlite://" + path);
-            config.setDriverClassName("org.sqlite.JDBC");
             config.setMaximumPoolSize(10);
+            // The data source alone names the database file and opens its connections; Hikari
+            // ignores jdbcUrl and driverClassName once a data source is set, so neither is set.
             config.setDataSource(new SQLiteBusyDataSource(path));
             return new HikariDataSource(config);
         });
