@@ -205,7 +205,8 @@
             <!-- The Paper API floor fixture (#831), fetched here rather than by dependency:copy so that a
                  missing or changed jar stops the build with a message naming the jar and how to
                  replace it, instead of a bare resolution error. The local Maven repository copy is
-                 used first (offline builds), then the Paper repository; the SHA-256 is always checked.
+                 used first (offline builds), then the Paper repository, whose verified download is
+                 then kept in the local repository; the SHA-256 is always checked.
                  Test fixture only: never on any classpath of the published jar. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -226,7 +227,7 @@
                                 <property name="floor.local" value="${settings.localRepository}/io/papermc/paper/paper-api/1.19.2-R0.1-SNAPSHOT/${floor.file}"/>
                                 <property name="floor.url" value="https://repo.papermc.io/repository/maven-public/io/papermc/paper/paper-api/1.19.2-R0.1-SNAPSHOT/${floor.file}"/>
                                 <mkdir dir="${floor.dir}"/>
-                                <copy file="${floor.local}" tofile="${floor.jar}" failonerror="false" quiet="true"/>
+                                <copy file="${floor.local}" tofile="${floor.jar}" failonerror="false" quiet="true" preservelastmodified="true"/>
                                 <get src="${floor.url}" dest="${floor.jar}" skipexisting="true" ignoreerrors="true" quiet="true"/>
                                 <fail message="Runtime API floor fixture missing: ${floor.file} (SHA-256 ${runtime.api.floor.paper.sha256}) is neither in the local Maven repository (${floor.local}) nor downloadable from ${floor.url}. The floor guard (RuntimeApiGuardTest) checks the framework against exactly this jar. If Paper has pruned the snapshot, replace the fixture: choose another published paper-api 1.19.2-R0.1-SNAPSHOT jar from that repository, set runtime.api.floor.paper.version and runtime.api.floor.paper.sha256 in pom.xml to its timestamped version and SHA-256 (sha256sum), and update RuntimeGuardConfigurationTest. Offline: place the original jar at ${floor.local}.">
                                     <condition>
@@ -243,6 +244,10 @@
                                         </not>
                                     </condition>
                                 </fail>
+                                <!-- A verified download is kept in the local Maven repository, so a later offline
+                                     build after mvn clean still finds it. A jar copied from there keeps its time
+                                     stamp and is not copied back. -->
+                                <copy file="${floor.jar}" tofile="${floor.local}" overwrite="false" failonerror="false" quiet="true" preservelastmodified="true"/>
                             </target>
                         </configuration>
                     </execution>
