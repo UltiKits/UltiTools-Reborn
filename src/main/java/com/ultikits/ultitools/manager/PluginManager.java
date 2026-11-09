@@ -288,9 +288,10 @@ public class PluginManager {
 
     /**
      * External plugin data folder (canonical path) -&gt; the {@link DataScope} minted for it,
-     * populated by {@link #registerExternal(ExternalPluginAdapter, Class[])}. Lets {@code
-     * DataStore.getOperator(File, Class)} resolve its caller back to a scope (D-18), for the
-     * default body a third-party {@code DataStore} that does not override that method inherits.
+     * populated by {@link #registerExternal(ExternalPluginAdapter, Class[])}. Backs {@link
+     * #findScopeForDataFolder} and the folder-collision refusal in {@code registerExternalScope}.
+     * (Before 6.4.0 it also let the removed {@code DataStore.getOperator(File, Class)} overload
+     * resolve its caller back to a scope, D-18.)
      */
     private final Map<String, DataScope> externalScopesByFolder = new ConcurrentHashMap<>();
 
@@ -2409,8 +2410,7 @@ public class PluginManager {
 
     /**
      * Records an external plugin's {@link DataScope} under its data folder's canonical path, so
-     * {@link #findScopeForDataFolder} can resolve the caller of {@code DataStore.getOperator(File,
-     * Class)} back to a scope (D-18) -- the same canonical-path keying 02-02's Task 2 used for the
+     * {@link #findScopeForDataFolder} can resolve a data folder back to a scope (D-18) -- the same canonical-path keying 02-02's Task 2 used for the
      * SQLite pool map, so two spellings of the same folder resolve to one entry.
      * <p>
      * Refuses (02-14 Task 2) rather than silently replacing when the canonical path already maps
@@ -2418,7 +2418,7 @@ public class PluginManager {
      * before this, so wrapping another plugin (all public calls -- {@code new
      * ExternalPluginAdapter(Bukkit.getPluginManager().getPlugin("Victim"))}) and calling the
      * public {@code registerExternal} would displace the victim's legitimate scope here, poisoning
-     * the D-18 reverse lookup {@code checkOwnership(File, Class)} depends on. Re-registration by
+     * the D-18 reverse lookup {@link #findScopeForDataFolder} answers. Re-registration by
      * the SAME plugin (matched by name) is idempotent, not refused -- a plugin reconnecting after
      * {@link #unregisterExternal(ExternalPluginAdapter)} must not be permanently locked out.
      *

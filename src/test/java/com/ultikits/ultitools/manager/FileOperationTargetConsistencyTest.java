@@ -1,16 +1,12 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.timeout;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
+import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -24,7 +20,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -41,43 +36,54 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
-import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.ultikits.ultitools.utils.CredentialStore;
+import com.ultikits.ultitools.contract.ContractFixtures;
+import com.ultikits.ultitools.contract.RecordingChannel;
+import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.AgentMessageRouter;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.TestHelper;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
- * Target-consistency reproductions for the remote file API (issue #672, Phase 20.2 Plan 01).
- * <p>
- * Every request goes through the public {@link FileOperationManager#handleFileOperation} entry and
- * every assertion checks a real filesystem effect, the captured panel response, or the single
- * action-log entry. The class reaches production only through the public constructor,
- * {@code setWebSocketClient}, {@code handleFileOperation} and reflective writes to the
- * {@code serverRoot} and {@code editableRoots} fields, so it compiles against the pre-fix
- * production bytes and can be run there as a baseline observation.
- * <p>
- * All methods are top-level: Surefire's method filter does not descend into nested classes.
- * <p>
- * Standard fixture (built before every test): server root = the temporary directory, single
+ * Target-consistency guarantees of the remote file API (issue #672, Phase 20.2), ported in 6.4.0
+ * from the removed protocol v1 handler onto the protocol 2.1.0 {@code files.read},
+ * {@code files.list}, {@code files.write} and {@code files.delete} requests: the object that is
+ * authorized is the object the I/O reaches, through symbolic links, path aliases, link loops and
+ * overlapping editable roots.
+ *
+ * <p>Requests go through {@link AgentMessageRouter} into {@link RemoteFileOperations}, exactly as
+ * the live connection dispatches them; every assertion is a real filesystem effect, the reply the
+ * panel receives (schema-checked by {@link RecordingChannel}) or the single action-log entry.</p>
+ *
+ * <p>Protocol 2.1.0 differs from v1 in four ways that shape the ported rows:</p>
+ * <ul>
+ *   <li>a {@code ServerPath} cannot carry {@code .} or {@code ..} segments, empty segments or a
+ *       leading or trailing separator, so those request shapes are answered {@code invalid_message}
+ *       before any filesystem access; the resolver's own refusal of them is still pinned directly
+ *       on {@link FileOperationManager#resolveTarget} as defence in depth;</li>
+ *   <li>a listing hides a refused child instead of marking it;</li>
+ *   <li>{@code files.write} never creates a file and needs the current {@code baseVersion} (the
+ *       rows below send the correct version, so only the guard can refuse);</li>
+ *   <li>{@code files.delete} has no recursive form; a directory answers {@code is_directory}.</li>
+ * </ul>
+ *
+ * <p>Standard fixture (built before every test): server root = the temporary directory, single
  * editable root = {@code root}; {@code outside/deep} (directory), {@code outside/secret.txt} and
  * {@code outside/victim.txt} carry sentinel bytes; in-root decoys {@code root/secret.txt} and
  * {@code root/victim.txt} carry different bytes; {@code root/sub} is a directory;
  * {@code root/link -> outside/deep}, {@code root/esc -> outside},
- * {@code root/dangling -> outside/created.txt} (absent).
+ * {@code root/dangling -> outside/created.txt} (absent).</p>
  */
-@DisplayName("FileOperationManager: the authorized object is the object the I/O reaches")
+@DisplayName("UltiCloud v2 files.*: the authorized object is the object the I/O reaches")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the fixture points the manager at a temp tree
 class FileOperationTargetConsistencyTest {
 
-    private static final String ACTOR = "target-consistency-admin";
     private static final String ROOTS_KEY = "ultipanel.files.editable-roots";
     private static final String NON_CONFIGURABLE_MARKER = "cannot be changed through configuration";
+    private static final String NOT_ALLOWED = "path_not_allowed";
 
     private static final String OUTSIDE_SECRET = "OUTSIDE-SECRET-SENTINEL-7f3a";
     private static final String OUTSIDE_VICTIM = "OUTSIDE-VICTIM-SENTINEL-91c2";
@@ -86,14 +92,16 @@ class FileOperationTargetConsistencyTest {
     private static final String TOKEN_SENTINEL = "SYNTHETIC-TOKEN-SENTINEL-d08";
     private static final String DATA_JSON_CONTENT = "{\"refresh_token\":\"" + TOKEN_SENTINEL + "\"}";
     private static final String ACTION_LOG_SENTINEL = "ACTION-LOG-SENTINEL-d08";
+    /** A well-formed version that matches no fixture file. */
+    private static final String ANY_VERSION = repeat('0', 64);
 
     @TempDir
     Path tmp;
 
-    private Logger mockLogger;
-    private RemoteActionLog actionLog;
-    private UltiPanelWebSocketClient webSocket;
-    private FileOperationManager manager;
+    private FileOperationManager files;
+    private AgentMessageRouter router;
+    private RecordingChannel channel;
+    private List<RemoteActionLog.Entry> audit;
 
     private Path root;
     private Path outside;
@@ -108,23 +116,23 @@ class FileOperationTargetConsistencyTest {
         MockBukkit.mock();
         MockBukkit.createMockPlugin();
 
-        mockLogger = mock(Logger.class);
-        actionLog = mock(RemoteActionLog.class);
+        Logger logger = mock(Logger.class);
         TestHelper.mockUltiToolsInstance(ultiTools -> {
-            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getLogger()).thenReturn(logger);
             lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
-            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(actionLog);
         });
 
-        webSocket = mock(UltiPanelWebSocketClient.class);
-        when(webSocket.isConnected()).thenReturn(true);
-        when(webSocket.getServerId()).thenReturn("test-server");
-
-        manager = new FileOperationManager();
-        manager.setWebSocketClient(webSocket);
-
         buildStandardFixture();
+        files = new FileOperationManager();
         pointManagerAt(tmp, root);
+        audit = Collections.synchronizedList(new ArrayList<RemoteActionLog.Entry>());
+        RemoteFileOperations handler = new RemoteFileOperations(files, tmp.toFile(), audit::add, () -> true);
+        router = new AgentMessageRouter(capability -> true, capability -> "disabled");
+        router.register("files.list", handler);
+        router.register("files.read", handler);
+        router.register("files.write", handler);
+        router.register("files.delete", handler);
+        channel = new RecordingChannel();
     }
 
     @AfterEach
@@ -133,159 +141,144 @@ class FileOperationTargetConsistencyTest {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Case fb720d5cbe578bb7ea7cffa20163b74b810033f5d71a62c70c0c655e25551347:
-    // the checked path and the used path differ (symbolic link followed by '..', dangling link).
+    // Request shapes that relied on '..', '.', doubled or trailing separators. Protocol 2.1.0
+    // refuses them at the contract layer; the guard still refuses the unsafe ones on its own.
+    // ------------------------------------------------------------------------------------------
+
+    @ParameterizedTest(name = "[{index}] {0} {1}")
+    @DisplayName("a '..', '.', doubled or trailing separator path is invalid_message and touches nothing")
+    @CsvSource({
+        "files.read, root/link/../secret.txt",
+        "files.write, root/link/../new.txt",
+        "files.list, root/link/..",
+        "files.delete, root/link/../victim.txt",
+        "files.write, root/missing/../x.txt",
+        "files.write, root/missing/./x.txt",
+        "files.write, root/secret.txt/../x.txt",
+        "files.delete, root/sub/..",
+        "files.delete, /",
+        "files.delete, .",
+        "files.delete, root/sub/.",
+        "files.read, root/sub/../secret.txt",
+        "files.read, root//sub/file.txt",
+        "files.list, root/sub/",
+        "files.list, root/sub/.."
+    })
+    void unsafePathShapesAreRefusedBeforeAnyFilesystemAccess(String type, String path) throws IOException {
+        Map<String, String> before = snapshot(tmp);
+
+        dispatch(requestFor(type, path, "PAYLOAD", ANY_VERSION));
+
+        JsonObject frame = only();
+        assertThat(frame.get("type").getAsString()).isEqualTo("error");
+        assertThat(frame.getAsJsonObject("payload").get("code").getAsString()).isEqualTo("invalid_message");
+        assertThat(frame.toString()).doesNotContain(OUTSIDE_SECRET).doesNotContain(DECOY_SECRET);
+        assertThat(snapshot(tmp)).as("nothing anywhere is created, changed or removed").isEqualTo(before);
+        assertThat(audit).as("a request refused before a decision records nothing").isEmpty();
+    }
+
+    @ParameterizedTest(name = "[{index}] {0} {1} -> configurable={2}")
+    @DisplayName("the guard itself still refuses a link followed by '..' and every unsafe '.' or '..' shape")
+    @CsvSource({
+        "FOLLOW, root/link/../secret.txt, true",
+        "FOLLOW, root/link/../new.txt, true",
+        "FOLLOW, root/link/.., true",
+        "ENTRY, root/link/../victim.txt, true",
+        "FOLLOW, root/missing/../x.txt, false",
+        "FOLLOW, root/missing/./x.txt, false",
+        "FOLLOW, root/secret.txt/../x.txt, false",
+        "ENTRY, root/sub/.., false"
+    })
+    void guardRefusesUnsafeShapes(FileOperationManager.ResolveMode mode, String path, boolean configurable) {
+        FileOperationManager.ResolvedTarget target = files.resolveTarget(path, mode);
+
+        assertThat(target.getDecision().isAllowed()).isFalse();
+        assertThat(target.getOperand()).isNull();
+        assertThat(target.getDecision().isConfigurable()).isEqualTo(configurable);
+        if (configurable) {
+            assertThat(target.getDecision().getMessage()).contains(ROOTS_KEY);
+        } else {
+            assertThat(target.getDecision().getMessage()).contains(NON_CONFIGURABLE_MARKER).doesNotContain(ROOTS_KEY);
+        }
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @DisplayName("the guard refuses a delete that names no ordinary entry ('/', '.', 'sub/.') non-configurably")
+    @ValueSource(strings = {"/", ".", "sub/."})
+    void guardRefusesDeleteWithoutOrdinaryTerminalName(String path) throws Exception {
+        Path srv = Files.createDirectories(tmp.resolve("srv"));
+        Files.createDirectories(srv.resolve("sub"));
+        pointManagerAt(srv, srv);
+
+        FileOperationManager.ResolvedTarget target =
+                files.resolveTarget(path, FileOperationManager.ResolveMode.ENTRY);
+
+        assertThat(target.getDecision().isAllowed()).isFalse();
+        assertThat(target.getDecision().getMessage()).contains(NON_CONFIGURABLE_MARKER).doesNotContain(ROOTS_KEY);
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @DisplayName("control: the guard resolves harmless '..', doubled and trailing separators to the plain object")
+    @CsvSource({
+        "root/sub/../file.txt, file.txt",
+        "root//sub/inner.txt, sub/inner.txt",
+        "root/sub/, sub",
+        "root/sub/.., ''"
+    })
+    void guardResolvesHarmlessShapesToThePlainObject(String path, String expectedInRoot) throws IOException {
+        Files.write(root.resolve("file.txt"), "plain-file".getBytes(StandardCharsets.UTF_8));
+        Files.write(root.resolve("sub").resolve("inner.txt"), "inner".getBytes(StandardCharsets.UTF_8));
+
+        FileOperationManager.ResolvedTarget target =
+                files.resolveTarget(path, FileOperationManager.ResolveMode.FOLLOW);
+
+        assertThat(target.getDecision().isAllowed()).isTrue();
+        Path expected = expectedInRoot.isEmpty() ? root.toRealPath() : root.toRealPath().resolve(expectedInRoot);
+        assertThat(target.getOperand().toPath()).isEqualTo(expected);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The checked path and the used path must not differ (dangling link, real-path refusal).
     // ------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("read root/link/../secret.txt does not read the outside object")
-    void readThroughLinkParentSegmentDoesNotReadOutsideObject() throws Exception {
-        String path = "root/link/../secret.txt";
-
-        Outcome outcome = send(request("read", path));
-
-        assertThat(outcome.allMessagesJson())
-                .as("no panel message may carry the outside file's bytes")
-                .doesNotContain(OUTSIDE_SECRET);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "read", path);
-    }
-
-    @Test
-    @DisplayName("write root/link/../new.txt does not create a file outside the root")
-    void writeThroughLinkParentSegmentDoesNotCreateOutsideFile() throws Exception {
-        String path = "root/link/../new.txt";
-        JsonObject data = request("write", path);
-        data.addProperty("content", "PAYLOAD");
-
-        Outcome outcome = send(data);
-
-        assertThat(outside.resolve("new.txt")).as("outside/new.txt must not be created").doesNotExist();
-        assertThat(root.resolve("new.txt")).as("a refused write creates nothing in the root").doesNotExist();
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "write", path);
-    }
-
-    @Test
-    @DisplayName("list root/link/.. does not list the outside directory")
-    void listThroughLinkParentSegmentDoesNotListOutsideDirectory() throws Exception {
-        String path = "root/link/..";
-
-        Outcome outcome = send(request("list", path));
-
-        assertThat(outcome.listedNames())
-                .as("no listed entry may come from the outside directory")
-                .doesNotContain("deep", "secret.txt");
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "list", path);
-    }
-
-    @Test
-    @DisplayName("delete root/link/../victim.txt does not remove the outside file")
-    void deleteThroughLinkParentSegmentDoesNotRemoveOutsideFile() throws Exception {
-        String path = "root/link/../victim.txt";
-
-        Outcome outcome = send(request("delete", path));
-
-        assertThat(outsideVictim).as("outside/victim.txt must not be removed").exists();
-        assertThat(readText(outsideVictim)).as("outside/victim.txt must be untouched").isEqualTo(OUTSIDE_VICTIM);
-        assertThat(readText(root.resolve("victim.txt"))).as("the in-root decoy must be untouched")
-                .isEqualTo(DECOY_VICTIM);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "delete", path);
-    }
-
-    @Test
-    @DisplayName("write to a dangling link does not create the link's target")
-    void writeToDanglingLinkDoesNotCreateLinkTarget() throws Exception {
-        String path = "root/dangling";
-        JsonObject data = request("write", path);
-        data.addProperty("content", "PAYLOAD");
-
-        Outcome outcome = send(data);
+    @DisplayName("a write to a dangling link does not create the link's target and is refused non-configurably")
+    void writeToDanglingLinkDoesNotCreateLinkTarget() throws IOException {
+        dispatch(writeRequest("root/dangling", "PAYLOAD", ANY_VERSION));
 
         assertThat(outside.resolve("created.txt")).as("the dangling link's target must not be created")
                 .doesNotExist();
         assertThat(Files.isSymbolicLink(root.resolve("dangling"))).as("the link itself is left alone").isTrue();
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "write", path);
+        assertDenied(Capability.FILE_WRITE, "files.write", "root/dangling", NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Case bfdffbeb4827bf3a7a613d559fcc44a0cafa47318e08cb6dc2c49997579fd4ff:
-    // a refusal reached during real-path resolution must be the decision that is audited.
-    // ------------------------------------------------------------------------------------------
-
     @ParameterizedTest(name = "[{index}] {0} {1}")
-    @DisplayName("a real-path refusal is audited as exactly one DENIED entry")
+    @DisplayName("a refusal reached during real-path resolution is audited as exactly one DENIED entry")
     @CsvSource({
-        "read, root/esc/secret.txt",
-        "write, root/esc/new.txt",
-        "list, root/esc",
-        "delete, root/esc/secret.txt"
+        "files.read, root/esc/secret.txt",
+        "files.write, root/esc/secret.txt",
+        "files.write, root/esc/new.txt",
+        "files.list, root/esc",
+        "files.delete, root/esc/secret.txt"
     })
-    void realPathRefusalIsAuditedAsDenied(String operation, String path) throws Exception {
-        JsonObject data = request(operation, path);
-        data.addProperty("content", "PAYLOAD"); // read, list and delete ignore it
+    void realPathRefusalIsAuditedAsDenied(String type, String path) throws IOException {
+        String version = RemoteFileOperations.sha256Hex(OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
 
-        Outcome outcome = send(data);
+        dispatch(requestFor(type, path, "PAYLOAD", version));
 
-        assertThat(outsideSecret).exists();
         assertThat(readText(outsideSecret)).isEqualTo(OUTSIDE_SECRET);
         assertThat(readText(outsideVictim)).isEqualTo(OUTSIDE_VICTIM);
         assertThat(outside.resolve("new.txt")).doesNotExist();
-        assertThat(outcome.allMessagesJson()).doesNotContain(OUTSIDE_SECRET);
-        assertThat(outcome.listedNames()).isEmpty();
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, operation, path);
-        assertThat(outcome.entry.getReason()).as("an out-of-root refusal names the editable-roots key")
+        assertThat(only().toString()).doesNotContain(OUTSIDE_SECRET);
+        assertDenied(capabilityOf(type), type, path, NOT_ALLOWED);
+        assertThat(audit.get(0).getReason()).as("an out-of-root refusal names the editable-roots key")
                 .contains(ROOTS_KEY);
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // Behaviour-change rows (baseline observation, not frozen cases).
-    // ------------------------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("a listed alias to an outside file is marked OUTSIDE_ROOTS without metadata")
-    void aliasToOutsideFileIsMarkedRefusedInList() throws Exception {
-        Path aliasDir = Files.createDirectories(root.resolve("aliasdir"));
-        Files.write(aliasDir.resolve("plain.txt"), "plain".getBytes(StandardCharsets.UTF_8));
-        link(aliasDir.resolve("alias.txt"), outsideSecret);
-
-        Outcome outcome = send(request("list", "root/aliasdir"));
-
-        JsonObject alias = outcome.listedEntry("alias.txt");
-        assertThat(alias.get("accessible").getAsBoolean()).isFalse();
-        assertThat(alias.get("reason").getAsString()).isEqualTo("OUTSIDE_ROOTS");
-        assertThat(alias.has("size")).isFalse();
-        assertThat(alias.has("lastModified")).isFalse();
-        assertThat(alias.has("readable")).isFalse();
-        assertThat(alias.has("writable")).isFalse();
-        assertThat(outcome.listedEntry("plain.txt").get("accessible").getAsBoolean()).isTrue();
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "list", "root/aliasdir");
-    }
-
-    @ParameterizedTest(name = "[{index}] {0}")
-    @DisplayName("a write whose missing part contains '..' or '.' is refused non-configurably")
-    @ValueSource(strings = {"root/missing/../x.txt", "root/missing/./x.txt", "root/secret.txt/../x.txt"})
-    void writeAfterMissingComponentParentSegmentIsRefused(String path) throws Exception {
-        JsonObject data = request("write", path);
-        data.addProperty("content", "PAYLOAD");
-
-        Outcome outcome = send(data);
-
-        assertThat(filesNamed("x.txt")).as("no x.txt may be created anywhere").isEmpty();
-        assertThat(root.resolve("missing")).as("no directory may be created for a refused write").doesNotExist();
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "write", path);
-        assertNonConfigurable(outcome);
     }
 
     @Test
     @DisplayName("a component under an unsearchable directory is refused as undeterminable")
-    void unsearchableDirectoryComponentIsRefused() throws Exception {
+    void unsearchableDirectoryComponentIsRefused() throws IOException {
         Path locked = Files.createDirectories(root.resolve("locked"));
         Files.write(locked.resolve("f.txt"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(locked);
@@ -294,12 +287,11 @@ class FileOperationTargetConsistencyTest {
             Assumptions.assumeFalse(Files.exists(locked.resolve("f.txt")),
                     "this user can search a mode-000 directory (running as root?); the row is BLOCKED here");
 
-            Outcome outcome = send(request("read", "root/locked/f.txt"));
+            dispatch(readRequest("root/locked/f.txt"));
 
-            assertThat(outcome.allMessagesJson()).doesNotContain(OUTSIDE_SECRET);
-            assertThat(outcome.success()).isFalse();
-            assertDeniedEntry(outcome, "read", "root/locked/f.txt");
-            assertNonConfigurable(outcome);
+            assertThat(only().toString()).doesNotContain(OUTSIDE_SECRET);
+            assertDenied(Capability.FILE_READ, "files.read", "root/locked/f.txt", NOT_ALLOWED);
+            assertNonConfigurable();
         } finally {
             Files.setPosixFilePermissions(locked, original);
         }
@@ -307,106 +299,65 @@ class FileOperationTargetConsistencyTest {
 
     @Test
     @DisplayName("a self-referencing link is refused as unresolvable")
-    void linkLoopIsRefusedAsUnresolvable() throws Exception {
+    void linkLoopIsRefusedAsUnresolvable() throws IOException {
         Path loop = root.resolve("loop");
         link(loop, loop);
 
-        Outcome outcome = send(request("read", "root/loop"));
+        dispatch(readRequest("root/loop"));
 
         assertThat(Files.isSymbolicLink(loop)).isTrue();
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "read", "root/loop");
-        assertNonConfigurable(outcome);
+        assertDenied(Capability.FILE_READ, "files.read", "root/loop", NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     @Test
-    @DisplayName("deleting an in-root link to an outside file removes only the link")
-    void deletingLinkToOutsideFileRemovesOnlyTheLink() throws Exception {
-        Path outLink = root.resolve("outlink");
-        link(outLink, outsideSecret);
+    @DisplayName("negative control: a sibling prefix directory (root-evil) is refused configurably")
+    void siblingPrefixDirectoryIsRefusedConfigurably() throws IOException {
+        Path evil = Files.createDirectories(tmp.resolve("root-evil"));
+        Files.write(evil.resolve("x"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
 
-        Outcome outcome = send(request("delete", "root/outlink"));
+        dispatch(readRequest("root-evil/x"));
 
-        assertThat(Files.exists(outLink, LinkOption.NOFOLLOW_LINKS)).as("the link entry is removed").isFalse();
-        assertThat(readText(outsideSecret)).as("the link's target is untouched").isEqualTo(OUTSIDE_SECRET);
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "root/outlink");
+        assertThat(only().toString()).doesNotContain(OUTSIDE_SECRET);
+        assertDenied(Capability.FILE_READ, "files.read", "root-evil/x", NOT_ALLOWED);
+        assertThat(audit.get(0).getReason()).contains(ROOTS_KEY);
     }
 
     @Test
-    @DisplayName("deleting a dangling link removes the link")
-    void deletingDanglingLinkRemovesTheLink() throws Exception {
-        Path dangling = root.resolve("dangling");
+    @DisplayName("control: a path continuing below a regular file is not_found, not a refusal")
+    void pathBelowARegularFileIsNotFound() {
+        dispatch(readRequest("root/secret.txt/x"));
 
-        Outcome outcome = send(request("delete", "root/dangling"));
+        JsonObject payload = only().getAsJsonObject("payload");
+        assertThat(payload.get("code").getAsString()).isEqualTo("not_found");
+        assertThat(payload.get("message").getAsString()).doesNotContain(NON_CONFIGURABLE_MARKER)
+                .doesNotContain(ROOTS_KEY);
+    }
 
-        assertThat(Files.exists(dangling, LinkOption.NOFOLLOW_LINKS)).as("the dangling link is removed").isFalse();
+    // ------------------------------------------------------------------------------------------
+    // Links: deletion removes only the link; in-root links reach their in-root targets.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("deleting a dangling link removes the link and creates nothing outside")
+    void deletingDanglingLinkRemovesTheLink() {
+        dispatch(deleteRequest("root/dangling"));
+
+        assertThat(okPayload()).isNotNull();
+        assertThat(Files.exists(root.resolve("dangling"), LinkOption.NOFOLLOW_LINKS))
+                .as("the dangling link is removed").isFalse();
         assertThat(outside.resolve("created.txt")).as("nothing is created outside").doesNotExist();
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "root/dangling");
-    }
-
-    @Test
-    @DisplayName("deleting root/sub/.. is refused non-configurably and removes nothing")
-    void deletingParentSegmentEntryIsRefused() throws Exception {
-        List<String> before = rootEntries();
-        JsonObject data = request("delete", "root/sub/..");
-        data.addProperty("recursive", true);
-
-        Outcome outcome = send(data);
-
-        assertThat(rootEntries()).as("every root entry is intact").isEqualTo(before);
-        assertThat(readText(root.resolve("secret.txt"))).isEqualTo(DECOY_SECRET);
-        assertThat(readText(outsideSecret)).isEqualTo(OUTSIDE_SECRET);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "delete", "root/sub/..");
-        assertNonConfigurable(outcome);
+        assertAllowed(Capability.FILE_DELETE, "files.delete", "root/dangling");
     }
 
     /**
-     * Additional behaviour-change row for the entry-mode rule "the terminal name must be an
-     * ordinary name": with the server root itself granted as the editable root, a delete of
-     * {@code /}, {@code .} or {@code sub/.} names no ordinary entry and is refused instead of
-     * emptying the directory it lexically collapses to.
+     * DIRLINK_ANSWER=A (maintainer, 2026-10-18): a panel delete of a symbolic link that points to
+     * a directory removes only the link; the target directory and its contents are untouched.
      */
-    @ParameterizedTest(name = "[{index}] {0}")
-    @DisplayName("a delete naming no ordinary entry ('/', '.', 'sub/.') is refused and removes nothing")
-    @ValueSource(strings = {"/", ".", "sub/."})
-    void deletingEntryWithoutOrdinaryTerminalNameIsRefused(String path) throws Exception {
-        Path srv = Files.createDirectories(tmp.resolve("srv"));
-        Path sub = Files.createDirectories(srv.resolve("sub"));
-        Files.write(srv.resolve("top.txt"), "top".getBytes(StandardCharsets.UTF_8));
-        Files.write(sub.resolve("keep.txt"), "keep".getBytes(StandardCharsets.UTF_8));
-        pointManagerAt(srv, srv);
-        JsonObject data = request("delete", path);
-        data.addProperty("recursive", true);
-
-        Outcome outcome = send(data);
-
-        assertThat(srv.resolve("top.txt")).exists();
-        assertThat(sub.resolve("keep.txt")).exists();
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "delete", path);
-        assertNonConfigurable(outcome);
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // Directory-link deletion, DIRLINK_ANSWER=A (maintainer, 2026-10-18): "A panel delete of a
-    // symbolic link that points to a directory removes ONLY the link; the target directory and
-    // its contents are untouched (option A, link-only; options B and C are not chosen)."
-    // ------------------------------------------------------------------------------------------
-
-    @ParameterizedTest(name = "[{index}] delete root/{0} with recursive={1}")
+    @ParameterizedTest(name = "[{index}] delete root/{0}")
     @DisplayName("deleting a link to a directory removes only the link (DIRLINK_ANSWER=A)")
-    @CsvSource({
-        "dlink, absent",
-        "dlink, false",
-        "dlink, true",
-        "olink, absent",
-        "olink, false",
-        "olink, true"
-    })
-    void deletingDirectoryLinkRemovesOnlyTheLink(String linkName, String recursive) throws Exception {
+    @ValueSource(strings = {"dlink", "olink", "esc"})
+    void deletingDirectoryLinkRemovesOnlyTheLink(String linkName) throws IOException {
         Path realDir = Files.createDirectories(root.resolve("realdir"));
         Path child = realDir.resolve("child.txt");
         Files.write(child, "child".getBytes(StandardCharsets.UTF_8));
@@ -415,616 +366,212 @@ class FileOperationTargetConsistencyTest {
         Files.write(sentinel, "sentinel".getBytes(StandardCharsets.UTF_8));
         link(root.resolve("dlink"), realDir);
         link(root.resolve("olink"), outsideDir);
+        Map<String, String> outsideBefore = snapshot(outside);
         String path = "root/" + linkName;
-        JsonObject data = request("delete", path);
-        if (!"absent".equals(recursive)) {
-            data.addProperty("recursive", Boolean.parseBoolean(recursive));
-        }
 
-        Outcome outcome = send(data);
+        dispatch(deleteRequest(path));
 
+        assertThat(okPayload()).isNotNull();
         assertThat(Files.exists(root.resolve(linkName), LinkOption.NOFOLLOW_LINKS))
                 .as("the link entry is removed").isFalse();
-        assertThat(child).as("the in-root target's contents are untouched").exists();
-        assertThat(readText(child)).isEqualTo("child");
-        assertThat(sentinel).as("the outside target's contents are untouched").exists();
-        assertThat(readText(sentinel)).isEqualTo("sentinel");
-        assertThat(Files.isSymbolicLink(root.resolve("dlink".equals(linkName) ? "olink" : "dlink")))
-                .as("the other link is left alone").isTrue();
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", path);
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // Controls whose behaviour does not change (regression pins; identical before and after).
-    // ------------------------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("control: reading an ordinary in-root file returns its bytes")
-    void readOrdinaryInRootFileReturnsItsBytes() throws Exception {
-        Outcome outcome = send(request("read", "root/secret.txt"));
-
-        assertThat(outcome.success()).isTrue();
-        assertThat(outcome.lastData().get("content").getAsString()).isEqualTo(DECOY_SECRET);
-        assertAllowedEntry(outcome, "read", "root/secret.txt");
+        assertThat(readText(child)).as("the in-root target's contents are untouched").isEqualTo("child");
+        assertThat(snapshot(outside)).as("the outside tree is byte-identical").isEqualTo(outsideBefore);
+        assertAllowed(Capability.FILE_DELETE, "files.delete", path);
     }
 
     @Test
     @DisplayName("control: reading an in-root link to an in-root file returns the target's bytes")
-    void readInRootLinkToInRootFileReturnsTargetBytes() throws Exception {
+    void readInRootLinkToInRootFileReturnsTargetBytes() throws IOException {
         link(root.resolve("inlink"), root.resolve("secret.txt"));
 
-        Outcome outcome = send(request("read", "root/inlink"));
+        dispatch(readRequest("root/inlink"));
 
-        assertThat(outcome.success()).isTrue();
-        assertThat(outcome.lastData().get("content").getAsString()).isEqualTo(DECOY_SECRET);
-        assertAllowedEntry(outcome, "read", "root/inlink");
-    }
-
-    @Test
-    @DisplayName("control: root/sub/../file.txt without links reads root/file.txt")
-    void readParentSegmentWithoutLinksReadsInRootFile() throws Exception {
-        Files.write(root.resolve("file.txt"), "plain-file".getBytes(StandardCharsets.UTF_8));
-
-        Outcome outcome = send(request("read", "root/sub/../file.txt"));
-
-        assertThat(outcome.success()).isTrue();
-        assertThat(outcome.lastData().get("content").getAsString()).isEqualTo("plain-file");
-        assertAllowedEntry(outcome, "read", "root/sub/../file.txt");
-    }
-
-    @ParameterizedTest(name = "[{index}] {0}")
-    @DisplayName("control: a doubled separator reads the same object as the plain form")
-    @ValueSource(strings = {"root/sub/file.txt", "root//sub/file.txt"})
-    void readWithDoubledSeparatorReachesSameObject(String path) throws Exception {
-        Files.write(root.resolve("sub").resolve("file.txt"), "sub-file".getBytes(StandardCharsets.UTF_8));
-
-        Outcome outcome = send(request("read", path));
-
-        assertThat(outcome.success()).isTrue();
-        assertThat(outcome.lastData().get("content").getAsString()).isEqualTo("sub-file");
-        assertAllowedEntry(outcome, "read", path);
-    }
-
-    @ParameterizedTest(name = "[{index}] {0}")
-    @DisplayName("control: a trailing separator lists the same directory as the plain form")
-    @ValueSource(strings = {"root/sub", "root/sub/"})
-    void listWithTrailingSeparatorReachesSameObject(String path) throws Exception {
-        Files.write(root.resolve("sub").resolve("file.txt"), "sub-file".getBytes(StandardCharsets.UTF_8));
-
-        Outcome outcome = send(request("list", path));
-
-        assertThat(outcome.success()).isTrue();
-        assertThat(outcome.listedNames()).containsExactly("file.txt");
-        assertAllowedEntry(outcome, "list", path);
-    }
-
-    @Test
-    @DisplayName("control: writing a new file into an existing in-root directory creates it there")
-    void writeNewFileIntoExistingDirectory() throws Exception {
-        JsonObject data = request("write", "root/sub/new.txt");
-        data.addProperty("content", "PAYLOAD");
-
-        Outcome outcome = send(data);
-
-        assertThat(outcome.success()).isTrue();
-        assertThat(readText(root.resolve("sub").resolve("new.txt"))).isEqualTo("PAYLOAD");
-        assertThat(filesNamed("new.txt")).hasSize(1);
-        assertAllowedEntry(outcome, "write", "root/sub/new.txt");
-    }
-
-    @Test
-    @DisplayName("control: writing root/new/deeper/x.txt creates both directories inside the root")
-    void writeCreatesMissingDirectoriesInsideRoot() throws Exception {
-        JsonObject data = request("write", "root/new/deeper/x.txt");
-        data.addProperty("content", "PAYLOAD");
-
-        Outcome outcome = send(data);
-
-        assertThat(outcome.success()).isTrue();
-        assertThat(readText(root.resolve("new").resolve("deeper").resolve("x.txt"))).isEqualTo("PAYLOAD");
-        assertThat(filesNamed("x.txt")).hasSize(1);
-        assertAllowedEntry(outcome, "write", "root/new/deeper/x.txt");
+        assertThat(okPayload().getAsJsonObject("data").get("content").getAsString()).isEqualTo(DECOY_SECRET);
+        assertAllowed(Capability.FILE_READ, "files.read", "root/inlink");
     }
 
     @Test
     @DisplayName("control: listing an in-root link to an in-root directory lists that directory")
-    void listInRootLinkToInRootDirectoryListsTarget() throws Exception {
+    void listInRootLinkToInRootDirectoryListsTarget() throws IOException {
         Files.write(root.resolve("sub").resolve("file.txt"), "sub-file".getBytes(StandardCharsets.UTF_8));
         link(root.resolve("dirlink"), root.resolve("sub"));
 
-        Outcome outcome = send(request("list", "root/dirlink"));
+        dispatch(listRequest("root/dirlink"));
 
-        assertThat(outcome.success()).isTrue();
-        assertThat(outcome.listedNames()).containsExactly("file.txt");
-        assertAllowedEntry(outcome, "list", "root/dirlink");
+        assertThat(listedNames()).containsExactly("file.txt");
+        assertAllowed(Capability.FILE_READ, "files.list", "root/dirlink");
     }
 
     @Test
-    @DisplayName("control: listing root/sub/.. lists the root")
-    void listParentSegmentWithoutLinksListsRoot() throws Exception {
-        Outcome outcome = send(request("list", "root/sub/.."));
+    @DisplayName("a listing hides links to outside directories and dangling links, and keeps real subdirectories")
+    void listedLinksToOutsideAreHidden() {
+        dispatch(listRequest("root"));
 
-        assertThat(outcome.success()).isTrue();
-        assertThat(outcome.listedNames()).contains("secret.txt", "victim.txt", "sub", "link", "esc", "dangling");
-        assertAllowedEntry(outcome, "list", "root/sub/..");
+        assertThat(listedNames()).containsExactlyInAnyOrder("secret.txt", "victim.txt", "sub");
+        assertAllowed(Capability.FILE_READ, "files.list", "root");
     }
 
     @Test
-    @DisplayName("negative control: a sibling prefix directory (root-evil) is refused configurably")
-    void siblingPrefixDirectoryIsRefusedConfigurably() throws Exception {
-        Path evil = Files.createDirectories(tmp.resolve("root-evil"));
-        Files.write(evil.resolve("x"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
+    @DisplayName("a listing hides an in-root alias to an outside file")
+    void aliasToOutsideFileIsHiddenFromList() throws IOException {
+        Path aliasDir = Files.createDirectories(root.resolve("aliasdir"));
+        Files.write(aliasDir.resolve("plain.txt"), "plain".getBytes(StandardCharsets.UTF_8));
+        link(aliasDir.resolve("alias.txt"), outsideSecret);
 
-        Outcome outcome = send(request("read", "root-evil/x"));
+        dispatch(listRequest("root/aliasdir"));
 
-        assertThat(outcome.allMessagesJson()).doesNotContain(OUTSIDE_SECRET);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "read", "root-evil/x");
-        assertThat(outcome.entry.getReason()).contains(ROOTS_KEY);
-    }
-
-    /**
-     * Ordinary failures after an allowed decision keep the allowed decision (D-03): the audit
-     * records policy, not I/O success. The last row pins a path that continues below a regular
-     * file: nothing can exist there, so it fails like a missing file rather than as a refusal.
-     */
-    @ParameterizedTest(name = "[{index}] {0} {1}")
-    @DisplayName("control: an ordinary failure after an allowed decision is audited ALLOWED")
-    @CsvSource({
-        "read, root/missing.txt",
-        "read, root/sub",
-        "write, root/sub/no-content.txt",
-        "list, root/secret.txt",
-        "delete, root/missing.txt",
-        "read, root/secret.txt/x"
-    })
-    void ordinaryFailureIsAuditedAllowed(String operation, String path) throws Exception {
-        Outcome outcome = send(request(operation, path));
-
-        assertThat(outcome.success()).isFalse();
-        assertThat(root.resolve("sub").resolve("no-content.txt")).doesNotExist();
-        assertAllowedEntry(outcome, operation, path);
+        assertThat(listedNames()).containsExactly("plain.txt");
+        assertThat(only().toString()).doesNotContain(OUTSIDE_SECRET);
+        assertAllowed(Capability.FILE_READ, "files.list", "root/aliasdir");
     }
 
     @Test
-    @DisplayName("control: deleting an in-root link to an in-root file removes only the link")
-    void deletingInRootLinkToInRootFileRemovesOnlyTheLink() throws Exception {
-        Path inLink = root.resolve("inlink");
-        link(inLink, root.resolve("secret.txt"));
-
-        Outcome outcome = send(request("delete", "root/inlink"));
-
-        assertThat(Files.exists(inLink, LinkOption.NOFOLLOW_LINKS)).as("the link entry is removed").isFalse();
-        assertThat(readText(root.resolve("secret.txt"))).as("the target is untouched").isEqualTo(DECOY_SECRET);
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "root/inlink");
-    }
-
-    @Test
-    @DisplayName("control: deleting a link named data.json is refused and leaves link and target")
-    void deletingLinkNamedDataJsonIsRefused() throws Exception {
+    @DisplayName("deleting a link named data.json is refused and leaves link and target")
+    void deletingLinkNamedDataJsonIsRefused() throws IOException {
         Path credentialLink = root.resolve("data.json");
         link(credentialLink, root.resolve("secret.txt"));
 
-        Outcome outcome = send(request("delete", "root/data.json"));
+        dispatch(deleteRequest("root/data.json"));
 
         assertThat(Files.isSymbolicLink(credentialLink)).as("the link is left in place").isTrue();
         assertThat(readText(root.resolve("secret.txt"))).isEqualTo(DECOY_SECRET);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "delete", "root/data.json");
-        assertNonConfigurable(outcome);
-    }
-
-    @Test
-    @DisplayName("control: list marking of a protected file and subdirectories is unchanged")
-    void listMarkingOfProtectedFileIsUnchanged() throws Exception {
-        Path marks = Files.createDirectories(root.resolve("marks"));
-        Files.write(marks.resolve("plain.txt"), "plain".getBytes(StandardCharsets.UTF_8));
-        Files.write(marks.resolve("data.json"), "{}".getBytes(StandardCharsets.UTF_8));
-        Files.createDirectories(marks.resolve("childdir"));
-
-        Outcome outcome = send(request("list", "root/marks"));
-
-        JsonObject plain = outcome.listedEntry("plain.txt");
-        assertThat(plain.get("accessible").getAsBoolean()).isTrue();
-        assertThat(plain.has("size")).isTrue();
-        assertThat(plain.has("lastModified")).isTrue();
-        JsonObject credential = outcome.listedEntry("data.json");
-        assertThat(credential.get("accessible").getAsBoolean()).isFalse();
-        assertThat(credential.get("reason").getAsString()).isEqualTo("PROTECTED_CREDENTIAL");
-        assertThat(credential.has("size")).isFalse();
-        assertThat(credential.has("lastModified")).isFalse();
-        assertThat(outcome.listedEntry("childdir").get("accessible").getAsBoolean()).isTrue();
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "list", "root/marks");
+        assertDenied(Capability.FILE_DELETE, "files.delete", "root/data.json", NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     // ------------------------------------------------------------------------------------------
-    // D-08 adjacent candidate (NOT one of the five frozen cases): an in-root alias whose real
-    // target is a protected file or lies in the action-log directory. Fixture: server root = the
-    // temporary directory, single editable root = plugins; plugins/UltiTools/data.json holds a
-    // synthetic token; plugins/UltiTools/security/action.log holds sentinel bytes;
-    // plugins/notes.txt -> data.json, plugins/view.log -> action.log,
-    // plugins/linkdir -> plugins/UltiTools.
+    // D-08: an in-root alias whose real target is a protected file or lies in the action-log
+    // directory. Fixture: editable root = plugins; plugins/UltiTools/data.json holds a synthetic
+    // token; plugins/UltiTools/security/action.log holds sentinel bytes;
+    // plugins/notes.txt -> data.json, plugins/view.log -> action.log, plugins/linkdir -> plugins/UltiTools.
     // ------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("D-08 adjacent candidate: an in-root alias to the credential file is refused")
+    @DisplayName("D-08: an in-root alias to the credential file is refused for read and write")
     void aliasToProtectedCredentialIsRefused() throws Exception {
         buildAliasFixture();
 
-        Outcome read = send(request("read", "plugins/notes.txt"));
+        dispatch(readRequest("plugins/notes.txt"));
+        assertThat(only().toString()).doesNotContain(TOKEN_SENTINEL);
+        assertDenied(Capability.FILE_READ, "files.read", "plugins/notes.txt", NOT_ALLOWED);
+        assertNonConfigurable();
 
-        assertThat(read.allMessagesJson()).doesNotContain(TOKEN_SENTINEL);
-        assertThat(read.success()).isFalse();
-        assertDeniedEntry(read, "read", "plugins/notes.txt");
-        assertNonConfigurable(read);
-
-        resetCollaborators();
-        JsonObject write = request("write", "plugins/notes.txt");
-        write.addProperty("content", "OVERWRITTEN");
-        Outcome written = send(write);
-
+        dispatch(writeRequest("plugins/notes.txt", "OVERWRITTEN", versionOf(dataJson)));
         assertThat(readText(dataJson)).as("the credential file is byte-identical").isEqualTo(DATA_JSON_CONTENT);
-        assertThat(written.success()).isFalse();
-        assertDeniedEntry(written, "write", "plugins/notes.txt");
+        assertDenied(Capability.FILE_WRITE, "files.write", "plugins/notes.txt", NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     @Test
-    @DisplayName("D-08 adjacent candidate: an in-root alias to the action log is refused")
+    @DisplayName("D-08: an in-root alias to the action log is refused for read and write")
     void aliasToActionLogIsRefused() throws Exception {
         buildAliasFixture();
 
-        Outcome read = send(request("read", "plugins/view.log"));
+        dispatch(readRequest("plugins/view.log"));
+        assertThat(only().toString()).doesNotContain(ACTION_LOG_SENTINEL);
+        assertDenied(Capability.FILE_READ, "files.read", "plugins/view.log", NOT_ALLOWED);
+        assertNonConfigurable();
 
-        assertThat(read.allMessagesJson()).doesNotContain(ACTION_LOG_SENTINEL);
-        assertThat(read.success()).isFalse();
-        assertDeniedEntry(read, "read", "plugins/view.log");
-
-        resetCollaborators();
-        JsonObject write = request("write", "plugins/view.log");
-        write.addProperty("content", "OVERWRITTEN");
-        Outcome written = send(write);
-
+        dispatch(writeRequest("plugins/view.log", "OVERWRITTEN", versionOf(actionLogFile)));
         assertThat(readText(actionLogFile)).as("the action log is byte-identical").isEqualTo(ACTION_LOG_SENTINEL);
-        assertThat(written.success()).isFalse();
-        assertDeniedEntry(written, "write", "plugins/view.log");
+        assertDenied(Capability.FILE_WRITE, "files.write", "plugins/view.log", NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     @Test
-    @DisplayName("D-08 adjacent candidate: an aliased parent path into the action-log directory is refused")
+    @DisplayName("D-08: an aliased parent path into the action-log directory is refused for read and write")
     void aliasedParentPathIntoSecurityDirectoryIsRefused() throws Exception {
         buildAliasFixture();
         String path = "plugins/linkdir/security/action.log";
 
-        Outcome read = send(request("read", path));
+        dispatch(readRequest(path));
+        assertThat(only().toString()).doesNotContain(ACTION_LOG_SENTINEL);
+        assertDenied(Capability.FILE_READ, "files.read", path, NOT_ALLOWED);
+        assertNonConfigurable();
 
-        assertThat(read.allMessagesJson()).doesNotContain(ACTION_LOG_SENTINEL);
-        assertThat(read.success()).isFalse();
-        assertDeniedEntry(read, "read", path);
-
-        resetCollaborators();
-        JsonObject write = request("write", path);
-        write.addProperty("content", "OVERWRITTEN");
-        Outcome written = send(write);
-
+        dispatch(writeRequest(path, "OVERWRITTEN", versionOf(actionLogFile)));
         assertThat(readText(actionLogFile)).as("the action log is byte-identical").isEqualTo(ACTION_LOG_SENTINEL);
-        assertThat(written.success()).isFalse();
-        assertDeniedEntry(written, "write", path);
+        assertDenied(Capability.FILE_WRITE, "files.write", path, NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     @Test
-    @DisplayName("D-08 adjacent candidate: listed aliases to protected targets are marked PROTECTED_CREDENTIAL")
-    void aliasChildIsMarkedProtectedInList() throws Exception {
+    @DisplayName("D-08: a listing hides aliases to protected targets and keeps the aliased directory")
+    void aliasesToProtectedTargetsAreHiddenFromList() throws Exception {
         buildAliasFixture();
 
-        Outcome outcome = send(request("list", "plugins"));
+        dispatch(listRequest("plugins"));
 
-        for (String alias : new String[] {"notes.txt", "view.log"}) {
-            JsonObject entry = outcome.listedEntry(alias);
-            assertThat(entry.get("accessible").getAsBoolean()).as(alias).isFalse();
-            assertThat(entry.get("reason").getAsString()).as(alias).isEqualTo("PROTECTED_CREDENTIAL");
-            assertThat(entry.has("size")).as(alias).isFalse();
-            assertThat(entry.has("lastModified")).as(alias).isFalse();
-        }
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "list", "plugins");
+        assertThat(listedNames()).containsExactlyInAnyOrder("UltiTools", "linkdir");
+        assertThat(only().toString()).doesNotContain(TOKEN_SENTINEL).doesNotContain(ACTION_LOG_SENTINEL);
+        assertAllowed(Capability.FILE_READ, "files.list", "plugins");
     }
 
     @Test
-    @DisplayName("D-08 adjacent candidate: a recursive delete through an aliased parent of the action-log directory is refused")
-    void recursiveDeleteThroughAliasedParentOfSecurityDirectoryIsRefused() throws Exception {
+    @DisplayName("D-08: a delete through an aliased parent of the action-log directory is refused")
+    void deleteThroughAliasedParentOfSecurityDirectoryIsRefused() throws Exception {
         buildAliasFixture();
-        JsonObject data = request("delete", "plugins/linkdir/security");
-        data.addProperty("recursive", true);
 
-        Outcome outcome = send(data);
-
-        assertThat(actionLogFile).as("the action log survives").exists();
+        dispatch(deleteRequest("plugins/linkdir/security"));
         assertThat(readText(actionLogFile)).isEqualTo(ACTION_LOG_SENTINEL);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "delete", "plugins/linkdir/security");
-    }
+        assertDenied(Capability.FILE_DELETE, "files.delete", "plugins/linkdir/security", NOT_ALLOWED);
+        assertNonConfigurable();
 
-    @Test
-    @DisplayName("D-08 adjacent candidate: deleting the alias link itself removes only the link")
-    void deletingAliasLinkRemovesOnlyTheLink() throws Exception {
-        buildAliasFixture();
-        Path notes = tmp.resolve("plugins").resolve("notes.txt");
-
-        Outcome outcome = send(request("delete", "plugins/notes.txt"));
-
-        assertThat(Files.exists(notes, LinkOption.NOFOLLOW_LINKS)).as("the alias link is removed").isFalse();
-        assertThat(readText(dataJson)).as("the credential file is untouched").isEqualTo(DATA_JSON_CONTENT);
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "plugins/notes.txt");
+        dispatch(deleteRequest("plugins/linkdir/security/action.log"));
+        assertThat(readText(actionLogFile)).as("the action log survives").isEqualTo(ACTION_LOG_SENTINEL);
+        assertDenied(Capability.FILE_DELETE, "files.delete", "plugins/linkdir/security/action.log", NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     // ------------------------------------------------------------------------------------------
-    // Review-1 finding (gate-1 security review of PR #686): a recursive delete never follows a
-    // symbolic link found inside the deleted tree. Fixture: server root = the temporary
-    // directory, single editable root = plugins; plugins/victim holds keep.txt and a real
-    // subdirectory inner/ holding inner.txt; each test places one link inside that tree. A link
-    // inside the tree is removed as a link; its target and the target's contents stay
-    // byte-identical; real subdirectories are still emptied and removed.
-    // ------------------------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("a recursive delete removes an in-tree link to an outside directory as a link only")
-    void recursiveDeleteDoesNotFollowInTreeLinkToOutsideDirectory() throws Exception {
-        Path victim = buildRecursiveDeleteVictim();
-        Path outsideDir = Files.createDirectories(outside.resolve("odir"));
-        Path nested = Files.createDirectories(outsideDir.resolve("nested"));
-        Files.write(outsideDir.resolve("sentinel.txt"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
-        Files.write(nested.resolve("deep.txt"), OUTSIDE_VICTIM.getBytes(StandardCharsets.UTF_8));
-        Map<String, String> before = snapshot(outsideDir);
-        link(victim.resolve("olink"), outsideDir);
-
-        Outcome outcome = send(recursiveDelete("plugins/victim"));
-
-        assertThat(Files.exists(victim, LinkOption.NOFOLLOW_LINKS))
-                .as("the requested tree, the link inside it included, is removed").isFalse();
-        assertThat(snapshot(outsideDir)).as("the outside directory is byte-identical").isEqualTo(before);
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "plugins/victim");
-    }
-
-    @Test
-    @DisplayName("a recursive delete removes an in-tree link to the action-log directory as a link only")
-    void recursiveDeleteDoesNotFollowInTreeLinkToActionLogDirectory() throws Exception {
-        Path victim = buildRecursiveDeleteVictim();
-        Path security = Files.createDirectories(tmp.resolve("plugins").resolve("UltiTools").resolve("security"));
-        Files.write(security.resolve("action.log.0"), ACTION_LOG_SENTINEL.getBytes(StandardCharsets.UTF_8));
-        Files.write(security.resolve("action.log.1"), (ACTION_LOG_SENTINEL + "-1").getBytes(StandardCharsets.UTF_8));
-        Map<String, String> before = snapshot(security);
-        link(victim.resolve("inner").resolve("loglink"), security);
-
-        Outcome outcome = send(recursiveDelete("plugins/victim"));
-
-        assertThat(Files.exists(victim, LinkOption.NOFOLLOW_LINKS))
-                .as("the requested tree, the link inside it included, is removed").isFalse();
-        assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "plugins/victim");
-    }
-
-    @Test
-    @DisplayName("a recursive delete removes an in-tree link to the credential directory as a link only")
-    void recursiveDeleteDoesNotFollowInTreeLinkToCredentialDirectory() throws Exception {
-        Path victim = buildRecursiveDeleteVictim();
-        Path credentialDir = Files.createDirectories(tmp.resolve(".ultikits"));
-        Files.write(credentialDir.resolve(CredentialStore.CREDENTIAL_FILE_NAME),
-                DATA_JSON_CONTENT.getBytes(StandardCharsets.UTF_8));
-        Map<String, String> before = snapshot(credentialDir);
-        link(victim.resolve("credlink"), credentialDir);
-
-        Outcome outcome = send(recursiveDelete("plugins/victim"));
-
-        assertThat(Files.exists(victim, LinkOption.NOFOLLOW_LINKS))
-                .as("the requested tree, the link inside it included, is removed").isFalse();
-        assertThat(snapshot(credentialDir)).as("the credential directory is byte-identical").isEqualTo(before);
-        assertThat(outcome.allMessagesJson()).doesNotContain(TOKEN_SENTINEL);
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "plugins/victim");
-    }
-
-    /** Builds plugins/victim (keep.txt, inner/inner.txt) and points the manager at root = plugins. */
-    private Path buildRecursiveDeleteVictim() throws Exception {
-        Path plugins = Files.createDirectories(tmp.resolve("plugins"));
-        Path victim = Files.createDirectories(plugins.resolve("victim"));
-        Path inner = Files.createDirectories(victim.resolve("inner"));
-        Files.write(victim.resolve("keep.txt"), "keep".getBytes(StandardCharsets.UTF_8));
-        Files.write(inner.resolve("inner.txt"), "inner".getBytes(StandardCharsets.UTF_8));
-        pointManagerAt(tmp, plugins);
-        return victim;
-    }
-
-    private static JsonObject recursiveDelete(String path) {
-        JsonObject data = request("delete", path);
-        data.addProperty("recursive", true);
-        return data;
-    }
-
-    /** Every entry under {@code dir} (links not followed): relative path to bytes, or a directory marker. */
-    private static Map<String, String> snapshot(Path dir) throws IOException {
-        Map<String, String> entries = new TreeMap<>();
-        try (Stream<Path> walk = Files.walk(dir)) {
-            for (Path p : walk.collect(Collectors.toList())) {
-                String key = dir.relativize(p).toString();
-                entries.put(key, Files.isDirectory(p, LinkOption.NOFOLLOW_LINKS) ? "<dir>" : readText(p));
-            }
-        }
-        return entries;
-    }
-
-    private void buildAliasFixture() throws Exception {
-        Path plugins = Files.createDirectories(tmp.resolve("plugins"));
-        Path ultiTools = Files.createDirectories(plugins.resolve("UltiTools"));
-        Path security = Files.createDirectories(ultiTools.resolve("security"));
-        dataJson = ultiTools.resolve("data.json");
-        actionLogFile = security.resolve("action.log");
-        Files.write(dataJson, DATA_JSON_CONTENT.getBytes(StandardCharsets.UTF_8));
-        Files.write(actionLogFile, ACTION_LOG_SENTINEL.getBytes(StandardCharsets.UTF_8));
-        link(plugins.resolve("notes.txt"), dataJson);
-        link(plugins.resolve("view.log"), actionLogFile);
-        link(plugins.resolve("linkdir"), ultiTools);
-        pointManagerAt(tmp, plugins);
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // Codex review run 2, finding 1: a link is never followed, whether it is the delete target
-    // itself or inside the deleted tree. Every "real directory or link" decision uses one shared
-    // predicate: an entry is a real directory only if it is a directory when links are not
-    // followed AND its real path equals its parent's real path plus its own name. A Windows
-    // junction passes the first test and fails the second; junctions cannot be created on Linux,
-    // so the junction case is proven through the predicate with an injected real-path lookup.
-    // ------------------------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("control: a recursive delete of a terminal link to an outside directory removes only the link")
-    void recursiveDeleteOfTerminalLinkToOutsideDirectoryRemovesOnlyTheLink() throws Exception {
-        Map<String, String> before = snapshot(outside);
-
-        Outcome outcome = send(recursiveDelete("root/esc"));
-
-        assertThat(Files.exists(root.resolve("esc"), LinkOption.NOFOLLOW_LINKS))
-                .as("the terminal link entry is removed").isFalse();
-        assertThat(snapshot(outside)).as("the outside directory is byte-identical").isEqualTo(before);
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "root/esc");
-    }
-
-    @Test
-    @DisplayName("the shared real-directory predicate refuses an entry whose real path is not its parent's real path plus its name")
-    void sharedPredicateRefusesEntryWhoseRealPathIsNotParentPlusName() throws Exception {
-        Method predicate = sharedRealDirectoryPredicate();
-        assertThat(predicate)
-                .as("FileOperationManager has one shared 'real directory or link' predicate "
-                        + "isRealDirectory(Path parentReal, Path entry, Function<Path, Path> realPath)")
-                .isNotNull();
-        Path rootReal = root.toRealPath();
-        Path sub = root.resolve("sub");
-        Function<Path, Path> filesystem = FileOperationTargetConsistencyTest::realPathOrNull;
-        Path junctionTarget = outside.resolve("deep").toRealPath();
-        Function<Path, Path> junction = p -> p.equals(sub) ? junctionTarget : realPathOrNull(p);
-        assertThat(Files.isDirectory(sub, LinkOption.NOFOLLOW_LINKS))
-                .as("precondition: root/sub is a directory when links are not followed").isTrue();
-
-        assertThat(invokePredicate(predicate, rootReal, sub, filesystem))
-                .as("control: a real subdirectory is a real directory").isTrue();
-        assertThat(invokePredicate(predicate, rootReal, sub, junction))
-                .as("a directory entry whose real path is elsewhere (a junction) is a link, not a real directory")
-                .isFalse();
-        assertThat(invokePredicate(predicate, rootReal, root.resolve("link"), filesystem))
-                .as("a symbolic link to a directory is not a real directory").isFalse();
-        Path throughLinkedParent = root.resolve("esc").resolve("deep");
-        assertThat(Files.isDirectory(throughLinkedParent, LinkOption.NOFOLLOW_LINKS))
-                .as("precondition: root/esc/deep is a directory when its own name is not followed").isTrue();
-        assertThat(invokePredicate(predicate, rootReal.resolve("esc"), throughLinkedParent, filesystem))
-                .as("an entry reached through a linked parent is not a real child of that parent path")
-                .isFalse();
-    }
-
-    @Test
-    @DisplayName("a recursive delete whose terminal entry is a junction-like directory never recurses into it")
-    void recursiveDeleteOfJunctionLikeTerminalEntryNeverRecurses() throws Exception {
-        Path victim = buildRecursiveDeleteVictim();
-        Path junctionTarget = Files.createDirectories(outside.resolve("odir")).toRealPath();
-        // A real junction lists its target's children; give the target its own files, with bytes that
-        // differ from the victim's copies, so that recursing "through" the junction would be visible.
-        Files.write(junctionTarget.resolve("keep.txt"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
-        Path targetInner = Files.createDirectories(junctionTarget.resolve("inner"));
-        Files.write(targetInner.resolve("inner.txt"), OUTSIDE_VICTIM.getBytes(StandardCharsets.UTF_8));
-        Map<String, String> targetBefore = snapshot(junctionTarget);
-        Map<String, String> victimBefore = snapshot(victim);
-        Map<String, String> outsideBefore = snapshot(outside);
-        assertThat(installRealPathLookup(p -> p.equals(victim) ? junctionTarget : realPathOrNull(p)))
-                .as("FileOperationManager's shared predicate takes its real paths from one replaceable "
-                        + "lookup (field realPathResolver), so a junction can be modelled on Linux")
-                .isTrue();
-
-        Outcome outcome = send(recursiveDelete("plugins/victim"));
-
-        assertThat(snapshot(victim))
-                .as("an entry whose real path is elsewhere is removed as an entry only, never emptied")
-                .isEqualTo(victimBefore);
-        assertThat(snapshot(outside)).as("the outside directory is byte-identical").isEqualTo(outsideBefore);
-        assertThat(snapshot(junctionTarget))
-                .as("the junction target's own files survive byte-identical").isEqualTo(targetBefore);
-        assertAllowedEntry(outcome, "delete", "plugins/victim");
-    }
-
-    @Test
-    @DisplayName("a listed link to an outside directory is marked OUTSIDE_ROOTS without metadata")
-    void listedLinkToOutsideDirectoryIsMarkedOutsideRoots() throws Exception {
-        Outcome outcome = send(request("list", "root"));
-
-        for (String alias : new String[] {"link", "esc"}) {
-            JsonObject entry = outcome.listedEntry(alias);
-            assertThat(entry.get("accessible").getAsBoolean()).as(alias).isFalse();
-            assertThat(entry.get("reason").getAsString()).as(alias).isEqualTo("OUTSIDE_ROOTS");
-            assertThat(entry.has("size")).as(alias).isFalse();
-            assertThat(entry.has("lastModified")).as(alias).isFalse();
-        }
-        assertThat(outcome.listedEntry("sub").get("accessible").getAsBoolean())
-                .as("control: a real subdirectory keeps the never-refused rule").isTrue();
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "list", "root");
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // Codex review run 2, finding 2: protected locations are judged by real path, independent of
-    // which editable root matched or the order of the roots. Fixture: server root = the temporary
-    // directory; editable roots, in this order, = [plugins/shadow, plugins], where
-    // plugins/shadow -> plugins/UltiTools; plugins/UltiTools/security holds action.log.0 and
+    // Protected locations are judged by real path, independent of which editable root matched or
+    // the order of the roots. Fixture: editable roots, in this order, = [plugins/shadow, plugins],
+    // where plugins/shadow -> plugins/UltiTools; plugins/UltiTools/security holds action.log.0 and
     // action.log.1 with sentinel bytes.
     // ------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("overlapping alias root: a recursive delete of plugins/UltiTools is refused and the action log is byte-identical")
-    void overlappingAliasRootRecursiveDeleteOfUltiToolsIsRefused() throws Exception {
+    @DisplayName("overlapping alias root: deleting plugins/UltiTools is refused and the action log is byte-identical")
+    void overlappingAliasRootDeleteOfUltiToolsLeavesActionLog() throws Exception {
         Path security = buildShadowRootFixture();
         Map<String, String> before = snapshot(security);
 
-        Outcome outcome = send(recursiveDelete("plugins/UltiTools"));
+        dispatch(deleteRequest("plugins/UltiTools"));
 
-        assertThat(security).as("the action-log directory survives").isDirectory();
         assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "delete", "plugins/UltiTools");
-        assertNonConfigurable(outcome);
+        assertDenied(Capability.FILE_DELETE, "files.delete", "plugins/UltiTools", "is_directory");
     }
 
     @Test
-    @DisplayName("overlapping alias root: a recursive delete of plugins/shadow/security is refused and the action log is byte-identical")
-    void overlappingAliasRootRecursiveDeleteOfSecurityIsRefused() throws Exception {
+    @DisplayName("overlapping alias root: deleting plugins/shadow/security or a log inside it is refused")
+    void overlappingAliasRootDeleteOfSecurityIsRefused() throws Exception {
         Path security = buildShadowRootFixture();
         Map<String, String> before = snapshot(security);
 
-        Outcome outcome = send(recursiveDelete("plugins/shadow/security"));
+        dispatch(deleteRequest("plugins/shadow/security"));
+        assertThat(snapshot(security)).isEqualTo(before);
+        assertDenied(Capability.FILE_DELETE, "files.delete", "plugins/shadow/security", NOT_ALLOWED);
+        assertNonConfigurable();
 
-        assertThat(security).as("the action-log directory survives").isDirectory();
+        dispatch(deleteRequest("plugins/shadow/security/action.log.0"));
         assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "delete", "plugins/shadow/security");
-        assertNonConfigurable(outcome);
+        assertDenied(Capability.FILE_DELETE, "files.delete", "plugins/shadow/security/action.log.0", NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     @Test
-    @DisplayName("overlapping alias root: deleting the plugins/shadow link removes only the link and the action log is byte-identical")
+    @DisplayName("overlapping alias root: deleting the plugins/shadow link removes only the link")
     void overlappingAliasRootDeleteOfShadowLinkRemovesOnlyTheLink() throws Exception {
         Path security = buildShadowRootFixture();
         Map<String, String> before = snapshot(security);
 
-        Outcome outcome = send(recursiveDelete("plugins/shadow"));
+        dispatch(deleteRequest("plugins/shadow"));
 
+        assertThat(okPayload()).isNotNull();
         assertThat(Files.exists(tmp.resolve("plugins").resolve("shadow"), LinkOption.NOFOLLOW_LINKS))
                 .as("the link entry is removed (link-only deletion)").isFalse();
-        assertThat(security).as("the action-log directory survives").isDirectory();
         assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
-        assertThat(outcome.success()).isTrue();
-        assertAllowedEntry(outcome, "delete", "plugins/shadow");
+        assertAllowed(Capability.FILE_DELETE, "files.delete", "plugins/shadow");
     }
 
     @Test
@@ -1033,12 +580,11 @@ class FileOperationTargetConsistencyTest {
         buildShadowRootFixture();
         String path = "plugins/shadow/security/action.log.0";
 
-        Outcome outcome = send(request("read", path));
+        dispatch(readRequest(path));
 
-        assertThat(outcome.allMessagesJson()).doesNotContain(ACTION_LOG_SENTINEL);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "read", path);
-        assertNonConfigurable(outcome);
+        assertThat(only().toString()).doesNotContain(ACTION_LOG_SENTINEL);
+        assertDenied(Capability.FILE_READ, "files.read", path, NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     @Test
@@ -1047,16 +593,12 @@ class FileOperationTargetConsistencyTest {
         Path security = buildShadowRootFixture();
         Map<String, String> before = snapshot(security);
         String path = "plugins/shadow/security/action.log.0";
-        JsonObject data = request("write", path);
-        data.addProperty("content", "OVERWRITTEN");
 
-        Outcome outcome = send(data);
+        dispatch(writeRequest(path, "OVERWRITTEN", versionOf(security.resolve("action.log.0"))));
 
-        assertThat(security).as("the action-log directory survives").isDirectory();
         assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "write", path);
-        assertNonConfigurable(outcome);
+        assertDenied(Capability.FILE_WRITE, "files.write", path, NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     @Test
@@ -1065,79 +607,15 @@ class FileOperationTargetConsistencyTest {
         buildShadowRootFixture();
         String path = "plugins/shadow/security";
 
-        Outcome outcome = send(request("list", path));
+        dispatch(listRequest(path));
 
-        assertThat(outcome.listedNames()).doesNotContain("action.log.0", "action.log.1");
-        assertThat(outcome.success()).isFalse();
-        assertDeniedEntry(outcome, "list", path);
-        assertNonConfigurable(outcome);
-    }
-
-    /**
-     * Builds plugins/UltiTools/security (action.log.0, action.log.1) and plugins/shadow ->
-     * plugins/UltiTools, and points the manager at the roots [plugins/shadow, plugins] in that
-     * order: the alias root is matched first.
-     */
-    private Path buildShadowRootFixture() throws Exception {
-        Path plugins = Files.createDirectories(tmp.resolve("plugins"));
-        Path ultiTools = Files.createDirectories(plugins.resolve("UltiTools"));
-        Path security = Files.createDirectories(ultiTools.resolve("security"));
-        Files.write(security.resolve("action.log.0"), ACTION_LOG_SENTINEL.getBytes(StandardCharsets.UTF_8));
-        Files.write(security.resolve("action.log.1"), (ACTION_LOG_SENTINEL + "-1").getBytes(StandardCharsets.UTF_8));
-        Files.write(ultiTools.resolve("config.yml"), "key: value".getBytes(StandardCharsets.UTF_8));
-        link(plugins.resolve("shadow"), ultiTools);
-        pointManagerAtRoots(tmp, plugins.resolve("shadow"), plugins);
-        return security;
-    }
-
-    /** The shared predicate, or {@code null} when the production class does not have it. */
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the predicate is package-private and looked up by name
-    private static Method sharedRealDirectoryPredicate() {
-        try {
-            Method method = FileOperationManager.class.getDeclaredMethod(
-                    "isRealDirectory", Path.class, Path.class, Function.class);
-            method.setAccessible(true);
-            return method;
-        } catch (NoSuchMethodException e) {
-            return null;
-        }
-    }
-
-    private static boolean invokePredicate(Method predicate, Path parentReal, Path entry,
-                                           Function<Path, Path> realPath) throws Exception {
-        return (Boolean) predicate.invoke(null, parentReal, entry, realPath);
-    }
-
-    /** Replaces the manager's real-path lookup; {@code false} when the production class has none. */
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the fixture models a junction on Linux
-    private boolean installRealPathLookup(Function<Path, Path> lookup) throws IllegalAccessException {
-        Field field;
-        try {
-            field = FileOperationManager.class.getDeclaredField("realPathResolver");
-        } catch (NoSuchFieldException e) {
-            return false;
-        }
-        field.setAccessible(true);
-        field.set(manager, lookup);
-        return true;
-    }
-
-    private static Path realPathOrNull(Path path) {
-        try {
-            return path.toRealPath();
-        } catch (IOException e) {
-            return null;
-        }
-    }
-
-    private void resetCollaborators() {
-        org.mockito.Mockito.reset(actionLog, webSocket);
-        when(webSocket.isConnected()).thenReturn(true);
-        when(webSocket.getServerId()).thenReturn("test-server");
+        assertThat(only().toString()).doesNotContain("action.log.0").doesNotContain("action.log.1");
+        assertDenied(Capability.FILE_READ, "files.list", path, NOT_ALLOWED);
+        assertNonConfigurable();
     }
 
     // ------------------------------------------------------------------------------------------
-    // Fixture and request helpers.
+    // Fixtures.
     // ------------------------------------------------------------------------------------------
 
     private void buildStandardFixture() throws IOException {
@@ -1156,6 +634,37 @@ class FileOperationTargetConsistencyTest {
         link(root.resolve("dangling"), outside.resolve("created.txt"));
     }
 
+    private void buildAliasFixture() throws Exception {
+        Path plugins = Files.createDirectories(tmp.resolve("plugins"));
+        Path ultiTools = Files.createDirectories(plugins.resolve("UltiTools"));
+        Path security = Files.createDirectories(ultiTools.resolve("security"));
+        dataJson = ultiTools.resolve("data.json");
+        actionLogFile = security.resolve("action.log");
+        Files.write(dataJson, DATA_JSON_CONTENT.getBytes(StandardCharsets.UTF_8));
+        Files.write(actionLogFile, ACTION_LOG_SENTINEL.getBytes(StandardCharsets.UTF_8));
+        link(plugins.resolve("notes.txt"), dataJson);
+        link(plugins.resolve("view.log"), actionLogFile);
+        link(plugins.resolve("linkdir"), ultiTools);
+        pointManagerAt(tmp, plugins);
+    }
+
+    /**
+     * Builds plugins/UltiTools/security (action.log.0, action.log.1) and plugins/shadow ->
+     * plugins/UltiTools, and points the manager at the roots [plugins/shadow, plugins] in that
+     * order: the alias root is matched first.
+     */
+    private Path buildShadowRootFixture() throws Exception {
+        Path plugins = Files.createDirectories(tmp.resolve("plugins"));
+        Path ultiTools = Files.createDirectories(plugins.resolve("UltiTools"));
+        Path security = Files.createDirectories(ultiTools.resolve("security"));
+        Files.write(security.resolve("action.log.0"), ACTION_LOG_SENTINEL.getBytes(StandardCharsets.UTF_8));
+        Files.write(security.resolve("action.log.1"), (ACTION_LOG_SENTINEL + "-1").getBytes(StandardCharsets.UTF_8));
+        Files.write(ultiTools.resolve("config.yml"), "key: value".getBytes(StandardCharsets.UTF_8));
+        link(plugins.resolve("shadow"), ultiTools);
+        pointManagerAt(tmp, plugins.resolve("shadow"), plugins);
+        return security;
+    }
+
     private static void link(Path link, Path target) {
         try {
             Files.createSymbolicLink(link, target);
@@ -1164,152 +673,169 @@ class FileOperationTargetConsistencyTest {
         }
     }
 
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the fixture points the manager at a temp tree
-    private void pointManagerAt(Path serverRoot, Path editableRoot) throws Exception {
+    private void pointManagerAt(Path serverRoot, Path... editableRoots) throws Exception {
         Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
         serverRootField.setAccessible(true);
-        serverRootField.set(manager, serverRoot.toFile());
+        serverRootField.set(files, serverRoot.toFile());
 
-        Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
-        editableRootsField.setAccessible(true);
-        editableRootsField.set(manager, Collections.singletonList(editableRoot.toFile()));
-    }
-
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the fixture points the manager at a temp tree
-    private void pointManagerAtRoots(Path serverRoot, Path... editableRoots) throws Exception {
-        pointManagerAt(serverRoot, editableRoots[0]);
-        List<java.io.File> roots = new ArrayList<>();
+        List<File> roots = new ArrayList<>();
         for (Path editableRoot : editableRoots) {
             roots.add(editableRoot.toFile());
         }
         Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
         editableRootsField.setAccessible(true);
-        editableRootsField.set(manager, Collections.unmodifiableList(roots));
+        editableRootsField.set(files, Collections.unmodifiableList(roots));
     }
 
-    private static JsonObject request(String operation, String path) {
-        JsonObject data = new JsonObject();
-        data.addProperty("operation", operation);
-        data.addProperty("path", path);
-        data.addProperty("operationId", "tc-" + operation);
-        data.addProperty("executor", ACTOR);
-        return data;
+    // ------------------------------------------------------------------------------------------
+    // Requests and assertions.
+    // ------------------------------------------------------------------------------------------
+
+    /** Clears the previous reply and audit, then dispatches one request frame. */
+    private void dispatch(JsonObject frame) {
+        channel.clear();
+        audit.clear();
+        router.dispatch(frame.toString(), channel);
     }
 
-    private Outcome send(JsonObject data) {
-        manager.handleFileOperation(data);
-
-        ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
-        verify(actionLog, timeout(5000).times(1)).record(entryCaptor.capture());
-
-        ArgumentCaptor<JsonObject> messageCaptor = ArgumentCaptor.forClass(JsonObject.class);
-        verify(webSocket, atLeastOnce()).sendMessage(messageCaptor.capture());
-        List<JsonObject> responses = new ArrayList<>();
-        for (JsonObject message : messageCaptor.getAllValues()) {
-            responses.add(message.getAsJsonObject("data"));
+    private static JsonObject requestFor(String type, String path, String content, String baseVersion) {
+        switch (type) {
+            case "files.read":
+                return readRequest(path);
+            case "files.list":
+                return listRequest(path);
+            case "files.write":
+                return writeRequest(path, content, baseVersion);
+            case "files.delete":
+                return deleteRequest(path);
+            default:
+                throw new IllegalArgumentException(type);
         }
-        return new Outcome(entryCaptor.getValue(), responses);
     }
 
-    private static void assertDeniedEntry(Outcome outcome, String operation, String path) {
-        RemoteActionLog.Entry entry = outcome.entry;
-        assertThat(entry.getVerdict()).as("verdict").isEqualTo(RemoteActionLog.Verdict.DENIED);
-        assertThat(entry.getCapability())
-                .isEqualTo(PluginInitiationUtils.resolveFileOperationCapability(operation).name());
-        assertThat(entry.getAction()).isEqualTo("file_operation:" + operation);
+    private static JsonObject readRequest(String path) {
+        JsonObject frame = ContractFixtures.object("fixtures/agent/files.read/valid/config.json");
+        frame.getAsJsonObject("payload").addProperty("path", path);
+        return frame;
+    }
+
+    private static JsonObject listRequest(String path) {
+        JsonObject frame = ContractFixtures.object("fixtures/agent/files.list/valid/plugins-dir.json");
+        frame.getAsJsonObject("payload").addProperty("path", path);
+        return frame;
+    }
+
+    private static JsonObject writeRequest(String path, String content, String baseVersion) {
+        JsonObject frame = ContractFixtures.object("fixtures/agent/files.write/valid/with-base-version.json");
+        JsonObject payload = frame.getAsJsonObject("payload");
+        payload.addProperty("path", path);
+        payload.addProperty("content", content);
+        payload.addProperty("baseVersion", baseVersion);
+        return frame;
+    }
+
+    private static JsonObject deleteRequest(String path) {
+        JsonObject frame = ContractFixtures.object("fixtures/agent/files.delete/valid/file.json");
+        frame.getAsJsonObject("payload").addProperty("path", path);
+        return frame;
+    }
+
+    private static Capability capabilityOf(String type) {
+        if ("files.write".equals(type)) {
+            return Capability.FILE_WRITE;
+        }
+        if ("files.delete".equals(type)) {
+            return Capability.FILE_DELETE;
+        }
+        return Capability.FILE_READ;
+    }
+
+    private JsonObject only() {
+        assertThat(channel.frames()).hasSize(1);
+        return channel.frames().get(0);
+    }
+
+    private JsonObject okPayload() {
+        JsonObject payload = only().getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).as(payload.toString()).isEqualTo("ok");
+        return payload;
+    }
+
+    private List<String> listedNames() {
+        JsonArray entries = okPayload().getAsJsonObject("data").getAsJsonArray("entries");
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < entries.size(); i++) {
+            names.add(entries.get(i).getAsJsonObject().get("name").getAsString());
+        }
+        return names;
+    }
+
+    /** One error reply with {@code code}, and exactly one DENIED entry carrying the text the panel received. */
+    private void assertDenied(Capability capability, String action, String path, String code) {
+        JsonObject payload = only().getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).as(payload.toString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).as(payload.toString()).isEqualTo(code);
+        assertThat(audit).hasSize(1);
+        RemoteActionLog.Entry entry = audit.get(0);
+        assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(entry.getCapability()).isEqualTo(capability.name());
+        assertThat(entry.getAction()).isEqualTo(action);
         assertThat(entry.getTarget()).isEqualTo(path);
-        assertThat(entry.getActor()).isEqualTo(ACTOR);
-        assertThat(entry.getReason()).isNotBlank();
+        assertThat(entry.getActor()).isEqualTo("panel");
         assertThat(entry.getReason()).as("the audited reason is the message the panel received")
-                .isEqualTo(outcome.lastMessage());
+                .isNotBlank().isEqualTo(payload.get("message").getAsString());
     }
 
-    private static void assertAllowedEntry(Outcome outcome, String operation, String path) {
-        RemoteActionLog.Entry entry = outcome.entry;
-        assertThat(entry.getVerdict()).as("verdict").isEqualTo(RemoteActionLog.Verdict.ALLOWED);
-        assertThat(entry.getCapability())
-                .isEqualTo(PluginInitiationUtils.resolveFileOperationCapability(operation).name());
-        assertThat(entry.getAction()).isEqualTo("file_operation:" + operation);
+    private void assertAllowed(Capability capability, String action, String path) {
+        assertThat(audit).hasSize(1);
+        RemoteActionLog.Entry entry = audit.get(0);
+        assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(entry.getCapability()).isEqualTo(capability.name());
+        assertThat(entry.getAction()).isEqualTo(action);
         assertThat(entry.getTarget()).isEqualTo(path);
-        assertThat(entry.getActor()).isEqualTo(ACTOR);
+        assertThat(entry.getActor()).isEqualTo("panel");
     }
 
-    private static void assertNonConfigurable(Outcome outcome) {
-        assertThat(outcome.entry.getReason())
-                .contains(NON_CONFIGURABLE_MARKER)
-                .doesNotContain(ROOTS_KEY);
+    private void assertNonConfigurable() {
+        assertThat(audit.get(0).getReason()).contains(NON_CONFIGURABLE_MARKER).doesNotContain(ROOTS_KEY);
+    }
+
+    private static String versionOf(Path file) throws IOException {
+        return RemoteFileOperations.sha256Hex(Files.readAllBytes(file));
     }
 
     private static String readText(Path file) throws IOException {
         return new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
     }
 
-    private List<Path> filesNamed(String name) throws IOException {
-        try (Stream<Path> walk = Files.walk(tmp)) {
-            return walk.filter(p -> p.getFileName() != null && name.equals(p.getFileName().toString()))
-                    .collect(Collectors.toList());
+    /**
+     * Every entry under {@code dir}, links not followed: relative path to bytes, a directory
+     * marker, or a link marker naming the link's target.
+     */
+    private static Map<String, String> snapshot(Path dir) throws IOException {
+        Map<String, String> entries = new TreeMap<>();
+        try (Stream<Path> walk = Files.walk(dir)) {
+            for (Path p : walk.collect(Collectors.toList())) {
+                String key = dir.relativize(p).toString();
+                String value;
+                if (Files.isSymbolicLink(p)) {
+                    value = "<link> " + Files.readSymbolicLink(p);
+                } else if (Files.isDirectory(p, LinkOption.NOFOLLOW_LINKS)) {
+                    value = "<dir>";
+                } else {
+                    value = readText(p);
+                }
+                entries.put(key, value);
+            }
         }
+        return entries;
     }
 
-    private List<String> rootEntries() throws IOException {
-        try (Stream<Path> walk = Files.walk(root)) {
-            return walk.map(p -> root.relativize(p).toString()).sorted().collect(Collectors.toList());
+    private static String repeat(char character, int count) {
+        StringBuilder text = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            text.append(character);
         }
-    }
-
-    /** One handled request: the single action-log entry and every panel response's data object. */
-    private static final class Outcome {
-        private final RemoteActionLog.Entry entry;
-        private final List<JsonObject> responses;
-
-        Outcome(RemoteActionLog.Entry entry, List<JsonObject> responses) {
-            this.entry = entry;
-            this.responses = responses;
-        }
-
-        boolean success() {
-            return responses.get(responses.size() - 1).get("success").getAsBoolean();
-        }
-
-        String lastMessage() {
-            return lastData().get("message").getAsString();
-        }
-
-        JsonObject lastData() {
-            return responses.get(responses.size() - 1);
-        }
-
-        String allMessagesJson() {
-            return responses.toString();
-        }
-
-        List<String> listedNames() {
-            List<String> names = new ArrayList<>();
-            for (JsonObject response : responses) {
-                JsonArray files = response.getAsJsonArray("files");
-                if (files == null) {
-                    continue;
-                }
-                for (JsonElement file : files) {
-                    names.add(file.getAsJsonObject().get("name").getAsString());
-                }
-            }
-            return names;
-        }
-
-        JsonObject listedEntry(String name) {
-            for (JsonObject response : responses) {
-                JsonArray files = response.getAsJsonArray("files");
-                if (files == null) {
-                    continue;
-                }
-                for (JsonElement file : files) {
-                    if (name.equals(file.getAsJsonObject().get("name").getAsString())) {
-                        return file.getAsJsonObject();
-                    }
-                }
-            }
-            throw new AssertionError("no listed entry named '" + name + "' in " + responses);
-        }
+        return text.toString();
     }
 }

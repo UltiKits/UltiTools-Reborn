@@ -210,6 +210,41 @@ class CloudLogoutRevokeTest {
      * invisible to it, and the wait returns before the callback. This widens that hand-off on purpose: the
      * scheduler's wait returns with no outcome, and {@link #awaitOutcome(List)} still observes it.
      */
+    /**
+     * A local delete that fails on the asynchronous task still reaches the operator as a failure
+     * line, instead of ending the command after "Unlinking..." (issue #753).
+     */
+    @Test
+    void failedLocalDeleteIsReportedToTheOperator() throws Exception {
+        ServerCredentialStore.save(credential("LOGOUT_TEST"));
+        assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
+        CredentialStore.setSimulateWriteFailureForTesting(true);
+        try {
+            new CloudLoginCommand().logout(sender());
+            server.getScheduler().waitAsyncTasksFinished();
+            awaitWithin(10_000, () -> lines.size() >= 3, "both logout outcome lines");
+        } finally {
+            CredentialStore.setSimulateWriteFailureForTesting(false);
+        }
+        assertThat(lines).containsExactly(ChatColor.AQUA + "Unlinking this server from UltiCloud...",
+                ChatColor.RED + "Could not delete this server's UltiCloud credential from the local credentials file. "
+                        + "Check the server log, then run /ulticloud logout again.",
+                ChatColor.GRAY + "Cloud features have been stopped regardless.");
+        assertThat(ServerCredentialStore.load()).as("the credential is still on disk").isNotNull();
+        assertThat(CloudSession.current().getCredential()).isNull();
+        assertThat(records.stream().filter(r -> r.getLevel() == Level.WARNING).map(LogRecord::getMessage))
+                .anyMatch(m -> m.contains("DataAccessException"))
+                .noneMatch(m -> m.contains("Simulated write failure"));
+        assertThat(records).allSatisfy(r -> assertThat(r.getMessage()).doesNotContain(SECRET));
+
+        List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
+        CloudAuthManager.logoutReporting(outcomes::add);
+        awaitOutcome(outcomes);
+        assertThat(outcomes).as("running logout again retries the delete").containsExactly(
+                CloudAuthManager.LogoutOutcome.REVOKED);
+        assertThat(CredentialStore.read().data()).doesNotContainKey("cloud_credential");
+    }
+
     @Test
     void logoutOutcomeIsAwaitedEvenWhenTheAsyncHandOffIsLate() throws Exception {
         ServerCredentialStore.save(credential("LOGOUT_TEST"));

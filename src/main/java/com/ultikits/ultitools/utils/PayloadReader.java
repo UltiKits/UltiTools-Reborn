@@ -176,6 +176,20 @@ public final class PayloadReader {
         return value.getAsJsonObject();
     }
 
+    /**
+     * Reads a required object with at least {@code minKeys} members (the schema's
+     * {@code minProperties}); its field validation remains the caller's responsibility.
+     * @param key the field name
+     * @param minKeys the inclusive minimum number of members
+     * @return a deep copy of the object
+     * @since 6.4.0
+     */
+    public JsonObject object(String key, int minKeys) {
+        JsonObject value = object(key);
+        if (value.size() < minKeys) { throw invalid(); }
+        return value;
+    }
+
     private InvalidFrameException invalid() {
         return new InvalidFrameException("invalid_message", id, "Payload does not match the message schema.");
     }

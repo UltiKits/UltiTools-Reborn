@@ -77,13 +77,41 @@ public class SQLiteDataStore implements DataStore {
         return "sqlite";
     }
 
-    @Override
+    /**
+     * Until 6.4.0 this overrode the {@code DataStore} overload of the same signature, which 6.4.0
+     * removed. It still checks ownership first and behaves as in 6.3.x.
+     *
+     * @param plugin     the requesting plugin
+     * @param dataEntity the data entity class
+     * @param <T>        the entity type
+     * @return the data operator
+     * @deprecated Kept only for binary compatibility with the {@code DataStore} overload removed in
+     *             6.4.0. Use {@link com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}
+     *             instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).
+     * @removeIn 6.5.0
+     */
+    @Deprecated(since = "6.4.0", forRemoval = true)
+    @SuppressWarnings("removal") // calls the deprecated DataStore#checkOwnership, removed with it in 6.5.0
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
         checkOwnership(plugin, dataEntity);
         return getOperatorForPath(dbPathForPlugin(plugin.getPluginName()), dataEntity);
     }
 
-    @Override
+    /**
+     * Until 6.4.0 this overrode the {@code DataStore} overload of the same signature, which 6.4.0
+     * removed. It still checks ownership first and behaves as in 6.3.x.
+     *
+     * @param dataFolder the external plugin's data folder
+     * @param dataEntity the data entity class
+     * @param <T>        the entity type
+     * @return the data operator
+     * @deprecated Kept only for binary compatibility with the {@code DataStore} overload removed in
+     *             6.4.0. Use {@link com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}
+     *             instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).
+     * @removeIn 6.5.0
+     */
+    @Deprecated(since = "6.4.0", forRemoval = true)
+    @SuppressWarnings("removal") // calls the deprecated DataStore#checkOwnership, removed with it in 6.5.0
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
         checkOwnership(dataFolder, dataEntity);
         return getOperatorForPath(dbPathForFolder(dataFolder), dataEntity);
@@ -97,8 +125,7 @@ public class SQLiteDataStore implements DataStore {
      * derives for {@link #transactionManagerFor(DataScope)} -- internal scopes resolve to {@link
      * #dbPathForPlugin(String)} keyed on the plugin's own name, external scopes to {@link
      * #dbPathForFolder(File)} -- so an internal scope never collapses onto the framework's shared
-     * core folder the way routing through the public {@code getOperator(File, Class)} overload
-     * used to (the exact regression 02-07 guarded against and CR-01 found reopened as a security
+     * core folder (the regression 02-07 guarded against and CR-01 found reopened as a security
      * bypass).
      */
     @Override
@@ -107,8 +134,8 @@ public class SQLiteDataStore implements DataStore {
     }
 
     /**
-     * Shared operator-construction body for all three entry points above, once ownership has
-     * already been established by whichever one of them was called. Single-sourced so the pool
+     * Operator-construction body for {@link #getOperatorUnchecked(DataScope, Class)}, once
+     * ownership has already been established. Single-sourced so the pool
      * cache (keyed by backing-file path), the operator cache (keyed by (path, entity)), and the
      * {@code transactionManagerFor(...)} wiring are each written in exactly one place.
      */
@@ -156,8 +183,7 @@ public class SQLiteDataStore implements DataStore {
     }
 
     /**
-     * Resolves {@code scope}'s backing .db file path, matching whichever legacy {@code
-     * getOperator} overload the same scope would actually route through: the internal ({@code
+     * Resolves {@code scope}'s backing .db file path: the internal ({@code
      * dbPathForPlugin}) shape when {@code scope} is an internal plugin's own scope (its {@code
      * dataFolder} is exactly the core framework's own data folder, {@code DataScope.forPlugin}'s
      * construction -- the same disambiguation {@code JsonStore.identityOf(DataScope)} uses, 02-05),
@@ -172,7 +198,7 @@ public class SQLiteDataStore implements DataStore {
 
     /**
      * The internal-plugin .db path shape: {@code <core data folder>/sqliteDB/<plugin name>.db}.
-     * Shared by {@link #getOperator(UltiToolsPlugin, Class)} and {@link #dbPathFor(DataScope)}.
+     * Used by {@link #dbPathFor(DataScope)}.
      */
     private static String dbPathForPlugin(String pluginName) {
         File dataFolder = new File(UltiTools.getInstance().getDataFolder(), "sqliteDB");
@@ -181,8 +207,8 @@ public class SQLiteDataStore implements DataStore {
     }
 
     /**
-     * The external-plugin .db path shape: {@code <plugin's own data folder>/data.db}. Shared by
-     * {@link #getOperator(File, Class)} and {@link #dbPathFor(DataScope)}.
+     * The external-plugin .db path shape: {@code <plugin's own data folder>/data.db}. Used by
+     * {@link #dbPathFor(DataScope)}.
      */
     private static String dbPathForFolder(File dataFolder) {
         ensureExists(dataFolder);

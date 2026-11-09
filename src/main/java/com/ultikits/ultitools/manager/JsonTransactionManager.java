@@ -338,7 +338,7 @@ public class JsonTransactionManager implements TransactionManager {
     }
 
     /**
-     * {@inheritDoc}
+     * Sets the isolation level of the active transaction.
      * <p>
      * Maps the {@link Connection} constants {@code TransactionInterceptor} passes:
      * {@code -1} ({@code Isolation.DEFAULT}), {@link Connection#TRANSACTION_READ_UNCOMMITTED} and
@@ -349,9 +349,9 @@ public class JsonTransactionManager implements TransactionManager {
      * granularity. With no active transaction a valid value does nothing, as on
      * {@link DataSourceTransactionManager}.
      *
+     * @param level a {@link Connection} {@code TRANSACTION_*} constant, or {@code -1} for the default
      * @throws IllegalArgumentException for any other value
      */
-    @Override
     public void setIsolationLevel(int level) {
         boolean lockAtFirstRead;
         switch (level) {
@@ -376,13 +376,14 @@ public class JsonTransactionManager implements TransactionManager {
     }
 
     /**
-     * {@inheritDoc}
+     * Sets read-only mode for the active transaction.
      * <p>
      * A read-only JSON transaction rejects every write with a
      * {@code DataAccessException} before the write locks or stages anything; reads work as usual.
      * With no active transaction this does nothing, as on {@link DataSourceTransactionManager}.
+     *
+     * @param readOnly true for read-only mode
      */
-    @Override
     public void setReadOnly(boolean readOnly) {
         Context ctx = contextHolder.get();
         if (ctx != null) {

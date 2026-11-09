@@ -36,7 +36,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Propagation;
@@ -431,12 +430,6 @@ class JdbcTransactionalParticipationTest {
         @Override
         public String getStoreType() {
             return "fake-jdbc";
-        }
-
-        @Override
-        public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin,
-                Class<T> dataEntity) {
-            throw new UnsupportedOperationException("not needed by this test");
         }
 
         @Override

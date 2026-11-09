@@ -231,8 +231,8 @@ class OverBroadExclusionInvariantTest {
         assertThat(classesInBuildOutput).contains(
                 "com.ultikits.ultitools.abstracts.command.CommandContext$CommandContextBuilder",
                 "com.ultikits.ultitools.commands.tabcomplete.TabCompletionContext$TabCompletionContextBuilder",
-                "com.ultikits.ultitools.entities.WhereCondition$WhereConditionBuilder",
-                "com.ultikits.ultitools.entities.vo.ServerEntityVO$ServerEntityVOBuilder");
+                // ServerEntityVO and its builder were removed with the protocol v1 surface in 6.4.0.
+                "com.ultikits.ultitools.entities.WhereCondition$WhereConditionBuilder");
     }
 
     @Test

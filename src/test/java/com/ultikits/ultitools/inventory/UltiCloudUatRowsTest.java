@@ -72,6 +72,11 @@ class UltiCloudUatRowsTest {
             "ultitools.ulticloud.close-superseded",
             "ultitools.ulticloud.close-long-backoff",
             "ultitools.ulticloud.server-id-mismatch",
+            // 6.4.0, #869: /ulticloud login <code> with the panel's re-pair code
+            "ultitools.ulticloud.login-code",
+            "ultitools.ulticloud.login-code.neg-used",
+            "ultitools.ulticloud.login-code.neg-expired",
+            "ultitools.ulticloud.login-code.neg-malformed",
             "ultitools.cloud.outbox.persist-restart",
             "ultitools.cloud.outbox.overflow",
             "ultitools.cloud.command.ack-result-output",

@@ -18,7 +18,10 @@ PAPER_VERSIONS = (
 )
 NAMESPACE = {"m": "http://maven.apache.org/POM/4.0.0"}
 DEPENDENCY_PLUGIN = "org.apache.maven.plugins:maven-dependency-plugin:3.11.0:"
-SERVER_PREFIXES = ("org/bukkit/", "io/papermc/", "net/minecraft/", "org/spigotmc/")
+# Every package LinkageAudit treats as server or framework API, plus NMS: a resolution-only JAR
+# carrying any of them could mask the old server's (or the audited framework's) own classes.
+SERVER_PREFIXES = ("org/bukkit/", "io/papermc/", "net/minecraft/", "org/spigotmc/",
+                   "com/destroystokyo/", "net/kyori/", "co/aikar/", "com/ultikits/ultitools/")
 OWN_PREFIX = "com/ultikits/ultitools/"
 PAPER = ("io.papermc.paper", "paper-api")
 
@@ -28,6 +31,7 @@ class Dependency:
     group: str
     artifact: str
     path: Path
+    version: str = ""
 
     @property
     def key(self) -> tuple[str, str]:
@@ -53,13 +57,14 @@ def resolve_dependencies(pom: Path, directory: Path, scope: str) -> list[Depende
     dependencies = []
     for line in output.read_text(encoding="utf-8").splitlines():
         # dependency:list appends a JPMS module description after the artifact path.
-        fields = line.strip().split(" -- ", 1)[0].split(":")
+        # A direct <optional>true</optional> dependency adds " (optional)" before that description.
+        fields = line.strip().split(" -- ", 1)[0].strip().removesuffix(" (optional)").split(":")
         if len(fields) not in (6, 7) or fields[-2] not in ("compile", "provided", "runtime", "system", "test"):
             continue
         if fields[2] != "jar" or fields[-2] not in ("compile", "provided", "runtime"):
             continue
         path = Path(fields[-1]).resolve(strict=True)
-        dependencies.append(Dependency(fields[0], fields[1], path))
+        dependencies.append(Dependency(fields[0], fields[1], path, fields[-3]))
     if not dependencies:
         raise ValueError("Maven returned no JAR dependencies: " + str(output))
     return dependencies
@@ -146,6 +151,7 @@ def main():
         directory = root / paper_version
         old_pom = paper_pom(project, directory, paper_version)
         server = resolve_dependencies(old_pom, directory, "runtime")
+        require_pinned_paper(server, paper_version)
         server.sort(key=lambda dependency: dependency.key != PAPER)
         # The old server's entire graph wins over every framework-only fallback.
         ordered = list(dict.fromkeys([dependency.path for dependency in server] + supplemental))
@@ -156,12 +162,28 @@ def main():
         subprocess.run(["java", "-cp", str(framework) + os.pathsep + classpath,
                         "com.ultikits.ultitools.LinkageAudit", "--api", classpath,
                         "--own", OWN_PREFIX, str(framework)], check=True)
-        print("Paper " + paper_version + ": 0 uncovered references", flush=True)
+        print("Paper " + paper_version + ": 0 unresolved references in framework code"
+              " (bundled-library summaries above are informational)", flush=True)
     return 0
 
 
-if __name__ == "__main__":
+def require_pinned_paper(server: list[Dependency], pinned: str) -> None:
+    """Fail unless the old graph's Paper API is the pinned line, not a modern or mediated one.
+
+    Maven reports a timestamp-pinned snapshot by its base version, so compare against that."""
+    base = pinned.rsplit("-", 2)[0] + "-SNAPSHOT"
+    found = [dependency.version for dependency in server if dependency.key == PAPER]
+    if found != [base]:
+        raise ValueError("Old Paper graph resolved paper-api " + repr(found) + ", expected " + base)
+
+
+def entry() -> int:
+    """Propagate the audit's own exit status (1 findings, 2 usage, 3 I/O) to CI unchanged."""
     try:
-        sys.exit(main())
+        return main()
     except subprocess.CalledProcessError as error:
-        sys.exit(error.returncode)
+        return error.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(entry())

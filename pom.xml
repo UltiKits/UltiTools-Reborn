@@ -4,7 +4,7 @@
     xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <artifactId>UltiTools-API</artifactId>
     <groupId>com.ultikits</groupId>
-    <version>6.4.0-SNAPSHOT</version>
+    <version>6.5.0-SNAPSHOT</version>
     <modelVersion>4.0.0</modelVersion>
     <name>UltiTools-API</name>
     <description>This project is the base of the Ultitools plugin development.</description>
@@ -49,7 +49,7 @@
             profile in ~/.m2/settings.xml. Do not hard-code a machine-specific path here.
         -->
         <ultitools.deploy.folder>${project.build.directory}/deploy</ultitools.deploy.folder>
-        <!-- The released UltiTools-API version on Maven Central (v6.3.2 tag) that the japicmp
+        <!-- The released UltiTools-API version on Maven Central (v6.4.0 tag) that the japicmp
              binary-compatibility gate below diffs against: always the LATEST release, so the gate
              guards everything already shipped. Override with -Djapicmp.baseline.version= to
              compare against a different released version. Lifecycle rule: a formal release keeps
@@ -59,7 +59,7 @@
              (RemovalConsistencyEvaluator stops requiring those entries). A formal (non-SNAPSHOT)
              build refuses a baseline that is missing, a SNAPSHOT, or not strictly older than the
              project version (ReleaseBoundaryInvariant). -->
-        <japicmp.baseline.version>6.3.2</japicmp.baseline.version>
+        <japicmp.baseline.version>6.4.0</japicmp.baseline.version>
         <!-- The Paper API floor fixture (#831): one timestamped 1.19.2 snapshot jar and its SHA-256.
              Paper may prune old snapshots; the runtime-api-floor-paper-fixture execution below then
              fails with instructions for replacing it. Change both values together. -->
@@ -448,15 +448,16 @@
                  legitimate only for a removal registered in the removal ledger
                  (compatibility/deprecations.json, status REMOVED) whose removedIn is newer than the
                  baseline, or for a non-public member admitted by the D-21 allowlist rule. The list
-                 is empty at the start of the 6.4.0 cycle: every 6.3.0 removal is absent from both
-                 the 6.3.2 baseline and this tree, so none of the former entries can be re-flagged.
+                 is empty at the start of the 6.5.0 cycle: every 6.3.0 and 6.4.0 removal is absent
+                 from both the 6.4.0 baseline and this tree, so none of the former entries can be
+                 re-flagged.
                  japicmp 二进制兼容性门（GATE-01）。会阻断构建：相对已发布的
                  ${japicmp.baseline.version}，com.ultikits.ultitools 中任何公共或受保护成员的二进制
                  不兼容变更都会导致 `mvn verify` 失败，除非该符号已在下方 <excludes> 中精确列出。
                  accessModifier 取 `protected` 而非 `public`，因为 BaseCommandExecutor#handleHelp
                  本身就是 `protected abstract`。排除项只允许用于删除台账中登记、且 removedIn 新于
-                 基线的删除，或符合 D-21 规则的非公开成员。6.4.0 周期开始时该列表为空：6.3.0 的
-                 删除在 6.3.2 基线与当前代码中都不存在，旧排除项已不可能再被报出。 -->
+                 基线的删除，或符合 D-21 规则的非公开成员。6.5.0 周期开始时该列表为空：6.3.0 与
+                 6.4.0 的删除在 6.4.0 基线与当前代码中都不存在，旧排除项已不可能再被报出。 -->
             <plugin>
                 <groupId>com.github.siom79.japicmp</groupId>
                 <artifactId>japicmp-maven-plugin</artifactId>
@@ -508,11 +509,11 @@
                              DeprecationRegistryGenerator holds each entry to the removal ledger
                              (RemovalConsistencyEvaluator: no unregistered, stale or missing
                              exclusion) and OverBroadExclusionInvariantTest rejects a whole-class
-                             entry for a class that still exists. Empty since the baseline advanced
-                             from 6.2.5 to 6.3.2 (#738): all 44 ledger removals carry removedIn 6.3.0
-                             and the remaining allowlist entries named 6.3.0 changes, none of which
-                             differ between 6.3.2 and this tree. A removal made in this cycle adds
-                             its entry here together with its ledger record. -->
+                             entry for a class that still exists. Emptied again when the baseline
+                             advanced from 6.3.2 to 6.4.0: every ledger removal carries removedIn
+                             6.3.0 or 6.4.0, so each symbol is absent from both the baseline and this
+                             tree. A removal made in this cycle adds its entry here together with its
+                             ledger record. -->
                         <excludes>
                         </excludes>
                     </parameter>

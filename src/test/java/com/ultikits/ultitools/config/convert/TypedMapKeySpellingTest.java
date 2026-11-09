@@ -16,7 +16,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.ultikits.ultitools.annotations.ConfigEntry;
 
 /**
  * Case 52 (issue #673, "Typed scalar map keys bind back to the original document keys"), converter level: given the
@@ -213,18 +212,6 @@ class TypedMapKeySpellingTest {
     }
 
     @Test
-    @DisplayName("control: an entry with a legacy parser ignores the file value")
-    void legacyParserIgnoresTheFileValue() throws Exception {
-        ConfigEntry entry = Shapes.class.getDeclaredField("legacy").getAnnotation(ConfigEntry.class);
-        Map<String, Object> value = new LinkedHashMap<>(plain("1", "a"));
-
-        Object withFile = registry.toPlainResult(value, Object.class, FILE, ROOT, entry, plain("01", "a")).value();
-
-        assertThat(withFile).isEqualTo(registry.toPlainResult(value, Object.class, FILE, ROOT, entry).value());
-        assertThat(withFile).isEqualTo(plain("1", "a"));
-    }
-
-    @Test
     @DisplayName("a map whose file spells every key differently is bound in visits linear in its size (PR #687 Codex run 2)")
     void nonCanonicalSpellingsBindInLinearVisits() throws Exception {
         int size = 2_000;
@@ -299,10 +286,6 @@ class TypedMapKeySpellingTest {
         @Override public String toString() { return "Point(" + number + ")"; }
     }
 
-    // Deliberately exercises the deprecated legacy parser compatibility contract.
-    @SuppressWarnings("removal")
-    public static class Passthrough extends com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser { }
-
     @SuppressWarnings("unused") // declarations read reflectively for their generic types
     static class Shapes {
         Map<Integer, String> integers;
@@ -314,8 +297,5 @@ class TypedMapKeySpellingTest {
         Map<Integer, Map<Integer, String>> typedOuter;
         List<Map<Integer, String>> listed;
         Map<Point, String> points;
-        // Deliberately selects a legacy parser to verify that it never sees the file value.
-        @SuppressWarnings("removal")
-        @ConfigEntry(parser = Passthrough.class) Object legacy;
     }
 }

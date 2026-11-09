@@ -12,7 +12,6 @@ import com.ultikits.ultitools.config.convert.ConfigConverter;
 import com.ultikits.ultitools.config.convert.ConversionContext;
 import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
-import com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser;
 import com.ultikits.ultitools.manager.ConfigManager;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,7 +19,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -33,9 +31,6 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.MemoryConfiguration;
-import org.bukkit.configuration.MemorySection;
 import org.bukkit.util.Vector;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -155,18 +150,6 @@ class ConfigUnknownKeyDiagnosticTest {
             CustomValues entity = new CustomValues(PATH);
             entity.init(plugin);
             assertThat(entity.wrapped.data).isInstanceOf(Map.class);
-            assertThat(diagnostics(capture)).isEmpty();
-        }
-    }
-
-    @Test
-    @SuppressWarnings("removal") // Tests the retained explicit-parser compatibility contract, not a new parser API.
-    void aLegacyParserOwnsItsWholeSerializedValue() throws Exception {
-        write("legacy: {joined: 'one,two', ignored: {dynamic: extra}}\n");
-        LegacyValues entity = new LegacyValues(PATH);
-        try (ConfigWarningCapture capture = ConfigWarningCapture.install()) {
-            entity.init(plugin);
-            assertThat(entity.legacy).containsExactly("one", "two");
             assertThat(diagnostics(capture)).isEmpty();
         }
     }
@@ -499,24 +482,6 @@ class ConfigUnknownKeyDiagnosticTest {
     static class CustomValues extends AbstractConfigEntity {
         @ConfigEntry Wrapped wrapped = new Wrapped(Collections.emptyMap());
         public CustomValues(String path) { super(path); }
-    }
-
-    @SuppressWarnings("removal") // Deliberately exercises the retained explicit-parser adapter.
-    static class LegacyValues extends AbstractConfigEntity {
-        @ConfigEntry(parser = JoinedParser.class) Set<String> legacy = new LinkedHashSet<>(Collections.singleton("default"));
-        public LegacyValues(String path) { super(path); }
-    }
-
-    @SuppressWarnings("removal") // Deliberately exercises the retained explicit-parser adapter.
-    public static class JoinedParser extends ConfigParser<Set<String>> {
-        @Override public Set<String> parse(Object value) {
-            return new LinkedHashSet<>(Arrays.asList(((ConfigurationSection) value).getString("joined").split(",")));
-        }
-        @Override public MemorySection serializeToMemorySection(Set<String> value) {
-            MemoryConfiguration result = new MemoryConfiguration();
-            result.set("joined", String.join(",", value));
-            return result;
-        }
     }
 
     static class ValidatedValues extends Values {

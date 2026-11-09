@@ -36,7 +36,8 @@ import com.ultikits.ultitools.UltiTools;
 class CloudConnectionLifecycleTest {
     private static final String UUID = "0123456789abcdef0123456789abcdef";
     private static final String REJECTED = "UltiCloud rejected this server's credential (it was revoked or is no longer valid). "
-            + "The saved credential was deleted. Run /ulticloud login to link this server again.";
+            + "The saved credential was deleted. If you used \"Revoke and re-pair\" in the panel, run "
+            + "/ulticloud login <code> with the code it shows; otherwise run /ulticloud login to link this server again.";
 
     @TempDir
     Path tempDir;
@@ -369,7 +370,6 @@ class CloudConnectionLifecycleTest {
         });
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
         PluginInitiationUtils.initWebsocket();
-        PluginInitiationUtils.startTokenRefreshScheduler();
         PluginInitiationUtils.stopCredentialSchedulers();
         Thread.sleep(150);
         assertThat(raw.requests).isEmpty();

@@ -7,7 +7,6 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.spy;
 
 import java.util.List;
 import java.util.logging.Level;
@@ -29,8 +28,10 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  * #587 item 1a: two diagnostics that #586 routed through {@link PanelConnectionLog} had no test
  * asserting that they are marked as panel-connection lines, so a change back to a plain
  * {@code getLogger().log(...)} -- which the log stream would carry to the panel, and on Paper feed
- * back into the stream's own handler -- would pass the suite. Both are pinned here: the failure
- * report of {@link SystemLogHandler#publish} and the catch of {@link UltiPanelLogTransmitter#shutdown}.
+ * back into the stream's own handler -- would pass the suite. The failure report of
+ * {@link SystemLogHandler#publish} is pinned here. The second site, the catch of
+ * {@code UltiPanelLogTransmitter#shutdown} around its v1 flush, was removed in 6.4.0 with the v1 batch sender:
+ * {@code shutdown} now only switches transmission off and has no failure path left to mark.
  */
 @DisplayName("Stream-side diagnostics are panel-connection lines (#587)")
 class PanelConnectionMarkingSitesTest {
@@ -77,23 +78,5 @@ class PanelConnectionMarkingSitesTest {
         LogRecord report = onlyWarning();
         assertThat(report.getMessage()).contains("transmitter broke");
         assertThat(PanelConnectionLog.isPanelConnectionRecord(report)).isTrue();
-    }
-
-    @Test
-    @DisplayName("UltiPanelLogTransmitter#shutdown: a failure while closing is reported as a marked WARNING")
-    void transmitterShutdownFailureIsMarked() {
-        UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter((timestamp, level, message) -> { });
-        UltiPanelLogTransmitter failing = spy(transmitter);
-        doThrow(new IllegalStateException("flush broke")).when(failing).flushLogs();
-        try {
-            failing.shutdown();
-
-            LogRecord report = onlyWarning();
-            assertThat(report.getMessage()).contains("flush broke");
-            assertThat(PanelConnectionLog.isPanelConnectionRecord(report)).isTrue();
-        } finally {
-            // The failed shutdown left the scheduler running; the real one stops it.
-            transmitter.shutdown();
-        }
     }
 }

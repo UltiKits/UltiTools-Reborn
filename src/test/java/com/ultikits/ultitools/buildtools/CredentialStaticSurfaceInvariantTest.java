@@ -21,11 +21,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.buildtools.fixtures.CredentialSurfaceOffenderFixture;
-import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.buildtools.fixtures.CredentialSurfaceOffenderFixture.StandInCredential;
+import com.ultikits.ultitools.utils.ServerCredentialSurfaceOffenderFixture;
 
 /**
  * Pins {@link CredentialStaticSurfaceInvariant}'s D-18 rule: no {@code public static} method in the
- * {@code utils} package may accept or return a {@link TokenEntity} or a generation. Synthetic cases
+ * {@code utils} package may accept or return a {@link StandInCredential} or a generation. Synthetic cases
  * (nested classes below) cover the discrimination logic directly against hand-built {@link Method}
  * arrays; {@link #scanMechanismCatchesAFixtureOffender()} then proves the package-<em>scanning</em>
  * mechanism itself is non-vacuous -- pointed at a fixture package holding a permanent, deliberate
@@ -37,57 +38,57 @@ import com.ultikits.ultitools.entities.TokenEntity;
 class CredentialStaticSurfaceInvariantTest {
 
     @Test
-    @DisplayName("a public static method returning TokenEntity produces exactly one violation naming that method")
-    void publicStaticMethodReturningTokenEntityReportsOneViolationNamingIt() {
+    @DisplayName("a public static method returning StandInCredential produces exactly one violation naming that method")
+    void publicStaticMethodReturningStandInCredentialReportsOneViolationNamingIt() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(TokenReturningOffender.class));
+                methodsOf(TokenReturningOffender.class), StandInCredential.class);
 
         assertThat(violations)
                 .hasSize(1)
                 .anySatisfy(v -> {
                     assertThat(v).contains("offend");
-                    assertThat(v).contains(TokenEntity.class.getSimpleName());
+                    assertThat(v).contains(StandInCredential.class.getSimpleName());
                 });
     }
 
     @Test
-    @DisplayName("round-15 review: a public static method returning a concrete SUBCLASS of TokenEntity "
+    @DisplayName("round-15 review: a public static method returning a concrete SUBCLASS of StandInCredential "
             + "produces exactly one violation naming that method -- assignability, not exact equality")
-    void publicStaticMethodReturningTokenEntitySubclassReportsOneViolation() {
+    void publicStaticMethodReturningStandInCredentialSubclassReportsOneViolation() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(TokenSubclassReturningOffender.class));
+                methodsOf(TokenSubclassReturningOffender.class), StandInCredential.class);
 
         assertThat(violations)
-                .as("TokenEntity is public and not final, so a concrete subclass is a real, "
+                .as("StandInCredential is public and not final, so a concrete subclass is a real, "
                         + "constructible signature that reifies as SessionToken.class, never "
-                        + "TokenEntity.class -- an exact-equality check would miss it entirely")
+                        + "StandInCredential.class -- an exact-equality check would miss it entirely")
                 .hasSize(1)
                 .anySatisfy(v -> {
                     assertThat(v).contains("offend");
-                    assertThat(v).contains(TokenEntity.class.getSimpleName());
+                    assertThat(v).contains(StandInCredential.class.getSimpleName());
                 });
     }
 
     @Test
     @DisplayName("round-15 review: a public static method ACCEPTING a concrete SUBCLASS of "
-            + "TokenEntity produces exactly one violation naming that method")
-    void publicStaticMethodAcceptingTokenEntitySubclassReportsOneViolation() {
+            + "StandInCredential produces exactly one violation naming that method")
+    void publicStaticMethodAcceptingStandInCredentialSubclassReportsOneViolation() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(TokenSubclassAcceptingOffender.class));
+                methodsOf(TokenSubclassAcceptingOffender.class), StandInCredential.class);
 
         assertThat(violations)
                 .hasSize(1)
                 .anySatisfy(v -> {
                     assertThat(v).contains("offend");
-                    assertThat(v).contains(TokenEntity.class.getSimpleName());
+                    assertThat(v).contains(StandInCredential.class.getSimpleName());
                 });
     }
 
     @Test
-    @DisplayName("a package-private static method returning TokenEntity produces no violation -- the rule is about the public surface")
-    void packagePrivateStaticMethodReturningTokenEntityReportsNone() {
+    @DisplayName("a package-private static method returning StandInCredential produces no violation -- the rule is about the public surface")
+    void packagePrivateStaticMethodReturningStandInCredentialReportsNone() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(PackagePrivateOffender.class));
+                methodsOf(PackagePrivateOffender.class), StandInCredential.class);
 
         assertThat(violations).isEmpty();
     }
@@ -96,7 +97,7 @@ class CredentialStaticSurfaceInvariantTest {
     @DisplayName("a public static method whose name says 'generation' and takes a long parameter produces one violation")
     void publicStaticMethodAcceptingGenerationShapedParameterReportsOneViolation() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(GenerationParameterOffender.class));
+                methodsOf(GenerationParameterOffender.class), StandInCredential.class);
 
         assertThat(violations)
                 .hasSize(1)
@@ -107,16 +108,16 @@ class CredentialStaticSurfaceInvariantTest {
     @DisplayName("a public static method with a bare long parameter but an unrelated name produces no violation -- the accepted, named blind spot")
     void publicStaticMethodWithUnrelatedNamedLongParameterReportsNone() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(UnrelatedLongParameterNonOffender.class));
+                methodsOf(UnrelatedLongParameterNonOffender.class), StandInCredential.class);
 
         assertThat(violations).isEmpty();
     }
 
     @Test
-    @DisplayName("a public instance (non-static) method returning TokenEntity produces no violation -- only the static surface is D-18's concern")
-    void publicInstanceMethodReturningTokenEntityReportsNone() {
+    @DisplayName("a public instance (non-static) method returning StandInCredential produces no violation -- only the static surface is D-18's concern")
+    void publicInstanceMethodReturningStandInCredentialReportsNone() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(InstanceMethodNonOffender.class));
+                methodsOf(InstanceMethodNonOffender.class), StandInCredential.class);
 
         assertThat(violations).isEmpty();
     }
@@ -127,7 +128,7 @@ class CredentialStaticSurfaceInvariantTest {
         List<Method> fixtureMethods = scanPublicStaticMethodsOfPackage(
                 testClassesRoot(), CredentialSurfaceOffenderFixture.class.getPackage().getName());
 
-        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(fixtureMethods);
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(fixtureMethods, StandInCredential.class);
 
         assertThat(violations)
                 .as("CredentialSurfaceOffenderFixture#offendByReturningToken() must be found by the "
@@ -139,43 +140,43 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
-    @DisplayName("WR-03: the scan mechanism also catches the fixture's erased-generic offenders (Optional<TokenEntity> return, Consumer<TokenEntity> parameter)")
+    @DisplayName("WR-03: the scan mechanism also catches the fixture's erased-generic offenders (Optional<StandInCredential> return, Consumer<StandInCredential> parameter)")
     void scanMechanismCatchesTheFixturesGenericOffenders() throws IOException, ClassNotFoundException {
         List<Method> fixtureMethods = scanPublicStaticMethodsOfPackage(
                 testClassesRoot(), CredentialSurfaceOffenderFixture.class.getPackage().getName());
 
-        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(fixtureMethods);
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(fixtureMethods, StandInCredential.class);
 
         assertThat(violations)
-                .as("Optional<TokenEntity> erases to Optional.class -- the pre-WR-03 rule would have "
+                .as("Optional<StandInCredential> erases to Optional.class -- the pre-WR-03 rule would have "
                         + "missed this entirely")
                 .anySatisfy(v -> assertThat(v).contains("offendByReturningOptionalOfToken"));
         assertThat(violations)
-                .as("Consumer<TokenEntity> erases to Consumer.class -- same gap, on a parameter")
+                .as("Consumer<StandInCredential> erases to Consumer.class -- same gap, on a parameter")
                 .anySatisfy(v -> assertThat(v).contains("offendByAcceptingConsumerOfToken"));
     }
 
     @Test
-    @DisplayName("Round 1 外部评审（第四轮）：TokenEntity[] 这种具体数组类型必须被抓到，不能因为它是 Class 而不是 GenericArrayType 就漏掉")
-    void publicStaticMethodReturningTokenEntityArrayReportsOneViolation() {
+    @DisplayName("Round 1 外部评审（第四轮）：StandInCredential[] 这种具体数组类型必须被抓到，不能因为它是 Class 而不是 GenericArrayType 就漏掉")
+    void publicStaticMethodReturningStandInCredentialArrayReportsOneViolation() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(ArrayReturningOffender.class));
+                methodsOf(ArrayReturningOffender.class), StandInCredential.class);
 
         assertThat(violations)
-                .as("反射把具体数组 TokenEntity[] 表示成 isArray()==true 的 Class，从不是 " +
+                .as("反射把具体数组 StandInCredential[] 表示成 isArray()==true 的 Class，从不是 " +
                         "GenericArrayType——只处理 GenericArrayType 的旧版本会漏掉这一种")
                 .hasSize(1)
                 .anySatisfy(v -> assertThat(v).contains("leaked"));
     }
 
     @Test
-    @DisplayName("Round 1 外部评审（第五轮）：带 TokenEntity 上界的类型变量必须被抓到，不能因为它是 TypeVariable 而不是 WildcardType 就漏掉")
+    @DisplayName("Round 1 外部评审（第五轮）：带 StandInCredential 上界的类型变量必须被抓到，不能因为它是 TypeVariable 而不是 WildcardType 就漏掉")
     void publicStaticMethodReturningBoundedTypeVariableReportsOneViolation() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(BoundedTypeVariableOffender.class));
+                methodsOf(BoundedTypeVariableOffender.class), StandInCredential.class);
 
         assertThat(violations)
-                .as("<T extends Iterable<TokenEntity>> 这种上界通过反射拿到的是 TypeVariable，" +
+                .as("<T extends Iterable<StandInCredential>> 这种上界通过反射拿到的是 TypeVariable，" +
                         "不是 WildcardType——只处理 WildcardType 的旧版本会漏掉这一种")
                 .hasSize(1)
                 .anySatisfy(v -> assertThat(v).contains("leaked"));
@@ -185,23 +186,23 @@ class CredentialStaticSurfaceInvariantTest {
     @DisplayName("Round 6 external review: a self-referential bounded type variable must not StackOverflowError and must report no violation")
     void selfReferentialBoundedTypeVariableDoesNotStackOverflowAndReportsNoViolation() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(SelfReferentialBoundNonOffender.class));
+                methodsOf(SelfReferentialBoundNonOffender.class), StandInCredential.class);
 
         assertThat(violations)
                 .as("<T extends Comparable<T>> recurses into its own bound via Comparable<T>'s sole "
                         + "type argument, T itself -- without cycle detection this call never "
-                        + "returns, and nothing here references TokenEntity anyway")
+                        + "returns, and nothing here references StandInCredential anyway")
                 .isEmpty();
     }
 
     @Test
-    @DisplayName("Round 6 external review: TokenEntity referenced only through a parameterized owner type must still be caught")
+    @DisplayName("Round 6 external review: StandInCredential referenced only through a parameterized owner type must still be caught")
     void ownerTypeLeakReportsOneViolation() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(OwnerTypeLeakOffender.class));
+                methodsOf(OwnerTypeLeakOffender.class), StandInCredential.class);
 
         assertThat(violations)
-                .as("GenericOwner<TokenEntity>.Inner records TokenEntity only in "
+                .as("GenericOwner<StandInCredential>.Inner records StandInCredential only in "
                         + "ParameterizedType#getOwnerType() -- Inner's own raw type and actual type "
                         + "arguments, both already checked, say nothing about it")
                 .hasSize(1)
@@ -209,43 +210,43 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
-    @DisplayName("Defect-class sweep: a GenericArrayType (List<TokenEntity>[]) must be caught, distinct from the reified-array Class case")
+    @DisplayName("Defect-class sweep: a GenericArrayType (List<StandInCredential>[]) must be caught, distinct from the reified-array Class case")
     void genericArrayTypeReportsOneViolation() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
-                methodsOf(GenericArrayOffender.class));
+                methodsOf(GenericArrayOffender.class), StandInCredential.class);
 
         assertThat(violations)
-                .as("List<TokenEntity>[] reifies as GenericArrayType, not as a plain Class with "
-                        + "isArray()==true -- ArrayReturningOffender's reified TokenEntity[] does not "
+                .as("List<StandInCredential>[] reifies as GenericArrayType, not as a plain Class with "
+                        + "isArray()==true -- ArrayReturningOffender's reified StandInCredential[] does not "
                         + "exercise this branch at all")
                 .hasSize(1)
                 .anySatisfy(v -> assertThat(v).contains("leaked"));
     }
 
     @Test
-    @DisplayName("Defect-class sweep: a WildcardType upper bound (List<? extends TokenEntity>) must be caught")
+    @DisplayName("Defect-class sweep: a WildcardType upper bound (List<? extends StandInCredential>) must be caught")
     void wildcardUpperBoundReportsOneViolation() throws NoSuchMethodException {
         Method method = WildcardUpperBoundOffender.class.getMethod("leaked", List.class);
 
-        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(java.util.Collections.singletonList(method));
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(java.util.Collections.singletonList(method), StandInCredential.class);
 
         assertThat(violations)
-                .as("List<? extends TokenEntity> reifies as a WildcardType whose getUpperBounds() "
-                        + "names TokenEntity -- no existing fixture drove this specific loop")
+                .as("List<? extends StandInCredential> reifies as a WildcardType whose getUpperBounds() "
+                        + "names StandInCredential -- no existing fixture drove this specific loop")
                 .hasSize(1)
                 .anySatisfy(v -> assertThat(v).contains("leaked"));
     }
 
     @Test
-    @DisplayName("Defect-class sweep: a WildcardType lower bound (List<? super TokenEntity>) must be caught")
+    @DisplayName("Defect-class sweep: a WildcardType lower bound (List<? super StandInCredential>) must be caught")
     void wildcardLowerBoundReportsOneViolation() throws NoSuchMethodException {
         Method method = WildcardLowerBoundOffender.class.getMethod("leaked", List.class);
 
-        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(java.util.Collections.singletonList(method));
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(java.util.Collections.singletonList(method), StandInCredential.class);
 
         assertThat(violations)
-                .as("List<? super TokenEntity> reifies as a WildcardType whose getLowerBounds() "
-                        + "names TokenEntity while getUpperBounds() names only Object -- only the "
+                .as("List<? super StandInCredential> reifies as a WildcardType whose getLowerBounds() "
+                        + "names StandInCredential while getUpperBounds() names only Object -- only the "
                         + "lower-bounds loop can catch this shape")
                 .hasSize(1)
                 .anySatisfy(v -> assertThat(v).contains("leaked"));
@@ -257,7 +258,7 @@ class CredentialStaticSurfaceInvariantTest {
         List<Field> fixtureFields = scanPublicStaticFieldsOfPackage(
                 testClassesRoot(), CredentialSurfaceOffenderFixture.class.getPackage().getName());
 
-        List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(fixtureFields);
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(fixtureFields, StandInCredential.class);
 
         assertThat(violations)
                 .as("CredentialSurfaceOffenderFixture#offendingLeakedField must be found -- fields "
@@ -267,24 +268,24 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
-    @DisplayName("a public static field returning TokenEntity via a synthetic fixture produces exactly one violation naming it")
-    void publicStaticFieldTypedAsTokenEntityReportsOneViolationNamingIt() throws NoSuchFieldException {
+    @DisplayName("a public static field returning StandInCredential via a synthetic fixture produces exactly one violation naming it")
+    void publicStaticFieldTypedAsStandInCredentialReportsOneViolationNamingIt() throws NoSuchFieldException {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(
-                fieldsOf(TokenFieldOffender.class));
+                fieldsOf(TokenFieldOffender.class), StandInCredential.class);
 
         assertThat(violations)
                 .hasSize(1)
                 .anySatisfy(v -> {
                     assertThat(v).contains("offendingField");
-                    assertThat(v).contains(TokenEntity.class.getSimpleName());
+                    assertThat(v).contains(StandInCredential.class.getSimpleName());
                 });
     }
 
     @Test
-    @DisplayName("a public static Optional<TokenEntity> field produces one violation via the generic-type check")
-    void publicStaticFieldWithGenericTokenEntityTypeReportsOneViolation() throws NoSuchFieldException {
+    @DisplayName("a public static Optional<StandInCredential> field produces one violation via the generic-type check")
+    void publicStaticFieldWithGenericStandInCredentialTypeReportsOneViolation() throws NoSuchFieldException {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(
-                fieldsOf(GenericTokenFieldOffender.class));
+                fieldsOf(GenericTokenFieldOffender.class), StandInCredential.class);
 
         assertThat(violations)
                 .hasSize(1)
@@ -292,10 +293,10 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
-    @DisplayName("a package-private static field typed as TokenEntity produces no violation -- the rule is about the public surface")
-    void packagePrivateStaticFieldTypedAsTokenEntityReportsNone() throws NoSuchFieldException {
+    @DisplayName("a package-private static field typed as StandInCredential produces no violation -- the rule is about the public surface")
+    void packagePrivateStaticFieldTypedAsStandInCredentialReportsNone() throws NoSuchFieldException {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(
-                fieldsOf(PackagePrivateFieldOffender.class));
+                fieldsOf(PackagePrivateFieldOffender.class), StandInCredential.class);
 
         assertThat(violations).isEmpty();
     }
@@ -328,18 +329,49 @@ class CredentialStaticSurfaceInvariantTest {
         assertThat(violations).isEmpty();
     }
 
+    @Test
+    @DisplayName("the real rule guards the protocol v2 server credential, which must still exist")
+    void realRuleGuardsTheServerCredentialType() {
+        assertThat(CredentialStaticSurfaceInvariant.credentialType().getName())
+                .as("TokenEntity was removed in 6.4.0; the rule now guards the only credential type "
+                        + "left -- if this type is renamed or removed the rule must be re-pointed")
+                .isEqualTo("com.ultikits.ultitools.utils.ServerCredential");
+    }
+
+    @Test
+    @DisplayName("the real rule is non-vacuous: utils-package offenders exposing ServerCredential are each caught")
+    void realRuleCatchesServerCredentialOffenders() {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
+                methodsOf(ServerCredentialSurfaceOffenderFixture.class));
+
+        assertThat(violations)
+                .as("one violation per offending method: direct return, Optional<ServerCredential> "
+                        + "return and Consumer<ServerCredential> parameter")
+                .hasSize(3)
+                .anySatisfy(v -> assertThat(v).contains("leakCredential"))
+                .anySatisfy(v -> assertThat(v).contains("leakOptionalCredential"))
+                .anySatisfy(v -> assertThat(v).contains("acceptCredentialConsumer"));
+
+        List<String> fieldViolations = CredentialStaticSurfaceInvariant.evaluateFields(
+                fieldsOf(ServerCredentialSurfaceOffenderFixture.class));
+
+        assertThat(fieldViolations)
+                .hasSize(1)
+                .anySatisfy(v -> assertThat(v).contains("leakedCredentialField"));
+    }
+
     // -------------------------------------------------------------------------
     // Synthetic fixtures -- one offending or non-offending shape each
     // -------------------------------------------------------------------------
 
     static class TokenReturningOffender {
-        public static TokenEntity offend() {
+        public static StandInCredential offend() {
             return null;
         }
     }
 
     static class PackagePrivateOffender {
-        static TokenEntity notPublic() {
+        static StandInCredential notPublic() {
             return null;
         }
     }
@@ -353,10 +385,10 @@ class CredentialStaticSurfaceInvariantTest {
 
     /**
      * round-15 review (16-10 gap-closure addendum, PR #464): a concrete subclass of
-     * {@link TokenEntity} -- since {@link TokenEntity} is {@code public} and not {@code final}, this
+     * {@link StandInCredential} -- since {@link StandInCredential} is {@code public} and not {@code final}, this
      * is a real, constructible type, not a hypothetical one.
      */
-    static class SessionToken extends TokenEntity {
+    static class SessionToken extends StandInCredential {
     }
 
     static class TokenSubclassReturningOffender {
@@ -372,9 +404,9 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     static class ArrayReturningOffender {
-        // Round-1 review, fourth pass (16-10, PR #464): a REIFIED array (TokenEntity[]) is a plain
+        // Round-1 review, fourth pass (16-10, PR #464): a REIFIED array (StandInCredential[]) is a plain
         // Class with isArray() == true, never a GenericArrayType -- the pre-fix code missed this.
-        public static TokenEntity[] leaked() {
+        public static StandInCredential[] leaked() {
             return null;
         }
     }
@@ -382,7 +414,7 @@ class CredentialStaticSurfaceInvariantTest {
     static class BoundedTypeVariableOffender {
         // Round-1 review, fifth pass (16-10, PR #464): a bounded type variable is reified as a
         // TypeVariable, not a WildcardType -- the pre-fix code's WildcardType branch never fires.
-        public static <T extends Iterable<TokenEntity>> T leaked() {
+        public static <T extends Iterable<StandInCredential>> T leaked() {
             return null;
         }
     }
@@ -391,7 +423,7 @@ class CredentialStaticSurfaceInvariantTest {
         // Round-6 external review finding (16-10, PR #464): <T extends Comparable<T>> recurses
         // from the TypeVariable T into its bound Comparable<T> (a ParameterizedType), whose sole
         // type argument is T itself -- the same TypeVariable -- so the pre-fix recursion never
-        // terminated. Nothing here references TokenEntity; this exists only to prove the scan
+        // terminated. Nothing here references StandInCredential; this exists only to prove the scan
         // survives a self-referential bound instead of exhausting the stack.
         public static <T extends Comparable<T>> T maxOf(T left, T right) {
             return null;
@@ -405,25 +437,25 @@ class CredentialStaticSurfaceInvariantTest {
         }
 
         // Round-6 external review finding (16-10, PR #464): a member type used against a
-        // parameterized enclosing type -- GenericOwner<TokenEntity>.Inner -- records TokenEntity
+        // parameterized enclosing type -- GenericOwner<StandInCredential>.Inner -- records StandInCredential
         // ONLY in the reflected ParameterizedType's getOwnerType(); Inner's own raw type and
         // (empty) actual type arguments, both already checked, say nothing about it.
-        public static GenericOwner<TokenEntity>.Inner leaked() {
+        public static GenericOwner<StandInCredential>.Inner leaked() {
             return null;
         }
     }
 
     static class GenericArrayOffender {
         // Defect-class sweep (16-10, PR #464): ArrayReturningOffender above proves the REIFIED
-        // array branch (TokenEntity[], a plain Class with isArray()==true); this proves the
+        // array branch (StandInCredential[], a plain Class with isArray()==true); this proves the
         // separate GenericArrayType branch, which only fires when the array's component type is
-        // itself generic (a type variable or parameterized type) -- e.g. List<TokenEntity>[],
+        // itself generic (a type variable or parameterized type) -- e.g. List<StandInCredential>[],
         // confirmed via a standalone reflection probe to reify as GenericArrayType with
-        // getGenericComponentType() == the ParameterizedType List<TokenEntity>. Never both
+        // getGenericComponentType() == the ParameterizedType List<StandInCredential>. Never both
         // branches at once: a single array return type is either a plain reified Class or a
         // GenericArrayType, never both, so this is a genuinely distinct shape from
         // ArrayReturningOffender, not a duplicate of it.
-        public static List<TokenEntity>[] leaked() {
+        public static List<StandInCredential>[] leaked() {
             return null;
         }
     }
@@ -431,23 +463,23 @@ class CredentialStaticSurfaceInvariantTest {
     static class WildcardUpperBoundOffender {
         // Defect-class sweep (16-10, PR #464): the WildcardType branch's getUpperBounds() loop had
         // no dedicated offender proving it non-vacuous -- BoundedTypeVariableOffender above proves
-        // the sibling TypeVariable branch, not this one. List<? extends TokenEntity> reifies as a
+        // the sibling TypeVariable branch, not this one. List<? extends StandInCredential> reifies as a
         // ParameterizedType whose sole type argument is a WildcardType with getUpperBounds() ==
-        // [TokenEntity.class] and empty getLowerBounds() (confirmed via a standalone reflection
+        // [StandInCredential.class] and empty getLowerBounds() (confirmed via a standalone reflection
         // probe).
-        public static void leaked(List<? extends TokenEntity> tokens) {
+        public static void leaked(List<? extends StandInCredential> tokens) {
             // no-op -- reflected over, never called
         }
     }
 
     static class WildcardLowerBoundOffender {
         // Defect-class sweep (16-10, PR #464): the WildcardType branch's getLowerBounds() loop had
-        // no dedicated offender either -- List<? extends TokenEntity> above only exercises
-        // getUpperBounds(). List<? super TokenEntity> reifies as a ParameterizedType whose sole
-        // type argument is a WildcardType with getLowerBounds() == [TokenEntity.class] (and
+        // no dedicated offender either -- List<? extends StandInCredential> above only exercises
+        // getUpperBounds(). List<? super StandInCredential> reifies as a ParameterizedType whose sole
+        // type argument is a WildcardType with getLowerBounds() == [StandInCredential.class] (and
         // getUpperBounds() == [Object.class], confirmed via the same reflection probe) -- so this
         // is the one shape that can ONLY be caught by the lower-bounds loop, not the upper one.
-        public static void leaked(List<? super TokenEntity> sink) {
+        public static void leaked(List<? super StandInCredential> sink) {
             // no-op -- reflected over, never called
         }
     }
@@ -463,21 +495,21 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     static class InstanceMethodNonOffender {
-        public TokenEntity notStatic() {
+        public StandInCredential notStatic() {
             return null;
         }
     }
 
     static class TokenFieldOffender {
-        public static TokenEntity offendingField = null;
+        public static StandInCredential offendingField = null;
     }
 
     static class GenericTokenFieldOffender {
-        public static Optional<TokenEntity> offendingGenericField = Optional.empty();
+        public static Optional<StandInCredential> offendingGenericField = Optional.empty();
     }
 
     static class PackagePrivateFieldOffender {
-        static TokenEntity notPublicField = null;
+        static StandInCredential notPublicField = null;
     }
 
     // -------------------------------------------------------------------------

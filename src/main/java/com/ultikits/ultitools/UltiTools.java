@@ -197,14 +197,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * reports and player events consult it on their way to the cloud (see
      * {@link SensitiveCommandRegistry}). Final and created with the plugin instance, before the early
      * log capture and before any module loads, so it exists for every caller whether or not the server
-     * is linked; it starts empty and is never replaced, so no registration is lost across a reload.
+     * is linked; it starts with the framework's own {@code ulticloud} command only (as of 6.4.0, see
+     * {@link SensitiveCommandRegistry#withFrameworkCommands()}) and is never replaced, so no registration is lost
+     * across a reload.
      *
      * @since 6.3.1
      */
     // PMD.FieldDeclarationsShouldBeAtStartOfClass: same rationale as remoteActionLog above.
     @Getter
     @SuppressWarnings("PMD.FieldDeclarationsShouldBeAtStartOfClass")
-    private final SensitiveCommandRegistry sensitiveCommandRegistry = new SensitiveCommandRegistry();
+    private final SensitiveCommandRegistry sensitiveCommandRegistry = SensitiveCommandRegistry.withFrameworkCommands();
     /**
      * The single-owner registry a module uses to claim a request/response responder for a panel
      * message type the framework itself does not own (WIRE-16, D-26/D-27), reached via

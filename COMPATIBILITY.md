@@ -5,6 +5,35 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## UltiCloud: re-pair with a code (as of 6.4.0)
+
+- **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
+  action, for a server whose credential may have leaked, revokes every credential of the server, closes its
+  connection with 4401 and shows the owner a single-use code, valid for 10 minutes, bound to the **same** server
+  record. Running `/ulticloud login <code>` on the server exchanges that code for a new credential through the
+  unchanged `POST /v1/device/token`, stores it exactly as a device login does, and reconnects; the server keeps
+  its server ID, name and history. No device code is requested and nothing has to be confirmed in the panel.
+- The code is a secret: the console shows `Redeeming the re-pair code with UltiCloud...` and never the code.
+  Text that cannot be a code (not 43 to 128 characters of `A-Z a-z 0-9 _ -`) is refused with one red line and
+  is not sent. A used, unknown or expired code is answered `expired_token` by UltiCloud and logged as "UltiCloud:
+  this re-pair code has expired or was already used. Create a new one in the panel (server settings > Revoke and
+  re-pair), or run /ulticloud login without a code."
+- A server that is still linked refuses the code exactly as it refuses `/ulticloud login` ("already linked",
+  naming `/ulticloud logout`). A server that was offline when the owner used "Revoke and re-pair" deletes its
+  revoked credential at the next connection attempt (HTTP 401), after which the code can be used while it is
+  still valid. Without an argument, `/ulticloud login` behaves exactly as in 6.3.x.
+- The 4401/401 warning now names both ways back (see "Connection outcomes an operator sees" below). No protocol,
+  REST contract or configuration change; on 6.3.x the panel's two-step fallback (run `/ulticloud login`, then
+  attach the server to the existing record on the confirmation page) still works.
+- The framework's sensitive-command registry now holds `ulticloud`: a line such as `Steve issued server command:
+  /ulticloud login <code>` (a player typing the console-only command by mistake) reaches UltiCloud's console
+  stream as `/ulticloud ***`. The local console and log files are unchanged.
+- New internal entry points (`CloudAuthManager#loginWithCode`, `#isWellFormedRepairCode`, both
+  `@ApiStatus.Internal` like the rest of the class) and `SensitiveCommandRegistry#withFrameworkCommands()` are
+  additive; no existing signature changed.
+
+中文补充：面板的“撤销并重新配对”会撤销该服务器的全部凭据、以 4401 断开连接，并给出一次性代码（10 分钟内有效，绑定同一服务器记录）。在服务器控制台运行 `/ulticloud login <code>` 即可换取新凭据并重连，服务器 ID、名称和历史保持不变；控制台不会显示代码本身。代码已使用、未知或过期时会提示到面板重新生成，或直接运行不带参数的 `/ulticloud login`。
+
 ## SQLite lock waits under native profiling (planned for 6.3.2)
 
 The pending fix for [#645](https://github.com/UltiKits/UltiTools-Reborn/issues/645) measures SQLite busy waits with a monotonic elapsed-time budget. It preserves the 3000 ms default, DEFERRED transactions, and JDBC statement timeout selection; native profiler signals no longer consume the budget merely by interrupting requested sleeps. This change is intended for 6.3.2.
@@ -27,7 +56,7 @@ explains it; the sections below are the reference and stay authoritative where t
 5. Replace every other removed API you call with its named replacement - for example `UltiTools#getEconomy()` with `EconomyUtils.getEconomy()`, `AbstractDataEntity` with `BaseDataEntity`, and `DependenceManagers#getAdventure()` with Paper's native `Player#sendMessage(Component)` - checking the generated registry and the exceptions list (see [Removal list for 6.3.0](#removal-list-for-630) and [Same-release exceptions applied in 6.3.0](#same-release-exceptions-applied-in-630)).
 6. Replace `AbstractConfigEntity#getConfig()` with `isPresentInFile(String)` for presence checks, and read or change declared fields and call `save()` instead of mutating Bukkit storage (see [Removed mutable configuration accessor](#removed-mutable-configuration-accessor)).
 7. Persist a configuration change when you make it - `save()` for a change the module made, `saveOperatorChange`/`saveOperatorMapEntry` for exactly what an operator's command names - because nothing writes configuration at server stop, module unload or replacement any more and `save()` writes only what the module changed (see [Configuration release; nothing written at stop](#configuration-release-nothing-written-at-stop) and [Declared types, whole map keys and persistence](#declared-types-whole-map-keys-and-persistence)).
-8. Move each legacy parser (`@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`, `StringHashMapParser`) to a public top-level `ConfigConverter` annotated `@ConfigConverterFor` in a scanned package, and register a converter for any declared field type the framework does not support, which otherwise refuses the module; the legacy parsers are deprecated in 6.3.0 and announced for removal in 6.4.0 (see [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)).
+8. Move each legacy parser (`@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`, `StringHashMapParser`) to a public top-level `ConfigConverter` annotated `@ConfigConverterFor` in a scanned package, and register a converter for any declared field type the framework does not support, which otherwise refuses the module; the legacy parsers are deprecated in 6.3.0 and removed in 6.4.0 (see [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)).
 9. If a field uses `@Scheduled(config = …, periodKey/delayKey = …)` or `@CmdCD(config = …, key = …)`, declare `api-version: 630`, keep a bound `@Scheduled` synchronous, and drop any `@Range` on the bound field, whose range the binding replaces (see [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)).
 10. Check command bodies for the one-tick delay they no longer get: a synchronous body now runs at dispatch, so code inside an `InventoryClickEvent` that opens or closes an inventory or dispatches a command must defer it with `runTask`, and a body that dispatches its own command meets `@UsageLimit` and `@CmdCD` on the same tick (see [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)).
 11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file if its `(String)` default instance could be constructed (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
@@ -46,7 +75,7 @@ explains it; the sections below are the reference and stay authoritative where t
 5. 把调用到的其他已删除 API 换成文中指明的替代——例如 `UltiTools#getEconomy()` 换成 `EconomyUtils.getEconomy()`，`AbstractDataEntity` 换成 `BaseDataEntity`，`DependenceManagers#getAdventure()` 换成 Paper 原生的 `Player#sendMessage(Component)`——并对照生成的登记表和例外清单逐项检查（见 [Removal list for 6.3.0](#removal-list-for-630) 和 [Same-release exceptions applied in 6.3.0](#same-release-exceptions-applied-in-630)）。
 6. 用 `isPresentInFile(String)` 替代 `AbstractConfigEntity#getConfig()` 做存在性判断，读取或修改声明的字段后调用 `save()`，不要再直接改 Bukkit 的存储（见 [Removed mutable configuration accessor](#removed-mutable-configuration-accessor)）。
 7. 在改动发生时就保存配置——模块自己的改动用 `save()`，服主命令指定的内容用 `saveOperatorChange`/`saveOperatorMapEntry`——因为服务器关闭、模块卸载或替换时都不再写入任何配置，`save()` 也只写模块改过的内容（见 [Configuration release; nothing written at stop](#configuration-release-nothing-written-at-stop) 和 [Declared types, whole map keys and persistence](#declared-types-whole-map-keys-and-persistence)）。
-8. 把每个旧解析器（`@ConfigEntry(parser = …)`、`Parser`、`ObjectConfigSerializer`、`ConfigParser`、`DefaultConfigParser`、`StringHashMapParser`）改写为扫描包内带 `@ConfigConverterFor` 的 public 顶层 `ConfigConverter`，并为框架不支持的声明字段类型注册转换器，否则模块会被拒绝；旧解析器在 6.3.0 弃用，公告在 6.4.0 删除（见 [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)）。
+8. 把每个旧解析器（`@ConfigEntry(parser = …)`、`Parser`、`ObjectConfigSerializer`、`ConfigParser`、`DefaultConfigParser`、`StringHashMapParser`）改写为扫描包内带 `@ConfigConverterFor` 的 public 顶层 `ConfigConverter`，并为框架不支持的声明字段类型注册转换器，否则模块会被拒绝；旧解析器在 6.3.0 弃用，已在 6.4.0 删除（见 [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)）。
 9. 字段使用 `@Scheduled(config = …, periodKey/delayKey = …)` 或 `@CmdCD(config = …, key = …)` 时，声明 `api-version: 630`，绑定配置的 `@Scheduled` 保持同步，并删除该字段上的 `@Range`（由绑定自带的范围取代）（见 [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)）。
 10. 检查依赖“延后一刻执行”的命令代码：同步命令体现在于分发时立即执行，因此在 `InventoryClickEvent` 中打开或关闭物品栏、或分发命令的代码要用 `runTask` 推迟，分发自身命令的命令体会在同一刻遇到 `@UsageLimit` 和 `@CmdCD`（见 [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)）。
 11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 在能通过 `(String)` 构造器创建默认实例时，会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
@@ -117,14 +146,17 @@ Login, Panel Integration, Player Link) explain each part in prose.
   replace each other's connection (close 4000), and after three replacements the framework stops reconnecting.
 - `UltiCloudRequests.post` and `.get`, the 6.3.0 helper that made UltiLogin's `/panel` magic-link calls,
   answer every call with `PATH_NOT_ALLOWED` and send nothing (one INFO line per run). UltiLogin 2.0.0's
-  `/panel` therefore stops working on 6.3.1; its `/login` keeps working. UltiLogin 2.1.0, released with
-  6.3.1, uses `CloudPlayerLinks` instead and is required for `/panel`. There is no bridge for 2.0.0.
+  `/panel` therefore stops working on 6.3.1; its `/login` keeps working. UltiLogin 2.1.0 uses
+  `CloudPlayerLinks` instead and is required for `/panel`. It was not released with 6.3.1: it is released
+  before UltiTools-API 6.4.0 and works on 6.3.1 or later. Operators upgrading to 6.4.0 must upgrade UltiLogin
+  to 2.1.0 first, because 2.0.0's `/panel` references `SimpleHttpClient` and `UltiCloudRequests`, removed in
+  6.4.0 (its `/login` is unaffected). There is no bridge for 2.0.0.
 
 ### New public API
 
 | API | Since | Purpose |
 |---|---|---|
-| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged, except the framework's own records of a remote-console command as of 6.4.0 (see [Sensitive commands in the remote console's local records](#sensitive-commands-in-the-remote-consoles-local-records-as-of-640)). The table starts empty, matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
+| `websocket.SensitiveCommandRegistry`, `UltiTools#getSensitiveCommandRegistry()` | 6.3.1 | A module registers its secret-carrying commands and aliases (`register("login", "l", "register", "reg")`) from its enable hook. Every line, chat message and error report sent to UltiCloud keeps such a command's name and replaces its arguments with `***`; the local console and log files are unchanged, except the framework's own records of a remote-console command as of 6.4.0 (see [Sensitive commands in the remote console's local records](#sensitive-commands-in-the-remote-consoles-local-records-as-of-640)). The table starts empty (as of 6.4.0 the framework's own registry holds `ulticloud`, whose `login <code>` form carries a re-pair code), matching ignores a leading `/`, a `namespace:` prefix and case, and there is no unregister. A `player.command` event carries only the normalised command name, registered or not. |
 | `websocket.CloudPlayerLinks`, `UltiTools#getCloudPlayerLinks()` | 6.3.1 | The player-link API that replaces the magic-link calls: `create(...)` returns a one-time link valid for 600 seconds; one module-owned `LinkEventHandler` receives completions and expiries on a framework worker thread; the framework persists each result before it answers the gateway, so a completion redelivered after a restart is answered without calling the module again. `getCloudPlayerLinks()` returns `null` only before the framework has enabled. |
 | `PanelResponderRegistry#ownerModuleOf(String)`, `#ownerModules()` | 6.3.1 | Read-only views of responder ownership. |
 | `websocket.CloudChannel`, `CloudRequest`, `CloudRequestHandler`, `CloudLimits` | 6.3.1, `@ApiStatus.Internal` | The framework's internal request and reply seam. Public only because handlers live in two packages; not for module use, and they may change without notice. |
@@ -235,7 +267,7 @@ retry. The gateway's refusals and closes end in these states:
 
 | Signal | Outcome |
 |---|---|
-| HTTP 401 at the upgrade, or close 4401 (credential revoked or the server deleted) | Reconnecting stops, the local credential and the reliable-delivery state are deleted, and the console says: "UltiCloud rejected this server's credential (it was revoked or is no longer valid). The saved credential was deleted. Run /ulticloud login to link this server again." |
+| HTTP 401 at the upgrade, or close 4401 (credential revoked or the server deleted) | Reconnecting stops, the local credential and the reliable-delivery state are deleted, and the console says: "UltiCloud rejected this server's credential (it was revoked or is no longer valid). The saved credential was deleted. If you used "Revoke and re-pair" in the panel, run /ulticloud login <code> with the code it shows; otherwise run /ulticloud login to link this server again." (as of 6.4.0; 6.3.x names only `/ulticloud login`) |
 | HTTP 426, or close 4426 | Reconnecting stops, the credential is kept, and the console says this UltiTools version is no longer accepted, with the minimum version when the gateway names one. Upgrade UltiTools and restart. |
 | HTTP 402, or close 4402 (plan limit) | The credential is kept; the framework retries quietly every 15 minutes and prints the reason, the end of the grace period and the plan's manage link once. `/ulticloud status` shows the pause; `/ulticloud reconnect` retries at once. The connection resumes on the next retry after the plan is renewed. |
 | HTTP 429, close 4400 or 4429, any other 4xx | Long backoff, from 60 seconds up to 15 minutes; a 429 waits at least its `Retry-After`, at most one hour. |
@@ -268,6 +300,9 @@ has a 4,194,304-byte limit, which fits five worst-case 64,000-character changelo
 the changelogs across pages. JAR size and hash verification are unchanged.
 
 ### Deprecations: the protocol v1 surface, removed in 6.4.0
+
+As of 6.4.0 every entry below is removed; see
+[Removal list for 6.4.0](#removal-list-for-640) for the migration. The table records their 6.3.1 behaviour.
 
 Every entry below is `@Deprecated(since = "6.3.1", forRemoval = true)` with a `@deprecated` paragraph and
 `@removeIn 6.4.0`, and appears in `compatibility/DEPRECATIONS.md`. Behaviour codes: **R** refuses explicitly
@@ -373,7 +408,7 @@ below). No line ever holds file content or a configuration value.
 **Behaviour change in 6.4.0: local log content changes.** When the panel's remote console (`command.execute`) runs a
 command a module registered with `UltiTools#getSensitiveCommandRegistry()`, the framework's own records of that
 request no longer carry its arguments. The `[Remote command] > ...` echo, the `[Remote command] Blocked: ...` line and
-the failure lines show the command followed by `***`, and so do the server console, `logs/latest.log` and the panel's
+the echo and refusal lines show the command followed by `***` (the line for a command that throws while being dispatched names only the command, `[Remote command] Command threw an exception: logadmin`, never its arguments), and so do the server console, `logs/latest.log` and the panel's
 log stream, which all receive those lines; the request's line in `plugins/UltiTools/security/action.log.<n>` has the
 same text as its `target`. For example, with UltiLogin registering `logadmin`, the panel command
 `logadmin reset Steve <password>` is logged as `[Remote command] > logadmin ***` and recorded with
@@ -396,7 +431,7 @@ text redaction to find.
 
 中文补充：**6.4.0 行为变更：本地日志内容改变。** 面板远程控制台（`command.execute`）运行模块通过
 `UltiTools#getSensitiveCommandRegistry()` 注册的命令时，框架为该请求写下的记录不再包含参数：`[Remote command] > ...`
-回显行、`[Remote command] Blocked: ...` 行和失败行都只显示命令名加 `***`，服务器控制台、`logs/latest.log` 和面板日志流
+回显行和 `[Remote command] Blocked: ...` 行都只显示命令名加 `***`（命令分发时抛出异常的那一行只记命令名，如 `[远程命令] 命令执行异常: logadmin`，不含参数），服务器控制台、`logs/latest.log` 和面板日志流
 （它们都收到这些行）同样如此；`plugins/UltiTools/security/action.log.<n>` 中该请求的 `target` 也是这段文字。例如 UltiLogin
 注册了 `logadmin` 后，面板命令 `logadmin reset Steve <密码>` 记为 `[Remote command] > logadmin ***`，动作日志为
 `"target":"logadmin ***"`。6.3.1 与 6.3.2 中本地控制台、`latest.log` 和动作日志会记下包括密码在内的整行命令，面板日志流也会，
@@ -697,7 +732,7 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
 - an inline comment aligned with several spaces (`enabled: true    # note`; one space before `#` is kept);
 - more than one space after a colon (`key:  value`), and spaces inside flow brackets (`worlds: [ world ]`);
 - a document start marker `---` or end marker `...`;
-- a block scalar value (`|` or `>`) followed by a blank line;
+- a block scalar value (`|`, `|-` or `>`) followed by a blank line. **Known limitation ([#883](https://github.com/UltiKits/UltiTools-Reborn/issues/883), same behaviour as 6.3.2):** when an operator-edited YAML file has such a block scalar, the framework does not append a newly introduced default key. The file is left unchanged, the default applies in memory, and a WARN from `OperatorFileWriter` names the key. Add the key by hand;
 - a block comment before any list item (at the item's column or deeper, before the first or a later item, including
   after a block scalar or flow item): a changed write to another key, or one that keeps the list's length, is refused.
   Before a plain or block-mapping item the refusal names the line; before a flow item (`- [1, 2]` or `- {k: v}`) it says
@@ -1389,7 +1424,8 @@ The six deprecated announcements are `ConfigEntry#parser()`, `interfaces.Parser`
 `interfaces.ObjectConfigSerializer`, and `interfaces.impl.pasers.ConfigParser`,
 `DefaultConfigParser`, `StringHashMapParser` (the published package spelling `pasers` is retained).
 Their first release carrying `@Deprecated(since = "6.3.0", forRemoval = true)` is 6.3.0; the next
-MINOR, 6.4.0, is the announced removal version. They are retained in 6.3.0, not deleted now.
+MINOR, 6.4.0, is the announced removal version. They were retained in 6.3.x and are removed in 6.4.0; the
+rest of this section describes the 6.3.x behaviour and the migration.
 An explicit non-default `parser = X.class` still selects the frozen legacy adapter. Its detached
 input is emitted under one key and loaded by a fresh Bukkit `YamlConfiguration#get`, retaining
 6.2 section-based dotted-key splitting and Bukkit `==` alias deserialization at the root and inside
@@ -1707,6 +1743,55 @@ flatten-maven-plugin and carries no dependency declarations, so placing UltiTool
 beyond compile time (Maven `compile`, Gradle `implementation`) gains you no transitive dependencies.
 What it does do, if your build has a shade or shadow step, is bundle the entire shaded framework into
 your module JAR, where it conflicts at runtime with the UltiTools already installed on the server.
+## Removal list for 6.4.0
+
+6.4.0 removes the public API that 6.3.0 and 6.3.1 announced for removal in 6.4.0. Every entry below carried
+`@Deprecated(forRemoval = true)` and `@removeIn 6.4.0` in a released version, so a module still using one was
+warned by name at compile time. The generated registry (`compatibility/DEPRECATIONS.md`) marks each one
+`REMOVED` in 6.4.0. A module compiled against 6.3.x that calls a removed member fails with
+`NoSuchMethodError` or `NoClassDefFoundError` on 6.4.0; recompile against 6.4.0 and apply the migration.
+
+**Announced in 6.3.0**
+
+| Removed | Migration |
+|---|---|
+| `DataStore#getOperator(UltiToolsPlugin, Class)`, `DataStore#getOperator(File, Class)` | Call `UltiToolsPlugin#getDataOperator(Class)` or `UltiToolsAPI.getDataOperator(plugin, Class)`; both resolve through `DataStore#getOperator(DataScope, Class)`. A custom `DataStore` overrides `getOperatorUnchecked(DataScope, Class)`. |
+| `@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`, `StringHashMapParser` | Delete `parser = …` and register a `ConfigConverter<T>` annotated `@ConfigConverterFor(T.class)` in a scanned package: `Parser#parse` becomes `fromPlain`, `serialize` / `ObjectConfigSerializer` become `toPlain` returning plain data. The built-in conversions already cover plain types, typed collections and `Map<String, String>`, so a `DefaultConfigParser` or `StringHashMapParser` declaration is simply deleted. See [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters). |
+| `TransactionManager#getConnection()`, `#setIsolationLevel(int)`, `#setReadOnly(boolean)` | Program against `JdbcTransactionManager`, which declares all three. |
+| `SimpleTempListener()`, `SimpleTempListener(Class, TempEventHandler)`, `(Class, TempEventHandler, Function)`, `(Class, TempEventHandler, EventPriority)` | Use `TempListener.common(Class)` or the four-argument constructor `SimpleTempListener(Class, EventPriority, TempEventHandler, Function)`. |
+| `PluginDependencyResolver.PluginNode#getAllDependencies(Set)` | Use `getAllDependencies(Set, Map)`; pass `Collections.emptyMap()` for the old behaviour. |
+| `AnnotationUtils#findAnnotation(Class, Class)` | Use `MergedAnnotationResolver.find(Class, Class)`. |
+
+**Announced in 6.3.1: the protocol v1 cloud surface** (listed with its 6.3.1 behaviour under
+[Deprecations: the protocol v1 surface, removed in 6.4.0](#deprecations-the-protocol-v1-surface-removed-in-640))
+
+| Removed | Migration |
+|---|---|
+| `entities.ApiResponse`, `entities.TokenEntity`, `entities.vo.ServerEntityVO` | None: they modelled the v1 Worker envelope, JWT and server record, which UltiCloud no longer serves. Link a server with `/ulticloud login` (`CloudAuthManager#login(DeviceLoginListener)`). |
+| `websocket.UltiPanelWebSocketClient`, `websocket.ReconnectStrategy`, `websocket.ExponentialBackoffStrategy` (and its `Builder`) | None: the framework's own UltiCloud session (protocol 2.1.0) holds the connection and its reconnect policy. |
+| `CommandExecutionManager#executeCommand(JsonObject)`, `#setWebSocketClient(..)`, `CommandExecutionManager.CommandResult` | `execute(String, String, Executor, CommandResultSink)`, which the protocol 2.1.0 session calls for a panel command. |
+| `FileOperationManager#handleFileOperation(JsonObject)`, `#setWebSocketClient(..)`; `ServerPropertiesManager#handleServerProperties(JsonObject)`, `#setWebSocketClient(..)` | None for modules: the protocol 2.1.0 session answers the panel's file and `server.properties` requests. |
+| `LogStreamManager#initialize(..)`, `#getLogTransmitter()`, `#handleLogStreamMessage(..)`, `#sendCustomLog(..)`, `#sendPlayerEventLog(..)`, `#sendPluginActionLog(..)`, `#onPlayerJoin`, `#onPlayerQuit`, `#onServerLoad`; `UltiPanelLogTransmitter(UltiPanelWebSocketClient, String)` | None: the protocol 2.1.0 session streams the console itself. |
+| `PlayerEventManager#initialize(..)` and its seven `on…` listener methods | None: the protocol 2.1.0 session reports player events itself. |
+| `ServerMonitorManager#startMonitoring()`, `#stopMonitoring()`, `#isMonitoring()`, `#sendServerStatus()`, `#sendServerStatusWithRequestId(..)`, `#sendMetricsData()`, `#sendMetricsDataWithRequestId(..)`, `#sendPlayerEvent(..)`, `#setWebSocketClient(..)` | None: the protocol 2.1.0 session sends server state itself. |
+| `CloudAuthManager#login(Runnable, Consumer, Runnable, Consumer, Consumer)` | `CloudAuthManager#login(DeviceLoginListener)`. |
+| `CloudAuthManager.CloudStatus#getUserName()`, `#getExpirationDate()` | `getServerName()` or `getServerId()`; a server credential has no user name or expiry. |
+| `HttpRequestUtils#registerServer(..)`, `#updateServer(..)`, `#getServerByUUID(..)` | None: `/ulticloud login` links a protocol 2.1.0 server. `HttpRequestUtils` itself stays. |
+| `PluginInitiationUtils#startTokenRefreshScheduler()` | None needed: the server credential does not expire. |
+| `SimpleHttpClient` (and `SimpleHttpClient.Response`) | `HttpURLConnection` or an HTTP client library of your own; the framework no longer used it. |
+| `UltiCloudRequests` (with `get`, `post`, `Outcome`, `Result`) | `CloudPlayerLinks` (`UltiTools#getCloudPlayerLinks()`) for player links; every call already answered `PATH_NOT_ALLOWED` without a request since 6.3.1. |
+
+The managers above are `@ApiStatus.Internal`; their removed members only acted through a v1 client that could
+never connect, so their removal changes nothing a server operator sees.
+
+**Deprecated in 6.4.0 for removal in 6.5.0.** `DataStore#checkOwnership(File, Class)` and
+`#checkOwnership(UltiToolsPlugin, Class)`, and the public `getOperator(UltiToolsPlugin, Class)` and
+`getOperator(File, Class)` methods of `JsonStore`, `MysqlDataStore` and `SQLiteDataStore`, outlived the
+`DataStore` overloads they served. They keep their 6.3.x behaviour, now carry
+`@Deprecated(since = "6.4.0", forRemoval = true)` with `@removeIn 6.5.0` (the first release the one-MINOR rule
+above allows), and are replaced by `DataStore#getOperator(DataScope, Class)` (a module calls
+`UltiToolsPlugin#getDataOperator(Class)`).
+
 ## Removal list for 6.3.0
 
 The removal list is generated at `mvn verify` from the `@Deprecated(forRemoval = true)`
@@ -4473,6 +4558,9 @@ references an absent server class, a separate warning names the module, bean, mi
 lost event handlers, including inherited handlers. Those handlers remain unregistered. The framework
 neither substitutes missing capabilities nor renames events, and it does not isolate individual
 handlers inside one class. See [the audit and skipped-bean diagnostics](https://github.com/UltiKits/UltiTools-Reborn/pull/810).
+A module whose main class itself fails to link is refused before its scan roots are known, so
+start-up prints only the refusal and no audit for that module; run the offline
+`com.ultikits.ultitools.LinkageAudit` launcher on its JAR to list the references.
 
 **Module-author pattern for optional events.** Keep required handlers in a class whose signatures do
 not refer to optional server types. Put optional handlers in separate classes outside **every**
@@ -4487,6 +4575,13 @@ make it an automatically scanned IoC component. Unregister manually registered l
 unload. One absent parameter type can prevent reflection of the entire class, so a probe does not
 protect required handlers left in that same class. UltiLogin's [equipment-swap isolation](https://github.com/UltiKits/UltiLogin/pull/84)
 and [older-event selection](https://github.com/UltiKits/UltiLogin/pull/85) demonstrate this layout.
+
+**Relocate shaded libraries outside the scan roots.** The audit tells a module's own code from
+bundled libraries by the module's scan roots. A library shaded and relocated *inside* a scan root
+(for example `com.example.mod.libs.gson` under the root `com.example.mod`) is therefore treated as
+own code: each of its unresolved references gets its own WARNING instead of one INFO summary for the
+library. Relocate shaded libraries outside every `scanBasePackages` root (for example
+`com.example.libs.gson`), which also keeps the component scan from loading their classes.
 
 The modules, not the framework, choose and document these remaining differences:
 

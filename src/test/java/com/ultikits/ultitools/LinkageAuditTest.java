@@ -43,7 +43,7 @@ class LinkageAuditTest implements Opcodes {
     void reportsTypesFieldsMethodsAndHandlesWithTheirCallingMember() throws Exception {
         File module = jar("module.jar", references());
         try (URLClassLoader api = api()) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(module, api, Collections.emptyList());
+            List<LinkageAudit.Finding> findings = scan(module, api, Collections.emptyList());
             assertEquals(5, findings.size());
             assertEquals(Arrays.asList("MISSING-CLASS", "MISSING-METHOD", "MISSING-FIELD",
                     "MISSING-METHOD", "MISSING-CLASS"), problemNames(findings));
@@ -63,7 +63,7 @@ class LinkageAuditTest implements Opcodes {
             public boolean covers(ServerApiReference ref) { return "gone".equals(ref.getName()); }
         };
         try (URLClassLoader api = api()) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(module, api, Collections.singletonList(fake));
+            List<LinkageAudit.Finding> findings = scan(module, api, Collections.singletonList(fake));
             assertEquals(4, findings.size());
             assertFalse(findings.stream().anyMatch(f -> "gone".equals(f.reference.getName())));
             assertTrue(findings.stream().anyMatch(f -> "absentField".equals(f.reference.getName())));
@@ -77,7 +77,7 @@ class LinkageAuditTest implements Opcodes {
         method.visitMethodInsn(INVOKEINTERFACE, "org/bukkit/Missing", "gone", "()V", true);
         finish(method);
         try (URLClassLoader api = api()) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("missing.jar", bytes(writer)), api,
+            List<LinkageAudit.Finding> findings = scan(jar("missing.jar", bytes(writer)), api,
                     Collections.emptyList());
             assertEquals(1, findings.size());
             assertEquals(Collections.singletonList("MISSING-CLASS"), findings.get(0).problems);
@@ -95,7 +95,7 @@ class LinkageAuditTest implements Opcodes {
         method.visitMethodInsn(INVOKESPECIAL, "org/bukkit/Child", "<init>", "(I)V", false);
         finish(method);
         try (URLClassLoader api = api()) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("inherit.jar", bytes(writer)), api,
+            List<LinkageAudit.Finding> findings = scan(jar("inherit.jar", bytes(writer)), api,
                     Collections.emptyList());
             assertEquals(2, findings.size());
             assertEquals("()I", findings.get(0).reference.getDescriptor());
@@ -110,7 +110,7 @@ class LinkageAuditTest implements Opcodes {
         method.visitMethodInsn(INVOKEVIRTUAL, "org/bukkit/Child", "exists", "()Ljava/lang/String;", false);
         finish(method);
         try (URLClassLoader api = api()) {
-            assertTrue(LinkageAudit.scan(jar("good.jar", bytes(writer)), api, Collections.emptyList()).isEmpty());
+            assertTrue(scan(jar("good.jar", bytes(writer)), api, Collections.emptyList()).isEmpty());
         }
     }
 
@@ -119,7 +119,9 @@ class LinkageAuditTest implements Opcodes {
         List<LogRecord> records = new ArrayList<>();
         Logger logger = capture(records);
         try (URLClassLoader api = api()) {
-            LinkageAudit.warn(jar("named-module.jar", references()), api, Collections.emptyList(), logger);
+            File module = jar("named-module.jar", references());
+            LinkageAudit.inspect(module, api, Collections.emptyList())
+                    .report(module.getName(), caller -> true, logger::warning, logger::info);
         }
         assertEquals(5, records.size());
         assertTrue(records.stream().allMatch(r -> r.getLevel().equals(java.util.logging.Level.WARNING)));
@@ -127,6 +129,47 @@ class LinkageAuditTest implements Opcodes {
                 && r.getMessage().contains("fixture.References")));
         assertTrue(records.get(1).getMessage().contains("call()V"));
         assertTrue(records.get(1).getMessage().contains("gone()V"));
+        assertTrue(records.get(2).getMessage().contains("references org.bukkit.Api.absentField:I: MISSING-FIELD"),
+                "a field name and its descriptor need a separator: " + records.get(2).getMessage());
+        assertTrue(records.get(1).getMessage().contains("references org.bukkit.Api.gone()V: MISSING-METHOD"),
+                "a method descriptor keeps reading naturally after its name: " + records.get(1).getMessage());
+    }
+
+    @Test
+    void offlineOwnRootAcceptsDottedFormAndMatchesOnAPackageBoundaryLikeStartup() throws Exception {
+        File api = apiJar();
+        File module = jar("module.jar", references());
+        for (String root : Arrays.asList("fixture", "fixture/", "fixture.", " fixture ")) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            assertEquals(LinkageAudit.EXIT_FINDINGS, LinkageAudit.run(new String[]{"--api", api.getPath(),
+                    "--own", root, module.getPath()}, new PrintStream(output)), "root " + root);
+            assertTrue(output.toString("UTF-8").contains("gone()V"), "root " + root);
+        }
+        // fixture/References is not in package "fix": a raw string prefix would wrongly claim it.
+        ByteArrayOutputStream library = new ByteArrayOutputStream();
+        assertEquals(0, LinkageAudit.run(new String[]{"--api", api.getPath(), "--own", "fix",
+                module.getPath()}, new PrintStream(library)));
+        assertTrue(library.toString("UTF-8").contains("unresolved references in bundled library fixture"));
+        for (String empty : Arrays.asList("", "/", ".")) {
+            assertEquals(LinkageAudit.EXIT_USAGE, LinkageAudit.run(new String[]{"--api", api.getPath(),
+                    "--own", empty, module.getPath()}, new PrintStream(new ByteArrayOutputStream())));
+        }
+    }
+
+    @Test
+    void offlineMissingInputsExitWithADistinctIoStatusNotTheFindingsStatus() throws Exception {
+        File api = apiJar();
+        File module = jar("module.jar", references());
+        File absent = temporary.resolve("absent.jar").toFile();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertEquals(LinkageAudit.EXIT_IO, LinkageAudit.run(new String[]{"--api", api.getPath(),
+                absent.getPath()}, new PrintStream(output)));
+        assertTrue(output.toString("UTF-8").contains("cannot read module JAR"), output.toString("UTF-8"));
+        assertEquals(LinkageAudit.EXIT_IO, LinkageAudit.run(new String[]{"--api", absent.getPath(),
+                module.getPath()}, new PrintStream(output)));
+        assertTrue(output.toString("UTF-8").contains("API path does not exist"), output.toString("UTF-8"));
+        assertNotEquals(LinkageAudit.EXIT_FINDINGS, LinkageAudit.EXIT_IO);
+        assertNotEquals(LinkageAudit.EXIT_USAGE, LinkageAudit.EXIT_IO);
     }
 
     @Test
@@ -149,7 +192,7 @@ class LinkageAuditTest implements Opcodes {
         writer.visitField(ACC_PUBLIC, "framework", "Lcom/ultikits/ultitools/Removed;", null, null).visitEnd();
         writer.visitField(ACC_PUBLIC, "library", "Lthird/party/Absent;", null, null).visitEnd();
         try (URLClassLoader api = api()) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("framework.jar", bytes(writer)), api,
+            List<LinkageAudit.Finding> findings = scan(jar("framework.jar", bytes(writer)), api,
                     Collections.emptyList());
             assertEquals(1, findings.size());
             assertEquals("com/ultikits/ultitools/Removed", findings.get(0).reference.getOwner());
@@ -166,7 +209,7 @@ class LinkageAuditTest implements Opcodes {
         File module = jar("inventory.jar", inventory());
         try (URLClassLoader oldApi = new URLClassLoader(new URL[]{floor.toUri().toURL()}, null);
                 URLClassLoader newApi = new URLClassLoader(new URL[]{current.toUri().toURL()}, null)) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(module, oldApi, Collections.emptyList());
+            List<LinkageAudit.Finding> findings = scan(module, oldApi, Collections.emptyList());
             List<String> problems = problemNames(findings);
             assertEquals(26, Collections.frequency(problems, "KIND"));
             assertEquals(2, Collections.frequency(problems, "MISSING-METHOD"));
@@ -174,7 +217,7 @@ class LinkageAuditTest implements Opcodes {
             assertEquals(36, findings.size(), "setTitle has two problems but is one reference");
             assertEquals(4, findings.stream().filter(f -> f.problems.contains("MISSING-CLASS"))
                     .map(f -> f.reference.getOwner()).distinct().count());
-            assertTrue(LinkageAudit.scan(module, newApi, Collections.emptyList()).isEmpty());
+            assertTrue(scan(module, newApi, Collections.emptyList()).isEmpty());
         }
     }
 
@@ -374,7 +417,7 @@ class LinkageAuditTest implements Opcodes {
                 new Handle(H_INVOKEINTERFACE, "org/bukkit/Api", "exists", "()Ljava/lang/String;", true));
         finish(method);
         try (URLClassLoader api = api()) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("shapes.jar", bytes(writer)), api,
+            List<LinkageAudit.Finding> findings = scan(jar("shapes.jar", bytes(writer)), api,
                     Collections.emptyList());
             assertEquals(4, findings.size());
             assertEquals(Arrays.asList("KIND", "KIND", "MISSING-FIELD", "KIND"), problemNames(findings));
@@ -394,7 +437,7 @@ class LinkageAuditTest implements Opcodes {
         method.visitTryCatchBlock(start, end, end, "org/bukkit/MissingException");
         finish(method);
         try (URLClassLoader api = api()) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("types.jar", bytes(writer)), api,
+            List<LinkageAudit.Finding> findings = scan(jar("types.jar", bytes(writer)), api,
                     Collections.emptyList());
             assertEquals(5, findings.size());
             assertTrue(findings.stream().allMatch(f -> f.problems.equals(Collections.singletonList("MISSING-CLASS"))));
@@ -406,7 +449,7 @@ class LinkageAuditTest implements Opcodes {
         File broken = jar("broken-api.jar", Collections.singletonMap("org/bukkit/Api", new byte[]{0, 1, 2}));
         try (URLClassLoader api = new URLClassLoader(new URL[]{broken.toURI().toURL()}, null)) {
             assertThrows(RuntimeException.class,
-                    () -> LinkageAudit.scan(jar("module.jar", references()), api, Collections.emptyList()));
+                    () -> scan(jar("module.jar", references()), api, Collections.emptyList()));
         }
     }
 
@@ -452,7 +495,7 @@ class LinkageAuditTest implements Opcodes {
                 }
             }
             try (URLClassLoader api = api()) {
-                List<LinkageAudit.Finding> findings = LinkageAudit.scan(path.toFile(), api, Collections.emptyList());
+                List<LinkageAudit.Finding> findings = scan(path.toFile(), api, Collections.emptyList());
                 assertEquals(1, findings.size());
                 assertEquals("org/bukkit/Version" + (multiRelease ? 9 : 0), findings.get(0).reference.getOwner());
             }
@@ -520,7 +563,7 @@ class LinkageAuditTest implements Opcodes {
         finish(call);
         classes.put("app/Caller", bytes(caller));
         try (URLClassLoader api = api()) {
-            assertTrue(LinkageAudit.scan(jar("subject-owner.jar", classes), api, Collections.emptyList()).isEmpty());
+            assertTrue(scan(jar("subject-owner.jar", classes), api, Collections.emptyList()).isEmpty());
         }
     }
 
@@ -553,7 +596,7 @@ class LinkageAuditTest implements Opcodes {
             }
         }
         try (URLClassLoader api = api()) {
-            assertTrue(LinkageAudit.scan(path.toFile(), api, Collections.emptyList()).isEmpty());
+            assertTrue(scan(path.toFile(), api, Collections.emptyList()).isEmpty());
         }
     }
 
@@ -563,7 +606,7 @@ class LinkageAuditTest implements Opcodes {
         File module = jar("switch.jar", compiled);
         File oldApi = enumApiJar();
         try (URLClassLoader api = new URLClassLoader(new URL[]{oldApi.toURI().toURL()}, null)) {
-            assertTrue(LinkageAudit.scan(module, api, Collections.emptyList()).isEmpty());
+            assertTrue(scan(module, api, Collections.emptyList()).isEmpty());
             List<LogRecord> records = new ArrayList<>();
             try (ModuleClassLoader loader = new ModuleClassLoader(new URL[]{module.toURI().toURL()}, api,
                     null, Collections.emptyList(), null)) {
@@ -586,7 +629,7 @@ class LinkageAuditTest implements Opcodes {
                 "try { return org.bukkit.FutureEnum.MISSING.ordinal(); } catch (" + exception
                         + " ignored) { return -1; }");
         try (URLClassLoader api = new URLClassLoader(new URL[]{enumApiJar().toURI().toURL()}, null)) {
-            assertTrue(LinkageAudit.scan(jar(exception + ".jar", compiled), api, Collections.emptyList()).isEmpty());
+            assertTrue(scan(jar(exception + ".jar", compiled), api, Collections.emptyList()).isEmpty());
         }
     }
 
@@ -611,7 +654,7 @@ class LinkageAuditTest implements Opcodes {
                 assertTrue(catchTypes.contains(null), "javac finally must exercise an actual type-0 handler");
             }
             try (URLClassLoader api = new URLClassLoader(new URL[]{enumApiJar().toURI().toURL()}, null)) {
-                List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("control.jar", compiled), api,
+                List<LinkageAudit.Finding> findings = scan(jar("control.jar", compiled), api,
                         Collections.emptyList());
                 assertEquals(1, findings.size());
                 assertEquals(Collections.singletonList("MISSING-FIELD"), findings.get(0).problems);
@@ -645,7 +688,7 @@ class LinkageAuditTest implements Opcodes {
         other.visitFieldInsn(GETSTATIC, "org/bukkit/Api", "other", "I");
         finish(other);
         try (URLClassLoader api = api()) {
-            List<LinkageAudit.Finding> findings = LinkageAudit.scan(jar("ranges.jar", bytes(writer)), api,
+            List<LinkageAudit.Finding> findings = scan(jar("ranges.jar", bytes(writer)), api,
                     Collections.emptyList());
             List<String> names = new ArrayList<>();
             for (LinkageAudit.Finding finding : findings) names.add(finding.reference.getName());
@@ -661,7 +704,7 @@ class LinkageAuditTest implements Opcodes {
         Map<String, byte[]> compiled = compileFixture("unrelated",
                 "try { return org.bukkit.FutureEnum.MISSING.ordinal(); } catch (RuntimeException ignored) { return -1; }");
         try (URLClassLoader api = new URLClassLoader(new URL[]{enumApiJar().toURI().toURL()}, null)) {
-            assertEquals(1, LinkageAudit.scan(jar("unrelated.jar", compiled), api, Collections.emptyList()).size());
+            assertEquals(1, scan(jar("unrelated.jar", compiled), api, Collections.emptyList()).size());
         }
     }
 
@@ -751,6 +794,11 @@ class LinkageAuditTest implements Opcodes {
         method.visitMethodInsn(INVOKEINTERFACE, "org/bukkit/OfflinePlayer", "getLocation", "()Lorg/bukkit/Location;", true);
         finish(method);
         return bytes(writer);
+    }
+
+    private static List<LinkageAudit.Finding> scan(File module, ClassLoader api, List<ClassRewriteRule> rules)
+            throws Exception {
+        return LinkageAudit.inspect(module, api, rules).findings;
     }
 
     private byte[] references() {
