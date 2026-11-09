@@ -29,18 +29,25 @@ final class SkippedBeanDiagnostics {
             return;
         }
         String handlers;
+        // Handler-isolation advice only helps a bean that lost handlers, or one whose handlers are unknown.
+        boolean lostHandlers;
         try {
             List<String> methods = new ArrayList<>();
             collect(beanClass.getClassLoader(), beanClass.getName().replace('.', '/'), false,
                     new HashSet<>(), new HashSet<>(), methods);
             handlers = methods.isEmpty() ? "none" : String.join(", ", methods);
+            lostHandlers = !methods.isEmpty();
         } catch (IOException | RuntimeException unreadable) {
             // This diagnostic must not replace the original, already observed bean failure.
             handlers = "could not read handler class bytes (" + unreadable.getClass().getSimpleName() + ")";
+            lostHandlers = true;
         }
         logger.warning("Module '" + module + "': bean class '" + beanClass.getName()
                 + "' was skipped because server class '" + missing
                 + "' is absent; unregistered @EventHandler methods: " + handlers + ".");
+        if (!lostHandlers) {
+            return;
+        }
         logger.warning("Module '" + module + "': move optional handlers for events that may be absent into a separate class "
                 + "outside every configured scanBasePackages string prefix, and register that class only after a "
                 + "Class.forName(name, false, loader) probe succeeds.");

@@ -102,6 +102,20 @@ class ModuleScanDiagnosticsTest {
         assertFalse(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE));
     }
 
+    @Test
+    void ordinaryFailureNamesItsCauseInTheSummaryBecauseTheFineDetailIsHiddenByDefault() {
+        String module = "inline-cause-" + System.nanoTime();
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.BrokenBean",
+                new NoClassDefFoundError("Could not initialize class fixture.Helper"));
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.NoCause", null);
+        ModuleScanDiagnostics.emitSummary(module);
+        String message = withLevel(Level.SEVERE).get(0).getMessage();
+        assertTrue(message.contains("fixture.BrokenBean (class linkage failed: java.lang.NoClassDefFoundError: "
+                + "Could not initialize class fixture.Helper)"), message);
+        assertTrue(message.contains("fixture.NoCause (class linkage failed)"), message);
+        assertFalse(message.contains("per-class diagnostic"), message);
+    }
+
     private List<LogRecord> withLevel(Level level) {
         List<LogRecord> result = new ArrayList<>();
         for (LogRecord record : captured) {

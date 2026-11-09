@@ -162,6 +162,7 @@ public class ComponentScanner {
      * @param basePackage requested scan package
      * @return whether the entry is in the requested scan scope
      */
+    @ApiStatus.Internal
     public static boolean matchesPackage(String entryName, String basePackage) {
         return entryName.startsWith(basePackage.replace('.', '/') + "/");
     }

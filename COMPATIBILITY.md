@@ -4558,6 +4558,9 @@ references an absent server class, a separate warning names the module, bean, mi
 lost event handlers, including inherited handlers. Those handlers remain unregistered. The framework
 neither substitutes missing capabilities nor renames events, and it does not isolate individual
 handlers inside one class. See [the audit and skipped-bean diagnostics](https://github.com/UltiKits/UltiTools-Reborn/pull/810).
+A module whose main class itself fails to link is refused before its scan roots are known, so
+start-up prints only the refusal and no audit for that module; run the offline
+`com.ultikits.ultitools.LinkageAudit` launcher on its JAR to list the references.
 
 **Module-author pattern for optional events.** Keep required handlers in a class whose signatures do
 not refer to optional server types. Put optional handlers in separate classes outside **every**
@@ -4572,6 +4575,13 @@ make it an automatically scanned IoC component. Unregister manually registered l
 unload. One absent parameter type can prevent reflection of the entire class, so a probe does not
 protect required handlers left in that same class. UltiLogin's [equipment-swap isolation](https://github.com/UltiKits/UltiLogin/pull/84)
 and [older-event selection](https://github.com/UltiKits/UltiLogin/pull/85) demonstrate this layout.
+
+**Relocate shaded libraries outside the scan roots.** The audit tells a module's own code from
+bundled libraries by the module's scan roots. A library shaded and relocated *inside* a scan root
+(for example `com.example.mod.libs.gson` under the root `com.example.mod`) is therefore treated as
+own code: each of its unresolved references gets its own WARNING instead of one INFO summary for the
+library. Relocate shaded libraries outside every `scanBasePackages` root (for example
+`com.example.libs.gson`), which also keeps the component scan from loading their classes.
 
 The modules, not the framework, choose and document these remaining differences:
 
