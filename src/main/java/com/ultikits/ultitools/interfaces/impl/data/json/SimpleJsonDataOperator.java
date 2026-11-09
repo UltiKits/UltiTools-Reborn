@@ -48,6 +48,7 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.impl.data.ConditionValues;
 import com.ultikits.ultitools.interfaces.impl.data.RowCountingDelete;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.utils.BeanCopyUtil;
@@ -573,13 +574,13 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         return results;
     }
 
-    /** Rejects null non-EQUAL values without changing EQUAL-null or empty-condition semantics. */
-    private void requireNonNullComparisonValue(WhereCondition condition) {
-        Comparison comparison = condition.getComparison();
-        if (comparison != null && comparison != Comparison.EQUAL && condition.getValue() == null) {
-            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
-                    "JSON comparison " + comparison + " has no null value meaning for store '" + type.getName() + "'.");
-        }
+    /**
+     * Refuses a null or non-finite condition value under every comparison, with the typed exception
+     * the relational backends throw for it (as of 6.4.0, #815, #696; before, a null EQUAL value threw
+     * a raw NullPointerException and a non-finite value Gson's IllegalArgumentException).
+     */
+    private void requireComparableValue(WhereCondition condition) {
+        ConditionValues.requireComparable(condition, type.getName());
     }
 
     private List<T> getAllRaw(WhereCondition... whereConditions) {
@@ -602,7 +603,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         boolean firstCondition = true;
         for (WhereCondition condition : effective) {
-            requireNonNullComparisonValue(condition);
+            requireComparableValue(condition);
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- this
                 // is a query-condition validation failure.
@@ -800,7 +801,13 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         boolean firstCondition = true;
         for (WhereCondition condition : whereConditions) {
-            requireNonNullComparisonValue(condition);
+            if (condition.isEmpty()) {
+                // As the relational backends do, an empty condition is not "delete everything".
+                throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                        "Refusing to delete from JSON store '" + type.getSimpleName() + "' with an empty "
+                                + "WhereCondition. Pass an explicit condition.");
+            }
+            requireComparableValue(condition);
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- this
                 // is a query-condition validation failure, same as getAll's identical check.
@@ -1078,6 +1085,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                 conditions.add(condition);
                 continue;
             }
+            ConditionValues.requireFinite(condition, type.getName());
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 throw new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query value is not serializable");
             }

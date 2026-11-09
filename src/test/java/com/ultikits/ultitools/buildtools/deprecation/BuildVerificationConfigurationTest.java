@@ -356,14 +356,14 @@ class BuildVerificationConfigurationTest {
         }
         assertThat(calls(workflowRuns("maven-ci.yml", "real-mysql"))).hasSize(1)
                 .allSatisfy(call -> assertThat(call).startsWith("-B clean test ")
-                        .contains("-Dtest=RelationalLiteralMatchTest,RelationalOrderingContractTest",
+                        .contains("-Dtest=RelationalLiteralMatchTest,RelationalOrderingContractTest,ConditionValueParityTest",
                                 "-Dultitools.test.mysql.url='jdbc:mysql://127.0.0.1:3306/ultitools_it_ci?",
                                 "-Dultitools.test.mysql.user=ultitools_it")
                         .doesNotContain("skipTests", "maven.test.skip", "deploy", "install", "|| true"));
         Map<String, Object> audit = steps.get(steps.size() - 1);
-        assertThat(audit).containsEntry("name", "Require both real MySQL lanes to execute without skips");
+        assertThat(audit).containsEntry("name", "Require every real MySQL lane to execute without skips");
         assertThat((String) audit.get("run")).contains("python3 -I -", "$RealMysql",
-                "\"RelationalLiteralMatchTest\", \"RelationalOrderingContractTest\"",
+                "\"RelationalLiteralMatchTest\", \"RelationalOrderingContractTest\", \"ConditionValueParityTest\"",
                 "Path(\"target/surefire-reports\").glob(\"TEST-*.xml\")",
                 "if case.get(\"classname\") in required:", "if not cases or any(",
                 "for case in cases for tag in (\"skipped\", \"failure\", \"error\")",

@@ -422,25 +422,26 @@ class UpdateIfNullExpectationTest {
     }
 
     /**
-     * {@code getAll}, {@code exist}, {@code del} and {@code page} keep what they did with a null
-     * condition value before #640 (measured at the base and recorded in the review file): the
-     * relational builders match nothing, the JSON operator throws {@code NullPointerException}.
+     * {@code getAll}, {@code exist}, {@code del} and {@code page} do not share {@code updateIf}'s
+     * {@code IS NULL} meaning. Before 6.4.0 the relational builders matched nothing and the JSON operator
+     * threw {@code NullPointerException}; as of 6.4.0 (#815) every backend refuses a null condition value
+     * with {@link DataAccessException}.
      */
     @Nested
-    @DisplayName("the read and delete builders are unchanged")
+    @DisplayName("the read and delete builders refuse a null value")
     class ReadAndDeleteUnchanged {
 
         @Test
-        @DisplayName("SQLite: a null condition value matches nothing in getAll, exist, page and del (control: the non-null value matches)")
-        void relationalMatchesNothing() {
+        @DisplayName("SQLite: a null condition value is refused in getAll, exist, page and del (control: the non-null value matches)")
+        void relationalRefusesNull() {
             SQLiteDataOperator<WorldRow> operator = new SQLiteDataOperator<>(dataSource, WorldRow.class);
             operator.insert(new WorldRow(null, "unset", 1.0));
             operator.insert(new WorldRow("EASY", "set", 1.0));
 
-            assertThat(operator.getAll(isNull("difficulty"))).isEmpty();
-            assertThat(operator.exist(isNull("difficulty"))).isFalse();
-            assertThat(operator.page(1, 10, isNull("difficulty"))).isEmpty();
-            operator.del(isNull("difficulty"));
+            assertThat(catchThrowable(() -> operator.getAll(isNull("difficulty")))).isInstanceOf(DataAccessException.class);
+            assertThat(catchThrowable(() -> operator.exist(isNull("difficulty")))).isInstanceOf(DataAccessException.class);
+            assertThat(catchThrowable(() -> operator.page(1, 10, isNull("difficulty")))).isInstanceOf(DataAccessException.class);
+            assertThat(catchThrowable(() -> operator.del(isNull("difficulty")))).isInstanceOf(DataAccessException.class);
             assertThat(operator.getAll()).hasSize(2);
 
             WhereCondition easy = WhereCondition.builder().column("difficulty").value("EASY").build();
@@ -452,17 +453,17 @@ class UpdateIfNullExpectationTest {
         }
 
         @Test
-        @DisplayName("JSON: a null condition value throws NullPointerException in getAll, exist, page and del (control: the non-null value matches)")
-        void jsonThrowsAsBefore() {
+        @DisplayName("JSON: a null condition value is refused in getAll, exist, page and del (control: the non-null value matches)")
+        void jsonRefusesNull() {
             SimpleJsonDataOperator<WorldRow> operator = new SimpleJsonDataOperator<>(
                     tempDir.resolve("json-read").toString(), WorldRow.class);
             operator.insert(new WorldRow(null, "unset", 1.0));
             operator.insert(new WorldRow("EASY", "set", 1.0));
 
-            assertThat(catchThrowable(() -> operator.getAll(isNull("difficulty")))).isInstanceOf(NullPointerException.class);
-            assertThat(catchThrowable(() -> operator.exist(isNull("difficulty")))).isInstanceOf(NullPointerException.class);
-            assertThat(catchThrowable(() -> operator.page(1, 10, isNull("difficulty")))).isInstanceOf(NullPointerException.class);
-            assertThat(catchThrowable(() -> operator.del(isNull("difficulty")))).isInstanceOf(NullPointerException.class);
+            assertThat(catchThrowable(() -> operator.getAll(isNull("difficulty")))).isInstanceOf(DataAccessException.class);
+            assertThat(catchThrowable(() -> operator.exist(isNull("difficulty")))).isInstanceOf(DataAccessException.class);
+            assertThat(catchThrowable(() -> operator.page(1, 10, isNull("difficulty")))).isInstanceOf(DataAccessException.class);
+            assertThat(catchThrowable(() -> operator.del(isNull("difficulty")))).isInstanceOf(DataAccessException.class);
             assertThat(operator.getAll()).hasSize(2);
 
             WhereCondition easy = WhereCondition.builder().column("difficulty").value("EASY").build();
