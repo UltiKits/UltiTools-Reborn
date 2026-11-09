@@ -217,6 +217,7 @@ final class AgentTelemetry implements CloudRequestHandler {
             Tracked track, long now) {
         JsonObject built = payload.get();
         if (!send(channel, type, built)) {
+            track.refused(built.toString());
             return false;
         }
         track.remember(built.toString(), now);
@@ -354,19 +355,32 @@ final class AgentTelemetry implements CloudRequestHandler {
      * Sends one snapshot when its mapped payload differs from the last one sent and at least
      * {@value #SNAPSHOT_MIN_INTERVAL_MS} ms have passed since that send. Comparison is on the
      * payload that would go on the wire, so a value the contract does not carry cannot wake it.
+     *
+     * <p>The three snapshots are built only from the monitor's published sample, which changes at
+     * most once per sampling period, so the payload is built again only when a new sample has been
+     * published since the last build, not on every tick. A payload the channel refused (larger than
+     * {@code maxFrameBytes}, or a capability the welcome did not accept) is not offered again until
+     * its content changes (#753).</p>
      */
-    private static void sendChanged(CloudChannel channel, String type, Supplier<JsonObject> payload,
+    private void sendChanged(CloudChannel channel, String type, Supplier<JsonObject> payload,
             Tracked track, long now) {
         if (now - track.lastAt < SNAPSHOT_MIN_INTERVAL_MS) {
             return;
         }
+        Object sample = monitor.currentStateSnapshot();
+        if (sample == track.lastSample) {
+            return;
+        }
+        track.lastSample = sample;
         JsonObject built = payload.get();
         String json = built.toString();
-        if (json.equals(track.lastPayload)) {
+        if (json.equals(track.lastPayload) || json.equals(track.refusedPayload)) {
             return;
         }
         if (send(channel, type, built)) {
             track.remember(json, now);
+        } else {
+            track.refused(json);
         }
     }
 
@@ -381,15 +395,26 @@ final class AgentTelemetry implements CloudRequestHandler {
     private static final class Tracked {
         private long lastAt;
         private String lastPayload;
+        /** The monitor sample the last change check was built from; identity only. */
+        private Object lastSample;
+        /** The last payload the channel refused, which is not offered again unchanged. */
+        private String refusedPayload;
 
         private void remember(String payload, long now) {
             lastPayload = payload;
             lastAt = now;
+            refusedPayload = null;
+        }
+
+        private void refused(String payload) {
+            refusedPayload = payload;
         }
 
         private void clear() {
             lastAt = 0L;
             lastPayload = null;
+            lastSample = null;
+            refusedPayload = null;
         }
     }
 

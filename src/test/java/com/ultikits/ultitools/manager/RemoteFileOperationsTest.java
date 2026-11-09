@@ -154,6 +154,21 @@ class RemoteFileOperationsTest {
     }
 
     @Test
+    @DisplayName("#753: a configured root that does not exist, or is a file, is not listed as a directory")
+    void missingOrFileRootsAreNotListed() throws Exception {
+        write("config.yml", "a: 1\n");
+        pointManagerAt(files, tmp, tmp.resolve("plugins"), tmp.resolve("logs"), tmp.resolve("missing"),
+                tmp.resolve("config.yml"));
+        JsonObject frame = ContractFixtures.object("fixtures/agent/files.list/valid/root.json");
+        router.dispatch(frame.toString(), channel);
+
+        JsonObject data = only(channel).getAsJsonObject("payload").getAsJsonObject("data");
+        assertThat(names(data.getAsJsonArray("entries")))
+                .as("the existing roots are the control: they are still listed")
+                .containsExactly("logs", "plugins");
+    }
+
+    @Test
     @DisplayName("a listing of more than 2000 entries is truncated at 2000 and flagged")
     void largeListingIsTruncated() throws IOException {
         Path many = tmp.resolve("plugins/many");

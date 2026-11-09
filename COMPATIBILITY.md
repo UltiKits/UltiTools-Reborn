@@ -454,6 +454,28 @@ changes already under way,
 including work handed to a module responder or the player-link handler, so no change happens after the remote
 action log closes.
 
+### Smaller UltiCloud client changes (as of 6.4.0)
+
+- **`files.list` of the empty path lists only roots that exist.** A configured editable root that does not exist, or
+  is a file, is no longer offered to the panel as a directory; opening it answered only `not_found` or
+  `not_a_directory`. Create the directory, or remove the entry from `ultipanel.files.editable-roots`.
+- **Header and body values use the contract's ranges.** A `Retry-After` header on the device-login endpoints is
+  read as 1 to 86400 seconds, like the body's `retryAfterSeconds`, instead of being cut to one hour; a value
+  outside that range is ignored and the body's value is used. A device-login poll never waits past the code's
+  expiry, so an expired code is still reported on time. The `X-UltiCloud-Protocol-Supported` header of a refused
+  connection is read as 1 to 99, like the body's `supportedProtocols`. The reconnect back-off of the live
+  connection is unchanged.
+- **Cooldown seconds round up.** `/ulticloud login` refused by its one-minute cooldown names the remaining seconds
+  rounded up (9.9 seconds left is shown as 10, and less than a second as 1, never 0).
+- **Integers in the credential file stay integers.** An update of `<server root>/.ultikits/credentials.json`
+  (for example a credential rotation) writes `userId` and `linkedAt` back as integers (`12`, `1700000000000`) rather
+  than `12.0` and `1.7E12`. Both forms are read the same way.
+- **Telemetry and log buffering cost less.** The players, plugins and worlds snapshots are rebuilt only when a new
+  server sample exists, and a snapshot the connection refused (larger than the negotiated frame size) is offered
+  again only once its content changes, not every second. A buffered console line keeps at most 8193 characters
+  until it is sent; what reaches the panel is unchanged, because a line is cut to the negotiated
+  `lineMaxBytes` (at most 8192 bytes) either way.
+
 ### Known limitations (6.3.1)
 
 These are documented, not defended; each needs a crash, an unusual layout, or a step the operator should not

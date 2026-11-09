@@ -320,6 +320,24 @@ class CredentialStoreTest {
     }
 
     @Test
+    @DisplayName("#753: an update writes stored integers back as integers, not 12.0 or 1.7E12")
+    void updateKeepsIntegersIntegral() throws IOException {
+        Files.write(dataFile, ("{\"server_credential\":{\"userId\":12,\"linkedAt\":1700000000000,"
+                + "\"ratio\":0.5},\"uuid\":\"keep\"}").getBytes(StandardCharsets.UTF_8));
+
+        CredentialStore.update(doc -> {
+            doc.put("uuid", "rotated");
+            return doc;
+        });
+
+        String content = new String(Files.readAllBytes(dataFile), StandardCharsets.UTF_8);
+        assertThat(content).contains("\"userId\": 12,").contains("\"linkedAt\": 1700000000000,")
+                .contains("\"ratio\": 0.5").doesNotContain("12.0").doesNotContain("E12");
+        assertThat(ServerCredential.parseUserId((Number) ((Map<?, ?>) CredentialStore.read().data()
+                .get("server_credential")).get("userId"))).isEqualTo(12L);
+    }
+
+    @Test
     @DisplayName("after write(), no temporary file remains in the parent directory")
     void writeLeavesNoTemporaryFileBehind() throws IOException {
         Map<String, Object> doc = new LinkedHashMap<>();

@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.contract.RecordingChannel;
+import com.ultikits.ultitools.websocket.CloudChannel;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +25,12 @@ import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -77,6 +83,35 @@ class AgentTelemetryTest {
         }
 
         assertThat(types(channel)).containsOnly("status").hasSize(6);
+    }
+
+    @Test
+    @DisplayName("#753: a refused snapshot is not rebuilt and offered again every second, only when it changes")
+    void refusedSnapshotIsNotRetriedEverySecond() {
+        CloudChannel channel = mock(CloudChannel.class);
+        when(channel.isOpen()).thenReturn(true);
+        when(channel.send(anyString(), any(JsonObject.class))).thenReturn(true);
+        when(channel.send(eq("players.snapshot"), any(JsonObject.class))).thenReturn(false);
+        AgentTelemetry telemetry = telemetry();
+        telemetry.onWelcome(channel);
+
+        for (int second = 1; second <= 60; second++) {
+            clock.set(second * 1000L);
+            if (second % 5 == 0) {
+                // A new sample every five seconds, as the monitor publishes, with the same content.
+                publish(players(player("alice", "SURVIVAL")), plugins(plugin("UltiTools", "6.3.1", null, true)),
+                        worlds(world("world", "NORMAL", "NORMAL")));
+            }
+            telemetry.tick(channel);
+        }
+        verify(channel, times(1)).send(eq("players.snapshot"), any(JsonObject.class));
+        verify(channel, times(7)).send(eq("status"), any(JsonObject.class));
+
+        clock.set(61_000L);
+        publish(players(player("alice", "SURVIVAL"), player("bob", "CREATIVE")),
+                plugins(plugin("UltiTools", "6.3.1", null, true)), worlds(world("world", "NORMAL", "NORMAL")));
+        telemetry.tick(channel);
+        verify(channel, times(2)).send(eq("players.snapshot"), any(JsonObject.class));
     }
 
     @Test

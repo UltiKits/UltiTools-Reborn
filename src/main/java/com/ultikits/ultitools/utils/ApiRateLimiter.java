@@ -50,16 +50,28 @@ public class ApiRateLimiter {
      *
      * @param key the API call type key
      * @param cooldownMs the cooldown period in milliseconds
-     * @return remaining seconds, or 0 if no cooldown active
+     * @return remaining seconds, rounded up, or 0 if no cooldown active
      */
     public static long getRemainingCooldown(String key, long cooldownMs) {
         Long lastCall = lastCallTimestamps.get(key);
         if (lastCall == null) {
             return 0;
         }
-        long elapsed = System.currentTimeMillis() - lastCall;
-        long remaining = cooldownMs - elapsed;
-        return remaining > 0 ? remaining / 1000 : 0;
+        return remainingSeconds(lastCall, cooldownMs, System.currentTimeMillis());
+    }
+
+    /**
+     * Whole seconds left of a cooldown, rounded up: 9.9 s left is shown as 10, and any part of a
+     * second left as 1, so a caller that is still refused never reads "0 seconds" (#753).
+     *
+     * @param lastCall   when the cooldown started, in epoch milliseconds
+     * @param cooldownMs the cooldown period in milliseconds
+     * @param now        the current time in epoch milliseconds
+     * @return the remaining seconds rounded up, or 0 once the cooldown has passed
+     */
+    static long remainingSeconds(long lastCall, long cooldownMs, long now) {
+        long remaining = cooldownMs - (now - lastCall);
+        return remaining > 0 ? (remaining + 999L) / 1000L : 0L;
     }
 
     /**

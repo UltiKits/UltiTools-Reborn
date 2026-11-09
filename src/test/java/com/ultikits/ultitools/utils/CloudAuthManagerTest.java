@@ -1107,6 +1107,20 @@ class CloudAuthManagerTest {
         }
 
         @Test
+        @DisplayName("#753: a Retry-After longer than the code's life waits only until the deadline, then reports expired")
+        void longRetryAfterNeverWaitsPastTheDeadline() {
+            loginWith(grantedClient(600, 5)
+                    .thenPoll(DeviceAuthorizationClient.PollResult.transientFailure(86_400)));
+
+            scheduler.runNext();
+
+            assertThat(scheduler.delays()).containsExactly(0L, 5_000L, 595_000L);
+            scheduler.runNext();
+            assertThat(listener.events).contains("expired");
+            assertThat(scheduler.pending()).isZero();
+        }
+
+        @Test
         @DisplayName("GRANTED commits the credential, stops polling and logs the linked line")
         void grantedCommitsAndStops() {
             new CloudReconnectStateMachineTest.AgentRuntime().install();
