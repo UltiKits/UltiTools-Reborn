@@ -12,6 +12,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.manager.CommandExecutionManager;
@@ -22,6 +23,7 @@ import com.ultikits.ultitools.utils.CloudAuthManager;
  *
  * Usage:
  *   /ulticloud login  — Link this server to UltiCloud
+ *   /ulticloud login &lt;code&gt; — Reattach this server with the re-pair code from the panel (as of 6.4.0)
  *   /ulticloud logout — Unlink this server and revoke its credential
  *   /ulticloud status — Show link and connection status
  *   /ulticloud reconnect — Retry the UltiCloud connection now
@@ -38,6 +40,8 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     static final String CANCELLED_KEY = "Cancelled the pending UltiCloud link request. Cloud features are stopped.";
     static final String NOT_LINKED_KEY = "This server is not linked to UltiCloud.";
     static final String STOPPED_KEY = "Cloud features have been stopped regardless.";
+    static final String LOCAL_DELETE_FAILED_KEY = "Could not delete this server's UltiCloud credential from the local "
+        + "credentials file. Check the server log, then run /ulticloud logout again.";
     static final String RECONNECT_STARTED_KEY = "Reconnecting to UltiCloud now.";
     static final String RECONNECT_STATUS_KEY = "Use /ulticloud status to see the result.";
     static final String ALREADY_CONNECTED_KEY = "This server is already connected to UltiCloud.";
@@ -45,6 +49,9 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     static final String UPGRADE_REQUIRED_KEY = "UltiCloud no longer accepts this UltiTools version. Upgrade UltiTools, then restart the server.";
     static final String RECONNECT_NOT_LINKED_KEY = "This server is not linked to UltiCloud. Use /ulticloud login to link it.";
     static final String RECONNECT_RATE_LIMITED_KEY = "Please wait %d seconds before trying again.";
+    /** Said, without echoing the input, when {@code /ulticloud login <code>} gets text that cannot be a code. */
+    static final String INVALID_REPAIR_CODE_KEY = "That is not a valid UltiCloud re-pair code. "
+        + "Copy the whole code from the panel and try again.";
     /**
      * Said when {@code /ulticloud reconnect} finds the connection stopped by a server-ID mismatch
      * (contract answer 21): the server is still linked, but only a restart or a new login leaves
@@ -69,7 +76,30 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         if (refusePanelAuthentication(sender)) {
             return;
         }
-        CloudAuthManager.login(new LoginOutput(sender));
+        CloudAuthManager.login(new LoginOutput(sender, false));
+    }
+
+    /**
+     * Reattaches this server with the single-use code the panel's "Revoke and re-pair" action shows (issue #869).
+     * The code is exchanged through the same device-token poll a plain {@code /ulticloud login} uses, and the
+     * credential is stored the same way; the server keeps its UltiCloud id, name and history. Like the plain form,
+     * this body is not {@code @RunAsync}: the exchange runs on the login session's executor. The code is a secret
+     * and is never echoed or logged; text that cannot be a code is refused here and never sent.
+     *
+     * @param sender the console, RCON, or another console-class sender
+     * @param code   the re-pair code
+     * @since 6.4.0
+     */
+    @CmdMapping(format = "login <code>")
+    public void login(@CmdSender CommandSender sender, @CmdParam("code") String code) {
+        if (refusePanelAuthentication(sender)) {
+            return;
+        }
+        if (!CloudAuthManager.isWellFormedRepairCode(code)) {
+            say(sender, ChatColor.RED, INVALID_REPAIR_CODE_KEY);
+            return;
+        }
+        CloudAuthManager.loginWithCode(code, new LoginOutput(sender, true));
     }
 
     @CmdMapping(format = "logout")
@@ -91,6 +121,10 @@ public class CloudLoginCommand extends BaseCommandExecutor {
                     break;
                 case CANCELLED_PENDING:
                     say(sender, ChatColor.GREEN, CANCELLED_KEY);
+                    break;
+                case LOCAL_DELETE_FAILED:
+                    say(sender, ChatColor.RED, LOCAL_DELETE_FAILED_KEY);
+                    say(sender, ChatColor.GRAY, STOPPED_KEY);
                     break;
                 case NOT_LINKED:
                 default:
@@ -160,6 +194,8 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     protected void handleHelp(CommandSender sender) {
         sender.sendMessage(ChatColor.AQUA + "=== UltiCloud Commands ===");
         sender.sendMessage(ChatColor.WHITE + "/ulticloud login" + ChatColor.GRAY + " - Link this server to UltiCloud");
+        sender.sendMessage(ChatColor.WHITE + "/ulticloud login <code>" + ChatColor.GRAY
+            + " - Reattach this server with the re-pair code from the panel");
         sender.sendMessage(ChatColor.WHITE + "/ulticloud logout" + ChatColor.GRAY
             + " - Unlink this server and revoke its credential");
         sender.sendMessage(ChatColor.WHITE + "/ulticloud status" + ChatColor.GRAY + " - Show link and connection status");
@@ -199,13 +235,19 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         private static final String REQUESTING = ChatColor.AQUA + "Requesting a device code from UltiCloud...";
         private static final String REQUESTING_REMOTE = ChatColor.AQUA
             + "Requesting a device code from UltiCloud. The code and the link will be printed in the server console.";
+        private static final String REDEEMING = ChatColor.AQUA + "Redeeming the re-pair code with UltiCloud...";
+        private static final String REDEEMING_REMOTE = ChatColor.AQUA
+            + "Redeeming the re-pair code with UltiCloud. The result will be printed in the server console.";
 
         private final CommandSender sender;
         private final boolean remote;
+        /** {@code true} for {@code /ulticloud login <code>}. */
+        private final boolean withCode;
 
-        LoginOutput(CommandSender sender) {
+        LoginOutput(CommandSender sender, boolean withCode) {
             this.sender = sender;
             this.remote = isRemoteSender(sender);
+            this.withCode = withCode;
         }
 
         /** Sends {@code line}; for a remote sender also logs it to the console at INFO. */
@@ -232,11 +274,12 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         public void onRequesting() {
             // Reached only after the already-linked and rate-limit decisions, so a remote sender is
             // told the code goes to the console only when a code is really being requested.
+            String line = withCode ? REDEEMING : REQUESTING;
             if (remote) {
-                sender.sendMessage(REQUESTING_REMOTE);
-                logToConsole(REQUESTING);
+                sender.sendMessage(withCode ? REDEEMING_REMOTE : REQUESTING_REMOTE);
+                logToConsole(line);
             } else {
-                sender.sendMessage(REQUESTING);
+                sender.sendMessage(line);
             }
         }
 
@@ -256,7 +299,8 @@ public class CloudLoginCommand extends BaseCommandExecutor {
 
         @Override
         public void onRequestFailed(String reason) {
-            say(ChatColor.RED + "Failed to get a device code: " + reason);
+            say(ChatColor.RED + (withCode ? "Could not use the re-pair code: " : "Failed to get a device code: ")
+                + reason);
         }
 
         private static long minutes(long seconds) {

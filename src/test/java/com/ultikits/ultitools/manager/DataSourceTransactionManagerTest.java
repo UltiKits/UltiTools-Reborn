@@ -1204,33 +1204,11 @@ class DataSourceTransactionManagerTest {
         }
 
         @Test
-        @DisplayName("getConnection() on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
-        void getConnectionThrowsNamingJdbcTransactionManager() {
-            TransactionManager manager = new LifecycleOnlyTransactionManager();
-
-            assertThatThrownBy(manager::getConnection)
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining(JdbcTransactionManager.class.getName());
-        }
-
-        @Test
-        @DisplayName("setIsolationLevel(int) on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
-        void setIsolationLevelThrowsNamingJdbcTransactionManager() {
-            TransactionManager manager = new LifecycleOnlyTransactionManager();
-
-            assertThatThrownBy(() -> manager.setIsolationLevel(Connection.TRANSACTION_SERIALIZABLE))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining(JdbcTransactionManager.class.getName());
-        }
-
-        @Test
-        @DisplayName("setReadOnly(boolean) on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
-        void setReadOnlyThrowsNamingJdbcTransactionManager() {
-            TransactionManager manager = new LifecycleOnlyTransactionManager();
-
-            assertThatThrownBy(() -> manager.setReadOnly(true))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining(JdbcTransactionManager.class.getName());
+        @DisplayName("TransactionManager no longer declares the JDBC-only members (removed in 6.4.0)")
+        void baseInterfaceDeclaresNoJdbcMembers() {
+            assertThat(TransactionManager.class.getDeclaredMethods())
+                .extracting(java.lang.reflect.Method::getName)
+                .doesNotContain("getConnection", "setIsolationLevel", "setReadOnly");
         }
 
         @Test

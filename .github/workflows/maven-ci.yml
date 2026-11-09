@@ -37,7 +37,7 @@ jobs:
 
     - name: ☕ Set up JDK 21
       if: steps.changes.outputs.build == 'true'
-      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
       with:
         java-version: '21'
         distribution: 'temurin'
@@ -56,6 +56,14 @@ jobs:
           printf '%s\n' "$STATUS"
           exit 1
         fi
+
+    - name: Install pinned linkage-audit Python dependencies
+      if: steps.changes.outputs.build == 'true'
+      run: bash .github/scripts/setup-linkage-audit-python.sh
+
+    - name: Audit framework linkage against old Paper APIs
+      if: steps.changes.outputs.build == 'true'
+      run: python3 -I .github/scripts/audit_framework_linkage.py
 
     - name: 🧪 Run isolated-tagged tests
       # A fresh Maven/Surefire JVM still isolates scheduler state. Reuse compiled classes, not reports.
@@ -161,7 +169,7 @@ jobs:
       with:
         persist-credentials: false
     - name: Set up JDK 21
-      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
       with:
         java-version: '21'
         distribution: 'temurin'
@@ -208,7 +216,7 @@ jobs:
 
     - name: ☕ Set up JDK 21
       if: steps.changes.outputs.tooling == 'true'
-      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
       with:
         java-version: '21'
         distribution: 'temurin'
@@ -222,6 +230,10 @@ jobs:
       # Run flatten online to populate its runtime realm, then resolve the offline Central probe dependencies.
       if: steps.changes.outputs.tooling == 'true'
       run: mvn -B -ntp process-resources dependency:resolve-plugins
+
+    - name: Install pinned linkage-audit Python dependencies
+      if: steps.changes.outputs.tooling == 'true'
+      run: bash .github/scripts/setup-linkage-audit-python.sh
 
     - name: Release tooling regression suites
       if: steps.changes.outputs.tooling == 'true'

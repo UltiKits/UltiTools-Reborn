@@ -114,13 +114,12 @@ class CapabilityGateIndependenceTest {
     class TeardownStaysUnconditional {
 
         @Test
-        @DisplayName("全部能力关闭时，disableCloud 仍无条件调用 stopMonitoring 与 shutdown")
+        @DisplayName("全部能力关闭时，disableCloud 仍无条件调用 shutdown")
         void teardownRunsUnconditionallyEvenWithAllCapabilitiesDisabled() throws Exception {
             lenient().when(UltiTools.getInstance().getConfig()).thenReturn(configWithAllEightDisabled());
 
             PluginInitiationUtils.disableCloud();
 
-            verify(mockServerMonitorManager).stopMonitoring();
             verify(mockPlayerEventManager).shutdown();
         }
     }

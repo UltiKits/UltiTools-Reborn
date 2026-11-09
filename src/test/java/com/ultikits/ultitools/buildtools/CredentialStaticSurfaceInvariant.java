@@ -17,11 +17,9 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 
-import com.ultikits.ultitools.entities.TokenEntity;
-
 /**
  * D-18's structural enforcement: no {@code public static} method in the {@code utils} package may
- * accept or return a {@link TokenEntity} or a generation. Plan 16-09 removed every such method from
+ * accept or return a {@code TokenEntity} or a generation. Plan 16-09 removed every such method from
  * {@code CloudAuthManager} and {@code PluginInitiationUtils} outright (D-17) -- this rule is what
  * keeps a static bypass of the session's credential commit from being reintroduced without
  * anyone noticing, the same way {@link com.ultikits.ultitools.buildtools.deprecation.OverBroadExclusionInvariant}
@@ -37,7 +35,7 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * cleanup at the first start); {@code CommonUtils#getUltiToolsUUID} writes the install id. The
  * session reaches them only through {@code CloudSession#commitCredential}, {@code #rotateCredential},
  * {@code #completeCredentialLogout} and its connection listener's rejection path. None of them is a
- * {@code public static} method, and none accepts or returns a {@link TokenEntity}.
+ * {@code public static} method, and none accepts or returns a {@code TokenEntity}.
  *
  * <p>Pure logic over an already-derived input -- the {@link Method} objects to check -- so this is
  * unit-testable with hand-built synthetic fixtures, without touching the classpath or the real
@@ -62,7 +60,7 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * {@code startPolling}) with a bare extra {@code long} tacked on and no textual hint anywhere. That
  * narrower shape was possible for the two now-removed shim overloads
  * ({@code #startPolling(String, Consumer, long)}, {@code PluginInitiationUtils#activateCloudIfCurrent(long)})
- * and is an accepted, named blind spot of this specific check -- the {@link TokenEntity} half of the
+ * and is an accepted, named blind spot of this specific check -- the {@code TokenEntity} half of the
  * rule below carries no such gap and applies to every {@code public static} method in the package
  * unconditionally, which is the shape a reintroduction is far more likely to need in the first place
  * (there has to be a token to actually persist one).
@@ -76,7 +74,7 @@ import com.ultikits.ultitools.entities.TokenEntity;
  *   {@code public static Optional<TokenEntity> peek()} would have reported {@code Consumer.class}/
  *   {@code Optional.class} and passed silently while still handing the raw token to any caller. This
  *   method now also walks {@link Method#getGenericReturnType()}/{@link Method#getGenericParameterTypes()}
- *   via {@link #referencesTokenEntity(Type)}, recursing into every type argument of a
+ *   via {@link #referencesGuardedType(Type, Class)}, recursing into every type argument of a
  *   {@link ParameterizedType} (so {@code Optional<List<TokenEntity>>} is caught, not just one level
  *   deep) and into a {@link WildcardType}'s bounds.</li>
  *   <li><b>Closed.</b> Fields were never scanned -- only {@link Method} objects reached this class.
@@ -96,7 +94,30 @@ import com.ultikits.ultitools.entities.TokenEntity;
  */
 public final class CredentialStaticSurfaceInvariant {
 
+    /**
+     * The credential type this rule guards in the real {@code utils} package. The protocol v1
+     * {@code TokenEntity} this rule was written against was removed in 6.4.0; the only credential
+     * type left is the protocol v2 server credential, {@code ServerCredential}, so that is what no
+     * {@code public static} member may expose. It is package-private, so it is loaded by name; a
+     * rename or removal fails {@link #credentialType()} loudly instead of making the rule vacuous.
+     */
+    public static final String CREDENTIAL_TYPE_NAME = "com.ultikits.ultitools.utils.ServerCredential";
+
     private CredentialStaticSurfaceInvariant() {
+    }
+
+    /**
+     * @return the real credential type named by {@link #CREDENTIAL_TYPE_NAME}
+     * @throws IllegalStateException if that type no longer exists -- the rule must then be
+     *         re-pointed, never silently skipped
+     */
+    public static Class<?> credentialType() {
+        try {
+            return Class.forName(CREDENTIAL_TYPE_NAME);
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException("guarded credential type " + CREDENTIAL_TYPE_NAME
+                    + " no longer exists; re-point CredentialStaticSurfaceInvariant", e);
+        }
     }
 
     /**
@@ -113,6 +134,8 @@ public final class CredentialStaticSurfaceInvariant {
      * argument or a {@code null} element.
      *
      * @param methods the methods to check -- typically every declared method of one or more classes
+     * @param guardedType the credential type no {@code public static} method may expose; the real
+     *        rule uses {@link #credentialType()}, the synthetic tests a non-final stand-in
      * @return one violation message per offending {@code public static} method, naming the method
      *         and which condition(s) it violates; empty when the invariant holds. Deterministically
      *         ordered by the method's own {@link Method#toString()} so repeated runs over the same
@@ -125,8 +148,9 @@ public final class CredentialStaticSurfaceInvariant {
     // same shape RegistryLedger.merge()'s own identical suppression already documents in this
     // codebase, not a measure of genuinely tangled control flow.
     @SuppressWarnings("PMD.NPathComplexity")
-    public static List<String> evaluate(Collection<Method> methods) {
+    public static List<String> evaluate(Collection<Method> methods, Class<?> guardedType) {
         Objects.requireNonNull(methods, "methods");
+        Objects.requireNonNull(guardedType, "guardedType");
 
         // TreeMap keyed by Method#toString() -- deterministic order regardless of the caller's
         // collection implementation or insertion order, mirroring RemovalConsistencyEvaluator's use
@@ -148,20 +172,20 @@ public final class CredentialStaticSurfaceInvariant {
             }
 
             List<String> reasons = new ArrayList<>();
-            if (TokenEntity.class.isAssignableFrom(method.getReturnType())) {
+            if (guardedType.isAssignableFrom(method.getReturnType())) {
                 // round-15 review (16-10 gap-closure addendum, PR #464): assignability, not exact
                 // equality -- a hypothetical `public static SessionToken leaked()` where
                 // `SessionToken extends TokenEntity` reports SessionToken.class to getReturnType(),
                 // never TokenEntity.class itself, and TokenEntity is public and non-final, so a
                 // concrete subclass is a real, constructible signature this exact-equality check
                 // would have let straight through while still exposing a raw credential.
-                reasons.add("returns " + TokenEntity.class.getSimpleName() + " or a subclass of it");
-            } else if (referencesTokenEntity(method.getGenericReturnType())) {
+                reasons.add("returns " + guardedType.getSimpleName() + " or a subclass of it");
+            } else if (referencesGuardedType(method.getGenericReturnType(), guardedType)) {
                 // WR-03: the erased check above missed this -- e.g. Optional<TokenEntity> reports
                 // Optional.class to getReturnType(), never TokenEntity.class. Checked as an "else"
                 // only so a directly-erased TokenEntity return does not additionally recurse through
                 // its own (non-generic) type and produce a duplicate, differently-worded reason.
-                reasons.add("returns a generic type that references " + TokenEntity.class.getSimpleName());
+                reasons.add("returns a generic type that references " + guardedType.getSimpleName());
             }
 
             boolean acceptsToken = false;
@@ -169,21 +193,21 @@ public final class CredentialStaticSurfaceInvariant {
             for (Class<?> paramType : method.getParameterTypes()) {
                 // round-15 review: assignability, not exact equality -- see the return-type check
                 // above for the concrete-subclass scenario this closes.
-                if (TokenEntity.class.isAssignableFrom(paramType)) {
+                if (guardedType.isAssignableFrom(paramType)) {
                     acceptsToken = true;
                 }
             }
             if (!acceptsToken) {
                 for (Type paramType : method.getGenericParameterTypes()) {
-                    if (referencesTokenEntity(paramType)) {
+                    if (referencesGuardedType(paramType, guardedType)) {
                         acceptsTokenGenerically = true;
                     }
                 }
             }
             if (acceptsToken) {
-                reasons.add("accepts a " + TokenEntity.class.getSimpleName() + " parameter or a subclass of it");
+                reasons.add("accepts a " + guardedType.getSimpleName() + " parameter or a subclass of it");
             } else if (acceptsTokenGenerically) {
-                reasons.add("accepts a parameter whose generic type references " + TokenEntity.class.getSimpleName());
+                reasons.add("accepts a parameter whose generic type references " + guardedType.getSimpleName());
             }
 
             if (nameSuggestsGeneration(method)) {
@@ -209,6 +233,16 @@ public final class CredentialStaticSurfaceInvariant {
         return violations;
     }
 
+    /**
+     * {@link #evaluate(Collection, Class)} against the real credential type, {@link #credentialType()}.
+     *
+     * @param methods the methods to check
+     * @return the violations, as {@link #evaluate(Collection, Class)} returns them
+     */
+    public static List<String> evaluate(Collection<Method> methods) {
+        return evaluate(methods, credentialType());
+    }
+
     private static String describe(Method method) {
         return method.getDeclaringClass().getName() + "#" + method.getName();
     }
@@ -216,7 +250,7 @@ public final class CredentialStaticSurfaceInvariant {
     /**
      * The field-shaped twin of {@link #evaluate(Collection)} (WR-03, 16-REVIEW-cloud.md): no
      * {@code public static} field in the {@code utils} package may be typed (erased or generically)
-     * as a {@link TokenEntity}. Fields were entirely outside the original scope of this class --
+     * as a {@code TokenEntity}. Fields were entirely outside the original scope of this class --
      * only {@link Method} objects were ever passed in.
      *
      * @param fields the fields to check -- typically every declared field of one or more classes
@@ -224,7 +258,20 @@ public final class CredentialStaticSurfaceInvariant {
      *         invariant holds. Deterministically ordered by the field's own {@link Field#toString()}.
      */
     public static List<String> evaluateFields(Collection<Field> fields) {
+        return evaluateFields(fields, credentialType());
+    }
+
+    /**
+     * {@link #evaluateFields(Collection)} against an explicit guarded type -- the synthetic tests use
+     * a non-final stand-in so the subclass (assignability) branches stay exercised.
+     *
+     * @param fields      the fields to check
+     * @param guardedType the credential type no {@code public static} field may expose
+     * @return one violation message per offending {@code public static} field
+     */
+    public static List<String> evaluateFields(Collection<Field> fields, Class<?> guardedType) {
         Objects.requireNonNull(fields, "fields");
+        Objects.requireNonNull(guardedType, "guardedType");
 
         TreeMap<String, Field> sorted = new TreeMap<>();
         for (Field field : fields) {
@@ -240,12 +287,12 @@ public final class CredentialStaticSurfaceInvariant {
             }
             // round-15 review: assignability, not exact equality -- see evaluate()'s own comment
             // on the return-type check for the concrete-subclass scenario this closes.
-            if (TokenEntity.class.isAssignableFrom(field.getType())) {
+            if (guardedType.isAssignableFrom(field.getType())) {
                 violations.add(describeField(field)
-                        + ": is typed as " + TokenEntity.class.getSimpleName() + " or a subclass of it");
-            } else if (referencesTokenEntity(field.getGenericType())) {
+                        + ": is typed as " + guardedType.getSimpleName() + " or a subclass of it");
+            } else if (referencesGuardedType(field.getGenericType(), guardedType)) {
                 violations.add(describeField(field)
-                        + ": has a generic type that references " + TokenEntity.class.getSimpleName());
+                        + ": has a generic type that references " + guardedType.getSimpleName());
             }
         }
         return violations;
@@ -256,7 +303,7 @@ public final class CredentialStaticSurfaceInvariant {
     }
 
     /**
-     * Recursively determines whether {@code type} mentions {@link TokenEntity} anywhere in its
+     * Recursively determines whether {@code type} mentions {@code TokenEntity} anywhere in its
      * generic structure -- the raw type itself, any type argument of a {@link ParameterizedType}
      * (recursing into each, so a doubly-nested {@code Optional<List<TokenEntity>>} is caught, not
      * just a single level of wrapping), an array component type, or a {@link WildcardType}'s upper
@@ -265,7 +312,7 @@ public final class CredentialStaticSurfaceInvariant {
      *
      * @param type a {@link Type} obtained from {@link Method#getGenericReturnType()},
      *             {@link Method#getGenericParameterTypes()}, or {@link Field#getGenericType()}
-     * @return {@code true} if {@code type} references {@link TokenEntity} anywhere in its structure
+     * @return {@code true} if {@code type} references {@code TokenEntity} anywhere in its structure
      */
     // PMD.NPathComplexity: the loops over getActualTypeArguments()/getUpperBounds()/getLowerBounds()
     // each recurse, and PMD's path count for a recursive method does not converge the way it does
@@ -273,8 +320,8 @@ public final class CredentialStaticSurfaceInvariant {
     // shallow for every real signature in this package (see the class javadoc's worked example,
     // Optional<List<TokenEntity>>, two levels deep).
     @SuppressWarnings("PMD.NPathComplexity")
-    private static boolean referencesTokenEntity(Type type) {
-        return referencesTokenEntity(type, new HashSet<>());
+    private static boolean referencesGuardedType(Type type, Class<?> guardedType) {
+        return referencesGuardedType(type, guardedType, new HashSet<>());
     }
 
     /**
@@ -294,10 +341,11 @@ public final class CredentialStaticSurfaceInvariant {
      * @param type    a {@link Type} obtained from {@link Method#getGenericReturnType()},
      *                {@link Method#getGenericParameterTypes()}, or {@link Field#getGenericType()}
      * @param visited every {@link TypeVariable} already entered earlier in this same top-level call
-     * @return {@code true} if {@code type} references {@link TokenEntity} anywhere in its structure
+     * @return {@code true} if {@code type} references {@code TokenEntity} anywhere in its structure
      */
     @SuppressWarnings("PMD.NPathComplexity")
-    private static boolean referencesTokenEntity(Type type, Set<TypeVariable<?>> visited) {
+    private static boolean referencesGuardedType(Type type, Class<?> guardedType,
+            Set<TypeVariable<?>> visited) {
         if (type == null) {
             return false;
         }
@@ -310,16 +358,16 @@ public final class CredentialStaticSurfaceInvariant {
         // `Class<?>` -- the ParameterizedType/GenericArrayType/array/WildcardType/TypeVariable
         // branches below each already recurse into their own constituent types, which eventually
         // bottom out at a Class<?> and re-enter this same check.
-        if (type instanceof Class<?> && TokenEntity.class.isAssignableFrom((Class<?>) type)) {
+        if (type instanceof Class<?> && guardedType.isAssignableFrom((Class<?>) type)) {
             return true;
         }
         if (type instanceof ParameterizedType) {
             ParameterizedType parameterized = (ParameterizedType) type;
-            if (referencesTokenEntity(parameterized.getRawType(), visited)) {
+            if (referencesGuardedType(parameterized.getRawType(), guardedType, visited)) {
                 return true;
             }
             for (Type typeArgument : parameterized.getActualTypeArguments()) {
-                if (referencesTokenEntity(typeArgument, visited)) {
+                if (referencesGuardedType(typeArgument, guardedType, visited)) {
                     return true;
                 }
             }
@@ -328,13 +376,13 @@ public final class CredentialStaticSurfaceInvariant {
             // TokenEntity ONLY in getOwnerType() (the reflected `Outer<TokenEntity>`); Inner's own
             // raw type and actual type arguments, both already checked above, mention nothing
             // about it. Without this branch such a return type or parameter would pass unnoticed.
-            return referencesTokenEntity(parameterized.getOwnerType(), visited);
+            return referencesGuardedType(parameterized.getOwnerType(), guardedType, visited);
         }
         if (type instanceof GenericArrayType) {
-            return referencesTokenEntity(((GenericArrayType) type).getGenericComponentType(), visited);
+            return referencesGuardedType(((GenericArrayType) type).getGenericComponentType(), guardedType, visited);
         }
         if (type instanceof Class<?> && ((Class<?>) type).isArray()) {
-            return referencesTokenEntity(((Class<?>) type).getComponentType(), visited);
+            return referencesGuardedType(((Class<?>) type).getComponentType(), guardedType, visited);
         }
         // Round-1 review, fourth pass (16-10, PR #464): a REIFIED array (e.g. `TokenEntity[]`) is
         // represented by reflection as a plain Class with isArray() == true, never as a
@@ -345,12 +393,12 @@ public final class CredentialStaticSurfaceInvariant {
         if (type instanceof WildcardType) {
             WildcardType wildcard = (WildcardType) type;
             for (Type upperBound : wildcard.getUpperBounds()) {
-                if (referencesTokenEntity(upperBound, visited)) {
+                if (referencesGuardedType(upperBound, guardedType, visited)) {
                     return true;
                 }
             }
             for (Type lowerBound : wildcard.getLowerBounds()) {
-                if (referencesTokenEntity(lowerBound, visited)) {
+                if (referencesGuardedType(lowerBound, guardedType, visited)) {
                     return true;
                 }
             }
@@ -369,7 +417,7 @@ public final class CredentialStaticSurfaceInvariant {
                 return false;
             }
             for (Type bound : typeVariable.getBounds()) {
-                if (referencesTokenEntity(bound, visited)) {
+                if (referencesGuardedType(bound, guardedType, visited)) {
                     return true;
                 }
             }

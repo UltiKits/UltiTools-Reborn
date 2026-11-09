@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import java.util.logging.Level;
+import java.util.regex.Pattern;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -23,15 +24,26 @@ class DeviceAuthorizationClient {
     static final String TOKEN_PATH = "/v1/device/token";
     /** The protocol major version this framework speaks. */
     static final int PROTOCOL_VERSION = 2;
-    /** RFC 8628 §3.2: the poll interval to use when the response names none. */
+    /**
+     * The poll interval this client always uses, in seconds (RFC 8628 §3.2's default). The
+     * contract fixes {@code interval} at 5, so the response's value is never read.
+     */
     static final long DEFAULT_INTERVAL_SECONDS = 5;
-    /** The device code lifetime to assume when the response names none. */
+    /**
+     * The device code lifetime this client always assumes, in seconds. The contract fixes
+     * {@code expiresIn} at 600, so the response's value is never read.
+     */
     static final long DEFAULT_EXPIRES_IN_SECONDS = 600;
     /** The longest backend-supplied text (message, reason) this class passes on, in characters. */
     static final int MAX_BACKEND_TEXT = 200;
     private static final int STATUS_BAD_REQUEST = 400;
     private static final int STATUS_TOO_MANY_REQUESTS = 429;
     private static final int STATUS_SERVER_ERROR = 500;
+    /**
+     * The contract's {@code deviceCode} shape: what {@code POST /v1/device/token} accepts and what a re-pair code from
+     * the panel's "Revoke and re-pair" action looks like.
+     */
+    private static final Pattern DEVICE_CODE = Pattern.compile("^[A-Za-z0-9_-]{43,128}$");
     /** The longest {@code error.details.retryAfterSeconds} taken from a 429 body. */
     private static final long MAX_RETRY_AFTER_SECONDS = 86400L;
 
@@ -91,8 +103,8 @@ class DeviceAuthorizationClient {
             return AuthorizeResult.failed("UltiCloud sent an incomplete device-code response", -1);
         }
         String complete = string(data, "verificationUriComplete");
-        // The contract fixes expiresIn/interval at 600/5. Unreadable or out-of-contract timing
-        // uses those same defaults, so no numeric conversion (and no truncation) is needed.
+        // The contract fixes expiresIn/interval at 600/5, so the response's values are not read
+        // and no numeric conversion (and no truncation) is needed.
         long expiresIn = DEFAULT_EXPIRES_IN_SECONDS;
         long interval = DEFAULT_INTERVAL_SECONDS;
         // The three presentable values go to the console verbatim; strip control characters so a
@@ -100,6 +112,29 @@ class DeviceAuthorizationClient {
         String uri = sanitise(verificationUri);
         return AuthorizeResult.granted(new Grant(deviceCode, sanitise(userCode), uri,
                 isBlank(complete) ? uri : sanitise(complete), expiresIn, interval));
+    }
+
+    /**
+     * @param deviceCode a device code typed by the operator, or {@code null}
+     * @return {@code true} when it has the contract's {@code deviceCode} shape
+     *         ({@code ^[A-Za-z0-9_-]{43,128}$})
+     * @since 6.4.0
+     */
+    static boolean isWellFormedDeviceCode(String deviceCode) {
+        return deviceCode != null && DEVICE_CODE.matcher(deviceCode).matches();
+    }
+
+    /**
+     * A grant for a device code UltiCloud has already approved and handed to the owner -- the single-use code of the
+     * panel's "Revoke and re-pair" action, typed as {@code /ulticloud login <code>}. Nothing is presented for it, so
+     * its presentable fields are {@code null}; its lifetime and poll interval are the contract's defaults.
+     *
+     * @param deviceCode the code; must be {@link #isWellFormedDeviceCode well formed}
+     * @return the grant to poll
+     * @since 6.4.0
+     */
+    static Grant approvedGrant(String deviceCode) {
+        return new Grant(deviceCode, null, null, null, DEFAULT_EXPIRES_IN_SECONDS, DEFAULT_INTERVAL_SECONDS);
     }
 
     /**

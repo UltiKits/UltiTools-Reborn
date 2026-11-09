@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * The only way the config storage layer replaces a file.
+ * The legacy internal configuration publisher, retaining its atomic/backed in-place policy.
  * <p>
  * Normally the new UTF-8 text is written to a same-directory temporary file with the target's POSIX
  * permissions, forced to disk, and atomically moved over the target. Eligible atomic-replace failures
@@ -63,8 +63,9 @@ import org.jetbrains.annotations.ApiStatus;
  * symbolic link stays a link: writes and backup cleanup use its resolved target.
  * Stale temporary files are cleaned on load; live staged writes are protected. The atomic path copies only
  * POSIX permission bits, not ownership, ACLs or extended attributes. Directory syncing is best effort.
- * This is a framework-internal writer for config files; crash-safe writes of a module's own files are a
- * separate, later feature (UltiKits/UltiTools-Reborn#545).
+ * This remains a framework-internal writer for config files. A module explicitly choosing strict complete YAML
+ * publication instead uses {@link com.ultikits.ultitools.config.CrashSafeYamlFiles} (6.4.0, #545), with its narrower
+ * POSIX/metadata support contract and no in-place fallback. That opt-in path does not change this writer's behavior.
  *
  * @since 6.3.0
  */

@@ -26,7 +26,6 @@ import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.manager.UltiPanelLogTransmitter;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * A line the framework logs about the panel connection itself -- above all the panel's own
@@ -121,21 +120,5 @@ class PanelConnectionLogNotRetransmittedTest {
                 "UltiCloud: the gateway answered error rate_limited: Rate limit exceeded. Please slow down.");
 
         assertLoggedLocallyButNotStreamed("Rate limit exceeded");
-    }
-
-    @Test
-    @DisplayName("the client's connection-error and disconnect lines are logged locally and never streamed")
-    void clientLifecycleLinesAreNotStreamed() throws Exception {
-        UltiPanelWebSocketClient client = new UltiPanelWebSocketClient("ws://localhost:1", "test-server", "token");
-        try {
-            client.disconnect();
-            client.onError(new IllegalStateException("connection-error-from-socket"));
-            client.onClose(1006, "closed-by-peer", true);
-        } finally {
-            client.disconnect();
-        }
-
-        assertLoggedLocallyButNotStreamed("connection-error-from-socket");
-        assertLoggedLocallyButNotStreamed("closed-by-peer");
     }
 }

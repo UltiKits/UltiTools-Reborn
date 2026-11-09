@@ -113,26 +113,15 @@ class PluginManagerAopWiringTest {
     }
 
     /**
-     * 02-12 Task 2: {@code JsonStore.getOperator(File, Class)} now calls {@code checkOwnership}
-     * as its first statement, so the two JSON-backend tests below (which call it directly,
-     * bypassing {@code getOperator(DataScope, Class)}) need a {@code PluginManager} whose {@code
-     * findScopeForDataFolder} resolves {@code "target/test-wireaop-json"} back to a scope that owns
-     * {@link JsonTestEntity} -- otherwise the call refuses before ever reaching the write it is
-     * actually testing. {@link #scope} itself is left with its pre-existing empty owned-entity set
-     * (it is also used by every other test in this file for {@code wireAop}, which does not
-     * examine that set); a separate scope carries the ownership these two tests specifically need.
+     * The JSON operator the two JSON-backend tests below write through, obtained via the
+     * surviving {@code getOperator(DataScope, Class)} entry point with a scope that owns {@link
+     * JsonTestEntity}. {@link #scope} itself keeps its empty owned-entity set (every other test in
+     * this file uses it only for {@code wireAop}, which does not examine that set).
      */
-    private void stubJsonTestFolderOwnership() {
-        File dataFolder = jsonDataFolder;
-        DataScope entityScope = DataScope.forExternal("PluginManagerAopWiringTest", dataFolder,
+    private DataOperator<JsonTestEntity> jsonOperator() {
+        DataScope entityScope = DataScope.forExternal("PluginManagerAopWiringTest", jsonDataFolder,
                 Collections.singleton(JsonTestEntity.class));
-        PluginManager pluginManager = mock(PluginManager.class);
-        when(pluginManager.findScopeForDataFolder(dataFolder)).thenReturn(entityScope);
-
-        UltiTools mockUltiTools = mock(UltiTools.class);
-        when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
-        when(mockUltiTools.getPluginManager()).thenReturn(pluginManager);
-        ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+        return jsonStore.getOperator(entityScope, JsonTestEntity.class);
     }
 
     public static class Guarded {
@@ -278,9 +267,7 @@ class PluginManagerAopWiringTest {
     @DisplayName("A @Transactional method on the JSON backend that writes then throws leaves "
             + "the operator's contents unchanged (D-03, flipped from the pre-02-05 rejection case)")
     void shouldRollBackOnJsonBackendWhenTransactionalMethodThrows() {
-        stubJsonTestFolderOwnership();
-        DataOperator<JsonTestEntity> operator =
-                jsonStore.getOperator(jsonDataFolder, JsonTestEntity.class);
+        DataOperator<JsonTestEntity> operator = jsonOperator();
 
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, scope);
@@ -298,9 +285,7 @@ class PluginManagerAopWiringTest {
     @DisplayName("A @Transactional method on the JSON backend that writes and returns normally "
             + "leaves the write committed")
     void shouldCommitOnJsonBackendWhenTransactionalMethodSucceeds() {
-        stubJsonTestFolderOwnership();
-        DataOperator<JsonTestEntity> operator =
-                jsonStore.getOperator(jsonDataFolder, JsonTestEntity.class);
+        DataOperator<JsonTestEntity> operator = jsonOperator();
 
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, scope);
@@ -422,12 +407,6 @@ class PluginManagerAopWiringTest {
             @Override
             public String getStoreType() {
                 return "fake-jdbc-timed";
-            }
-
-            @Override
-            public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(
-                    com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin, Class<T> dataEntity) {
-                throw new UnsupportedOperationException("not needed by this test");
             }
 
             @Override

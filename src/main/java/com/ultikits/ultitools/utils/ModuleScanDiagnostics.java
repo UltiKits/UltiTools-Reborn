@@ -30,8 +30,9 @@ import org.jetbrains.annotations.ApiStatus;
  * auto-reports any {@link Level#SEVERE} record carrying a {@link Throwable} into
  * {@code ErrorReportCollector} — which would turn this per-module summary into an error report
  * and risk the circular logging both classes' javadoc already warns about. The summary emitted by
- * {@link #emitSummary(String)} deliberately carries no {@link Throwable} for the same reason; the
- * individual causes live only on the per-class {@link Level#FINE} detail recorded by {@link
+ * {@link #emitSummary(String)} deliberately carries no {@link Throwable} for the same reason: it
+ * names each cause's type and message as text, and the stack traces live only on the per-class
+ * {@link Level#FINE} detail recorded by {@link
  * #recordSkippedClass(String, String, Throwable)}. Disabling parent handlers also disconnects this
  * logger from the console/{@code logs/latest.log} sink the server installs on the root logger, so a
  * {@link PluginLoggerBridge} forwards the records to the plugin's own logger (#557) -- the summary
@@ -96,7 +97,7 @@ public final class ModuleScanDiagnostics {
         }
         SKIPPED_CLASSES_BY_MODULE
                 .computeIfAbsent(moduleName, key -> new CopyOnWriteArrayList<>())
-                .add(className);
+                .add(describeFailure(className, cause));
         DIAGNOSTICS_LOGGER.log(Level.FINE,
                 "Module '" + moduleName + "' could not load scanned class '" + className + "'", cause);
     }
@@ -119,10 +120,55 @@ public final class ModuleScanDiagnostics {
         }
         String message = "Module '" + moduleName + "' skipped " + skipped.size()
                 + " class(es) that failed to load during startup and continued loading without "
-                + "them: " + String.join(", ", skipped) + ". This usually means the module was "
-                + OLDER_API_CAUSE + " or the server API is older than the module requires -- "
-                + COMPATIBILITY_POINTER + ".";
+                + "them: " + String.join(", ", skipped)
+                + " -- " + COMPATIBILITY_POINTER + ".";
         DIAGNOSTICS_LOGGER.log(Level.SEVERE, message);
+    }
+
+    private static String describeFailure(String className, Throwable cause) {
+        boolean frameworkMismatch = false;
+        Throwable cursor = cause;
+        for (int depth = 0; cursor != null && depth < 8; depth++, cursor = cursor.getCause()) {
+            String message = cursor.getMessage();
+            if (message == null) {
+                continue;
+            }
+            String normalized = message.trim().replace('/', '.');
+            if (cursor instanceof NoClassDefFoundError || cursor instanceof ClassNotFoundException) {
+                // A failed initializer ("Could not initialize class ...") is not an absent type.
+                if (normalized.indexOf(' ') >= 0) {
+                    continue;
+                }
+                if (isServerClass(normalized)) {
+                    return className + " (missing server class " + normalized
+                            + "; handlers/signatures requiring this class are unavailable on this server)";
+                }
+                frameworkMismatch |= normalized.startsWith("com.ultikits.ultitools.");
+            } else if (cursor instanceof IncompatibleClassChangeError) {
+                frameworkMismatch |= normalized.contains("com.ultikits.ultitools.");
+            }
+        }
+        return frameworkMismatch ? className + " (" + OLDER_API_CAUSE + " -- " + COMPATIBILITY_POINTER + ")"
+                : className + " (class linkage failed" + inlineCause(cause) + ")";
+    }
+
+    /**
+     * The per-class detail is logged at {@link Level#FINE}, which a default console hides, so the
+     * summary names the caught failure itself rather than pointing at a line the operator cannot see.
+     */
+    private static String inlineCause(Throwable cause) {
+        if (cause == null) {
+            return "";
+        }
+        String message = cause.getMessage();
+        return ": " + cause.getClass().getName()
+                + (message == null || message.trim().isEmpty() ? "" : ": " + message.trim());
+    }
+
+    private static boolean isServerClass(String name) {
+        return name.startsWith("org.bukkit.") || name.startsWith("io.papermc.")
+                || name.startsWith("com.destroystokyo.") || name.startsWith("org.spigotmc.")
+                || name.startsWith("net.kyori.") || name.startsWith("co.aikar.");
     }
 
     private static boolean isBlank(String value) {

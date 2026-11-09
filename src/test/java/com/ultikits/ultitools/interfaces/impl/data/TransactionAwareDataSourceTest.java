@@ -13,19 +13,20 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 
 @DisplayName("TransactionAwareDataSource Tests")
 class TransactionAwareDataSourceTest {
 
     private DataSource delegate;
-    private TransactionManager txManager;
+    private JdbcTransactionManager txManager;
     private TransactionAwareDataSource txDataSource;
 
     @BeforeEach
     void setUp() {
         delegate = mock(DataSource.class);
-        txManager = mock(TransactionManager.class);
+        txManager = mock(JdbcTransactionManager.class);
         txDataSource = new TransactionAwareDataSource(delegate, () -> txManager);
     }
 
@@ -95,6 +96,20 @@ class TransactionAwareDataSourceTest {
 
             assertThat(conn).isSameAs(delegateConn);
         }
+    }
+
+    @Test
+    @DisplayName("An active non-JDBC transaction manager is refused with UnsupportedOperationException")
+    void activeNonJdbcManagerIsRefused() {
+        TransactionManager lifecycleOnly = mock(TransactionManager.class);
+        when(lifecycleOnly.hasActiveTransaction()).thenReturn(true);
+        TransactionAwareDataSource ds = new TransactionAwareDataSource(delegate, () -> lifecycleOnly);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(ds::getConnection)
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(JdbcTransactionManager.class.getName());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> ds.getConnection("u", "p"))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Nested

@@ -197,14 +197,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * reports and player events consult it on their way to the cloud (see
      * {@link SensitiveCommandRegistry}). Final and created with the plugin instance, before the early
      * log capture and before any module loads, so it exists for every caller whether or not the server
-     * is linked; it starts empty and is never replaced, so no registration is lost across a reload.
+     * is linked; it starts with the framework's own {@code ulticloud} command only (as of 6.4.0, see
+     * {@link SensitiveCommandRegistry#withFrameworkCommands()}) and is never replaced, so no registration is lost
+     * across a reload.
      *
      * @since 6.3.1
      */
     // PMD.FieldDeclarationsShouldBeAtStartOfClass: same rationale as remoteActionLog above.
     @Getter
     @SuppressWarnings("PMD.FieldDeclarationsShouldBeAtStartOfClass")
-    private final SensitiveCommandRegistry sensitiveCommandRegistry = new SensitiveCommandRegistry();
+    private final SensitiveCommandRegistry sensitiveCommandRegistry = SensitiveCommandRegistry.withFrameworkCommands();
     /**
      * The single-owner registry a module uses to claim a request/response responder for a panel
      * message type the framework itself does not own (WIRE-16, D-26/D-27), reached via
@@ -371,7 +373,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // JAR, and decided after the modules load (initPluginModules). Their log lines wait for
         // the language to be loaded.
         moduleFileTransactions = new ModuleFileTransactions(getDataFolder());
-        ultiToolsClassLoader = new URLClassLoader(getModuleUrls(), getClassLoader());
+        ultiToolsClassLoader = new ModuleClassLoader(getModuleUrls(), getClassLoader(), getServerJar());
         this.eventBus = new EventBus();
 
         if (!initDependencies()) {
@@ -388,6 +390,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // Plan 22-21 (S-60): the player-link API exists before the modules that set its handler load.
         cloudFeatures = CloudFeatures.start(this);
         initPluginModules();
+        ((ModuleClassLoader) ultiToolsClassLoader).logRewriteCounts(getLogger());
         migrateCapabilitiesConfig();
         initWebSocketManagers();
         startMetrics(this, 8652, getLogger());
@@ -542,7 +545,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             file.mkdirs();
         }
         try {
-            loadModulesThenObserve(moduleFileTransactions, () -> pluginManager.init(ultiToolsClassLoader),
+            loadModulesThenObserve(moduleFileTransactions, () -> initModulesWithAudit(ultiToolsClassLoader, pluginManager, getLogger()),
                     pluginManager::getPluginList);
         } catch (IOException e) {
             // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this is
@@ -553,6 +556,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } finally {
             moduleFileTransactions.flushReports(getLogger(), this::i18n);
         }
+    }
+
+    /** Startup seam: diagnostics never change PluginManager's bean decisions. */
+    static void initModulesWithAudit(URLClassLoader loader, PluginManager manager, Logger logger)
+            throws IOException {
+        if (loader instanceof ModuleClassLoader) {
+            ModuleClassLoader modules = (ModuleClassLoader) loader;
+            modules.auditModules(logger);
+            manager.setModuleScanObserver((mainClass, roots) -> modules.reportModule(mainClass, roots, logger));
+        }
+        manager.init(loader);
     }
 
     /** The module loading step {@link #loadModulesThenObserve} wraps. */

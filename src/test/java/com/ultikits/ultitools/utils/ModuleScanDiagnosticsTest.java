@@ -67,6 +67,55 @@ class ModuleScanDiagnosticsTest {
         diagnosticsLogger.removeHandler(captureHandler);
     }
 
+    @Test
+    void missingServerClassIsNamedWithoutBlamingFrameworkAge() {
+        String module = "server-gap-" + System.nanoTime();
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.LoginListener",
+                new IllegalStateException("validation", new NoClassDefFoundError(
+                        "io/papermc/paper/event/player/PlayerSwapWithEquipmentSlotEvent")));
+        ModuleScanDiagnostics.emitSummary(module);
+        String message = withLevel(Level.SEVERE).get(0).getMessage();
+        assertTrue(message.contains("io.papermc.paper.event.player.PlayerSwapWithEquipmentSlotEvent"));
+        assertTrue(message.contains("fixture.LoginListener"));
+        assertFalse(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE));
+    }
+
+    @Test
+    void genuineFrameworkMismatchKeepsItsExistingAdvice() {
+        String module = "framework-gap-" + System.nanoTime();
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.LegacyBean",
+                new NoSuchMethodError("com.ultikits.ultitools.abstracts.UltiToolsPlugin.removed()V"));
+        ModuleScanDiagnostics.emitSummary(module);
+        assertTrue(withLevel(Level.SEVERE).get(0).getMessage().contains(ModuleScanDiagnostics.OLDER_API_CAUSE));
+    }
+
+    @Test
+    void thirdPartyAndOrdinaryFailuresAreNotCalledFrameworkMismatches() {
+        String module = "other-gap-" + System.nanoTime();
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.OptionalBean",
+                new NoClassDefFoundError("third/party/Absent"));
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.BrokenBean", new LinkageError("ordinary failure"));
+        ModuleScanDiagnostics.emitSummary(module);
+        String message = withLevel(Level.SEVERE).get(0).getMessage();
+        assertTrue(message.contains("fixture.OptionalBean"));
+        assertTrue(message.contains("fixture.BrokenBean"));
+        assertFalse(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE));
+    }
+
+    @Test
+    void ordinaryFailureNamesItsCauseInTheSummaryBecauseTheFineDetailIsHiddenByDefault() {
+        String module = "inline-cause-" + System.nanoTime();
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.BrokenBean",
+                new NoClassDefFoundError("Could not initialize class fixture.Helper"));
+        ModuleScanDiagnostics.recordSkippedClass(module, "fixture.NoCause", null);
+        ModuleScanDiagnostics.emitSummary(module);
+        String message = withLevel(Level.SEVERE).get(0).getMessage();
+        assertTrue(message.contains("fixture.BrokenBean (class linkage failed: java.lang.NoClassDefFoundError: "
+                + "Could not initialize class fixture.Helper)"), message);
+        assertTrue(message.contains("fixture.NoCause (class linkage failed)"), message);
+        assertFalse(message.contains("per-class diagnostic"), message);
+    }
+
     private List<LogRecord> withLevel(Level level) {
         List<LogRecord> result = new ArrayList<>();
         for (LogRecord record : captured) {
@@ -106,7 +155,7 @@ class ModuleScanDiagnosticsTest {
     }
 
     @Test
-    void missingServerApiNamesBothPossibleCausesWithoutChangingSkipPolicy() {
+    void missingServerApiNamesTheMissingTypeWithoutChangingSkipPolicy() {
         String moduleName = "server-api-module-" + System.nanoTime();
         String className = "com.example.NewServerListener";
         ModuleScanDiagnostics.recordSkippedClass(moduleName, className,
@@ -117,10 +166,11 @@ class ModuleScanDiagnosticsTest {
         assertEquals(1, severe.size());
         String message = severe.get(0).getMessage();
         assertTrue(message.contains(className), message);
-        assertTrue(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE), message);
-        assertTrue(message.contains("the server API is older than the module requires"), message);
+        assertFalse(message.contains(ModuleScanDiagnostics.OLDER_API_CAUSE), message);
+        assertTrue(message.contains("missing server class org.bukkit.event.player.PlayerInputEvent"), message);
+        assertTrue(message.contains("handlers/signatures requiring this class are unavailable on this server"), message);
         assertTrue(message.contains("continued loading without them"), message);
-        assertTrue(message.contains("COMPATIBILITY.md"), message);
+        assertTrue(message.contains("https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md"), message);
         assertTrue(severe.get(0).getThrown() == null, "summary must not submit a throwable");
     }
 

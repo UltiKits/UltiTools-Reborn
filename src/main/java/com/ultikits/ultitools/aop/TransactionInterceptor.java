@@ -7,7 +7,9 @@ import java.util.logging.Logger;
 import com.ultikits.ultitools.annotations.Isolation;
 import com.ultikits.ultitools.annotations.Propagation;
 import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.ultikits.ultitools.manager.JsonTransactionManager;
 
 /**
  * AOP interceptor that implements declarative transaction management.
@@ -298,11 +300,11 @@ public class TransactionInterceptor implements MethodInterceptor {
         try {
             Isolation isolation = tx.isolation();
             if (isolation != Isolation.DEFAULT) {
-                transactionManager.setIsolationLevel(isolation.getLevel());
+                setIsolationLevel(isolation.getLevel());
             }
 
             if (tx.readOnly()) {
-                transactionManager.setReadOnly(true);
+                setReadOnly();
             }
 
             if (tx.timeout() > 0) {
@@ -319,6 +321,41 @@ public class TransactionInterceptor implements MethodInterceptor {
                 }
             }
             throw settingsFailure;
+        }
+    }
+
+    /**
+     * Applies an isolation level through the two manager types that support one: {@link
+     * JdbcTransactionManager} and the JSON backend's {@link JsonTransactionManager}. Any other
+     * manager is refused with the same {@link UnsupportedOperationException} the base interface's
+     * deprecated {@code setIsolationLevel(int)} default threw before it was removed in 6.4.0.
+     */
+    private void setIsolationLevel(int level) {
+        if (transactionManager instanceof JdbcTransactionManager) {
+            ((JdbcTransactionManager) transactionManager).setIsolationLevel(level);
+        } else if (transactionManager instanceof JsonTransactionManager) {
+            ((JsonTransactionManager) transactionManager).setIsolationLevel(level);
+        } else {
+            throw new UnsupportedOperationException(
+                    "setIsolationLevel(int) is JDBC-specific and not supported by this "
+                            + "TransactionManager. Implement " + JdbcTransactionManager.class.getName()
+                            + " to provide it.");
+        }
+    }
+
+    /**
+     * Marks the transaction read-only, dispatched like {@link #setIsolationLevel(int)}.
+     */
+    private void setReadOnly() {
+        if (transactionManager instanceof JdbcTransactionManager) {
+            ((JdbcTransactionManager) transactionManager).setReadOnly(true);
+        } else if (transactionManager instanceof JsonTransactionManager) {
+            ((JsonTransactionManager) transactionManager).setReadOnly(true);
+        } else {
+            throw new UnsupportedOperationException(
+                    "setReadOnly(boolean) is JDBC-specific and not supported by this "
+                            + "TransactionManager. Implement " + JdbcTransactionManager.class.getName()
+                            + " to provide it.");
         }
     }
 
