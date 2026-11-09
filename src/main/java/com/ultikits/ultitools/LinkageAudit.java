@@ -1,5 +1,6 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.context.ComponentScanner;
 import net.bytebuddy.jar.asm.ClassReader;
 import net.bytebuddy.jar.asm.ClassVisitor;
 import net.bytebuddy.jar.asm.ConstantDynamic;
@@ -25,7 +26,6 @@ import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
-import java.util.logging.Logger;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -36,12 +36,14 @@ import java.util.function.Predicate;
  * Reflection, string lookups, NMS and behaviour behind unchanged signatures are out of scope.
  */
 final class LinkageAudit {
+    static final int EXIT_FINDINGS = 1;
+    static final int EXIT_USAGE = 2;
+    static final int EXIT_IO = 3;
+    private static final String USAGE =
+            "Usage: LinkageAudit --api <api.jar[:dependency.jar...]> [--own <package/prefix/>]... <module.jar>...";
+
     private LinkageAudit() {
         // Utility class; use the static audit entry points.
-    }
-
-    static List<Finding> scan(File module, ClassLoader api, List<ClassRewriteRule> rules) throws IOException {
-        return inspect(module, api, rules).findings;
     }
 
     static Audit inspect(File module, ClassLoader api, List<ClassRewriteRule> rules) throws IOException {
@@ -106,17 +108,17 @@ final class LinkageAudit {
         }
     }
 
-    static void warn(File module, ClassLoader api, List<ClassRewriteRule> rules, Logger logger) throws IOException {
-        for (Finding finding : scan(module, api, rules)) {
-            logger.warning(finding.message(module.getName()));
-        }
-    }
-
     /**
      * Explicit API paths never inherit the host process's Paper API. Additional API jars are repeatable.
      * The --api index must include every runtime dependency whose classes the audited code extends
      * or calls: the server API and its transitive dependencies, plus the audited artifact's own
      * provided/runtime dependencies.
+     * <p>
+     * Exit status: 0 when no own-code reference is unresolved, {@value #EXIT_FINDINGS} when one is,
+     * {@value #EXIT_USAGE} for invalid arguments, and {@value #EXIT_IO} when an API path or module
+     * JAR does not exist or cannot be read, so a caller can tell findings from a failed run.
+     * An {@code --own} root is a package, in slash or dotted form, matched on a package boundary
+     * exactly as start-up matches a module's scan roots.
      */
     static int run(String[] arguments, PrintStream output) throws IOException {
         List<URL> apis = new ArrayList<>();
@@ -125,20 +127,30 @@ final class LinkageAudit {
         for (int i = 0; i < arguments.length; i++) {
             if ("--api".equals(arguments[i]) && i + 1 < arguments.length) {
                 for (String path : arguments[++i].split(java.util.regex.Pattern.quote(File.pathSeparator))) {
-                    apis.add(new File(path).toURI().toURL());
+                    File api = new File(path);
+                    if (!api.exists()) {
+                        output.println("LinkageAudit: API path does not exist: " + path);
+                        return EXIT_IO;
+                    }
+                    apis.add(api.toURI().toURL());
                 }
             } else if ("--own".equals(arguments[i]) && i + 1 < arguments.length) {
-                ownRoots.add(arguments[++i]);
+                String root = ownRoot(arguments[++i]);
+                if (root.isEmpty()) {
+                    output.println(USAGE);
+                    return EXIT_USAGE;
+                }
+                ownRoots.add(root);
             } else if (arguments[i].startsWith("--")) {
-                output.println("Usage: LinkageAudit --api <api.jar[:dependency.jar...]> [--own <package/prefix/>]... <module.jar>...");
-                return 2;
+                output.println(USAGE);
+                return EXIT_USAGE;
             } else {
                 modules.add(new File(arguments[i]));
             }
         }
         if (apis.isEmpty() || modules.isEmpty()) {
-            output.println("Usage: LinkageAudit --api <api.jar[:dependency.jar...]> [--own <package/prefix/>]... <module.jar>...");
-            return 2;
+            output.println(USAGE);
+            return EXIT_USAGE;
         }
         // The executing framework supplies its own API, but never supplies a fallback server API.
         apis.add(LinkageAudit.class.getProtectionDomain().getCodeSource().getLocation());
@@ -146,14 +158,30 @@ final class LinkageAudit {
         try (URLClassLoader loader = new URLClassLoader(apis.toArray(new URL[0]), null);
                 ModuleClassLoader moduleLoader = new ModuleClassLoader(new URL[0], loader, null)) {
             for (File module : modules) {
-                Audit audit = moduleLoader.inspect(module);
+                Audit audit;
+                try {
+                    audit = moduleLoader.inspect(module);
+                } catch (IOException unreadable) {
+                    output.println("LinkageAudit: cannot read module JAR " + module + ": " + unreadable);
+                    return EXIT_IO;
+                }
                 if (audit.report(module.getName(), caller -> ownRoots.isEmpty()
-                        || ownRoots.stream().anyMatch(caller::startsWith), output::println, output::println)) {
-                    status = 1;
+                        || ownRoots.stream().anyMatch(root -> ComponentScanner.matchesPackage(caller, root)),
+                        output::println, output::println)) {
+                    status = EXIT_FINDINGS;
                 }
             }
         }
         return status;
+    }
+
+    /** Normalises a slash or dotted package root to the dotted form start-up passes to the scanner. */
+    private static String ownRoot(String argument) {
+        String root = argument.trim().replace('/', '.');
+        while (root.endsWith(".")) {
+            root = root.substring(0, root.length() - 1);
+        }
+        return root;
     }
 
     /** The enclosing type is package-private; this launcher is not a published Java API. */
@@ -230,7 +258,10 @@ final class LinkageAudit {
         }
 
         String message(String module) {
-            String member = reference.getName() == null ? "" : "." + reference.getName() + reference.getDescriptor();
+            // Method descriptors start with '(' and read naturally after the name; a field
+            // descriptor needs a separator, as in javap's name:descriptor form.
+            String member = reference.getName() == null ? "" : "." + reference.getName()
+                    + (reference.getDescriptor().startsWith("(") ? "" : ":") + reference.getDescriptor();
             return "Module '" + module + "': " + referringClass.replace('/', '.') + "." + referringMember
                     + (line > 0 ? " (line " + line + ")" : "") + " references "
                     + reference.getOwner().replace('/', '.') + member + ": " + String.join(", ", problems)

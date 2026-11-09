@@ -30,8 +30,9 @@ import org.jetbrains.annotations.ApiStatus;
  * auto-reports any {@link Level#SEVERE} record carrying a {@link Throwable} into
  * {@code ErrorReportCollector} — which would turn this per-module summary into an error report
  * and risk the circular logging both classes' javadoc already warns about. The summary emitted by
- * {@link #emitSummary(String)} deliberately carries no {@link Throwable} for the same reason; the
- * individual causes live only on the per-class {@link Level#FINE} detail recorded by {@link
+ * {@link #emitSummary(String)} deliberately carries no {@link Throwable} for the same reason: it
+ * names each cause's type and message as text, and the stack traces live only on the per-class
+ * {@link Level#FINE} detail recorded by {@link
  * #recordSkippedClass(String, String, Throwable)}. Disabling parent handlers also disconnects this
  * logger from the console/{@code logs/latest.log} sink the server installs on the root logger, so a
  * {@link PluginLoggerBridge} forwards the records to the plugin's own logger (#557) -- the summary
@@ -148,7 +149,20 @@ public final class ModuleScanDiagnostics {
             }
         }
         return frameworkMismatch ? className + " (" + OLDER_API_CAUSE + " -- " + COMPATIBILITY_POINTER + ")"
-                : className + " (class linkage failed; see the per-class diagnostic for its cause)";
+                : className + " (class linkage failed" + inlineCause(cause) + ")";
+    }
+
+    /**
+     * The per-class detail is logged at {@link Level#FINE}, which a default console hides, so the
+     * summary names the caught failure itself rather than pointing at a line the operator cannot see.
+     */
+    private static String inlineCause(Throwable cause) {
+        if (cause == null) {
+            return "";
+        }
+        String message = cause.getMessage();
+        return ": " + cause.getClass().getName()
+                + (message == null || message.trim().isEmpty() ? "" : ": " + message.trim());
     }
 
     private static boolean isServerClass(String name) {
