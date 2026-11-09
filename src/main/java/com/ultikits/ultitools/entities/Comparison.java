@@ -30,15 +30,20 @@ public enum Comparison {
      * {@code double} that needs 16 or 17 significant digits is stored and compared with 15. A number that
      * agrees with a stored {@code float} to 15 significant digits but differs after them compares as
      * equal to it; pass a {@code float} value for a {@code float} field. That holds
-     * for a value that is a finite number; an infinite value, a number beyond the range of a
-     * {@code double} and text are compared as bound, and a NaN value matches no row. On MySQL
+     * for a value that is a finite number; a number beyond the range of a {@code double} and text are
+     * compared as bound. On MySQL
      * such a default text column is compared the way MySQL compares text with a number, in double
      * precision, so whole numbers beyond plus or minus 9,007,199,254,740,992 (2^53) compare
      * approximately; declare the column with a numeric {@code type} (for example {@code BIGINT}) for
      * exact results there. On JSON the values are compared as {@code double}, also approximate beyond
-     * plus or minus 9,007,199,254,740,992, and an infinite or NaN value throws
-     * {@code IllegalArgumentException}, because it cannot be written as JSON. A field of any other
-     * type is compared as the database compares the stored text.
+     * plus or minus 9,007,199,254,740,992. A field of any other type is compared as the database
+     * compares the stored text.
+     * <p>
+     * As of 6.4.0 a {@code null} value, and an infinite or NaN {@code Double} or {@code Float}, is
+     * refused under this and every other comparison on every backend with a
+     * {@link com.ultikits.ultitools.exceptions.DataAccessException}
+     * ({@code DATA_ENTITY_INVALID}); see {@code DataOperator#updateIf} for the one {@code null}
+     * meaning that remains.
      */
     GREATER,
     /**

@@ -112,6 +112,27 @@ class SkippedBeanDiagnosticsTest implements Opcodes {
     }
 
     @Test
+    void skippedBeanWithoutHandlersGetsNoHandlerIsolationAdvice() throws Exception {
+        write(BASE, type(BASE, "java.lang.Object"));
+        ClassWriter bean = type(BEAN, BASE);
+        MethodVisitor plain = bean.visitMethod(ACC_PUBLIC, "useOptional",
+                "(L" + MISSING.replace('.', '/') + ";)V", null, null);
+        plain.visitCode();
+        plain.visitInsn(RETURN);
+        plain.visitMaxs(0, 2);
+        plain.visitEnd();
+        write(BEAN, bean);
+        try (BlockingLoader loader = loader(MISSING)) {
+            SimpleContainer container = container(loader.loadClass(BEAN));
+            assertDoesNotThrow(container::refresh);
+            List<LogRecord> consequences = consequences();
+            assertEquals(1, consequences.size(), "the skip itself is still explained");
+            assertTrue(consequences.get(0).getMessage().contains("unregistered @EventHandler methods: none."));
+            assertTrue(guidance().isEmpty(), "no handlers were lost, so handler-isolation advice is noise");
+        }
+    }
+
+    @Test
     void healthyBeanWithTheSameHandlersDoesNotEmitSkipConsequencesOrGuidance() throws Exception {
         writeFixture(MISSING);
         try (BlockingLoader loader = loader(null)) {

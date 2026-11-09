@@ -81,10 +81,6 @@ final class ModuleClassLoader extends URLClassLoader {
     }
 
     /** Uses exactly the rule snapshot that class definition uses, also for the offline entry point. */
-    List<LinkageAudit.Finding> audit(File module) throws IOException {
-        return LinkageAudit.scan(module, getParent(), rules);
-    }
-
     LinkageAudit.Audit inspect(File module) throws IOException {
         return LinkageAudit.inspect(module, getParent(), rules);
     }

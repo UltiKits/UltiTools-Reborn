@@ -125,25 +125,26 @@ class SimpleJsonDataOperatorTest {
         }
 
         /**
-         * Known-limitation pin, not a contract (#815): on the JSON backend an {@code EQUAL} condition
-         * with a null value and {@code del(WhereCondition.empty())} still throw a raw
-         * {@link NullPointerException}. COMPATIBILITY.md documents that module authors must not pass
-         * either. A later change that refuses them with a typed {@code DataAccessException} replaces
-         * these assertions; it is not a regression.
+         * As of 6.4.0 (#815) an {@code EQUAL} condition with a null value and
+         * {@code del(WhereCondition.empty())} are refused with {@code DataAccessException}
+         * ({@code DATA_ENTITY_INVALID}), as on SQLite and MySQL; 6.3.x threw a raw
+         * {@link NullPointerException}. An empty condition still means "no filter" for the reads.
          */
         @Test
-        void knownLimitationEqualNullAndEmptyDeleteStillThrowNullPointerException() {
+        void equalNullAndEmptyDeleteAreRefusedWithTheTypedException() {
             operator.insert(new TestData("null-guard", "kept", 1));
             WhereCondition equalNull = condition(Comparison.EQUAL, null);
-            assertThatThrownBy(() -> operator.getAll(equalNull)).isInstanceOf(NullPointerException.class);
-            assertThatThrownBy(() -> operator.exist(equalNull)).isInstanceOf(NullPointerException.class);
-            assertThatThrownBy(() -> operator.page(1, 10, equalNull)).isInstanceOf(NullPointerException.class);
-            assertThatThrownBy(() -> operator.del(equalNull)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> operator.getAll(equalNull)).isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode()).isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
+            assertThatThrownBy(() -> operator.exist(equalNull)).isInstanceOf(DataAccessException.class);
+            assertThatThrownBy(() -> operator.page(1, 10, equalNull)).isInstanceOf(DataAccessException.class);
+            assertThatThrownBy(() -> operator.del(equalNull)).isInstanceOf(DataAccessException.class);
             assertThat(operator.getAll(WhereCondition.empty())).hasSize(1);
             assertThat(operator.getAll(new WhereCondition[0])).isEmpty();
             assertThat(operator.exist()).isFalse();
             assertThat(operator.page(1, 10)).isEmpty();
-            assertThatThrownBy(() -> operator.del(WhereCondition.empty())).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> operator.del(WhereCondition.empty())).isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode()).isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
             assertThat(operator.getById("null-guard")).isNotNull();
         }
 

@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.interfaces.impl.data;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.SoftAssertions.assertSoftly;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -92,12 +91,8 @@ class SqliteFloatThresholdTest {
     // Deliberate: the exact decimal expansion of the float 0.1f, not the shortest text 0.1.
     @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
     static final List<Object[]> NUMBER_CASES = Collections.unmodifiableList(Arrays.asList(
-            new Object[]{Comparison.GREATER, Float.POSITIVE_INFINITY},
-            new Object[]{Comparison.LESS, Float.POSITIVE_INFINITY},
-            new Object[]{Comparison.GREATER, Float.NEGATIVE_INFINITY},
-            new Object[]{Comparison.LESS, Float.NEGATIVE_INFINITY},
-            new Object[]{Comparison.GREATER, Double.POSITIVE_INFINITY},
-            new Object[]{Comparison.LESS, Double.NEGATIVE_INFINITY},
+            // An infinite or NaN Float or Double is refused on every backend as of 6.4.0 (#696); the
+            // refusal is pinned here (nonFiniteThresholdsAreRefused) and in ConditionValueParityTest.
             new Object[]{Comparison.GREATER, new BigDecimal("1E+400")},
             new Object[]{Comparison.LESS, new BigDecimal("1E+400")},
             new Object[]{Comparison.GREATER, new BigDecimal("-1E+400")},
@@ -111,6 +106,10 @@ class SqliteFloatThresholdTest {
             new Object[]{Comparison.LESS, (short) 20},
             new Object[]{Comparison.GREATER, (byte) 1},
             new Object[]{Comparison.LESS, Long.MAX_VALUE},
+            // Double thresholds a float holds exactly, so H2's single-precision REAL compares them as Java does;
+            // RealSqlite#finiteDoubleThresholdsFollowJava covers doubles a float cannot hold.
+            new Object[]{Comparison.GREATER, 0.5},
+            new Object[]{Comparison.LESS, -1.0},
             new Object[]{Comparison.LESS, 0.1f},
             new Object[]{Comparison.GREATER, 1.1f},
             new Object[]{Comparison.LESS, 3.3f},
@@ -352,7 +351,7 @@ class SqliteFloatThresholdTest {
         }
 
         @Test
-        @DisplayName("del weight GREATER +Infinity or GREATER BigDecimal 1E+400 deletes nothing, on both columns")
+        @DisplayName("del weight GREATER BigDecimal 1E+400 or BigInteger 10^400 deletes nothing, on both columns")
         // The assertions are made through assertSoftly in the check helper this test calls.
         @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void delGreaterThanEveryFloatDeletesNothing() {
@@ -362,8 +361,7 @@ class SqliteFloatThresholdTest {
 
         private <R extends BaseDataEntity<String> & WeightRow> void checkDelDeletesNothing(
                 DataOperator<R> op, Supplier<R> factory, String column) {
-            List<Object> thresholds = Arrays.asList(Float.POSITIVE_INFINITY, Double.POSITIVE_INFINITY,
-                    new BigDecimal("1E+400"), BigInteger.TEN.pow(400));
+            List<Object> thresholds = Arrays.<Object>asList(new BigDecimal("1E+400"), BigInteger.TEN.pow(400));
             assertSoftly(softly -> {
                 for (Object threshold : thresholds) {
                     List<R> rows = insertFixture(op, factory);
@@ -377,10 +375,10 @@ class SqliteFloatThresholdTest {
         }
 
         @Test
-        @DisplayName("updateIf weight LESS +Infinity writes every finite row, on both columns")
+        @DisplayName("updateIf weight LESS BigDecimal 1E+400 writes every finite row, on both columns")
         // The assertions are made through assertSoftly in the check helper this test calls.
         @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
-        void updateIfLessThanInfinityWrites() {
+        void updateIfLessThanAnOutOfRangeNumberWrites() {
             bothColumns(() -> checkUpdateIfWrites(defaultOperator(), DefaultRow::new, "default column"),
                     () -> checkUpdateIfWrites(realOperator(), RealRow::new, "REAL column"));
         }
@@ -391,7 +389,7 @@ class SqliteFloatThresholdTest {
             List<String> applied = new ArrayList<>();
             for (R row : rows) {
                 row.setMarker("changed");
-                if (op.updateIf(row, weight(Comparison.LESS, Float.POSITIVE_INFINITY))) {
+                if (op.updateIf(row, weight(Comparison.LESS, new BigDecimal("1E+400")))) {
                     applied.add(row.getCode());
                 }
             }
@@ -403,9 +401,9 @@ class SqliteFloatThresholdTest {
             }
             removeRows(op, rows);
             assertSoftly(softly -> {
-                softly.assertThat(applied).as("%s: updateIf weight LESS +Infinity applied", column)
+                softly.assertThat(applied).as("%s: updateIf weight LESS 1E+400 applied", column)
                         .containsExactlyInAnyOrderElementsOf(allCodes());
-                softly.assertThat(written).as("%s: rows written by updateIf weight LESS +Infinity", column)
+                softly.assertThat(written).as("%s: rows written by updateIf weight LESS 1E+400", column)
                         .containsExactlyInAnyOrderElementsOf(allCodes());
             });
         }
@@ -542,20 +540,33 @@ class SqliteFloatThresholdTest {
         }
 
         @Test
-        @DisplayName("del weight LESS -Infinity and NaN thresholds delete nothing; the text is not touched")
-        void nonFiniteThresholdsDeleteNothing() {
-            List<Object[]> cases = Arrays.asList(
-                    new Object[]{Comparison.LESS, Float.NEGATIVE_INFINITY},
-                    new Object[]{Comparison.GREATER, Float.NaN},
-                    new Object[]{Comparison.LESS, Double.NaN});
+        @DisplayName("an infinite or NaN threshold is refused (6.4.0, #696) on both columns; del deletes nothing")
+        // The assertions are made through assertSoftly in the check helper this test calls.
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
+        void nonFiniteThresholdsAreRefused() {
+            bothColumns(() -> checkNonFiniteRefused(defaultOperator, DefaultRow::new, "default column"),
+                    () -> checkNonFiniteRefused(realOperator, RealRow::new, "REAL column"));
+        }
+
+        private <R extends BaseDataEntity<String> & WeightRow> void checkNonFiniteRefused(
+                DataOperator<R> op, Supplier<R> factory, String column) {
+            List<Object> values = Arrays.asList(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NaN,
+                    Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN);
             assertSoftly(softly -> {
-                for (Object[] c : cases) {
-                    List<DefaultRow> rows = insertFixture(defaultOperator, DefaultRow::new);
-                    defaultOperator.del(weight((Comparison) c[0], c[1]));
-                    softly.assertThat(codesOf(defaultOperator.getAll()))
-                            .as("rows left after del %s", describe((Comparison) c[0], c[1]))
-                            .containsExactlyInAnyOrderElementsOf(allCodes());
-                    removeRows(defaultOperator, rows);
+                for (Object value : values) {
+                    for (Comparison comparison : Arrays.asList(Comparison.GREATER, Comparison.LESS)) {
+                        List<R> rows = insertFixture(op, factory);
+                        WhereCondition condition = weight(comparison, value);
+                        String what = describe(comparison, value);
+                        softly.assertThatThrownBy(() -> op.getAll(condition))
+                                .as("%s: getAll %s", column, what).isInstanceOf(DataAccessException.class);
+                        softly.assertThatThrownBy(() -> op.del(condition))
+                                .as("%s: del %s", column, what).isInstanceOf(DataAccessException.class);
+                        softly.assertThat(codesOf(op.getAll()))
+                                .as("%s: rows left after del %s", column, what)
+                                .containsExactlyInAnyOrderElementsOf(allCodes());
+                        removeRows(op, rows);
+                    }
                 }
             });
         }
@@ -655,12 +666,12 @@ class SqliteFloatThresholdTest {
     }
 
     /**
-     * JSON's existing behaviour, recorded, not changed: Gson refuses to write an infinite or NaN value
-     * as JSON, so a condition with one throws {@link IllegalArgumentException} as soon as it is
-     * evaluated, under any comparison, and nothing is deleted or written.
+     * JSON refuses an infinite or NaN value under any comparison with the typed exception the relational
+     * backends throw (6.4.0, #696; 6.3.x threw Gson's {@link IllegalArgumentException}), and nothing is
+     * deleted or written.
      */
     @Nested
-    @DisplayName("JSON (an infinite or NaN value throws)")
+    @DisplayName("JSON (an infinite or NaN value is refused)")
     class Json {
         @TempDir
         Path tempDir;
@@ -674,7 +685,7 @@ class SqliteFloatThresholdTest {
         }
 
         @Test
-        @DisplayName("getAll, exist, page, del and updateIf with +Infinity, -Infinity or NaN throw; nothing changes")
+        @DisplayName("getAll, exist, page, del and updateIf with +Infinity, -Infinity or NaN are refused; nothing changes")
         void nonFiniteValuesThrow() {
             List<DefaultRow> rows = new ArrayList<>();
             for (Map.Entry<String, Float> entry : FIXTURE.entrySet()) {
@@ -686,24 +697,24 @@ class SqliteFloatThresholdTest {
             }
             DefaultRow first = rows.get(0);
             List<Object> values = Arrays.asList(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NaN,
-                    Double.POSITIVE_INFINITY, Double.NaN);
+                    Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN);
             assertSoftly(softly -> {
                 for (Object value : values) {
                     for (Comparison comparison : Arrays.asList(Comparison.GREATER, Comparison.LESS, Comparison.EQUAL)) {
                         WhereCondition condition = weight(comparison, value);
                         String what = describe(comparison, value);
                         softly.assertThatThrownBy(() -> operator.getAll(condition)).as("getAll %s", what)
-                                .isInstanceOf(IllegalArgumentException.class)
-                                .hasMessageContaining("is not a valid double value as per JSON specification");
+                                .isInstanceOf(DataAccessException.class)
+                                .hasMessageContaining("non-finite value");
                         softly.assertThatThrownBy(() -> operator.exist(condition)).as("exist %s", what)
-                                .isInstanceOf(IllegalArgumentException.class);
+                                .isInstanceOf(DataAccessException.class);
                         softly.assertThatThrownBy(() -> operator.page(1, 10, condition)).as("page %s", what)
-                                .isInstanceOf(IllegalArgumentException.class);
+                                .isInstanceOf(DataAccessException.class);
                         softly.assertThatThrownBy(() -> operator.del(condition)).as("del %s", what)
-                                .isInstanceOf(IllegalArgumentException.class);
+                                .isInstanceOf(DataAccessException.class);
                         first.setMarker("changed");
                         softly.assertThatThrownBy(() -> operator.updateIf(first, condition)).as("updateIf %s", what)
-                                .isInstanceOf(IllegalArgumentException.class);
+                                .isInstanceOf(DataAccessException.class);
                     }
                 }
             });
@@ -717,13 +728,23 @@ class SqliteFloatThresholdTest {
         }
 
         @Test
-        @DisplayName("updateIf on a row that does not exist returns false before it evaluates the value")
-        void updateIfOnMissingRowReturnsFalse() {
+        @DisplayName("updateIf refuses a non-finite value before it looks for the row, as SQLite and MySQL do")
+        void updateIfOnMissingRowRefusesANonFiniteValue() {
             DefaultRow missing = new DefaultRow();
             missing.setUp("missing", 1.0f);
             missing.setId(UUID.randomUUID().toString());
-            assertThat(operator.updateIf(missing, weight(Comparison.LESS, Float.POSITIVE_INFINITY)))
-                    .as("updateIf weight LESS +Infinity on a missing id").isFalse();
+            List<Object> values = Arrays.asList(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NaN,
+                    Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN);
+            assertSoftly(softly -> {
+                for (Object value : values) {
+                    for (Comparison comparison : Arrays.asList(Comparison.GREATER, Comparison.LESS, Comparison.EQUAL)) {
+                        softly.assertThatThrownBy(() -> operator.updateIf(missing, weight(comparison, value)))
+                                .as("updateIf %s on a missing id", describe(comparison, value))
+                                .isInstanceOf(DataAccessException.class);
+                    }
+                }
+            });
+            assertThat(operator.getAll()).as("rows after the refused updateIf calls").isEmpty();
         }
     }
 }

@@ -240,6 +240,31 @@ def artifact_paths():
             for kind, suffix in (('main', ''), ('sources', '-sources'), ('javadoc', '-javadoc'))}
 
 
+def plugin_version(group, artifact):
+    # The single source of truth for plugin versions is the project POM. A literal copy here
+    # went stale on a Dependabot bump (surefire 3.6.0 -> 3.6.1, japicmp 0.26.5 -> 0.27.0).
+    ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+    pom = ET.parse(ROOT / 'pom.xml').getroot()
+    versions = {plugin.findtext('m:version', namespaces=ns) for plugin in pom.iter('{%s}plugin' % ns['m'])
+                if (plugin.findtext('m:groupId', namespaces=ns) or 'org.apache.maven.plugins') == group
+                and plugin.findtext('m:artifactId', namespaces=ns) == artifact}
+    require(len(versions) == 1 and None not in versions and '${' not in next(iter(versions)),
+            'Missing, ambiguous or unresolved plugin version in project POM: %s:%s %s' % (group, artifact, versions))
+    return versions.pop()
+
+
+def mojo(group, artifact, goal, execution):
+    return (group, artifact, plugin_version(group, artifact), goal, execution)
+
+
+def lifecycle_mojos():
+    return {'compiler': mojo('org.apache.maven.plugins', 'maven-compiler-plugin', 'compile',
+                             'compile-deprecation-buildtools'),
+            'surefire': mojo('org.apache.maven.plugins', 'maven-surefire-plugin', 'test', 'default-test'),
+            'japicmp': mojo('com.github.siom79.japicmp', 'japicmp-maven-plugin', 'cmp', 'default'),
+            'generator': mojo('org.codehaus.mojo', 'exec-maven-plugin', 'java', 'generate-deprecation-registry')}
+
+
 def check_artifact(path, kind):
     require(path.is_file(), 'Missing exact %s artifact: %s' % (kind, path))
     with zipfile.ZipFile(path) as archive:
@@ -325,11 +350,10 @@ def mojo_pair(events, identity):
 def check_lifecycle(log, mode, root, started=None, observation=None):
     # log is retained for diagnostics ONLY. Test stdout cannot create execution evidence.
     events = read_observation(observation, root)
-    compiler = mojo_pair(events, ('org.apache.maven.plugins', 'maven-compiler-plugin', '3.16.0',
-                                  'compile', 'compile-deprecation-buildtools'))
-    japicmp = mojo_pair(events, ('com.github.siom79.japicmp', 'japicmp-maven-plugin', '0.26.5', 'cmp', 'default'))
-    generator = mojo_pair(events, ('org.codehaus.mojo', 'exec-maven-plugin', '3.6.4',
-                                   'java', 'generate-deprecation-registry'))
+    mojos = lifecycle_mojos()
+    compiler = mojo_pair(events, mojos['compiler'])
+    japicmp = mojo_pair(events, mojos['japicmp'])
+    generator = mojo_pair(events, mojos['generator'])
     positions = [int(event['sequence']) for pair in (compiler, japicmp, generator) for event in pair]
     project_start = next(int(event['sequence']) for event in events if event['type'] == 'ProjectStarted')
     project_end = next(int(event['sequence']) for event in events if event['type'] == 'ProjectSucceeded')
@@ -357,7 +381,7 @@ def check_lifecycle(log, mode, root, started=None, observation=None):
                       'true' if mode == 'skip-compilation' else 'false')
     require(all((event.get('skipTests'), event.get('mavenTestSkip')) == expected_flags
                 for event in events[1:]), 'Wrong native test flags')
-    mojo_pair(events, ('org.apache.maven.plugins', 'maven-surefire-plugin', '3.6.0', 'test', 'default-test'))
+    mojo_pair(events, mojos['surefire'])
     reports = list((root / 'target/surefire-reports').glob('TEST-*.xml'))
     if mode == 'skip-compilation':
         require(not (root / 'target/test-classes').exists(), 'Clean skip-compilation used test output')
@@ -590,11 +614,11 @@ def self_test():
                   'skipTests': 'false', 'mavenTestSkip': 'true', 'sessionErrors': 'false'}
         events = [{'type': 'ObserverStarted'}, dict(common, type='SessionStarted'),
                   dict(common, type='ProjectStarted')]
+        # Fake events take their versions from the project POM, as check_lifecycle does, so this
+        # fixture cannot drift from the build; a POM/checker mismatch is caught by the mutation below.
+        mojos = lifecycle_mojos()
         for group, artifact, version, goal, execution in (
-                ('org.apache.maven.plugins', 'maven-compiler-plugin', '3.16.0', 'compile', 'compile-deprecation-buildtools'),
-                ('org.apache.maven.plugins', 'maven-surefire-plugin', '3.6.0', 'test', 'default-test'),
-                ('com.github.siom79.japicmp', 'japicmp-maven-plugin', '0.26.5', 'cmp', 'default'),
-                ('org.codehaus.mojo', 'exec-maven-plugin', '3.6.4', 'java', 'generate-deprecation-registry')):
+                mojos['compiler'], mojos['surefire'], mojos['japicmp'], mojos['generator']):
             mojo = dict(common, groupId=group, artifactId=artifact, version=version, goal=goal, executionId=execution,
                         arguments=str(product), **{'config.outputDirectory': str(product / 'target/buildtools-classes'),
                         'config.mainClass': 'com.ultikits.ultitools.buildtools.deprecation.DeprecationRegistryGenerator'})
@@ -613,9 +637,9 @@ def self_test():
         save(events)
         noise = '\n'.join([
             'DeprecationRegistryGenerator: wrote fixture output',
-            '[INFO] --- exec-maven-plugin:3.6.4:java (generate-deprecation-registry) @ fixture ---',
-            '[INFO] --- japicmp-maven-plugin:0.26.5:cmp (default) @ fixture ---',
-            'maven-compiler-plugin:3.16.0:compile (compile-deprecation-buildtools)',
+            '[INFO] --- exec-maven-plugin:%s:java (generate-deprecation-registry) @ fixture ---' % mojos['generator'][2],
+            '[INFO] --- japicmp-maven-plugin:%s:cmp (default) @ fixture ---' % mojos['japicmp'][2],
+            'maven-compiler-plugin:%s:compile (compile-deprecation-buildtools)' % mojos['compiler'][2],
             'Tests run: 99999, Failures: 0, Errors: 0, Skipped: 0',
             json.dumps(events[-1])])
         check_lifecycle(noise, 'skip-compilation', product, observation=observation)
@@ -651,6 +675,11 @@ def self_test():
         mutation('duplicate generator', lambda rows: rows.insert(11, dict(rows[10])), 'native mojo')
         mutation('failed generator', lambda rows: rows[10].update(type='MojoFailed'), 'failed or skipped')
         mutation('wrong compiler identity', lambda rows: rows[3].update(version='other'), 'native mojo')
+        # A build whose plugin version differs from the POM (the stale-literal defect) is rejected.
+        mutation('surefire version differs from POM', lambda rows: [row.update(version='0.0.0') for row in rows[5:7]],
+                 'maven-surefire-plugin')
+        mutation('japicmp version differs from POM', lambda rows: [row.update(version='0.0.0') for row in rows[7:9]],
+                 'japicmp-maven-plugin')
         mutation('wrong compiler output', lambda rows: rows[3].update(**{'config.outputDirectory': str(fixture)}), 'compiler output')
         mutation('wrong generator argument', lambda rows: rows[9].update(arguments=str(fixture)), 'basedir argument')
         mutation('wrong output attribution', lambda rows: rows[10].update(**{'deprecations.json.path': str(fixture)}), 'registry path')

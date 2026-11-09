@@ -1,6 +1,7 @@
 """Mechanical isolation contracts for the offline framework CI audit helper."""
 
 import contextlib
+import dataclasses
 import importlib.util
 import io
 import os
@@ -45,8 +46,13 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             added = AUDIT.framework_resolution([safe] + forbidden + [safe], [])
         self.assertEqual([safe.path], added)
-        self.assertEqual(5, output.getvalue().count("forbidden server entry"))
+        self.assertEqual(len(AUDIT.SERVER_PREFIXES) + 1, output.getvalue().count("forbidden server entry"))
         self.assertIn("Framework resolution-only JARs (1):", output.getvalue())
+
+    def test_guard_covers_every_namespace_the_java_audit_treats_as_api(self):
+        for prefix in ("org/bukkit/", "io/papermc/", "com/destroystokyo/", "net/kyori/",
+                       "co/aikar/", "org/spigotmc/", "com/ultikits/ultitools/"):
+            self.assertIn(prefix, AUDIT.SERVER_PREFIXES)
 
     def test_excludes_whole_modern_graph_even_for_other_versions(self):
         paper = self.jar("paper-api", group="io.papermc.paper")
@@ -70,11 +76,24 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
                 "   fixture:test:jar:1:test:" + str(jar.path),
                 "   fixture:system:jar:1:system:" + str(jar.path),
                 "   fixture:bom:pom:1:compile:" + str(jar.path),
+                "   fixture:optional:jar:2:compile:" + str(jar.path) + " (optional) -- module optional",
+                "   fixture:optional-plain:jar:3:runtime:" + str(jar.path) + " (optional)",
             ]), encoding="utf-8")
 
         with patch.object(AUDIT.subprocess, "run", side_effect=resolve):
             found = AUDIT.resolve_dependencies(self.root / "pom.xml", self.root, "compile")
-        self.assertEqual([("fixture", "dep"), ("fixture", "classified")], [item.key for item in found])
+        self.assertEqual([("fixture", "dep"), ("fixture", "classified"), ("fixture", "optional"),
+                          ("fixture", "optional-plain")], [item.key for item in found])
+        self.assertEqual(["1", "1", "2", "3"], [item.version for item in found])
+
+    def test_old_graph_must_resolve_the_pinned_paper_line(self):
+        pinned = "1.19.2-R0.1-20221206.184705-189"
+        old = AUDIT.Dependency("io.papermc.paper", "paper-api", self.root / "p.jar", "1.19.2-R0.1-SNAPSHOT")
+        AUDIT.require_pinned_paper([old], pinned)
+        modern = AUDIT.Dependency("io.papermc.paper", "paper-api", self.root / "p.jar", "1.21.11-R0.1-SNAPSHOT")
+        for graph in ([modern], [], [old, modern]):
+            with self.assertRaises(ValueError):
+                AUDIT.require_pinned_paper(graph, pinned)
 
     def test_resolution_failure_cannot_reuse_stale_output(self):
         output = self.root / "dependencies-runtime.txt"
@@ -119,7 +138,7 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
                                            managed=True)).getroot()
         self.assertIsNotNone(modern.find("m:dependencyManagement", AUDIT.NAMESPACE))
 
-    def test_main_uses_old_graph_first_and_only_framework_as_subject(self):
+    def main_fixture(self):
         framework = self.jar("framework")
         supplemental = self.jar("sqlite-jdbc")
         old = self.jar("paper-api", group="io.papermc.paper")
@@ -128,7 +147,6 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
         project = parse_xml_string('''<project xmlns="http://maven.apache.org/POM/4.0.0">
           <version>1</version><dependencies><dependency><groupId>io.papermc.paper</groupId>
           <artifactId>paper-api</artifactId><version>modern</version></dependency></dependencies></project>''')
-        invocations = []
         original_cwd = Path.cwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, original_cwd)
@@ -139,8 +157,26 @@ class FrameworkLinkageClasspathTest(unittest.TestCase):
                 return [modern]
             if directory.name == "framework":
                 return [supplemental]
-            return [old_child, old]
+            pinned_base = directory.name.rsplit("-", 2)[0] + "-SNAPSHOT"
+            return [old_child, dataclasses.replace(old, version=pinned_base)]
 
+        return framework, supplemental, old, old_child, project, resolve
+
+    def test_nonzero_java_exit_propagates_through_entry(self):
+        framework, _, _, _, project, resolve = self.main_fixture()
+        for status in (1, 3):
+            with patch.object(AUDIT, "parse_xml", return_value=element_tree.ElementTree(project)), \
+                    patch.object(AUDIT, "resolve_dependencies", side_effect=resolve), \
+                    patch.object(AUDIT.subprocess, "run",
+                                 side_effect=subprocess.CalledProcessError(status, "java")), \
+                    patch.object(sys, "argv", [str(SCRIPT), str(framework.path)]), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(status, AUDIT.entry())
+            self.assertNotIn("0 unresolved references", output.getvalue())
+
+    def test_main_uses_old_graph_first_and_only_framework_as_subject(self):
+        framework, supplemental, old, old_child, project, resolve = self.main_fixture()
+        invocations = []
         with patch.object(AUDIT, "parse_xml", return_value=element_tree.ElementTree(project)), \
                 patch.object(AUDIT, "resolve_dependencies", side_effect=resolve), \
                 patch.object(AUDIT.subprocess, "run", side_effect=lambda args, **kw: invocations.append(args)), \

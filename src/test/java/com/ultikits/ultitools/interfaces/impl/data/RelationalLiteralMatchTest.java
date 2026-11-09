@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.interfaces.impl.data;
 
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.SoftAssertions.assertSoftly;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -40,6 +41,7 @@ import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataOperator.LikeType;
 import com.ultikits.ultitools.interfaces.impl.data.json.SimpleJsonDataOperator;
@@ -58,7 +60,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * throwaway local database), and JSON, which already matched literally and is the parity oracle.
  * Expected sets come from Java's {@code contains}, {@code startsWith} and {@code endsWith} over the
  * fixture, never from hand-written lists. The pins prove that {@code getLike}, {@code Query#like},
- * {@code EQUAL}, a {@code null} INCLUDE value and each backend's letter case are unchanged.
+ * {@code EQUAL} and each backend's letter case are unchanged, and that a {@code null} INCLUDE value is refused (6.4.0).
  */
 @DisplayName("Literal INCLUDE / STARTSWITH / ENDSWITH on every backend (#675)")
 class RelationalLiteralMatchTest {
@@ -412,31 +414,29 @@ class RelationalLiteralMatchTest {
         }
 
         @Test
-        @DisplayName("getLike, Query#like, EQUAL and a null INCLUDE value keep their behaviour")
+        @DisplayName("getLike, Query#like and EQUAL keep their behaviour; a null INCLUDE value is refused")
         void unchangedOperatorsKeepTheirBehaviour() {
             List<LiteralRow> rows = insertFixture();
             List<String> getLike = labelsOf(operator().getLike("label", "world_", LikeType.START));
-            List<String> queryLike = relational()
-                    ? labelsOf(operator().query().where("label").like("world_%").list()) : null;
-            List<String> equal = relational()
-                    ? labelsOf(operator().getAll(condition(Comparison.EQUAL, "world_"))) : null;
-            List<String> includeNull = relational()
-                    ? labelsOf(operator().getAll(condition(Comparison.INCLUDE, null))) : null;
+            List<String> queryLike = labelsOf(operator().query().where("label").like("world_%").list());
+            List<String> equal = labelsOf(operator().getAll(condition(Comparison.EQUAL, "world_")));
+            // As of 6.4.0 (#815) a null INCLUDE value is refused on every backend, no longer read as the text "null".
+            Throwable includeNull = catchThrowable(() -> operator().getAll(condition(Comparison.INCLUDE, null)));
             removeRows(rows);
 
             assertSoftly(softly -> {
                 if (relational()) {
                     softly.assertThat(getLike).as("getLike START world_ is a pattern")
                             .containsExactlyInAnyOrder("world_", "worldX", "world_1");
-                    softly.assertThat(queryLike).as("Query#like world_% is a pattern")
-                            .containsExactlyInAnyOrder("world_", "worldX", "world_1");
-                    softly.assertThat(equal).as("EQUAL world_").containsExactly("world_");
-                    softly.assertThat(includeNull).as("INCLUDE null renders the text null")
-                            .containsExactly("nullable");
                 } else {
                     softly.assertThat(getLike).as("JSON getLike START world_ (its existing literal result)")
                             .containsExactlyInAnyOrder("world_", "world_1");
                 }
+                // Query#like filters in memory on every backend, so its pattern result is the same on JSON.
+                softly.assertThat(queryLike).as("Query#like world_% is a pattern")
+                        .containsExactlyInAnyOrder("world_", "worldX", "world_1");
+                softly.assertThat(equal).as("EQUAL world_").containsExactly("world_");
+                softly.assertThat(includeNull).as("INCLUDE null is refused").isInstanceOf(DataAccessException.class);
             });
         }
 
