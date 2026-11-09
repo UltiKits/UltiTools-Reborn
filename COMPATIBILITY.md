@@ -146,8 +146,11 @@ Login, Panel Integration, Player Link) explain each part in prose.
   replace each other's connection (close 4000), and after three replacements the framework stops reconnecting.
 - `UltiCloudRequests.post` and `.get`, the 6.3.0 helper that made UltiLogin's `/panel` magic-link calls,
   answer every call with `PATH_NOT_ALLOWED` and send nothing (one INFO line per run). UltiLogin 2.0.0's
-  `/panel` therefore stops working on 6.3.1; its `/login` keeps working. UltiLogin 2.1.0, released with
-  6.3.1, uses `CloudPlayerLinks` instead and is required for `/panel`. There is no bridge for 2.0.0.
+  `/panel` therefore stops working on 6.3.1; its `/login` keeps working. UltiLogin 2.1.0 uses
+  `CloudPlayerLinks` instead and is required for `/panel`. It was not released with 6.3.1: it is released
+  before UltiTools-API 6.4.0 and works on 6.3.1 or later. Operators upgrading to 6.4.0 must upgrade UltiLogin
+  to 2.1.0 first, because 2.0.0's `/panel` references `SimpleHttpClient` and `UltiCloudRequests`, removed in
+  6.4.0 (its `/login` is unaffected). There is no bridge for 2.0.0.
 
 ### New public API
 
