@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.interfaces.impl.data;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.SoftAssertions.assertSoftly;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -107,6 +106,10 @@ class SqliteFloatThresholdTest {
             new Object[]{Comparison.LESS, (short) 20},
             new Object[]{Comparison.GREATER, (byte) 1},
             new Object[]{Comparison.LESS, Long.MAX_VALUE},
+            // Double thresholds a float holds exactly, so H2's single-precision REAL compares them as Java does;
+            // RealSqlite#finiteDoubleThresholdsFollowJava covers doubles a float cannot hold.
+            new Object[]{Comparison.GREATER, 0.5},
+            new Object[]{Comparison.LESS, -1.0},
             new Object[]{Comparison.LESS, 0.1f},
             new Object[]{Comparison.GREATER, 1.1f},
             new Object[]{Comparison.LESS, 3.3f},
@@ -537,26 +540,33 @@ class SqliteFloatThresholdTest {
         }
 
         @Test
-        @DisplayName("an infinite or NaN threshold is refused (6.4.0, #696); del deletes nothing")
+        @DisplayName("an infinite or NaN threshold is refused (6.4.0, #696) on both columns; del deletes nothing")
+        // The assertions are made through assertSoftly in the check helper this test calls.
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void nonFiniteThresholdsAreRefused() {
-            List<Object[]> cases = Arrays.asList(
-                    new Object[]{Comparison.LESS, Float.NEGATIVE_INFINITY},
-                    new Object[]{Comparison.GREATER, Float.POSITIVE_INFINITY},
-                    new Object[]{Comparison.GREATER, Float.NaN},
-                    new Object[]{Comparison.LESS, Double.NaN},
-                    new Object[]{Comparison.LESS, Double.POSITIVE_INFINITY});
+            bothColumns(() -> checkNonFiniteRefused(defaultOperator, DefaultRow::new, "default column"),
+                    () -> checkNonFiniteRefused(realOperator, RealRow::new, "REAL column"));
+        }
+
+        private <R extends BaseDataEntity<String> & WeightRow> void checkNonFiniteRefused(
+                DataOperator<R> op, Supplier<R> factory, String column) {
+            List<Object> values = Arrays.asList(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NaN,
+                    Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN);
             assertSoftly(softly -> {
-                for (Object[] c : cases) {
-                    List<DefaultRow> rows = insertFixture(defaultOperator, DefaultRow::new);
-                    WhereCondition condition = weight((Comparison) c[0], c[1]);
-                    softly.assertThatThrownBy(() -> defaultOperator.getAll(condition))
-                            .as("getAll %s", describe((Comparison) c[0], c[1])).isInstanceOf(DataAccessException.class);
-                    softly.assertThatThrownBy(() -> defaultOperator.del(condition))
-                            .as("del %s", describe((Comparison) c[0], c[1])).isInstanceOf(DataAccessException.class);
-                    softly.assertThat(codesOf(defaultOperator.getAll()))
-                            .as("rows left after del %s", describe((Comparison) c[0], c[1]))
-                            .containsExactlyInAnyOrderElementsOf(allCodes());
-                    removeRows(defaultOperator, rows);
+                for (Object value : values) {
+                    for (Comparison comparison : Arrays.asList(Comparison.GREATER, Comparison.LESS)) {
+                        List<R> rows = insertFixture(op, factory);
+                        WhereCondition condition = weight(comparison, value);
+                        String what = describe(comparison, value);
+                        softly.assertThatThrownBy(() -> op.getAll(condition))
+                                .as("%s: getAll %s", column, what).isInstanceOf(DataAccessException.class);
+                        softly.assertThatThrownBy(() -> op.del(condition))
+                                .as("%s: del %s", column, what).isInstanceOf(DataAccessException.class);
+                        softly.assertThat(codesOf(op.getAll()))
+                                .as("%s: rows left after del %s", column, what)
+                                .containsExactlyInAnyOrderElementsOf(allCodes());
+                        removeRows(op, rows);
+                    }
                 }
             });
         }
@@ -687,7 +697,7 @@ class SqliteFloatThresholdTest {
             }
             DefaultRow first = rows.get(0);
             List<Object> values = Arrays.asList(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NaN,
-                    Double.POSITIVE_INFINITY, Double.NaN);
+                    Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN);
             assertSoftly(softly -> {
                 for (Object value : values) {
                     for (Comparison comparison : Arrays.asList(Comparison.GREATER, Comparison.LESS, Comparison.EQUAL)) {
@@ -723,8 +733,18 @@ class SqliteFloatThresholdTest {
             DefaultRow missing = new DefaultRow();
             missing.setUp("missing", 1.0f);
             missing.setId(UUID.randomUUID().toString());
-            assertThatThrownBy(() -> operator.updateIf(missing, weight(Comparison.LESS, Float.POSITIVE_INFINITY)))
-                    .as("updateIf weight LESS +Infinity on a missing id").isInstanceOf(DataAccessException.class);
+            List<Object> values = Arrays.asList(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NaN,
+                    Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN);
+            assertSoftly(softly -> {
+                for (Object value : values) {
+                    for (Comparison comparison : Arrays.asList(Comparison.GREATER, Comparison.LESS, Comparison.EQUAL)) {
+                        softly.assertThatThrownBy(() -> operator.updateIf(missing, weight(comparison, value)))
+                                .as("updateIf %s on a missing id", describe(comparison, value))
+                                .isInstanceOf(DataAccessException.class);
+                    }
+                }
+            });
+            assertThat(operator.getAll()).as("rows after the refused updateIf calls").isEmpty();
         }
     }
 }

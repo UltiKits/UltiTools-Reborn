@@ -213,6 +213,8 @@ class ConditionValueParityTest {
         @DisplayName("a non-finite value is refused under every comparison by every call")
         void nonFiniteValueIsRefusedEverywhere() {
             ValueRow target = insert("kept", 5.0, "n");
+            // A refused updateIf must not write this label, so "change no row" covers updateIf too.
+            target.setLabel("changed");
             assertSoftly(softly -> {
                 for (Object value : NON_FINITE) {
                     for (Comparison comparison : Comparison.values()) {
