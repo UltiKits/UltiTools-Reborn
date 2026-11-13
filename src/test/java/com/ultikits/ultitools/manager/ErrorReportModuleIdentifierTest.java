@@ -63,7 +63,7 @@ class ErrorReportModuleIdentifierTest {
         MockBukkitHelper.safeUnmock();
     }
 
-    @org.junit.jupiter.api.Test
+    @Test
     void errorsUseTheNameFallbackWhenTheLoadedModuleHasNoValidIdentifyString() {
         UltiToolsPlugin chat = com.ultikits.ultitools.UltiTools.getInstance().getPluginManager()
                 .getPluginList().get(0);
