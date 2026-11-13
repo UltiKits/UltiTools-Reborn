@@ -136,7 +136,9 @@ public class PlayerCacheManager {
      *                                the three this manager can sweep (a {@code Map} keyed by
      *                                {@link UUID}, a {@code Set<UUID>}, or a {@code Map} whose
      *                                value is a {@link UUID}) -- an annotation that cannot take
-     *                                effect must fail loudly rather than be silently skipped.
+     *                                effect must fail loudly rather than be silently skipped;
+     *                                also if {@code saveBeforeRemove = true} but the bean does
+     *                                not implement {@link PlayerCacheSaver} (as of 6.5.0).
      */
     public void registerBean(Object bean) {
         if (isTracked(bean)) {
@@ -159,6 +161,13 @@ public class PlayerCacheManager {
                                 + field.getDeclaringClass().getName() + " has an unsupported "
                                 + "shape; PlayerCacheManager can only sweep Map<UUID, ?> "
                                 + "(key-side), Map<?, UUID> (value-side), and Set<UUID>");
+            }
+            if (annotation.saveBeforeRemove() && !(bean instanceof PlayerCacheSaver)) {
+                throw new PluginModuleException(ErrorCode.INVALID_ARGUMENT,
+                        "@PlayerCache field '" + field.getName() + "' declared on "
+                                + field.getDeclaringClass().getName() + " requests saveBeforeRemove = true, "
+                                + "but bean " + bean.getClass().getName()
+                                + " does not implement PlayerCacheSaver");
             }
             field.setAccessible(true); // NOPMD
             fields.add(new TrackedField(field, annotation.saveBeforeRemove(), shape));

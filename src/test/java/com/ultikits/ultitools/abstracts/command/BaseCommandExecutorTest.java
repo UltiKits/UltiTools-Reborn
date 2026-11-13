@@ -1103,6 +1103,37 @@ class BaseCommandExecutorTest {
         }
 
         @Test
+        @DisplayName("A throwing mapped invocation still starts the player's cooldown")
+        void throwingMappedMethodStillStartsCooldown() throws Exception {
+            CooldownValidator cooldown = new CooldownValidator(60);
+            ValidatorChain chain = ValidatorChain.builder().add(cooldown).build();
+            ThrowingCommandExecutor executor = new ThrowingCommandExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                executor.onCommand(mockPlayer, mockCommand, "throwing", new String[]{"boom"});
+            }
+
+            Method method = ThrowingCommandExecutor.class.getDeclaredMethod("doBoom", Player.class);
+            assertTrue(cooldown.getRemainingCooldown(player1UUID, executor, method.toString()) > 0,
+                    "a failed invocation must start cooldown just like a successful one");
+        }
+
+        @Test
+        @DisplayName("Dispatch refused before invocation does not start cooldown")
+        void refusedDispatchDoesNotStartCooldown() throws Exception {
+            CooldownValidator cooldown = new CooldownValidator(60);
+            RecordingValidator refusing = new RecordingValidator("refusing", 1000, false, null);
+            ValidatorChain chain = ValidatorChain.builder().add(cooldown).add(refusing).build();
+            ThrowingCommandExecutor executor = new ThrowingCommandExecutor(chain);
+
+            executor.onCommand(mockPlayer, mockCommand, "throwing", new String[]{"boom"});
+
+            Method method = ThrowingCommandExecutor.class.getDeclaredMethod("doBoom", Player.class);
+            assertEquals(0, cooldown.getRemainingCooldown(player1UUID, executor, method.toString()));
+        }
+
+        @Test
         @DisplayName("When the mapped method throws, validators that ran still receive their post-action call with success=false")
         void throwingMappedMethodStillInvokesPostActionWithFailureFlag() {
             RecordingValidator recorder = new RecordingValidator("recorder", 10, true, null);

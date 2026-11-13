@@ -5,6 +5,16 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Player cache save declarations (as of 6.5.0)
+
+A bean with `@PlayerCache(saveBeforeRemove = true)` must implement `PlayerCacheSaver`,
+including when the annotated field is inherited. Registration now throws `PluginModuleException`
+naming the bean class and field if the saver is missing, just as unsupported cache field shapes
+are refused. Previously the cache entry was silently removed without saving. Implement
+`savePlayerData(UUID)` or use `saveBeforeRemove = false` if no save is intended. A rejected
+bean is not added to cache tracking. Save failures still log a warning and remove the entry;
+this change adds no persistence or retry guarantee.
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
