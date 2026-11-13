@@ -154,6 +154,73 @@ class PanelDispatchHardeningTest {
         assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
     }
 
+    /**
+     * F-1 of the gate 2 review: `reload` is a shipped blocklist default, but `rl` is not, and the
+     * typed first word is all the admission check sees. Bukkit's reload command is not a
+     * {@code BaseCommandExecutor}, so the execution-time check never sees it either: the label has to
+     * be resolved through the server's command map before the dispatch, whichever way it is spelled.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"rl confirm", "bukkit:rl confirm", "reload confirm", "bukkit:reload confirm"})
+    void builtInAliasOfABlocklistedCommandIsRefused(String line) {
+        AtomicInteger reloads = new AtomicInteger();
+        Command reload = new Command("reload") {
+            @Override
+            public boolean execute(CommandSender sender, String label, String[] args) {
+                reloads.incrementAndGet();
+                return true;
+            }
+        };
+        reload.setAliases(Collections.singletonList("rl"));
+        server.getCommandMap().register("bukkit", reload);
+
+        accept(line);
+        // The direct spellings are refused at admission, so nothing reaches the server thread.
+        assertThat(mainThread).as("the alias form is only refused on the server thread")
+                .hasSize("rl confirm".equals(line) || "bukkit:rl confirm".equals(line) ? 1 : 0);
+        if (!mainThread.isEmpty()) {
+            mainThread.remove().run();
+        }
+
+        assertThat(reloads.get()).as("the alias must never reach the blocklisted command").isZero();
+        assertThat(channel.frames()).hasSize(2);
+        JsonObject result = channel.frames().get(1);
+        assertThat(result.get("type").getAsString()).isEqualTo("command.result");
+        JsonObject payload = result.getAsJsonObject("payload");
+        assertThat(payload.get("code").getAsString()).isEqualTo("command_blocked");
+        assertThat(payload.getAsJsonObject("details").get("matched").getAsString()).isEqualTo("reload");
+        assertThat(payload.get("message").getAsString()).contains("ultipanel.commands.blocklist");
+        assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
+    /**
+     * The control for the check above: resolving the label must not turn an ordinary alias into a
+     * refusal. Without it, refusing everything that resolves through the command map would pass.
+     */
+    @Test
+    void unblockedCommandStillRunsThroughItsAlias() {
+        AtomicInteger calls = new AtomicInteger();
+        Command friendly = new Command("friendly") {
+            @Override
+            public boolean execute(CommandSender sender, String label, String[] args) {
+                calls.incrementAndGet();
+                return true;
+            }
+        };
+        friendly.setAliases(Collections.singletonList("fr"));
+        server.getCommandMap().register("test", friendly);
+
+        accept("fr hello");
+        mainThread.remove().run();
+
+        assertThat(calls.get()).isEqualTo(1);
+        assertThat(channel.frames()).hasSize(2);
+        JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+        assertThat(payload.getAsJsonObject("data").has("output")).isTrue();
+        assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
     private void accept(String line) {
         JsonObject payload = new JsonObject();
         payload.addProperty("command", line);

@@ -11,7 +11,17 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
   `BaseCommandExecutor` checks both the invoked label and the resolved command name before help, validators or the
   command body. This covers aliases and synchronous wrappers that enter that executor. The existing in-body refusal
   of panel-issued `ulticloud login`, `login <code>` and `logout` remains independent of the configurable list.
-  A nested refusal is captured as ordinary command output; a direct refusal still returns `command_blocked`.
+  A nested refusal is captured as ordinary command output **only when the nested command keeps the panel's sender**: a
+  wrapper that re-dispatches as the console or as a player sends the refusal to that sender's chat or to the server
+  log instead, and the panel's `command.result` is `ok` with no refusal line. A direct refusal still returns
+  `command_blocked`.
+- **A blocklisted command is refused through its built-in alias too.** Immediately before dispatch, on the server
+  thread, the framework resolves the command line's label through the server's command map and checks the resolved
+  command's name against the same blocklist. `rl confirm` and `bukkit:rl confirm` are therefore answered
+  `command_blocked` although only `reload` is listed and Bukkit's reload command is not a framework command. A label
+  the server does not know keeps its admission decision, so nothing is refused merely for being unknown. A wrapper,
+  `execute run`, or a `commands.yml` alias whose eventual target is another command is still out of reach; see the
+  known limitations below.
 - **A command throwing an `Error` still gets a result after its acknowledgement.** Linkage failures return
   `command_failed`; other errors get that result before being rethrown to the server. The panel-origin scope is always
   restored, and late feedback follows the existing console-forwarding rules.
@@ -29,9 +39,10 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
 
 ### Known limitations of panel command hardening
 
-The blocklist is not a sandbox for other plugins or Minecraft's command dispatcher. It checks the outer request and
-nested calls entering `BaseCommandExecutor`; it cannot intercept a wrapper, `execute run`, or a `commands.yml` alias
-whose eventual target is a vanilla or third-party command outside that boundary. Add such wrapper names and aliases
+The blocklist is not a sandbox for other plugins or Minecraft's command dispatcher. It checks the outer request, the
+command the label resolves to just before dispatch, and nested calls entering `BaseCommandExecutor`; it cannot
+intercept a wrapper, `execute run`, or a `commands.yml` alias whose eventual target is a vanilla or third-party
+command outside that boundary. Add such wrapper names and aliases
 (including `execute`) to the blocklist if they must not be available to the panel. Other plugins can also schedule a
 command asynchronously or for a later tick; that later work does not inherit the synchronous panel-origin scope.
 Do not grant panel command access to untrusted operators, and do not treat these checks as protection from a malicious
@@ -602,9 +613,12 @@ take.
   example a blocklisted one) is the `message` of the `command_failed` error reply, not `data.output` of a
   `command.result`.
 - **The command blocklist is read when the request is admitted.** A request is checked against the blocklist at
-  admission, before it waits for the server thread, so a reload can race that outer check. As of 6.5.0 a command
-  entering `BaseCommandExecutor` also checks the current list at execution. Before 6.5.0, a command throwing an `Error`
-  (not an `Exception`) after its acknowledgement got no `command.result`; 6.5.0 answers it before propagating a fatal error.
+  admission, before it waits for the server thread, so a reload can race that outer check. As of 6.5.0 the resolved
+  command is also checked on the server thread just before dispatch, and a command entering `BaseCommandExecutor`
+  checks the current list at execution. Before 6.5.0, a command registered directly as a `Command` (not a
+  `PluginCommand`), or a failure inside the dispatcher itself, that threw an `Error` (not an `Exception`) after its
+  acknowledgement got no `command.result`; a `PluginCommand` already wrapped `Throwable` in `CommandException`, so
+  every framework and module command did get one. 6.5.0 answers it before propagating a fatal error.
 - **`server.power` is acknowledged before it is scheduled.** Its `ok` reply is sent first, and the stop or restart
   is scheduled to begin one second later. If UltiTools starts disabling between the reply and the scheduling, the
   action is dropped with only a FINE log line although the panel saw `ok`. Check the console and send the request

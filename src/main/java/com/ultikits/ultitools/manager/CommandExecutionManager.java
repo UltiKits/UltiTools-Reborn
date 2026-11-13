@@ -18,6 +18,8 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 
@@ -374,7 +376,7 @@ public class CommandExecutionManager {
         UltiTools.getInstance().getLogger().log(Level.INFO,
                 FrameworkText.format("[远程命令] > %s", shown));
         recordCommandDecision(shown, actor, null);
-        mainThread.execute(() -> executeCaptured(command, sink));
+        mainThread.execute(() -> executeCaptured(command, shown, actor, sink));
     }
 
     /**
@@ -522,7 +524,21 @@ public class CommandExecutionManager {
         }
     }
 
-    private void executeCaptured(String commandLine, CommandResultSink sink) {
+    private void executeCaptured(String commandLine, String shown, String actor, CommandResultSink sink) {
+        Command blocklisted = blocklistedTarget(commandLine);
+        if (blocklisted != null) {
+            // The admission check compares only the typed first word, so `rl` passes while the
+            // `reload` it resolves to is a shipped default, and Bukkit's ReloadCommand is not a
+            // BaseCommandExecutor, so the execution-time check never sees it either. Answer exactly
+            // as the admission check does, and do not dispatch.
+            String matched = blocklisted.getName().toLowerCase(Locale.ROOT);
+            AccessDecision decision = canonicalCommandDecision(matched + argumentsOf(commandLine));
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    FrameworkText.format("[远程命令] 已拦截: %s", shown));
+            recordCommandDecision(shown, actor, decision.getMessage());
+            sink.blocked(matched, resultMessage(decision.getMessage()));
+            return;
+        }
         // Paper's feedback sender shares the console's PermissibleBase, so the command runs with
         // console-equivalent permissions; both sendMessage(String) and sendMessage(Component)
         // arrive at the feedback object, which splits a component into one entry per printed line.
@@ -551,6 +567,79 @@ public class CommandExecutionManager {
         }
         BoundedLines bounded = boundLines(lines);
         sink.completed(bounded.lines, bounded.truncated, elapsed);
+    }
+
+    /**
+     * The blocklisted command a panel command line would actually reach, resolved through the
+     * server's command map. The admission check sees the typed first word only; the execution-time
+     * check in {@code BaseCommandExecutor} sees framework commands only. Between them lies every
+     * built-in alias of a non-framework command, and the one an operator types out of habit is
+     * {@code rl} for {@code reload}.
+     * <p>
+     * Both spellings are resolved: the label as typed (so {@code bukkit:rl} asks the map for
+     * {@code bukkit:rl}) and the namespace-free form the admission check uses. A label the server
+     * does not know resolves to nothing and keeps the admission decision, so unknown text is never
+     * refused here. This is not a sandbox: a wrapper, {@code execute run} and a {@code commands.yml}
+     * alias whose eventual target is another command are still out of reach, as the documented known
+     * limitations state.
+     *
+     * @param commandLine the canonical command line, dispatched unchanged
+     * @return the resolved command the blocklist refuses, or null when the line may run
+     */
+    private Command blocklistedTarget(String commandLine) {
+        String arguments = argumentsOf(commandLine);
+        for (Command target : resolvedTargets(commandLine)) {
+            if (!canonicalCommandDecision(target.getName() + arguments).isAllowed()) {
+                return target;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Every command the server's command map resolves this line's label to, at most two and at most
+     * one per distinct resolved name.
+     *
+     * @param commandLine the canonical command line
+     * @return the resolved commands, empty when there is no server or no command map
+     */
+    private static List<Command> resolvedTargets(String commandLine) {
+        if (Bukkit.getServer() == null) {
+            return Collections.emptyList();
+        }
+        CommandMap commandMap = Bukkit.getServer().getCommandMap();
+        if (commandMap == null) {
+            return Collections.emptyList();
+        }
+        List<Command> targets = new ArrayList<>(2);
+        addResolvedTarget(targets, commandMap.getCommand(label(commandLine)));
+        addResolvedTarget(targets, commandMap.getCommand(baseCommandName(commandLine)));
+        return targets;
+    }
+
+    /** Adds {@code resolved} unless an already-added command carries the same name. */
+    private static void addResolvedTarget(List<Command> targets, Command resolved) {
+        if (resolved == null) {
+            return;
+        }
+        for (Command known : targets) {
+            if (known.getName().equalsIgnoreCase(resolved.getName())) {
+                return;
+            }
+        }
+        targets.add(resolved);
+    }
+
+    /** The first token of a canonical command line, namespace included, or "" for an empty line. */
+    private static String label(String commandLine) {
+        int separator = commandLine.indexOf(' ');
+        return separator < 0 ? commandLine : commandLine.substring(0, separator);
+    }
+
+    /** The arguments of a canonical command line including the leading space, or "" without any. */
+    private static String argumentsOf(String commandLine) {
+        int separator = commandLine.indexOf(' ');
+        return separator < 0 ? "" : commandLine.substring(separator);
     }
 
     private static void commandFailed(String commandLine, CapturedFeedback feedback, CommandResultSink sink,
