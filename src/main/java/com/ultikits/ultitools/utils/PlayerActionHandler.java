@@ -7,6 +7,12 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.kyori.adventure.text.Component;
@@ -67,6 +73,9 @@ final class PlayerActionHandler implements CloudRequestHandler {
     static final String CODE_INTERNAL_ERROR = "internal_error";
     /** The result message used when another plugin cancels the teleport. */
     static final String TELEPORT_CANCELLED = "teleport was cancelled";
+    /** Reply before the gateway gives up, without cancelling the Bukkit operation. */
+    static final long TELEPORT_DEADLINE_MS = 25_000L;
+    static final String TELEPORT_TIMED_OUT = "teleport did not complete in time";
     /** The result message used when another plugin cancels the game mode change. */
     static final String GAME_MODE_CANCELLED = "game mode change was cancelled";
     /** The result message used when another plugin cancels the kick. */
@@ -93,6 +102,7 @@ final class PlayerActionHandler implements CloudRequestHandler {
 
     private final Executor mainThread;
     private final ActionAudit audit;
+    private final ScheduledExecutorService timers;
 
     /**
      * Creates the handler.
@@ -103,8 +113,14 @@ final class PlayerActionHandler implements CloudRequestHandler {
      *              to record nothing
      */
     PlayerActionHandler(Executor mainThread, ActionAudit audit) {
+        this(mainThread, audit, null);
+    }
+
+    /** Uses the existing cloud timer for teleport reply deadlines; null preserves the direct test port. */
+    PlayerActionHandler(Executor mainThread, ActionAudit audit, ScheduledExecutorService timers) {
         this.mainThread = mainThread;
         this.audit = audit;
+        this.timers = timers;
     }
 
     /**
@@ -262,7 +278,28 @@ final class PlayerActionHandler implements CloudRequestHandler {
             fail(channel, request, action, ex);
             return;
         }
-        pending.whenComplete((completed, error) -> completeTeleport(channel, request, action, completed, error));
+        if (timers == null) {
+            pending.whenComplete((completed, error) -> completeTeleport(channel, request, action, completed, error));
+            return;
+        }
+        AtomicBoolean answered = new AtomicBoolean();
+        ScheduledFuture<?> deadline;
+        try {
+            deadline = timers.schedule(() -> {
+                if (answered.compareAndSet(false, true)) {
+                    completeTeleport(channel, request, action, null, new TimeoutException(TELEPORT_TIMED_OUT));
+                }
+            }, TELEPORT_DEADLINE_MS, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException stopping) {
+            completeTeleport(channel, request, action, null, stopping);
+            return;
+        }
+        pending.whenComplete((completed, error) -> {
+            if (answered.compareAndSet(false, true)) {
+                deadline.cancel(false);
+                completeTeleport(channel, request, action, completed, error);
+            }
+        });
     }
 
     /**
@@ -295,7 +332,9 @@ final class PlayerActionHandler implements CloudRequestHandler {
     private void completeTeleport(CloudChannel channel, CloudRequest request, Action action,
                                   Boolean completed, Throwable error) {
         try {
-            if (error != null) {
+            if (error instanceof TimeoutException) {
+                deny(channel, request, action, CODE_INTERNAL_ERROR, TELEPORT_TIMED_OUT);
+            } else if (error != null) {
                 fail(channel, request, action, error);
             } else if (Boolean.TRUE.equals(completed)) {
                 succeed(channel, request, action);

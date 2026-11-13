@@ -39,7 +39,7 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public class CommandExecutionManager {
     /** Panel origin exists only inside synchronous main-thread dispatch, including nested commands. */
-    private static final ThreadLocal<Boolean> PANEL_DISPATCH = new ThreadLocal<>();
+    private static final ThreadLocal<CommandExecutionManager> PANEL_DISPATCH = new ThreadLocal<>();
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     /**
@@ -451,13 +451,42 @@ public class CommandExecutionManager {
      * @return true only during a panel dispatch, including synchronous nested dispatches
      */
     public static boolean isPanelDispatch() {
-        return Boolean.TRUE.equals(PANEL_DISPATCH.get());
+        return PANEL_DISPATCH.get() != null;
     }
 
-    /** Restores the caller's origin even when a nested dispatch throws. Both panel paths use this. */
-    private static boolean dispatchPanelCommand(CommandSender sender, String command) {
-        Boolean previous = PANEL_DISPATCH.get();
-        PANEL_DISPATCH.set(Boolean.TRUE);
+    /**
+     * Checks an actual framework command reached during synchronous panel dispatch, rather than
+     * attempting to predict how arbitrary aliases or third-party wrappers expand. Called before a
+     * BaseCommandExecutor runs help, validators or a body. The outer request's manager supplies the
+     * policy, including when the nested command changes sender. No origin is inherited by later tasks.
+     *
+     * @param sender receives a refusal as ordinary command feedback
+     * @param commandLine the resolved command name or invoked alias, followed by its arguments
+     * @return whether this panel-originated command was refused; false outside panel dispatch
+     * @since 6.5.0
+     */
+    public static boolean refusePanelCommand(CommandSender sender, String commandLine) {
+        CommandExecutionManager manager = PANEL_DISPATCH.get();
+        if (manager == null) {
+            return false;
+        }
+        AccessDecision decision = manager.isCommandAllowed(commandLine);
+        if (decision.isAllowed()) {
+            return false;
+        }
+        String canonical = canonicalCommandLine(commandLine);
+        String shown = loggedCommandLine(commandLine, canonical);
+        manager.recordCommandDecision(shown, "panel", decision.getMessage());
+        UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "[Remote command] Blocked a nested panel command: " + baseCommandName(canonical));
+        sender.sendMessage(resultMessage(decision.getMessage()));
+        return true;
+    }
+
+    /** Restores the caller's origin even when a nested dispatch throws. */
+    private boolean dispatchPanelCommand(CommandSender sender, String command) {
+        CommandExecutionManager previous = PANEL_DISPATCH.get();
+        PANEL_DISPATCH.set(this);
         try {
             return Bukkit.dispatchCommand(sender, command);
         } finally {
@@ -506,14 +535,13 @@ public class CommandExecutionManager {
         boolean accepted;
         try {
             accepted = dispatchPanelCommand(sender, commandLine);
-        } catch (Exception ex) {
-            feedback.take();
-            // The panel receives the message only, so the stack trace lives here or nowhere. The
-            // command name is logged without its arguments: an argument can carry a secret.
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.format("[远程命令] 命令执行异常: %s", baseCommandName(commandLine)), ex);
-            sink.failed(resultMessage(ex.getMessage()));
+        } catch (Exception | LinkageError ex) {
+            commandFailed(commandLine, feedback, sink, ex);
             return;
+        } catch (Error fatal) {
+            // Answer first, but never swallow a VM failure or other non-linkage Error.
+            commandFailed(commandLine, feedback, sink, fatal);
+            throw fatal;
         }
         List<String> lines = feedback.take();
         long elapsed = Math.min(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), MAX_EXECUTION_MS);
@@ -523,6 +551,15 @@ public class CommandExecutionManager {
         }
         BoundedLines bounded = boundLines(lines);
         sink.completed(bounded.lines, bounded.truncated, elapsed);
+    }
+
+    private static void commandFailed(String commandLine, CapturedFeedback feedback, CommandResultSink sink,
+                                      Throwable failure) {
+        feedback.take();
+        // The panel receives only the message. Keep the stack locally, without command arguments.
+        UltiTools.getInstance().getLogger().log(Level.WARNING,
+                FrameworkText.format("[远程命令] 命令执行异常: %s", baseCommandName(commandLine)), failure);
+        sink.failed(resultMessage(failure.getMessage()));
     }
 
     /**

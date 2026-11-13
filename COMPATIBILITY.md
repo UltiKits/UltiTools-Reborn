@@ -5,6 +5,49 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## UltiCloud client replies and panel-command boundaries (as of 6.5.0)
+
+- **Nested framework commands recheck the remote blocklist.** While a synchronous panel dispatch is active,
+  `BaseCommandExecutor` checks both the invoked label and the resolved command name before help, validators or the
+  command body. This covers aliases and synchronous wrappers that enter that executor. The existing in-body refusal
+  of panel-issued `ulticloud login`, `login <code>` and `logout` remains independent of the configurable list.
+  A nested refusal is captured as ordinary command output; a direct refusal still returns `command_blocked`.
+- **A command throwing an `Error` still gets a result after its acknowledgement.** Linkage failures return
+  `command_failed`; other errors get that result before being rethrown to the server. The panel-origin scope is always
+  restored, and late feedback follows the existing console-forwarding rules.
+- **An asynchronous teleport has a 25-second reply deadline.** If its future has not completed, `player.action.result`
+  reports `internal_error` with `teleport did not complete in time`. This stops waiting, not the teleport: the Bukkit
+  operation is not cancelled and may still take effect. Check the player's actual position before retrying. A late
+  completion never sends a second result. The deadline uses the existing cloud timer, not a per-request thread.
+- **Player-link events no longer get stuck behind a lost create answer.** Closing the connection or receiving an error
+  releases held completion ids for redelivery without restarting. Checking a saved receipt and claiming a completion
+  are atomic. A held completion or expiry is delivered only after the create future's callbacks have returned;
+  cancelling the caller's future cannot prevent transport cleanup. Already-running completion handlers remain
+  in flight across reconnects.
+- **Module capability versions use only the version core.** Digits in prerelease or build metadata no longer fill a
+  missing component: `2.0-rc1` and `2.0+build.9` both declare `2.0.0`, not `2.0.1` or `2.0.9`.
+
+### Known limitations of panel command hardening
+
+The blocklist is not a sandbox for other plugins or Minecraft's command dispatcher. It checks the outer request and
+nested calls entering `BaseCommandExecutor`; it cannot intercept a wrapper, `execute run`, or a `commands.yml` alias
+whose eventual target is a vanilla or third-party command outside that boundary. Add such wrapper names and aliases
+(including `execute`) to the blocklist if they must not be available to the panel. Other plugins can also schedule a
+command asynchronously or for a later tick; that later work does not inherit the synchronous panel-origin scope.
+Do not grant panel command access to untrusted operators, and do not treat these checks as protection from a malicious
+installed plugin. The outer policy is still read at admission, so a reload does not retroactively revoke an admitted
+request. `command_blocked.details.matched` for the fixed authentication refusal names `ulticloud`, not a configured
+blocklist entry.
+
+An expiry received before any player-link handler was registered is still consumed; register the handler before
+creating links. The router intentionally has one handler per protocol message type. The remaining file/configuration,
+malformed-backend and shutdown-window limitations in [Known limitations (6.3.1)](#known-limitations-631) still apply
+except where the fixes above explicitly supersede them. Large player/world snapshots are capped at 1000/200 entries,
+though their counts can be higher; custom framework version strings must fit the protocol's 64-character bound.
+A command's synchronous output is returned to its requesting sender, not redacted as a log stream; do not print
+another user's secrets in a command reply. Outbound values outside the module bridge are assembled by the
+framework and are not subjected to an additional global strict-JSON pass.
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
@@ -204,10 +247,10 @@ responders are reachable under the `plugin.yml` name. This is deliberate: the `p
 catalogue entry, and the panel would then attribute the error to a module that does not exist. Give the module a
 valid `identify-string` to have its errors attributed.
 
-The version in `modules:<identifier>@<X.Y.Z>` is always three numbers. The framework takes the first three runs of
-digits in the `plugin.yml` version and pads missing ones with `0`, so a pre-release or build suffix is not carried:
-`2.0` becomes `2.0.0`, but `2.0-rc1` becomes `2.0.1` and `2.0.0-SNAPSHOT` becomes `2.0.0`. UltiCloud's protocol
-accepts only `X.Y.Z` in a capability name (no pre-release tag), so a `2.0.0-rc1` form would make the gateway
+The version in `modules:<identifier>@<X.Y.Z>` is always three numbers. As of 6.5.0 the framework takes the first three
+runs of digits before any `-` or `+` suffix in the `plugin.yml` version and pads missing ones with `0`:
+`2.0`, `2.0-rc1` and `2.0+build.9` become `2.0.0`. Before 6.5.0 suffix digits could fill missing components, so
+`2.0-rc1` became `2.0.1`. UltiCloud's protocol accepts only `X.Y.Z` in a capability name (no pre-release tag), so a `2.0.0-rc1` form would make the gateway
 refuse the whole `hello`. Module authors who want the panel to show the version they ship should use a plain
 three-number `plugin.yml` version; a pre-release should not reuse the number of a later release.
 
@@ -559,18 +602,17 @@ take.
   example a blocklisted one) is the `message` of the `command_failed` error reply, not `data.output` of a
   `command.result`.
 - **The command blocklist is read when the request is admitted.** A request is checked against the blocklist at
-  admission, before it waits for the server thread, so a `ul reload` that changes `ultipanel.commands.blocklist`
-  in that moment does not affect a request already admitted. A command that throws an `Error` (not an `Exception`)
-  after its acknowledgement gets no `command.result`; the panel sees its own timeout.
+  admission, before it waits for the server thread, so a reload can race that outer check. As of 6.5.0 a command
+  entering `BaseCommandExecutor` also checks the current list at execution. Before 6.5.0, a command throwing an `Error`
+  (not an `Exception`) after its acknowledgement got no `command.result`; 6.5.0 answers it before propagating a fatal error.
 - **`server.power` is acknowledged before it is scheduled.** Its `ok` reply is sent first, and the stop or restart
   is scheduled to begin one second later. If UltiTools starts disabling between the reply and the scheduling, the
   action is dropped with only a FINE log line although the panel saw `ok`. Check the console and send the request
   again if the server is still running.
-- **A teleport that never completes is answered by the gateway's timeout.** A `player.action` teleport waits for
-  the server's asynchronous teleport to finish; if it never does, the framework sends no reply and the panel sees
-  its own timeout. There is no local deadline.
-- **Player-link ordering has gaps.** These need a lost answer, a closed connection or a very early event, and a
-  server restart clears every one of them:
+- **Before 6.5.0 a teleport that never completed was answered only by the gateway's timeout.** As of 6.5.0 the
+  framework has the 25-second reply deadline described above; it never cancels the teleport itself.
+- **Player-link ordering gaps before 6.5.0.** The first three cases below are fixed in 6.5.0; an expiry received
+  before a handler was registered is still not delivered:
   - a completion held while its link-create answer is outstanding stays marked busy if the connection closes or an
     error reply arrives first, so the gateway's redelivery is ignored until the next start (a module that needs the
     result meanwhile asks the panel again);

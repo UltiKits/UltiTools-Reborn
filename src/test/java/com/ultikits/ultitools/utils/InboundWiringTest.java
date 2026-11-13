@@ -355,10 +355,15 @@ class InboundWiringTest {
     }
 
     @Test
-    @DisplayName("a switch turned off after the handshake refuses the next request and writes nothing (S-66)")
+    @DisplayName("a switch reloaded off renegotiates capabilities and refuses the next request without a write (S-66)")
     void switchOffAfterHandshakeRefuses() throws Exception {
         connect();
         config.set(Capability.FILE_WRITE.getConfigPath(), false);
+        features.onReload();
+        await(() -> stub.gateway().received("hello").size() >= 2 && CloudAuthManager.status().isConnected(),
+                "the capabilities renegotiated after reload");
+        assertThat(reply("hello", 2).getAsJsonObject("payload").getAsJsonArray("capabilities").toString())
+                .doesNotContain("\"files:write\"");
         String id = send("files.write", "with-base-version", null).get("id").getAsString();
         JsonObject error = reply("error", 1);
         assertThat(error.get("replyTo").getAsString()).isEqualTo(id);
