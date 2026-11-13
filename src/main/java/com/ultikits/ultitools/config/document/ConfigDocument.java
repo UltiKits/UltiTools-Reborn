@@ -680,6 +680,7 @@ public final class ConfigDocument {
      * which the gate refuses if it cannot preserve the operator's content. Line breaks are restored to the document's
      * style by renderFrom after this UNIX-line-break emission, just as for every other rendered line.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Independent alignment guards keep each ambiguous restoration fail-closed.
     private String preserveBlockScalarSeparators(String text, Node out) {
         List<ScalarNode> written = scalars(out);
         boolean hasSourceBlock = false;
@@ -757,6 +758,7 @@ public final class ConfigDocument {
      * line break (the emitter can quote an empty block scalar); only whitespace or a comment may follow its token.
      * Mark indices count Unicode code points, not UTF-16 characters. Tagged/anchored block headers are not restored.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Validate marks, physical indentation and token tails separately before copying bytes.
     private static int[] scalarLineRegion(String text, ScalarNode scalar) {
         if (scalar.getStartMark() == null || scalar.getEndMark() == null) {
             return null;
