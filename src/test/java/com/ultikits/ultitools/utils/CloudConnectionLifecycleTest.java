@@ -11,7 +11,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -52,12 +51,14 @@ class CloudConnectionLifecycleTest {
      * for this test's, and every join or state check on it would fail.
      */
     private final List<Thread> agentThreads = new CopyOnWriteArrayList<>();
+    private final List<ControlledAgentExecutor> agentExecutors = new CopyOnWriteArrayList<>();
+    private final java.util.concurrent.atomic.AtomicLong agentTime = new java.util.concurrent.atomic.AtomicLong(1000L);
 
     @BeforeEach
     void setUp() throws Exception {
         previousPlugin = UltiTools.getInstance();
         CloudSession.resetForTesting();
-        CloudSession.setAgentRuntimeForTesting(this::recordingAgentExecutor, null, null);
+        CloudSession.setAgentRuntimeForTesting(this::recordingAgentExecutor, null, agentTime::get);
         ApiRateLimiter.resetAll();
         PluginInitiationUtils.startAcceptingPanelMessages();
         credentialFile = tempDir.resolve("credentials.json");
@@ -109,7 +110,7 @@ class CloudConnectionLifecycleTest {
         assertThat(gateway.headers).isEmpty();
         assertThat(Files.readAllBytes(credentialFile)).isEqualTo(before);
         PluginInitiationUtils.initWebsocket();
-        await(() -> gateway.peer != null, "startup connection");
+        await(() -> CloudAuthManager.status().isConnected(), "startup connection");
         assertThat(gateway.paths).containsExactly("/v1/agent");
         assertThat(gateway.headers).containsExactly("Bearer ucs_LIFE");
         gateway.peer.close(4401, "revoked");
@@ -117,7 +118,7 @@ class CloudConnectionLifecycleTest {
         await(() -> warningCount(REJECTED) == 1, "credential rejection notice");
         assertThat(CredentialStore.read().data()).containsEntry("uuid", UUID).doesNotContainKey("cloud_credential");
         assertThat(CloudSession.current().hasCredential()).isFalse();
-        Thread.sleep(3100);
+        advanceAgentTime(TimeUnit.HOURS.toMillis(1));
         assertThat(gateway.headers).hasSize(1);
         assertThat(warningCount(REJECTED)).isEqualTo(1);
         assertNoSecrets();
@@ -129,7 +130,7 @@ class CloudConnectionLifecycleTest {
         ServerCredentialStore.save(credential("LIFE"));
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
         PluginInitiationUtils.initWebsocket();
-        await(() -> gateway.peer != null, "startup connection");
+        await(() -> CloudAuthManager.status().isConnected(), "startup connection");
         ServerCredentialStore.save(credential("NEW"));
         gateway.peer.close(4401, "revoked");
 
@@ -150,7 +151,7 @@ class CloudConnectionLifecycleTest {
         CloudSession.current().startDevicePolling(DeviceLoginTestSupport.grant(600, 1),
                 new DeviceLoginTestSupport.RecordingListener());
         scheduler.runNext();
-        await(() -> gateway.peer != null, "connection after grant");
+        await(() -> CloudAuthManager.status().isConnected(), "connection after grant");
         assertThat(gateway.headers).containsExactly("Bearer ucs_NEW");
         assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo("cred-NEW");
         await(() -> CloudAuthManager.status().isConnected(), "connected status");
@@ -166,7 +167,7 @@ class CloudConnectionLifecycleTest {
                 + "Cloud features are stopped until UltiTools is upgraded; this server stays linked."
                 + " UltiCloud requires UltiTools 6.3.2 or later.";
         await(() -> warningCount(warning) == 1, "upgrade notice");
-        Thread.sleep(300);
+        advanceAgentTime(300);
         assertThat(raw.requests).hasSize(1);
         assertThat(ServerCredentialStore.load()).isNotNull();
         assertThat(CloudAuthManager.status().isConnected()).isFalse();
@@ -183,8 +184,8 @@ class CloudConnectionLifecycleTest {
         byte[] before = Files.readAllBytes(credentialFile);
         await(() -> CloudSession.current().connectionState() == AgentConnection.State.SERVER_ID_MISMATCH,
                 "server-ID mismatch stop");
-        // fastPolicy() retries within 40 ms; ten times that passes with no further connection.
-        Thread.sleep(500);
+        await(() -> records.stream().anyMatch(r -> r.getLevel() == Level.SEVERE), "mismatch notice");
+        advanceAgentTime(TimeUnit.HOURS.toMillis(1));
         assertThat(gateway.headers).hasSize(1);
         assertThat(Files.readAllBytes(credentialFile)).as("credential file unchanged").isEqualTo(before);
         assertThat(ServerCredentialStore.load()).isNotNull();
@@ -205,7 +206,7 @@ class CloudConnectionLifecycleTest {
         command.reconnect(sender);
         assertThat(lines.get(lines.size() - 1)).contains(
                 "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to.");
-        Thread.sleep(200);
+        advanceAgentTime(200);
         assertThat(gateway.headers).as("reconnect does not leave the mismatch").hasSize(1);
         assertNoSecrets();
     }
@@ -235,8 +236,16 @@ class CloudConnectionLifecycleTest {
         fastTiming();
         gateway.closeCode = 4000;
         startSaved();
-        await(() -> CloudSession.current().connectionState() == AgentConnection.State.SUPERSEDED, "three supersessions");
-        Thread.sleep(300);
+        for (int attempt = 1; attempt < 3; attempt++) {
+            final int completed = attempt;
+            await(() -> records.stream().filter(r -> r.getMessage().startsWith(
+                    "UltiCloud: another connection is using")).count() == completed, "supersession backoff");
+            advanceAgentTime(100);
+        }
+        await(() -> records.stream().anyMatch(r -> r.getMessage().startsWith(
+                "UltiCloud closed this server's connection three times")), "terminal supersession notice");
+        assertThat(CloudSession.current().connectionState()).isEqualTo(AgentConnection.State.SUPERSEDED);
+        advanceAgentTime(TimeUnit.HOURS.toMillis(1));
         assertThat(gateway.headers).hasSize(3);
         assertThat(records.stream().filter(r -> r.getMessage().startsWith(
                 "UltiCloud closed this server's connection three times"))).hasSize(1);
@@ -250,8 +259,17 @@ class CloudConnectionLifecycleTest {
         raw = new AgentConnectionLoopbackTest.RawGateway(request -> AgentConnectionLoopbackTest.Reply.of(
                 "402 Payment Required", "", AgentConnectionLoopbackTest.BODY_402));
         startRaw();
-        await(() -> raw.requests.size() >= 3, "plan-limit retries");
-        await(() -> CloudSession.current().connectionState() == AgentConnection.State.PLAN_LIMITED, "plan-limit pause");
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            final int expected = attempt;
+            await(() -> raw.requests.size() == expected, "plan-limit request " + attempt);
+            await(() -> CloudSession.current().connectionState() == AgentConnection.State.PLAN_LIMITED, "plan-limit pause");
+            // Drain the callback which publishes PLAN_LIMITED before advancing the retry clock.
+            advanceAgentTime(0);
+            if (attempt < 3) {
+                advanceAgentTime(100);
+            }
+        }
+        assertThat(raw.requests).hasSize(3);
         assertThat(records.stream().filter(r -> r.getLevel() == Level.WARNING
                 && r.getMessage().startsWith("UltiCloud has paused"))).singleElement().satisfies(r ->
                 assertThat(r.getMessage()).contains("the Pro plan expired and the account has more servers than its plan allows",
@@ -280,7 +298,7 @@ class CloudConnectionLifecycleTest {
         CloudSession.setAgentTimingOverrideForTesting(new ReconnectPolicy(() -> 0, 300, 300, 300, 300),
                 AgentConnection.Timing.defaults());
         startSaved();
-        await(() -> gateway.peer != null, "connected before teardown");
+        await(() -> CloudAuthManager.status().isConnected(), "connected before teardown");
         Thread agent = agentThread();
         assertThat(agent).isNotNull();
         gateway.peer.close(1011, "retry");
@@ -288,7 +306,7 @@ class CloudConnectionLifecycleTest {
         stop.run();
         agent.join(2000);
         assertThat(agent.isAlive()).isFalse();
-        Thread.sleep(400);
+        advanceAgentTime(400);
         assertThat(gateway.headers).hasSize(1);
         assertThat(CloudSession.current().connectionState()).isEqualTo(AgentConnection.State.STOPPED);
     }
@@ -297,13 +315,14 @@ class CloudConnectionLifecycleTest {
     void reinitReplacesConnectionAndDoesNotStartASecondLoop() throws Exception {
         openGateway();
         startSaved();
-        await(() -> gateway.peer != null, "initial connection");
+        await(() -> CloudAuthManager.status().isConnected(), "initial connection");
         Thread first = agentThread();
         PluginInitiationUtils.reinitWebSocket();
         await(() -> gateway.headers.size() == 2, "fresh connection");
+        await(() -> CloudAuthManager.status().isConnected(), "fresh welcome");
         first.join(2000);
         assertThat(first.isAlive()).isFalse();
-        Thread.sleep(300);
+        advanceAgentTime(300);
         assertThat(gateway.headers).hasSize(2);
         assertThat(CloudAuthManager.status().isConnected()).isTrue();
     }
@@ -312,16 +331,17 @@ class CloudConnectionLifecycleTest {
     void invalidateNeverWaitsForCallbackParkedOnSessionMonitor() throws Exception {
         openGateway();
         startSaved();
-        await(() -> gateway.peer != null, "connection before parked callback");
+        await(() -> CloudAuthManager.status().isConnected(), "connection before parked callback");
         CloudSession session = CloudSession.current();
         Thread agent = agentThread();
         byte[] before = Files.readAllBytes(credentialFile);
         synchronized (session) {
             gateway.peer.close(4401, "revoked");
             await(() -> agent.getState() == Thread.State.BLOCKED, "agent waiting on session monitor");
-            long start = System.nanoTime();
+            // Returning while the callback is still blocked on this monitor proves no join;
+            // the class timeout guards a deadlock, not a loaded host's sub-second speed.
             session.invalidate();
-            assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)).isLessThan(1000);
+            assertThat(agent.getState()).isEqualTo(Thread.State.BLOCKED);
         }
         agent.join(2000);
         assertThat(agent.isAlive()).isFalse();
@@ -348,7 +368,7 @@ class CloudConnectionLifecycleTest {
         try {
             openGateway();
             startSaved();
-            await(() -> gateway.peer != null, "connection beside the decoys");
+            await(() -> CloudAuthManager.status().isConnected(), "connection beside the decoys");
             Thread agent = agentThread();
             assertThat(agent).isNotNull().isNotIn(decoys);
             CloudSession.current().invalidate();
@@ -371,7 +391,7 @@ class CloudConnectionLifecycleTest {
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
         PluginInitiationUtils.initWebsocket();
         PluginInitiationUtils.stopCredentialSchedulers();
-        Thread.sleep(150);
+        advanceAgentTime(TimeUnit.HOURS.toMillis(1));
         assertThat(raw.requests).isEmpty();
         assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid").containsEntry("uuid", UUID);
         // Plan 22-24: the session has no user-token state any more; the old token adopted nothing.
@@ -455,14 +475,23 @@ class CloudConnectionLifecycleTest {
         return agentThreads.isEmpty() ? null : agentThreads.get(agentThreads.size() - 1);
     }
 
-    /** The production agent executor (one daemon thread, same name), recording the thread it starts. */
+    /** One real daemon agent thread, with retry/deadline time advanced only by the test. */
     private ScheduledExecutorService recordingAgentExecutor() {
-        return Executors.newSingleThreadScheduledExecutor(runnable -> {
+        ControlledAgentExecutor executor = new ControlledAgentExecutor(agentTime, runnable -> {
             Thread thread = new Thread(runnable, "UltiTools-Cloud-Agent");
             thread.setDaemon(true);
             agentThreads.add(thread);
             return thread;
         });
+        agentExecutors.add(executor);
+        return executor;
+    }
+
+    private void advanceAgentTime(long millis) throws Exception {
+        agentTime.addAndGet(millis);
+        for (ControlledAgentExecutor executor : agentExecutors) {
+            executor.runDue();
+        }
     }
 
     private static ServerCredential credential(String suffix) {
@@ -505,12 +534,15 @@ class CloudConnectionLifecycleTest {
             headers.add(handshake.getFieldValue("Authorization"));
             paths.add(handshake.getResourceDescriptor());
             peer = conn;
-            if (closeCode != 0) { conn.close(closeCode, "test close"); }
         }
         @Override public void onClose(WebSocket conn, int code, String reason, boolean remote) { }
         @Override public void onMessage(WebSocket conn, String message) {
             if ("ping".equals(message)) {
                 conn.send("pong");
+            } else if (closeCode != 0) {
+                // Wait for hello: closing inside onOpen races the client's own onOpened/send
+                // callback and can manufacture an unrelated send-failure reconnect.
+                conn.close(closeCode, "test close");
             } else {
                 HandshakeEndToEndTest.answerHello(conn, message, welcomeServerId);
             }

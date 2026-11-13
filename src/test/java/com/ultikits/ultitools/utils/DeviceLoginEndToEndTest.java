@@ -68,6 +68,8 @@ class DeviceLoginEndToEndTest {
 
     private Path credentialFile;
     private HttpServer cloud;
+    private DeviceLoginTestSupport.FakeScheduler scheduler;
+    private java.util.concurrent.ExecutorService pollThread;
     private final List<String[]> requests = new CopyOnWriteArrayList<>();
     private final AtomicInteger tokenPolls = new AtomicInteger();
     private final List<String> logLines = new CopyOnWriteArrayList<>();
@@ -105,6 +107,10 @@ class DeviceLoginEndToEndTest {
         MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         CloudSession.resetForTesting();
+        DeviceLoginTestSupport.FakeClock clock = new DeviceLoginTestSupport.FakeClock();
+        scheduler = new DeviceLoginTestSupport.FakeScheduler(clock);
+        CloudSession.setDeviceSeamsForTesting(null, scheduler, clock);
+        pollThread = java.util.concurrent.Executors.newSingleThreadExecutor();
         ApiRateLimiter.resetAll();
         credentialFile = tempDir.resolve("credentials.json");
         Files.write(credentialFile, ("{\"uuid\":\"" + STORED_UUID + "\",\"cloud_token\":{\"access_token\":\"old\"}}")
@@ -132,6 +138,8 @@ class DeviceLoginEndToEndTest {
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears the UltiTools singleton mocked in setUp
     void tearDown() throws Exception {
         CloudSession.resetForTesting();
+        pollThread.shutdownNow();
+        assertThat(pollThread.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
         ApiRateLimiter.resetAll();
         HttpRequestUtils.resetBaseUrl();
         CredentialStore.clearTargetPathForTesting();
@@ -223,8 +231,17 @@ class DeviceLoginEndToEndTest {
         }).when(sender).sendMessage(anyString());
 
         new CloudLoginCommand().login(sender);
+        // Keep the real HTTP client and its off-primary-thread execution, but advance virtual
+        // polling time explicitly: authorize, pending, granted. No wall-clock poll interval.
+        for (int step = 0; step < 3; step++) {
+            assertThat(scheduler.pending()).as("device step %s", step).isEqualTo(1);
+            pollThread.submit(scheduler::runNext).get(10, TimeUnit.SECONDS);
+        }
+        assertThat(scheduler.delays()).containsExactly(0L, 5000L, 5000L);
+        assertThat(scheduler.pending()).isZero();
+        assertThat(tokenPolls.get()).isEqualTo(2);
 
-        assertThat(await(() -> bodyOf("POST /v1/device/authorize") != null, 5000))
+        assertThat(bodyOf("POST /v1/device/authorize") != null)
                 .as("the login must send POST /v1/device/authorize to UltiCloud; requests seen: %s",
                         requestLines())
                 .isTrue();
@@ -236,7 +253,7 @@ class DeviceLoginEndToEndTest {
         assertThat(authorize.get("legacyServerUuid").getAsString()).isEqualTo(STORED_UUID);
         assertThat(authorize.has("attachToServerId")).isFalse();
 
-        assertThat(await(this::credentialWritten, 15_000))
+        assertThat(credentialWritten())
                 .as("the granted credential must reach credentials.json; requests seen: %s", requestLines())
                 .isTrue();
 
