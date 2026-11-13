@@ -699,7 +699,7 @@ public final class ConfigDocument {
         if (written.size() != read.size()) {
             return text;
         }
-        String body = source.startsWith("﻿") ? source.substring(1) : source;
+        String body = source.startsWith("\uFEFF") ? source.substring(1) : source;
         StringBuilder result = new StringBuilder(text.length());
         int copied = 0;
         for (int i = 0; i < written.size(); i++) {
