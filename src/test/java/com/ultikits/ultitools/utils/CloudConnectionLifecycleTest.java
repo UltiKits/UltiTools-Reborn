@@ -304,6 +304,11 @@ class CloudConnectionLifecycleTest {
         gateway.peer.close(1011, "retry");
         await(() -> CloudSession.current().connectionState() == AgentConnection.State.BACKOFF, "backoff");
         stop.run();
+        // The double keeps delayed tasks across shutdown() exactly as production does, so the only
+        // thing that can stop the pending retry is the product's own AgentConnection.stop().
+        assertThat(lastExecutor().pendingDelayedAtShutdown())
+                .as("teardown cancelled the retry before the agent executor stopped")
+                .isZero();
         agent.join(2000);
         assertThat(agent.isAlive()).isFalse();
         advanceAgentTime(400);
@@ -322,6 +327,9 @@ class CloudConnectionLifecycleTest {
         await(() -> CloudAuthManager.status().isConnected(), "fresh welcome");
         first.join(2000);
         assertThat(first.isAlive()).isFalse();
+        assertThat(agentExecutors.get(0).pendingDelayedAtShutdown())
+                .as("the replaced connection left no retry behind")
+                .isZero();
         advanceAgentTime(300);
         assertThat(gateway.headers).hasSize(2);
         assertThat(CloudAuthManager.status().isConnected()).isTrue();
@@ -342,6 +350,12 @@ class CloudConnectionLifecycleTest {
             // the class timeout guards a deadlock, not a loaded host's sub-second speed.
             session.invalidate();
             assertThat(agent.getState()).isEqualTo(Thread.State.BLOCKED);
+            // CloudSession's contract: teardown never waits for the agent thread. The state check
+            // above only catches an unbounded wait (through the class timeout); a bounded
+            // awaitTermination would pass it, so the executor double records every such call.
+            assertThat(lastExecutor().awaitTerminationTimeouts())
+                    .as("invalidate() never awaits the agent thread")
+                    .isEmpty();
         }
         agent.join(2000);
         assertThat(agent.isAlive()).isFalse();
@@ -391,8 +405,11 @@ class CloudConnectionLifecycleTest {
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
         PluginInitiationUtils.initWebsocket();
         PluginInitiationUtils.stopCredentialSchedulers();
-        advanceAgentTime(TimeUnit.HOURS.toMillis(1));
-        assertThat(raw.requests).isEmpty();
+        // Nothing was resumed, so no agent connection exists and advancing the virtual agent clock
+        // decides nothing here. Keep a short bounded real-time window instead: asynchronous work
+        // started by initWebsocket() (a legacy socket handshake, a refresh POST for the old token)
+        // must never reach the loopback server, and a single read could miss a late request.
+        assertStaysEmpty(raw.requests, 300);
         assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid").containsEntry("uuid", UUID);
         // Plan 22-24: the session has no user-token state any more; the old token adopted nothing.
         assertThat(CloudSession.current().hasCredential()).isFalse();
@@ -492,6 +509,24 @@ class CloudConnectionLifecycleTest {
         for (ControlledAgentExecutor executor : agentExecutors) {
             executor.runDue();
         }
+    }
+
+    /** The agent executor of the connection this test started last. */
+    private ControlledAgentExecutor lastExecutor() {
+        return agentExecutors.get(agentExecutors.size() - 1);
+    }
+
+    /**
+     * Polls for {@code windowMillis} and fails if {@code requests} ever gains an entry: a bounded
+     * real-time observation window for work that is asynchronous but has no timer to advance.
+     */
+    private static void assertStaysEmpty(List<?> requests, long windowMillis) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(windowMillis);
+        while (System.nanoTime() < deadline) {
+            assertThat(requests).as("no request during the observation window").isEmpty();
+            Thread.sleep(10);
+        }
+        assertThat(requests).as("no request during the observation window").isEmpty();
     }
 
     private static ServerCredential credential(String suffix) {
