@@ -61,7 +61,7 @@ final class AgentEventEncoders {
      * {@code isFramework}, no player UUID).</p>
      */
     interface ErrorReportView {
-        /** @return the collector's hexadecimal fingerprint, one to eight digits */
+        /** @return the collector's hexadecimal fingerprint, one to 64 digits */
         String fingerprint();
 
         /** @return the exception's binary class name */

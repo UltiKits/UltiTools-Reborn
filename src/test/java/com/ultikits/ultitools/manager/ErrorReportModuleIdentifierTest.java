@@ -4,14 +4,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
-import java.util.Collections;
+import java.lang.reflect.Field;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.google.gson.JsonObject;
@@ -41,8 +45,11 @@ class ErrorReportModuleIdentifierTest {
         final UltiToolsPlugin chat = mock(UltiToolsPlugin.class);
         lenient().when(chat.getPluginName()).thenReturn("UltiTools-Chat");
         lenient().when(chat.getIdentifyString()).thenReturn("ultichat");
+        final UltiToolsPlugin trade = mock(UltiToolsPlugin.class);
+        lenient().when(trade.getPluginName()).thenReturn("UltiTools-Trade");
+        lenient().when(trade.getIdentifyString()).thenReturn("ultitrade");
         final PluginManager modules = mock(PluginManager.class);
-        lenient().when(modules.getPluginList()).thenReturn(Collections.singletonList(chat));
+        lenient().when(modules.getPluginList()).thenReturn(Arrays.asList(chat, trade));
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
             lenient().when(ultiTools.getServerMonitorManager()).thenReturn(monitor);
             lenient().when(ultiTools.getPluginManager()).thenReturn(modules);
@@ -64,6 +71,119 @@ class ErrorReportModuleIdentifierTest {
         collector.reportError(new IllegalStateException("fallback"), "UltiTools-Chat", null);
         JsonObject payload = collector.drainErrorReportPayloads(10).get(0);
         assertThat(payload.get("moduleName").getAsString()).isEqualTo("ultitools-chat");
+    }
+
+    @Test
+    void theSameFailureInTwoModulesHasSeparateCountsAndWireFingerprints() {
+        IllegalStateException failure = sharedFailure();
+        report(failure, "UltiTools-Chat", 2);
+        report(failure, "UltiTools-Trade", 3);
+
+        List<JsonObject> payloads = collector.drainErrorReportPayloads(10);
+        assertThat(payloads).hasSize(2);
+        assertReport(payloads, "ultichat", 2);
+        assertReport(payloads, "ultitrade", 3);
+        assertThat(payloads).extracting(payload -> payload.get("fingerprint").getAsString())
+                .doesNotHaveDuplicates();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void attributedAndUnattributedFailuresStaySeparate(boolean unattributedFirst) {
+        IllegalStateException failure = sharedFailure();
+        if (unattributedFirst) {
+            report(failure, null, 1);
+        }
+        report(failure, "UltiTools-Chat", 2);
+        if (!unattributedFirst) {
+            report(failure, null, 1);
+        }
+
+        List<JsonObject> payloads = collector.drainErrorReportPayloads(10);
+        assertThat(payloads).hasSize(2);
+        assertReport(payloads, "ultichat", 2);
+        JsonObject unattributed = assertReport(payloads, null, 1);
+        String legacyFingerprint = String.format("%8s", ErrorReportCollector.fingerprintOf(failure))
+                .replace(' ', '0');
+        assertThat(unattributed.get("fingerprint").getAsString()).isEqualTo(legacyFingerprint);
+        assertThat(payloads).extracting(payload -> payload.get("fingerprint").getAsString())
+                .doesNotHaveDuplicates();
+    }
+
+    @Test
+    void aliasesOfTheSameModuleStillDeduplicate() {
+        IllegalStateException failure = sharedFailure();
+        report(failure, "UltiTools-Chat", 1);
+        report(failure, "ultichat", 1);
+        report(failure, "ULTICHAT", 1);
+
+        List<JsonObject> payloads = collector.drainErrorReportPayloads(10);
+        assertThat(payloads).hasSize(1);
+        assertReport(payloads, "ultichat", 3);
+    }
+
+    @Test
+    void drainMergesOnlyTheSameModuleAcrossDedupWindows() throws Exception {
+        IllegalStateException failure = sharedFailure();
+        report(failure, "UltiTools-Chat", 1);
+        report(failure, "UltiTools-Trade", 1);
+        report(failure, null, 1);
+        ((Map<?, ?>) field("dedupMap").get(collector)).clear();
+        report(failure, "ultichat", 2);
+        report(failure, "ultitrade", 3);
+        report(failure, null, 4);
+
+        List<JsonObject> payloads = collector.drainErrorReportPayloads(10);
+        assertThat(payloads).hasSize(3);
+        assertReport(payloads, "ultichat", 3);
+        assertReport(payloads, "ultitrade", 4);
+        assertReport(payloads, null, 5);
+    }
+
+    @Test
+    void samplingBudgetsAreIndependentForEachModuleAndUnattributedFailures() throws Exception {
+        field("sampleAfterCount").set(collector, 1);
+        field("sampleRate").set(collector, 0.0);
+        IllegalStateException failure = sharedFailure();
+        report(failure, "UltiTools-Chat", 2);
+        report(failure, "UltiTools-Trade", 2);
+        report(failure, null, 2);
+
+        List<JsonObject> payloads = collector.drainErrorReportPayloads(10);
+        assertThat(payloads).hasSize(3);
+        assertReport(payloads, "ultichat", 1);
+        assertReport(payloads, "ultitrade", 1);
+        assertReport(payloads, null, 1);
+    }
+
+    private void report(Throwable failure, String moduleName, int count) {
+        for (int i = 0; i < count; i++) {
+            collector.reportError(failure, moduleName, null);
+        }
+    }
+
+    private static IllegalStateException sharedFailure() {
+        IllegalStateException failure = new IllegalStateException("shared failure");
+        failure.setStackTrace(new StackTraceElement[] {
+                new StackTraceElement("org.example.SharedService", "fail", "SharedService.java", 42)
+        });
+        return failure;
+    }
+
+    private static JsonObject assertReport(List<JsonObject> payloads, String moduleId, int count) {
+        JsonObject payload = payloads.stream().filter(candidate -> candidate.get("moduleName").isJsonNull()
+                ? moduleId == null : candidate.get("moduleName").getAsString().equals(moduleId)).findFirst()
+                .orElseThrow(() -> new AssertionError("Missing report for " + moduleId));
+        assertThat(payload.get("occurrences").getAsInt()).isEqualTo(count);
+        assertThat(new RecordingChannel().send("error.report", payload)).as("schema-valid").isTrue();
+        return payload;
+    }
+
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Configure sampling and simulate a dedup window reset.
+    private static Field field(String name) throws NoSuchFieldException {
+        Field field = ErrorReportCollector.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
     }
 
     @ParameterizedTest(name = "reported as ''{0}'' -> {1}")

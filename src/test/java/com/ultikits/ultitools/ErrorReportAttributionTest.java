@@ -69,9 +69,8 @@ public class ErrorReportAttributionTest {
     @Test
     void inheritedAopMethodsUseTheConcreteProxiedBeansJar() throws Throwable {
         try (ModuleClassLoader loader = modules(); MockedStatic<UltiTools> framework = mockStatic(UltiTools.class)) {
+            ErrorReportCollector collector = install(framework, loader);
             for (String suffix : new String[] {"A", "B"}) {
-                // Each sample has its own dedup window: the same inherited failure is intentionally grouped.
-                ErrorReportCollector collector = install(framework, loader);
                 Class<?> bean = loader.loadClass(PACKAGE + ".Bean" + suffix);
                 Method method = bean.getMethod("fail");
                 Class<?> proxy = new ProxyFactory(Collections.emptyList())
@@ -80,10 +79,18 @@ public class ErrorReportAttributionTest {
                 MethodInvocation invocation = mock(MethodInvocation.class);
                 when(invocation.getTarget()).thenReturn(target);
                 when(invocation.getMethod()).thenReturn(method);
-                when(invocation.proceed()).thenThrow(failure("bean" + suffix));
-                assertThat(new ExceptionInterceptor().invoke(invocation)).isNull();
-                assertModule(collector, "module-" + suffix.toLowerCase(java.util.Locale.ROOT));
+                when(invocation.proceed()).thenThrow(failure("inherited"));
+                int occurrences = "A".equals(suffix) ? 2 : 3;
+                for (int i = 0; i < occurrences; i++) {
+                    assertThat(new ExceptionInterceptor().invoke(invocation)).isNull();
+                }
             }
+            List<JsonObject> reports = payloads(collector);
+            assertThat(reports).extracting(report -> report.get("moduleName").getAsString()
+                    + ":" + report.get("occurrences").getAsInt())
+                    .containsExactlyInAnyOrder("module-a:2", "module-b:3");
+            assertThat(reports).extracting(report -> report.get("fingerprint").getAsString())
+                    .doesNotHaveDuplicates();
         }
     }
 
@@ -197,14 +204,19 @@ public class ErrorReportAttributionTest {
         assertThat(payload(collector).get("moduleName")).isEqualTo(new com.google.gson.JsonPrimitive(expected));
     }
 
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Read the actual v2 payload from the root-package loader test.
     private static JsonObject payload(ErrorReportCollector collector) throws Exception {
+        List<JsonObject> reports = payloads(collector);
+        assertThat(reports).hasSize(1);
+        return reports.get(0);
+    }
+
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Read the actual v2 payloads from the root-package loader test.
+    private static List<JsonObject> payloads(ErrorReportCollector collector) throws Exception {
         Method drain = ErrorReportCollector.class.getDeclaredMethod("drainErrorReportPayloads", int.class);
         drain.setAccessible(true);
         @SuppressWarnings("unchecked")
-        List<JsonObject> payloads = (List<JsonObject>) drain.invoke(collector, 10);
-        assertThat(payloads).hasSize(1);
-        return payloads.get(0);
+        List<JsonObject> reports = (List<JsonObject>) drain.invoke(collector, 10);
+        return reports;
     }
 
     private static IllegalStateException failure(String method) {
