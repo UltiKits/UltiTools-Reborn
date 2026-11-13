@@ -8,23 +8,31 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
 ## UltiCloud client replies and panel-command boundaries (as of 6.5.0)
 
 - **Nested framework commands recheck the remote blocklist.** While a synchronous panel dispatch is active,
-  `BaseCommandExecutor` checks both the invoked label and the resolved command name before help, validators or the
-  command body. This covers aliases and synchronous wrappers that enter that executor. The existing in-body refusal
+  `BaseCommandExecutor` checks the invoked label, resolved command name, registered label and every registered alias
+  before help, validators or the command body. A listed sibling alias blocks the command's other spellings too:
+  listing `ultitools` refuses `ul help`, `ulti help` and `ultitools:ul help`, and the synchronous framework target in
+  `execute run ul help`. Matching is case-insensitive and namespace-free. This covers synchronous wrappers only when
+  their target enters that executor. The existing in-body refusal
   of panel-issued `ulticloud login`, `login <code>` and `logout` remains independent of the configurable list.
   A nested refusal is captured as ordinary command output **only when the nested command keeps the panel's sender**: a
   wrapper that re-dispatches as the console or as a player sends the refusal to that sender's chat or to the server
   log instead, and the panel's `command.result` is `ok` with no refusal line. A direct refusal still returns
   `command_blocked`.
-- **A blocklisted command is refused through its built-in alias too.** Immediately before dispatch, on the server
-  thread, the framework resolves the command line's label through the server's command map and checks the resolved
-  command's name against the same blocklist. `rl confirm` and `bukkit:rl confirm` are therefore answered
-  `command_blocked` although only `reload` is listed and Bukkit's reload command is not a framework command. A label
-  the server does not know keeps its admission decision, so nothing is refused merely for being unknown. A wrapper,
-  `execute run`, or a `commands.yml` alias whose eventual target is another command is still out of reach; see the
-  known limitations below.
-- **A command throwing an `Error` still gets a result after its acknowledgement.** Linkage failures return
-  `command_failed`; other errors get that result before being rethrown to the server. The panel-origin scope is always
-  restored, and late feedback follows the existing console-forwarding rules.
+- **A blocklisted command is refused through its registered aliases too.** Immediately before dispatch, on the
+  server thread, the framework resolves the command line's label through the server's command map and checks the
+  resolved command's name, registered label and all registered aliases against the same blocklist. With `reload`
+  listed, `bukkit:rl confirm` is answered `command_blocked` with `details.matched: reload`. On Paper 1.21.11 Bukkit's
+  reload command has only the labels `bukkit:reload` and `bukkit:rl`: bare `rl` is unknown, so `rl confirm` returns
+  `command_failed` with `The server console did not accept the command.`, not `command_blocked`. Bare `reload` is
+  vanilla's datapack reload, still refused by the shipped list. A label the server does not know keeps its admission
+  decision; it is not refused merely for being unknown. See the wrapper limitations below.
+- **An `Error` escaping dispatch still gets a result after its acknowledgement.** This covers raw Bukkit `Command`
+  registrations and dispatcher internals when the error escapes `Bukkit.dispatchCommand`: linkage failures return
+  `command_failed`; other errors get that result before being rethrown to the server. A `BaseCommandExecutor` body
+  instead reports its reflected body failure as ordinary command output, for example `Command execution failed: <message>`;
+  it is not this escaping-error path. The local exception/stack record omits arguments, but an unregistered command's
+  echo and action-log target still include them; only registered sensitive commands mask those records. The
+  panel-origin scope is always restored, and late feedback follows the existing console-forwarding rules.
 - **An asynchronous teleport has a 25-second reply deadline.** If its future has not completed, `player.action.result`
   reports `internal_error` with `teleport did not complete in time`. This stops waiting, not the teleport: the Bukkit
   operation is not cancelled and may still take effect. Check the player's actual position before retrying. A late
@@ -39,16 +47,22 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
 
 ### Known limitations of panel command hardening
 
-The blocklist is not a sandbox for other plugins or Minecraft's command dispatcher. It checks the outer request, the
-command the label resolves to just before dispatch, and nested calls entering `BaseCommandExecutor`; it cannot
-intercept a wrapper, `execute run`, or a `commands.yml` alias whose eventual target is a vanilla or third-party
-command outside that boundary. Add such wrapper names and aliases
-(including `execute`) to the blocklist if they must not be available to the panel. Other plugins can also schedule a
-command asynchronously or for a later tick; that later work does not inherit the synchronous panel-origin scope.
-Do not grant panel command access to untrusted operators, and do not treat these checks as protection from a malicious
-installed plugin. The outer policy is still read at admission, so a reload does not retroactively revoke an admitted
-request. `command_blocked.details.matched` for the fixed authentication refusal names `ulticloud`, not a configured
-blocklist entry.
+The remote command blocklist is a guard on what the panel command line resolves to, **not a sandbox**. It checks the
+outer request and resolved command's registered spellings, plus synchronous nested calls entering
+`BaseCommandExecutor`. It does not cover vanilla or Bukkit commands reached through `execute ... run` / `return run`,
+`commands.yml` aliases, datapack functions, third-party re-dispatchers, or later-tick paths such as command blocks and
+scheduled commands. Later work does not inherit the synchronous panel-origin scope. Operators who need those paths
+unavailable must restrict panel command access with **`ultipanel.capabilities.commands: false`** in
+`plugins/UltiTools/config.yml` (the shipped default); do not grant it to untrusted operators. Blocking wrapper names
+such as `execute`, `return` and `function` can narrow direct entry points, but is not a complete sandbox. This change
+adds none of those names to the shipped ten-command blocklist and does not protect against a malicious installed plugin.
+
+The blocklist is loaded at server start: stop the server, edit `ultipanel.commands.blocklist`, and start it again.
+`/ul reload` does not apply a blocklist edit. Checks use the manager's current in-memory policy, including the recheck
+before dispatch; editing a file alone cannot revoke an admitted request. `command_blocked.details.matched` for the
+fixed authentication refusal names `ulticloud`, not a configured blocklist entry.
+
+中文补充：列入命令的任意已注册别名，会同时拦截该命令的其他拼写；修改黑名单须停服、编辑后重新启动，`/ul reload` 不会应用。黑名单只守住面板命令行的解析入口及同步进入框架执行器的嵌套命令，不覆盖经 `execute ... run`、`return run`、`commands.yml` 别名、数据包函数、第三方转派器或命令方块等后续 tick 路径执行的原版／Bukkit 命令。需要禁用这些路径时，应在 `plugins/UltiTools/config.yml` 中设置 `ultipanel.capabilities.commands: false`，而不是把黑名单当成沙箱。
 
 An expiry received before any player-link handler was registered is still consumed; register the handler before
 creating links. The router intentionally has one handler per protocol message type. The remaining file/configuration,

@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -16,6 +17,7 @@ import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
@@ -34,9 +36,12 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.endsWith;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @Timeout(30)
@@ -155,10 +160,9 @@ class PanelDispatchHardeningTest {
     }
 
     /**
-     * F-1 of the gate 2 review: `reload` is a shipped blocklist default, but `rl` is not, and the
-     * typed first word is all the admission check sees. Bukkit's reload command is not a
-     * {@code BaseCommandExecutor}, so the execution-time check never sees it either: the label has to
-     * be resolved through the server's command map before the dispatch, whichever way it is spelled.
+     * Command-map resolution is needed for aliases of non-framework commands. This synthetic
+     * registration deliberately exposes both bare and namespaced aliases; Paper 1.21.11 itself
+     * installs ReloadCommand only as bukkit:reload and bukkit:rl, not as bare reload or rl.
      */
     @ParameterizedTest
     @ValueSource(strings = {"rl confirm", "bukkit:rl confirm", "reload confirm", "bukkit:reload confirm"})
@@ -219,6 +223,125 @@ class PanelDispatchHardeningTest {
         assertThat(payload.get("status").getAsString()).isEqualTo("ok");
         assertThat(payload.getAsJsonObject("data").has("output")).isTrue();
         assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ul help", "ulti help", "ultitools help", "ultitools:ul help"})
+    void siblingAliasEntryBlocksEveryOuterSpelling(String line) {
+        UlCommand executor = registerUl();
+        manager.setBlockedCommands(Collections.singleton("ultitools"));
+
+        accept(line);
+        if (!mainThread.isEmpty()) {
+            mainThread.remove().run();
+        }
+
+        assertSiblingRefusal(executor);
+        verify(UltiTools.getInstance().getLogger()).log(eq(Level.WARNING), endsWith(": " + line));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"UlTiToOlS", "test:ULTITOOLS"})
+    void siblingAliasEntriesAreCaseInsensitiveAndNamespaceFree(String entry) {
+        UlCommand executor = registerUl();
+        manager.setBlockedCommands(Collections.singleton(entry));
+
+        accept("ul help");
+        mainThread.remove().run();
+
+        assertSiblingRefusal(executor);
+        assertThat(manager.isCommandAllowed("ultitools help").isAllowed()).isFalse();
+    }
+
+    @Test
+    void siblingAliasAddedAfterAdmissionIsRefusedBeforeDispatch() {
+        UlCommand executor = registerUl();
+        accept("ul help");
+        assertThat(channel.frames()).hasSize(1);
+        manager.setBlockedCommands(Collections.singleton("ultitools"));
+
+        mainThread.remove().run();
+
+        assertSiblingRefusal(executor);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ul help", "ulti help", "ultitools:ul help"})
+    void synchronousNestedCommandChecksSiblingAliases(String nested) {
+        UlCommand executor = registerUl();
+        // A synchronous forwarding fixture, not a simulation of Paper's Brigadier parser.
+        register("execute", (sender, args) -> Bukkit.dispatchCommand(sender, nested));
+        manager.setBlockedCommands(Collections.singleton("ultitools"));
+
+        accept("execute run " + nested);
+        mainThread.remove().run();
+
+        assertThat(executor.calls.get()).isZero();
+        assertThat(channel.frames()).hasSize(2);
+        JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+        assertThat(payload.getAsJsonObject("data").getAsJsonArray("output").toString())
+                .contains("command 'ultitools' is on the remote command blocklist")
+                .contains("ultipanel.commands.blocklist").doesNotContain("ul help body");
+        verify(UltiTools.getInstance().getLogger()).log(Level.WARNING,
+                "[Remote command] Blocked a nested panel command: ul");
+        assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+        Bukkit.dispatchCommand(server.getConsoleSender(), "ul help");
+        assertThat(executor.calls.get()).as("the local console is not subject to the remote policy").isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ul help", "ulti help", "ultitools:ul help", "execute run ul help"})
+    void unrelatedEntryDoesNotBlockUlOrItsNestedPath(String line) {
+        UlCommand executor = registerUl();
+        register("execute", (sender, args) -> Bukkit.dispatchCommand(sender, "ul help"));
+        manager.setBlockedCommands(Collections.singleton("unrelated"));
+
+        accept(line);
+        mainThread.remove().run();
+
+        assertThat(executor.calls.get()).isEqualTo(1);
+        assertThat(channel.frames()).hasSize(2);
+        JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+        assertThat(payload.getAsJsonObject("data").getAsJsonArray("output").toString()).contains("ul help body");
+        assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
+    private void assertSiblingRefusal(UlCommand executor) {
+        assertThat(executor.calls.get()).isZero();
+        assertThat(channel.frames()).hasSize(2);
+        JsonObject result = channel.frames().get(1);
+        assertThat(result.get("type").getAsString()).isEqualTo("command.result");
+        JsonObject payload = result.getAsJsonObject("payload");
+        assertThat(payload.get("code").getAsString()).isEqualTo("command_blocked");
+        assertThat(payload.getAsJsonObject("details").get("matched").getAsString()).isEqualTo("ultitools");
+        assertThat(payload.get("message").getAsString()).contains("ultipanel.commands.blocklist");
+        assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
+    private UlCommand registerUl() {
+        UlCommand executor = new UlCommand();
+        Command command = new Command("ul") {
+            @Override
+            public boolean execute(CommandSender sender, String label, String[] args) {
+                return executor.onCommand(sender, this, label, args);
+            }
+        };
+        command.setAliases(Arrays.asList("ulti", "ultitools"));
+        server.getCommandMap().register("ultitools", command);
+        return executor;
+    }
+
+    @CmdExecutor(alias = {"ul", "ulti", "ultitools"})
+    public static class UlCommand extends BaseCommandExecutor {
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            calls.incrementAndGet();
+            sender.sendMessage("ul help body");
+        }
     }
 
     private void accept(String line) {

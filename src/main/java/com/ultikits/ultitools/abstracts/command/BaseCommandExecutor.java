@@ -358,10 +358,10 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String alias, String[] args) {
         if (CommandExecutionManager.isPanelDispatch()) {
-            // Check the actual command as well as its invoked alias: wrappers can hide the name
-            // from the outer request, but not from this execution boundary. Local commands bypass it.
+            // Pass the actual command so a listed sibling alias also blocks its other spellings.
+            // Synchronous wrappers can hide the outer name, but local commands bypass this check.
             String arguments = args.length == 0 ? "" : " " + String.join(" ", args);
-            if (CommandExecutionManager.refusePanelCommand(sender, command.getName() + arguments)
+            if (CommandExecutionManager.refusePanelCommand(sender, command, command.getName() + arguments)
                     || CommandExecutionManager.refusePanelCommand(sender, alias + arguments)) {
                 return true;
             }

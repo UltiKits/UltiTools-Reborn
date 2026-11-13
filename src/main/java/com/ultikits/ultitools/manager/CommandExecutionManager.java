@@ -289,7 +289,7 @@ public class CommandExecutionManager {
             }
         }
 
-        if (blockedCommands.contains(baseCommand)) {
+        if (blockedCommands.stream().anyMatch(entry -> baseCommandName(entry).equals(baseCommand))) {
             return AccessDecision.deniedConfigurable(
                     "command '" + baseCommand + "' is on the remote command blocklist",
                     BLOCKLIST_CONFIG_KEY);
@@ -468,15 +468,35 @@ public class CommandExecutionManager {
      * @since 6.5.0
      */
     public static boolean refusePanelCommand(CommandSender sender, String commandLine) {
+        return refusePanelCommand(sender, null, commandLine);
+    }
+
+    /**
+     * Also checks the resolved command's name, registered label and sibling aliases. The executor
+     * supplies the actual command, so nested checks need no command-map lookup or wrapper parsing.
+     *
+     * @param sender receives a refusal as ordinary command feedback
+     * @param command the actual command entering the executor, or null for a text-only check
+     * @param commandLine the invoked label or resolved name followed by its arguments
+     * @return whether the synchronous panel command was refused
+     * @since 6.5.0
+     */
+    public static boolean refusePanelCommand(CommandSender sender, Command command, String commandLine) {
         CommandExecutionManager manager = PANEL_DISPATCH.get();
         if (manager == null) {
             return false;
         }
-        AccessDecision decision = manager.isCommandAllowed(commandLine);
+        String canonical = canonicalCommandLine(commandLine);
+        AccessDecision decision = manager.canonicalCommandDecision(canonical);
+        if (decision.isAllowed() && command != null) {
+            String matched = manager.blocklistedLabel(command, canonical);
+            if (matched != null) {
+                decision = manager.canonicalCommandDecision(matched + argumentsOf(canonical));
+            }
+        }
         if (decision.isAllowed()) {
             return false;
         }
-        String canonical = canonicalCommandLine(commandLine);
         String shown = loggedCommandLine(commandLine, canonical);
         manager.recordCommandDecision(shown, "panel", decision.getMessage());
         UltiTools.getInstance().getLogger().log(Level.WARNING,
@@ -525,13 +545,10 @@ public class CommandExecutionManager {
     }
 
     private void executeCaptured(String commandLine, String shown, String actor, CommandResultSink sink) {
-        Command blocklisted = blocklistedTarget(commandLine);
-        if (blocklisted != null) {
-            // The admission check compares only the typed first word, so `rl` passes while the
-            // `reload` it resolves to is a shipped default, and Bukkit's ReloadCommand is not a
-            // BaseCommandExecutor, so the execution-time check never sees it either. Answer exactly
-            // as the admission check does, and do not dispatch.
-            String matched = blocklisted.getName().toLowerCase(Locale.ROOT);
+        String matched = blocklistedTarget(commandLine);
+        if (matched != null) {
+            // Admission is text-only on the calling thread. Resolve registered spellings on the
+            // server thread, including a listed sibling alias, and report the spelling that matched.
             AccessDecision decision = canonicalCommandDecision(matched + argumentsOf(commandLine));
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                     FrameworkText.format("[远程命令] 已拦截: %s", shown));
@@ -570,27 +587,38 @@ public class CommandExecutionManager {
     }
 
     /**
-     * The blocklisted command a panel command line would actually reach, resolved through the
-     * server's command map. The admission check sees the typed first word only; the execution-time
-     * check in {@code BaseCommandExecutor} sees framework commands only. Between them lies every
-     * built-in alias of a non-framework command, and the one an operator types out of habit is
-     * {@code rl} for {@code reload}.
+     * Resolves the outer label on the server thread and checks every registered spelling against
+     * the same text policy as admission. On Paper 1.21.11 {@code bukkit:rl} resolves to
+     * {@code reload}; bare {@code rl} does not exist. A listed sibling alias also refuses the
+     * command's other spellings. Unknown labels keep their admission decision.
      * <p>
-     * Both spellings are resolved: the label as typed (so {@code bukkit:rl} asks the map for
-     * {@code bukkit:rl}) and the namespace-free form the admission check uses. A label the server
-     * does not know resolves to nothing and keeps the admission decision, so unknown text is never
-     * refused here. This is not a sandbox: a wrapper, {@code execute run} and a {@code commands.yml}
-     * alias whose eventual target is another command are still out of reach, as the documented known
-     * limitations state.
+     * Neither lookup expands wrappers, {@code execute run}, functions or {@code commands.yml}
+     * aliases into their eventual targets. This is a command-line guard, not a sandbox.
      *
      * @param commandLine the canonical command line, dispatched unchanged
-     * @return the resolved command the blocklist refuses, or null when the line may run
+     * @return the normalized name or alias that was refused, or null when the line may run
      */
-    private Command blocklistedTarget(String commandLine) {
-        String arguments = argumentsOf(commandLine);
+    private String blocklistedTarget(String commandLine) {
         for (Command target : resolvedTargets(commandLine)) {
-            if (!canonicalCommandDecision(target.getName() + arguments).isAllowed()) {
-                return target;
+            String matched = blocklistedLabel(target, commandLine);
+            if (matched != null) {
+                return matched;
+            }
+        }
+        return null;
+    }
+
+    /** Uses the actual registered command metadata, never predictions of wrapper expansion. */
+    private String blocklistedLabel(Command target, String commandLine) {
+        List<String> labels = new ArrayList<>(target.getAliases().size() + 2);
+        labels.add(target.getName());
+        labels.add(target.getLabel());
+        labels.addAll(target.getAliases());
+        String arguments = argumentsOf(commandLine);
+        for (String candidate : labels) {
+            String normalized = baseCommandName(candidate);
+            if (!canonicalCommandDecision(normalized + arguments).isAllowed()) {
+                return normalized;
             }
         }
         return null;
