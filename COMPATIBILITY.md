@@ -5,6 +5,13 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Offline runtime API floor checks (as of 6.5.0)
+
+The build verifies the pinned Paper API 1.19.2 fixture against its SHA-256. For offline builds
+without that fixture, `-Druntime.api.floor.skip=true` skips its retrieval and the three fixture-dependent
+unit tests; it does not certify API-floor compatibility. CI keeps the check enabled by default.
+The fixture is test-only and is never bundled in the published JAR.
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"

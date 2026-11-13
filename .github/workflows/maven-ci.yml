@@ -42,6 +42,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+        # Include the pinned Maven version in setup-java's dependency hash.
+        cache-dependency-path: |
+          pom.xml
+          .github/scripts/setup-pinned-maven.sh
 
     - name: 🧪 Build & Test with Coverage
       # Verify also exercises packaging, API compatibility and deprecation-registry checks.
@@ -174,6 +178,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+        # Include the pinned Maven version in setup-java's dependency hash.
+        cache-dependency-path: |
+          pom.xml
+          .github/scripts/setup-pinned-maven.sh
     - name: Run real MySQL comparison contracts with fresh reports
       run: mvn -B clean test -Dtest=RelationalLiteralMatchTest,RelationalOrderingContractTest,ConditionValueParityTest -Dultitools.test.mysql.url='jdbc:mysql://127.0.0.1:3306/ultitools_it_ci?allowPublicKeyRetrieval=true&useSSL=false' -Dultitools.test.mysql.user=ultitools_it
     - name: Require every real MySQL lane to execute without skips
@@ -221,6 +229,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+        # Include the pinned Maven version in setup-java's dependency hash.
+        cache-dependency-path: |
+          pom.xml
+          .github/scripts/setup-pinned-maven.sh
 
     - name: Set up pinned Maven for Central staging
       if: steps.changes.outputs.tooling == 'true'
