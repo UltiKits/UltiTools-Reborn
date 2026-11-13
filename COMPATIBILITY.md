@@ -5,6 +5,18 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Default keys after YAML block scalars (as of 6.5.0)
+
+The configuration write gate can now insert missing default keys after an unchanged literal (`|`) or folded (`>`)
+block scalar followed by empty lines ([#883](https://github.com/UltiKits/UltiTools-Reborn/issues/883)). The original
+block spelling and its trailing empty lines are kept byte for byte, including explicit indentation indicators,
+strip/clip/keep chomping, comments on the indicator line, and consistent LF/CRLF/CR line endings. Existing values
+and comments are not rewritten; the result must parse back to the intended values before publication.
+
+This does not authorize rewriting a block scalar's own value or its separators. Invalid YAML, anchors/aliases,
+unlocatable spans, and any unrelated layout that cannot be preserved still refuse with the existing warning and
+leave the file unchanged. Add the missing key by hand when a write is refused. No public API changes.
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
@@ -733,7 +745,8 @@ preservation guarantee. The storage API signatures are unchanged.
 
 #### Layouts the write gate cannot keep
 
-The renderer writes a document back in one canonical layout. If a changed write would alter any byte outside the keys
+The renderer generally writes a document back in one canonical layout; as of 6.5.0 it retains the source spelling of
+unchanged block scalars with trailing empty lines. If a changed write would alter any byte outside the keys
 it owns, the gate refuses it - a first-start insert, a comment rewrite, a save, an operator change or a panel edit.
 A no-op returns unchanged without rendering. Ownership matters: a layout change wholly inside an owned path can pass if
 every other gate check succeeds. Refusing layout changes is deliberate: the rule forbids normalizing an
@@ -754,7 +767,10 @@ layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalList
 - an inline comment aligned with several spaces (`enabled: true    # note`; one space before `#` is kept);
 - more than one space after a colon (`key:  value`), and spaces inside flow brackets (`worlds: [ world ]`);
 - a document start marker `---` or end marker `...`;
-- a block scalar value (`|`, `|-` or `>`) followed by a blank line. **Known limitation ([#883](https://github.com/UltiKits/UltiTools-Reborn/issues/883), same behaviour as 6.3.2):** when an operator-edited YAML file has such a block scalar, the framework does not append a newly introduced default key. The file is left unchanged, the default applies in memory, and a WARN from `OperatorFileWriter` names the key. Add the key by hand;
+- changing or removing a block scalar value (`|`, `|-` or `>`) when its trailing separator lines would be lost.
+  As of 6.5.0, an unchanged block scalar followed by empty lines no longer prevents inserting a missing default key
+  ([#883](https://github.com/UltiKits/UltiTools-Reborn/issues/883)); its original spelling and separators are retained.
+  Every other unowned byte must still be preserved, or the existing WARN refuses the write;
 - a block comment before any list item (at the item's column or deeper, before the first or a later item, including
   after a block scalar or flow item): a changed write to another key, or one that keeps the list's length, is refused.
   Before a plain or block-mapping item the refusal names the line; before a flow item (`- [1, 2]` or `- {k: v}`) it says
@@ -794,7 +810,8 @@ when every other check succeeds; long keys do **not** imply that all writes are 
 
 Kept byte for byte (a write elsewhere goes through): one space before an inline comment, a block scalar without a blank
 line after it (including a comment line right after it attached to the next key, exactly as after a plain value -
-[#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592)), flow maps and flow lists without inner spaces, quoted
+[#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592)), and, as of 6.5.0, an unchanged block scalar with trailing
+empty lines; flow maps and flow lists without inner spaces, quoted
 values, consistent four-space indentation, list items at the key's column, CRLF or LF throughout, a missing final line
 break (also in a file holding block scalars, apart from the last-value case above), a byte-order mark, `#comment` without
 a space, several blank lines, hexadecimal numbers, `~` and empty values. These kept layouts exclude every list item
