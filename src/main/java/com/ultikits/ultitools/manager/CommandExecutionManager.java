@@ -472,8 +472,9 @@ public class CommandExecutionManager {
     }
 
     /**
-     * Also checks the resolved command's name, registered label and sibling aliases. The executor
-     * supplies the actual command, so nested checks need no command-map lookup or wrapper parsing.
+     * Also checks registered names, labels and aliases in both directions. The executor supplies
+     * the actual command; the reverse check resolves blocklist entries on the same server thread.
+     * Neither check parses wrapper expansion.
      *
      * @param sender receives a refusal as ordinary command feedback
      * @param command the actual command entering the executor, or null for a text-only check
@@ -608,20 +609,41 @@ public class CommandExecutionManager {
         return null;
     }
 
-    /** Uses the actual registered command metadata, never predictions of wrapper expansion. */
+    /** Uses symmetric Bukkit alias metadata, never predictions of wrapper expansion. */
     private String blocklistedLabel(Command target, String commandLine) {
-        List<String> labels = new ArrayList<>(target.getAliases().size() + 2);
-        labels.add(target.getName());
-        labels.add(target.getLabel());
-        labels.addAll(target.getAliases());
         String arguments = argumentsOf(commandLine);
-        for (String candidate : labels) {
+        for (String candidate : registeredLabels(target)) {
             String normalized = baseCommandName(candidate);
             if (!canonicalCommandDecision(normalized + arguments).isAllowed()) {
                 return normalized;
             }
         }
+        // Paper can split a primary command and its aliases into different wrappers, with alias
+        // metadata only on the primary. Resolve the configured entry as well as the typed label.
+        String invoked = baseCommandName(commandLine);
+        for (String entry : blockedCommands) {
+            String normalized = baseCommandName(entry);
+            for (Command blocked : resolvedTargets(normalized)) {
+                for (String candidate : registeredLabels(blocked)) {
+                    if (baseCommandName(candidate).equals(invoked)) {
+                        return normalized;
+                    }
+                }
+            }
+        }
         return null;
+    }
+
+    /** A third-party command may return null instead of an empty alias list. */
+    private static List<String> registeredLabels(Command command) {
+        List<String> labels = new ArrayList<>();
+        labels.add(command.getName());
+        labels.add(command.getLabel());
+        List<String> aliases = command.getAliases();
+        if (aliases != null) {
+            labels.addAll(aliases);
+        }
+        return labels;
     }
 
     /**

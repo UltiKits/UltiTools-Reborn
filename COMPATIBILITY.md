@@ -18,21 +18,31 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
   wrapper that re-dispatches as the console or as a player sends the refusal to that sender's chat or to the server
   log instead, and the panel's `command.result` is `ok` with no refusal line. A direct refusal still returns
   `command_blocked`.
-- **A blocklisted command is refused through its registered aliases too.** Immediately before dispatch, on the
-  server thread, the framework resolves the command line's label through the server's command map and checks the
-  resolved command's name, registered label and all registered aliases against the same blocklist. With `reload`
-  listed, `bukkit:rl confirm` is answered `command_blocked` with `details.matched: reload`. On Paper 1.21.11 Bukkit's
+- **Bukkit alias matching is symmetric over registered metadata.** Immediately before dispatch and at the synchronous
+  nested framework boundary, on the server thread, a blocklist entry matches either the resolved command's name,
+  label or aliases, or a command resolved from that entry whose name, label or aliases contains the invoked label.
+  Both sides are case-insensitive and namespace-free. Paper 1.21.11 splits `plugins` and `pl` into separate wrappers,
+  with aliases only on `plugins`: listing `plugins` blocks `pl` and `bukkit:pl`; listing `pl` also blocks `plugins`.
+  Listing `version` likewise blocks `ver` and `about`. An unrelated entry blocks none of them. This uses the two
+  commands' Bukkit metadata, not a transitive alias graph: listing a split `ver` wrapper with no aliases does not
+  also block its sibling `about`. With `reload` listed, `bukkit:rl confirm` is answered `command_blocked` with
+  `details.matched: reload`. On Paper 1.21.11 Bukkit's
   reload command has only the labels `bukkit:reload` and `bukkit:rl`: bare `rl` is unknown, so `rl confirm` returns
   `command_failed` with `The server console did not accept the command.`, not `command_blocked`. Bare `reload` is
   vanilla's datapack reload, still refused by the shipped list. A label the server does not know keeps its admission
   decision; it is not refused merely for being unknown. See the wrapper limitations below.
-- **An `Error` escaping dispatch still gets a result after its acknowledgement.** This covers raw Bukkit `Command`
-  registrations and dispatcher internals when the error escapes `Bukkit.dispatchCommand`: linkage failures return
-  `command_failed`; other errors get that result before being rethrown to the server. A `BaseCommandExecutor` body
-  instead reports its reflected body failure as ordinary command output, for example `Command execution failed: <message>`;
-  it is not this escaping-error path. The local exception/stack record omits arguments, but an unregistered command's
-  echo and action-log target still include them; only registered sensitive commands mask those records. The
-  panel-origin scope is always restored, and late feedback follows the existing console-forwarding rules.
+- **Dispatch failures still get a result after their acknowledgement.** On Paper 1.21.11, an `Error` thrown by a raw
+  Bukkit `Command` is wrapped in `CommandException` before `Bukkit.dispatchCommand` returns: the panel gets
+  `command_failed`, the local WARNING carries the exception stack and the server keeps serving commands. The result
+  uses Paper's wrapper message, not necessarily the inner error's message. Only repository unit fixtures can expose
+  the escaping-`Error` branches: `PanelDispatchHardeningTest#commandLinkageFailureIsAnsweredWithoutKillingDispatch`
+  proves a linkage failure is answered without rethrow, and
+  `#commandErrorStillAnswersAfterAckAndRestoresOriginBeforeRethrowing` proves other errors are answered before rethrow.
+  A `BaseCommandExecutor` body instead reports its reflected failure as ordinary command output, for example
+  `Command execution failed: <message>`. The framework's WARNING header names only the command, but a third-party
+  exception's message or stack can include arguments; the echo and action-log target also keep unregistered arguments.
+  Do not use these records as a secret-redaction boundary. The panel-origin scope is always restored, and late feedback
+  follows the existing console-forwarding rules.
 - **An asynchronous teleport has a 25-second reply deadline.** If its future has not completed, `player.action.result`
   reports `internal_error` with `teleport did not complete in time`. This stops waiting, not the teleport: the Bukkit
   operation is not cancelled and may still take effect. Check the player's actual position before retrying. A late
@@ -56,6 +66,10 @@ unavailable must restrict panel command access with **`ultipanel.capabilities.co
 `plugins/UltiTools/config.yml` (the shipped default); do not grant it to untrusted operators. Blocking wrapper names
 such as `execute`, `return` and `function` can narrow direct entry points, but is not a complete sandbox. This change
 adds none of those names to the shipped ten-command blocklist and does not protect against a malicious installed plugin.
+
+Vanilla Brigadier redirects such as `tp` / `teleport` are not Bukkit alias metadata and remain a known limitation:
+listing one redirect spelling does not guarantee that the other is blocked. List each spelling explicitly, or disable
+the panel command capability when that boundary is required.
 
 The blocklist is loaded at server start: stop the server, edit `ultipanel.commands.blocklist`, and start it again.
 `/ul reload` does not apply a blocklist edit. Checks use the manager's current in-memory policy, including the recheck

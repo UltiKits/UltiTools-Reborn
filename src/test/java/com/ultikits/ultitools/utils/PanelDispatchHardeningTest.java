@@ -13,6 +13,8 @@ import com.ultikits.ultitools.websocket.CloudRequest;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
@@ -29,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -38,8 +41,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.endsWith;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -306,6 +312,174 @@ class PanelDispatchHardeningTest {
         assertThat(payload.get("status").getAsString()).isEqualTo("ok");
         assertThat(payload.getAsJsonObject("data").getAsJsonArray("output").toString()).contains("ul help body");
         assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
+    /** Paper 1.21.11 uses distinct wrappers; only the primary lists its aliases. */
+    @ParameterizedTest
+    @CsvSource({
+            "plugins, pl", "plugins, bukkit:pl", "BuKkIt:PLUGINS, BuKkIt:PL",
+            "version, ver", "version, about", "version, bukkit:ver", "version, bukkit:about",
+            "pl, plugins", "bukkit:PL, bukkit:plugins"
+    })
+    void splitPaperWrappersMatchAliasesInEitherDirection(String entry, String line) {
+        AtomicInteger calls = registerPaperSplitWrappers(null);
+        manager.setBlockedCommands(Collections.singleton(entry));
+        assertThat(server.getCommandMap().getCommand("pl"))
+                .isNotSameAs(server.getCommandMap().getCommand("plugins"));
+        assertThat(server.getCommandMap().getCommand("pl").getAliases()).isEmpty();
+        assertThat(server.getCommandMap().getCommand("plugins").getAliases())
+                .containsExactly("pl", "bukkit:pl");
+        clearInvocations(server);
+
+        accept(line);
+
+        verify(server, never()).getCommandMap();
+        assertThat(mainThread).as("admission is text-only; metadata is checked on the server thread").hasSize(1);
+        mainThread.remove().run();
+
+        assertThat(calls.get()).isZero();
+        assertThat(channel.frames()).hasSize(2);
+        JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
+        assertThat(payload.get("code").getAsString()).isEqualTo("command_blocked");
+        assertThat(payload.getAsJsonObject("details").get("matched").getAsString())
+                .isEqualTo(entry.substring(entry.indexOf(':') + 1).toLowerCase(java.util.Locale.ROOT));
+        assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"plugins, pl help", "plugins, bukkit:pl help", "version, ver help",
+            "version, about help", "pl, plugins help"})
+    void nestedFrameworkCheckAlsoMatchesSplitPaperWrappers(String entry, String nested) {
+        UlCommand executor = new UlCommand();
+        registerPaperSplitWrappers(executor);
+        register("execute", (sender, args) -> Bukkit.dispatchCommand(sender, nested));
+        manager.setBlockedCommands(Collections.singleton(entry));
+
+        accept("execute run " + nested);
+        mainThread.remove().run();
+
+        assertThat(executor.calls.get()).isZero();
+        assertThat(channel.frames()).hasSize(2);
+        JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+        assertThat(payload.getAsJsonObject("data").getAsJsonArray("output").toString())
+                .contains("command '" + entry + "' is on the remote command blocklist")
+                .doesNotContain("ul help body");
+        assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"pl", "bukkit:pl", "ver", "about"})
+    void unrelatedEntryDoesNotRefuseSplitPaperWrappers(String line) {
+        AtomicInteger calls = registerPaperSplitWrappers(null);
+        manager.setBlockedCommands(Collections.singleton("unrelated"));
+
+        accept(line);
+        mainThread.remove().run();
+
+        assertThat(calls.get()).isEqualTo(1);
+        assertThat(channel.frames()).hasSize(2);
+        assertThat(channel.frames().get(1).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+    }
+
+    @Test
+    void splitSiblingWrappersWithoutMetadataDoNotInventATransitiveAliasRelation() {
+        AtomicInteger calls = registerPaperSplitWrappers(null);
+        manager.setBlockedCommands(Collections.singleton("ver"));
+
+        accept("about");
+        mainThread.remove().run();
+
+        assertThat(calls.get()).isEqualTo(1);
+        assertThat(channel.frames().get(1).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"pl", "bukkit:pl"})
+    void nullAliasesOnTypedWrapperStillAllowReverseMatching(String line) {
+        AtomicInteger calls = registerPaperSplitWrappers(null);
+        Command alias = spy(server.getCommandMap().getCommand("pl"));
+        doReturn(null).when(alias).getAliases();
+        server.getCommandMap().getKnownCommands().put("pl", alias);
+        server.getCommandMap().getKnownCommands().put("bukkit:pl", alias);
+        manager.setBlockedCommands(Collections.singleton("plugins"));
+
+        accept(line);
+        mainThread.remove().run();
+
+        assertThat(calls.get()).isZero();
+        assertThat(channel.frames().get(1).getAsJsonObject("payload").get("code").getAsString())
+                .isEqualTo("command_blocked");
+    }
+
+    @Test
+    void nullAliasesOnBlocklistEntryDoNotRefuseAnUnrelatedCommand() {
+        AtomicInteger calls = registerPaperSplitWrappers(null);
+        Command primary = spy(server.getCommandMap().getCommand("plugins"));
+        doReturn(null).when(primary).getAliases();
+        server.getCommandMap().getKnownCommands().put("plugins", primary);
+        server.getCommandMap().getKnownCommands().put("bukkit:plugins", primary);
+        manager.setBlockedCommands(Collections.singleton("plugins"));
+
+        accept("ver");
+        mainThread.remove().run();
+
+        assertThat(calls.get()).isEqualTo(1);
+        assertThat(channel.frames().get(1).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+    }
+
+    @Test
+    void nestedAuthenticationExecutorUsesPolicyTextBeforeItsBody() {
+        CloudLoginCommand authentication = new CloudLoginCommand();
+        server.getCommandMap().register("ultitools", new Command("ulticloud") {
+            @Override
+            public boolean execute(CommandSender sender, String label, String[] args) {
+                return authentication.onCommand(sender, this, label, args);
+            }
+        });
+        register("execute", (sender, args) -> Bukkit.dispatchCommand(sender, "ulticloud logout"));
+        manager.setBlockedCommands(Collections.emptySet());
+
+        accept("execute run ulticloud logout");
+        mainThread.remove().run();
+
+        assertThat(channel.frames()).hasSize(2);
+        JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("ok");
+        assertThat(payload.getAsJsonObject("data").getAsJsonArray("output").get(0).getAsString())
+                .isEqualTo("Blocked — UltiCloud login/logout must be run from the server console. "
+                        + "This restriction cannot be changed through configuration.");
+        assertThat(CommandExecutionManager.isPanelDispatch()).isFalse();
+    }
+
+    private AtomicInteger registerPaperSplitWrappers(UlCommand executor) {
+        AtomicInteger calls = new AtomicInteger();
+        installPaperWrapper("plugins", Arrays.asList("pl", "bukkit:pl"), executor, calls);
+        installPaperWrapper("pl", Collections.emptyList(), executor, calls);
+        installPaperWrapper("version", Arrays.asList("ver", "bukkit:ver", "about", "bukkit:about"), executor, calls);
+        installPaperWrapper("ver", Collections.emptyList(), executor, calls);
+        installPaperWrapper("about", Collections.emptyList(), executor, calls);
+        return calls;
+    }
+
+    private void installPaperWrapper(String name, List<String> aliases, UlCommand executor, AtomicInteger calls) {
+        Command wrapper = new Command(name) {
+            @Override
+            public boolean execute(CommandSender sender, String label, String[] args) {
+                if (executor != null) {
+                    return executor.onCommand(sender, this, label, args);
+                }
+                calls.incrementAndGet();
+                sender.sendMessage("split wrapper body");
+                return true;
+            }
+        };
+        wrapper.setAliases(aliases);
+        // Replace lookup nodes directly: SimpleCommandMap.register would reuse the primary object
+        // for aliases, whereas Paper's VanillaCommandWrapper nodes are separate objects.
+        Map<String, Command> commands = server.getCommandMap().getKnownCommands();
+        commands.put(name, wrapper);
+        commands.put("bukkit:" + name, wrapper);
     }
 
     private void assertSiblingRefusal(UlCommand executor) {
