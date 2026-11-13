@@ -56,6 +56,16 @@ class ErrorReportModuleIdentifierTest {
         MockBukkitHelper.safeUnmock();
     }
 
+    @org.junit.jupiter.api.Test
+    void errorsUseTheNameFallbackWhenTheLoadedModuleHasNoValidIdentifyString() {
+        UltiToolsPlugin chat = com.ultikits.ultitools.UltiTools.getInstance().getPluginManager()
+                .getPluginList().get(0);
+        lenient().when(chat.getIdentifyString()).thenReturn("invalid_id");
+        collector.reportError(new IllegalStateException("fallback"), "UltiTools-Chat", null);
+        JsonObject payload = collector.drainErrorReportPayloads(10).get(0);
+        assertThat(payload.get("moduleName").getAsString()).isEqualTo("ultitools-chat");
+    }
+
     @ParameterizedTest(name = "reported as ''{0}'' -> {1}")
     @CsvSource(nullValues = "null", value = {
             "UltiTools-Chat, ultichat",

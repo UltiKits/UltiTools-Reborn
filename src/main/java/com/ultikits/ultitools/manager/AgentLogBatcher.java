@@ -401,7 +401,7 @@ final class AgentLogBatcher {
      */
     private static JsonObject lineObject(long ts, String level, String message) {
         JsonObject object = new JsonObject();
-        object.addProperty("ts", ts);
+        object.addProperty("ts", AgentEventEncoders.seenAt(ts));
         object.addProperty("level", level);
         object.addProperty("message", message);
         return object;
