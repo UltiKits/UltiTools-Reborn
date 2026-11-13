@@ -25,7 +25,7 @@ class RandomOrderWorkflowTest {
 
     @Test
     void independentCheckCoversMainAndOffersManualReplay() throws Exception {
-        Map<String, Object> workflow = workflow();
+        Map<?, ?> workflow = workflow();
         // SnakeYAML's YAML 1.1 resolver reads GitHub's unquoted "on" key as true.
         Map<?, ?> events = (Map<?, ?>) workflow.get(Boolean.TRUE);
         for (String event : new String[] {"push", "pull_request"}) {
@@ -108,7 +108,7 @@ class RandomOrderWorkflowTest {
         return (Map<?, ?>) ((Map<?, ?>) workflow().get("jobs")).get("random-order");
     }
 
-    private Map<String, Object> workflow() throws Exception {
+    private Map<?, ?> workflow() throws Exception {
         try (InputStream input = Files.newInputStream(Paths.get(".github/workflows/random-order-tests.yml"))) {
             return new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
         }
