@@ -24,7 +24,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -47,6 +49,7 @@ import com.ultikits.ultitools.manager.DataScope;
  */
 @Timeout(60)
 @DisplayName("JSON transaction(...) behaviours the shipped modules rely on")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonModuleTransactionBehaviourTest {
 
     private static final long HANDSHAKE_SECONDS = 10;

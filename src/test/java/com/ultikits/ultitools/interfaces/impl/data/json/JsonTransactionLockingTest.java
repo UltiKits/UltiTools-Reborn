@@ -38,8 +38,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
@@ -75,6 +77,7 @@ import com.ultikits.ultitools.manager.PluginManager;
  */
 @Timeout(60)
 @DisplayName("JSON transaction engine: table write locks, bounded waits, isolation")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonTransactionLockingTest {
 
     /** Bounded wait for every handshake that must happen. */

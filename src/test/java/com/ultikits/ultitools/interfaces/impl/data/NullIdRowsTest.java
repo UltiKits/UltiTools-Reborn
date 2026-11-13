@@ -28,7 +28,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -51,6 +53,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * exist. The backfill keys rows by {@code _rowid_}, which both engines provide.
  */
 @DisplayName("NULL-id rows: backfill at table init, refuse null-id update/delete (#546)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class NullIdRowsTest {
 
     private static DataSource dataSource;

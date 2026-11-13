@@ -22,7 +22,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -50,6 +52,7 @@ import lombok.EqualsAndHashCode;
  * @since 6.2.5
  */
 @DisplayName("JSON 后端查询语义（#176 列名匹配 / #192 AND 交集）")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonQuerySemanticsTest {
 
     @TempDir

@@ -28,7 +28,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -57,6 +59,7 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournal.Kind;
  */
 @Timeout(60)
 @DisplayName("JSON backend: entity id to file name rules")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonEntityFileNameTest {
 
     /** The characters a Windows file name cannot contain, besides the separators and control characters. */
