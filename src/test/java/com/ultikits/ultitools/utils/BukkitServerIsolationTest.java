@@ -44,7 +44,7 @@ class BukkitServerIsolationTest {
             "com.ultikits.ultitools.manager.JdbcTransactionalParticipationTest"
     })
     void bareServerFixtureRestoresThePreviousServer(String className) throws Exception {
-        Class<?> owner = Class.forName(className);
+        Class<?> owner = loadTestClass(className);
         Server previous = Bukkit.getServer();
         List<Extension> extensions = extensions(owner);
         ExtensionContext context = context();
@@ -105,10 +105,19 @@ class BukkitServerIsolationTest {
         for (Path source : owners) {
             String className = sources.relativize(source).toString().replace(java.io.File.separatorChar, '.')
                     .replaceFirst("\\.java$", "");
-            Class<?> owner = Class.forName(className);
+            Class<?> owner = loadTestClass(className);
             assertThat(extensions(owner)).as("%s must restore the server it installs", className)
                     .anyMatch(extension -> extension instanceof MockBukkitHelper.ServerStateExtension);
         }
+    }
+
+    /**
+     * Resolves a test class by name. Both call sites pass names taken from this repository's own test
+     * sources — a fixed literal list and a directory scan — so no external input reaches the call.
+     */
+    private static Class<?> loadTestClass(String className) throws ClassNotFoundException {
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
+        return Class.forName(className);
     }
 
     private static boolean installsServer(Path source) {

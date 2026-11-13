@@ -37,7 +37,8 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: maven
+          # No Maven cache on purpose: the release-tooling suite keeps the cached-Maven set fixed and
+          # keys each entry to the pinned-Maven script, so this replay job resolves from a cold cache.
 
       - name: Select and record replay seed
         id: seed
