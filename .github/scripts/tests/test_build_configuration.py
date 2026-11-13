@@ -4,12 +4,14 @@ import os
 import subprocess
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as element_tree
 from pathlib import Path
+
+from defusedxml.ElementTree import parse as parse_xml
 
 ROOT = Path(__file__).resolve().parents[3]
 NS = {"m": "http://maven.apache.org/POM/4.0.0"}
-POM = ET.parse(ROOT / "pom.xml")
+POM = parse_xml(ROOT / "pom.xml")
 
 
 def required(parent, path, namespaces=None):
@@ -43,15 +45,20 @@ class BuildConfigurationTests(unittest.TestCase):
         configuration = plugin.find("configuration")
         if configuration is not None:
             plugin.remove(configuration)
-        project = ET.Element("project")
+        project = element_tree.Element("project")
         for name, value in (("modelVersion", "4.0.0"), ("groupId", "probe"),
                             ("artifactId", "build-config"), ("version", "1")):
-            ET.SubElement(project, name).text = value
+            element_tree.SubElement(project, name).text = value
         properties = local_tag(copy.deepcopy(required(POM, "m:properties", NS)))
         project.append(properties)
-        plugins = ET.SubElement(ET.SubElement(project, "build"), "plugins")
+        # Offline resolution must recognise the repository IDs used by CI's online warm-up.
+        for section in ("repositories", "pluginRepositories"):
+            repositories = POM.find("m:" + section, NS)
+            if repositories is not None:
+                project.append(local_tag(copy.deepcopy(repositories)))
+        plugins = element_tree.SubElement(element_tree.SubElement(project, "build"), "plugins")
         plugins.append(plugin)
-        (self.root / "pom.xml").write_bytes(ET.tostring(project))
+        (self.root / "pom.xml").write_bytes(element_tree.tostring(project))
         env = dict(os.environ)
         env.pop("MAVEN_ARGS", None)
         selected = required(plugin, "executions/execution/goals/goal").text
@@ -59,10 +66,18 @@ class BuildConfigurationTests(unittest.TestCase):
         prefix = "org.apache.maven.plugins:" + artifact + ":" + plugin.findtext("version") + ":"
         goals = [prefix + "compile"] if artifact == "maven-compiler-plugin" else []
         goals.append(prefix + selected + "@" + execution)
+        # Resolve this probe's actual plugin realm online, not just the framework's realm.
+        # Skipping the fixture here preserves missing/changed files for the offline assertion.
+        warm_args = ["-Druntime.api.floor.skip=true"] if artifact == "maven-antrun-plugin" else []
+        warm = subprocess.run(["mvn", "-B", "-ntp", *goals, *args, *warm_args], cwd=self.root, env=env,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              timeout=660)
+        warm_output = warm.stdout.decode("utf-8", "replace")
+        self.assertEqual(warm.returncode, 0, "Probe dependency warm-up failed:\n" + warm_output)
         result = subprocess.run(["mvn", "-B", "-o", "-ntp", *goals, *args], cwd=self.root, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=660)
-        return result, result.stdout.decode("utf-8", "replace")
+        return result, warm_output + result.stdout.decode("utf-8", "replace")
 
     def floor(self, *args):
         return self.run_mojo("maven-antrun-plugin", "runtime-api-floor-paper-fixture",
@@ -104,6 +119,7 @@ class BuildConfigurationTests(unittest.TestCase):
         self.assertTrue((self.root / "target/classes/Product.class").is_file())
         self.assertTrue((self.root / "target/buildtools-classes/com/ultikits/ultitools/buildtools/deprecation/Helper.class").is_file())
         self.assertFalse((self.root / "target/classes/com/ultikits/ultitools/buildtools/deprecation").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
