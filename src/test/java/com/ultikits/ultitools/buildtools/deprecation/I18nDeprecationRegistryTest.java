@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 /** #877: the build's source scanner must register both retained language declarations. */
 class I18nDeprecationRegistryTest {
     @Test
-    void sourceScannerAnnouncesBothDeclarationsWithoutInventingAMajorReleaseDeadline() throws IOException {
+    void sourceScannerAnnouncesBothDeclarationsWithAccurateHistoryAndEarliestRemoval() throws IOException {
         String annotationPackage = "com.ultikits.ultitools.annotations.";
         List<DeprecationEntry> entries = new JavadocDeprecationScanner(getClass().getClassLoader())
                 .scan(Paths.get("src/main/java/com/ultikits/ultitools/annotations")).stream()
@@ -26,7 +26,9 @@ class I18nDeprecationRegistryTest {
             assertThat(entry.isForRemoval()).isTrue();
             assertThat(entry.getStatus()).isEqualTo(DeprecationEntry.Status.ANNOUNCED);
             assertThat(entry.getRemoveIn()).isNull();
-            assertThat(entry.getReplacement()).contains("lang/*", "future major version");
+            assertThat(entry.getReplacement()).contains("Deprecated since 6.5.0.",
+                    "Since 6.3.0, languages come from", "lang/*", "may be removed as early as 6.6.0")
+                    .doesNotContain("future major version");
         }
     }
 }

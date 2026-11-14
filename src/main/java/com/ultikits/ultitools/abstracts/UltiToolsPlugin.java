@@ -395,7 +395,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             getLogger().warn("Module '" + getPluginName() + "' uses deprecated @I18n / "
                     + "@UltiToolsModule(i18n): missing language resources: " + String.join(", ", declared)
                     + ". Ship lang/<code>.json, .yml or .yaml in this module's JAR. "
-                    + "Declarations have been ignored since 6.3.0 and will be removed in a future major version.");
+                    + "Declarations have been ignored since 6.3.0 and may be removed as early as 6.6.0.");
         }
     }
 
