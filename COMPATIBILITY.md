@@ -64,13 +64,17 @@ The three new entries refuse direct nested-dispatch entry points such as `execut
 because alias/nested matching has the limits described below. Namespaced forms such as `minecraft:execute` are
 refused too, with `command_blocked` and `details.matched: execute`.
 
+**Known limitation:** the first word is what is matched, so `schedule function <pack>:x …` still runs a datapack
+function later from the scheduler; `schedule` is not on the shipped list because it is an ordinary operator command.
+An operator who wants to refuse it adds `schedule` to `ultipanel.commands.blocklist` (stop, edit, start).
+
 New installs and configurations without this key get the new defaults. **An existing operator list is never
 extended or rewritten**: existing servers keep their old list and must add `execute`, `return` and `function`
 themselves if they want these refusals. To allow those commands, stop the server, delete their three lines from
 `ultipanel.commands.blocklist` in `plugins/UltiTools/config.yml`, and start it again. Keep the remaining entries;
 `[]` disables the entire configurable list. `/ul reload` does not re-read this list.
 
-中文补充：6.5.0 的默认列表新增 `execute`、`return`、`function`，新安装或缺少此键的配置采用新默认值。已有列表绝不追加或改写；旧服务器如需拦截这三项须自行添加。要允许它们，停服后删除列表中对应三行，再启动服务器；`/ul reload` 不会重读此列表。
+中文补充：6.5.0 的默认列表新增 `execute`、`return`、`function`，新安装或缺少此键的配置采用新默认值。已有列表绝不追加或改写；旧服务器如需拦截这三项须自行添加。要允许它们，停服后删除列表中对应三行，再启动服务器；`/ul reload` 不会重读此列表。已知限制：`schedule function …` 仍可由调度器稍后执行数据包函数，默认列表不含 `schedule`；如需拦截，请自行加入后重启。
 
 ### Known limitations of panel command hardening
 
