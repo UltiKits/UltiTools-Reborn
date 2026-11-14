@@ -332,7 +332,8 @@ stable extension points although their package carries `@ApiStatus.Internal`.
 A `PanelResponderRegistry` responder may now answer any JSON value: an object, an array, a primitive, or no
 content. A future that completes with `null` or `JsonNull` is a success with no content, sent as `ok` with
 `data: null`; in 6.3.0 it was a failure. A responder that returns no future, throws, or completes its future
-exceptionally still fails the request (`module_error`). To allow these shapes the generic signatures changed,
+exceptionally still fails the request (`module_error`). The `module_error` message is value-free by design: when a
+responder's result cannot be serialised as JSON, the message does not name the offending field. To allow these shapes the generic signatures changed,
 with identical erasure, so compiled modules keep linking (japicmp: binary compatible):
 
 - `registerResponder(String, Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>>, String)`
@@ -772,9 +773,9 @@ take.
 - **An editable root equal to the server root is not listed.** `files.list` with an empty path lists the editable
   roots by their path relative to the server root; the server root itself has no such path and is omitted, although
   requests for paths inside it are still judged normally. Use sub-directories (`plugins`, `logs`) as editable roots.
-- **A log line with a negative timestamp invalidates its `log.lines` frame.** The framework forwards the line's
-  timestamp unchanged, and the contract requires `ts` of at least 0, so a system clock set before 1970 makes the
-  gateway refuse the frame. Keep the system clock correct.
+- **A panel config edit replaces a module's unsaved in-memory change to the same key.** The panel writes the file and
+  reloads the module's config entity; as in the three-way reload, the value on disk wins and the module's unsaved
+  change to that key is dropped. Modules should save their own changes before an operator edits the same key.
 
 ## Config layer (6.3.0)
 
