@@ -255,7 +255,7 @@ public class CommandExecutionManager {
      * against the operator-configured blocklist at {@code ultipanel.commands.blocklist} in
      * {@code plugins/UltiTools/config.yml} — so both the bare command and its namespaced form are
      * blocked; the stripping order is what makes that true. The blocklist is editable in both
-     * directions — an operator may remove any of the ten shipped defaults, add to them, or clear
+     * directions — an operator may remove any of the thirteen shipped defaults, add to them, or clear
      * the list entirely. Separately, direct forms of UltiCloud's own {@code login} and {@code logout}
      * subcommands are refused with {@code command_blocked}, regardless of the configured blocklist.
      * Command names come from {@link CloudLoginCommand}'s {@link CmdExecutor} aliases, the same

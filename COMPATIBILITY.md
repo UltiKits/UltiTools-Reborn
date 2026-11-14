@@ -695,8 +695,10 @@ take.
   command's real output. A plugin command that accepts only the console sender refuses it. Run such commands in
   the server console. There is no automatic console retry.
 - **A panel command's immediate reply is no longer echoed to the console (6.3.1).** It is captured in
-  `command.result` `data.output`, not in the server console, its log files or the panel's log stream. The
-  console records the `[UltiTools] [Remote command] > <command>` audit line and any late output, not a copy
+  `command.result` `data.output` on success; when dispatch is refused, the captured text is in the
+  `command_failed` error's `message` instead. Neither is echoed to the console, its log files or the panel's
+  log stream. The console records the audit line (English: `[UltiTools] [Remote command] > <command>`;
+  its text follows the server's `language` setting) and any late output, not a copy
   of the immediate reply (`CommandExecutionManager#execute` writes the audit line;
   `CommandExecutionManager#executeCaptured` captures the reply and forwards late output).
 - **A panel command's late output is not in its result.** `command.result` is sent when the command's dispatch
@@ -1792,6 +1794,9 @@ such spelling: keep binary values out of the keys of a file the framework writes
 - **MINOR** (for example 6.2.x → 6.3.0): feature evolution. **May include removal of public API.**
 - **MAJOR**: reserved for a change of direction at the framework level. It will not be issued
   merely to clean up deprecated API.
+
+Libraries delivered through `plugin.yml` `libraries:` (for example XSeries) follow their own versioning,
+not this framework's version-number contract.
 
 ### When a public API becomes eligible for removal
 
