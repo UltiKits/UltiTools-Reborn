@@ -622,7 +622,7 @@ changes already under way,
 including work handed to a module responder or the player-link handler, so no change happens after the remote
 action log closes.
 
-### Smaller UltiCloud client changes (as of 6.4.0)
+### Smaller UltiCloud client changes (as of 6.5.0)
 
 - **`files.list` of the empty path lists only roots that exist.** A configured editable root that does not exist, or
   is a file, is no longer offered to the panel as a directory; opening it answered only `not_found` or
@@ -2842,7 +2842,7 @@ This section governs the third kind.
   other comparison, a column the entity does not map (also with a `null` value), a `null` id and a
   `null` condition are still refused with `DataAccessException`. The meaning belongs to `updateIf`
   alone: `getAll`, `exist`, `del` and `page` treated a `null` condition value as before, and refuse it as of
-  6.4.0 (#815, see the comparison entry below). 6.3.0
+  6.5.0 (#815, see the comparison entry below). 6.3.0
   snapshots published earlier in this cycle refused a `null` expected value; no release ever had
   `updateIf` (`git tag --contains` on the commit that added it is empty), so only a module compiled
   against such a snapshot that relied on the refusal must change.
@@ -2852,7 +2852,7 @@ This section governs the third kind.
   `<c> IS NULL`，JSON 要求该条目的字段不存在或为 JSON null。因此，对读取时尚未设置的列做比较后写入时，若另一台服务器在
   读取与写入之间写入了该列，本次写入不生效，另一方的值得以保留。其他比较下的 `null`、实体未映射的列（值为 `null` 时也一样）、
   `null` id 和 `null` 条件仍抛 `DataAccessException`。这一含义只属于 `updateIf`：`getAll`、`exist`、`del`、`page` 对 `null`
-  条件值的处理当时不变，自 6.4.0 起改为拒绝（#815，见下方比较条目）。本周期较早发布的 6.3.0 快照会拒绝 `null` 期望值；没有任何正式版本包含 `updateIf`，因此只有针对这类快照
+  条件值的处理当时不变，自 6.5.0 起改为拒绝（#815，见下方比较条目）。本周期较早发布的 6.3.0 快照会拒绝 `null` 期望值；没有任何正式版本包含 `updateIf`，因此只有针对这类快照
   编译、并依赖该拒绝行为的模块需要修改。
 - An update by a non-null id that matches no row writes nothing and says so (#558, maintainer
   decision of 2026-09-29). `update(T)`, `update(column, value, id)` and `updateAll` now log one
@@ -2948,7 +2948,7 @@ This section governs the third kind.
   it reads back: a `float` such as `0.1f`, which SQLite keeps there as the 15 significant digits
   `0.100000001490116`, is neither greater nor less than `0.1f`. That read-back comparison applies to a value
   that is a finite number; a number beyond the range of a `double` and any text are compared as they are
-  bound. An infinite or NaN `double` or `float` value is refused on every backend as of 6.4.0 (see the
+  bound. An infinite or NaN `double` or `float` value is refused on every backend as of 6.5.0 (see the
   paragraph on null and non-finite values below).
   On MySQL such a default text column is
   compared the way MySQL compares text with a number, in double precision, so whole numbers beyond
@@ -2978,7 +2978,7 @@ This section governs the third kind.
   number of 10^15 or more such as `(1L << 53) + 1`, or a decimal with 16 or more significant digits)
   compares as equal to it, so `GREATER` that value does not select the row holding `0.1f`; this holds in a default
   column and also in a column declared `REAL`, which earlier 6.3.0 snapshots compared exactly. Pass a
-  `float` value for a `float` field. **As of 6.4.0, a null or non-finite condition value is refused on every
+  `float` value for a `float` field. **As of 6.5.0, a null or non-finite condition value is refused on every
   backend ([#815](https://github.com/UltiKits/UltiTools-Reborn/issues/815),
   [#696](https://github.com/UltiKits/UltiTools-Reborn/issues/696)).** `getAll`, `exist`, `page`, `del` and
   `updateIf` (and `Query`, whose `eq(null)` builds such a condition) throw `DataAccessException` with
@@ -3009,7 +3009,7 @@ This section governs the third kind.
   MySQL 会把它与默认文本列按文本比较，于是 `"10"` 排在 `"2"` 之前。在 SQLite 上，列保持默认 `VARCHAR(255)` 类型时同样按类型比较，
   整数保持 64 位精度，所存的值按读回时的值比较：`0.1f` 这样的 `float` 在该列中保存为 15 位有效数字 `0.100000001490116`，
   它既不大于也不小于 `0.1f`。这种按读回值的比较只适用于有限数字的值；无穷大、超出 `double` 范围的数字以及任何文本都按绑定时的值比较，
-  自 6.4.0 起，无穷大或 NaN 的 `double`/`float` 值在所有后端都会被拒绝（见下文关于 null 与非有限值的说明）。在 MySQL 上，这种默认文本列按 MySQL 比较文本与数字的方式以双精度比较，超出
+  自 6.5.0 起，无穷大或 NaN 的 `double`/`float` 值在所有后端都会被拒绝（见下文关于 null 与非有限值的说明）。在 MySQL 上，这种默认文本列按 MySQL 比较文本与数字的方式以双精度比较，超出
   ±9,007,199,254,740,992（2^53）的整数在那里只是近似比较；需要精确结果时，请为该列声明数值 `type`（例如
   `@Column(value = "stamp", type = "BIGINT")`）。在 JSON 上按 `double` 比较，超出 ±9,007,199,254,740,992 时同样是近似的。
   其他类型的字段按数据库比较所存文本的方式比较。本周期较早的 6.3.0 快照把 `%` 和 `_` 当作通配符，并在 SQLite
@@ -3026,7 +3026,7 @@ This section governs the third kind.
   （`0.333333333333333`），读回和比较都按这个值，因此 `LESS 1/3.0` 会选中写入时为 `1/3.0` 的行，而保留全部数字的 JSON 不会；
   要保留全部数字，请把该列声明为 `type = "DOUBLE"`。在 SQLite 上，与所存 `float` 前 15 位有效数字相同、之后才不同的任何数值
   （例如 `Math.nextDown((double) 0.1f)`、10^15 及以上的整数如 `(1L << 53) + 1`，或有 16 位及以上有效数字的小数）会被视为与它相等，因此 `GREATER` 该值不会选中保存 `0.1f` 的行；默认列如此，声明为 `REAL`
-  的列也如此，而本周期较早的 6.3.0 快照在 `REAL` 列上是精确比较的。对 `float` 字段请传 `float` 值。**自 6.4.0 起，null 或非有限的条件值在所有后端都会被拒绝（#815、#696）。** `getAll`、`exist`、`page`、`del` 与 `updateIf`（以及 `eq(null)` 会构造此类条件的 `Query`）在 SQLite、MySQL 和 JSON 上一致地于读取、删除或写入之前抛出带 `DATA_ENTITY_INVALID` 的 `DataAccessException`：条件值在任何比较方式下为 `null`，或是无穷大或 NaN 的 `Double`/`Float`。唯一例外是 `updateIf` 中 `EQUAL` 下的 `null` 值，仍表示 `IS NULL`（#640）。JSON 上的 `del(WhereCondition.empty())` 也同样被拒绝（与 SQLite、MySQL 一致），`exist(entity)` 对没有 id 的实体在所有后端都返回 `false`。**异常类型变化：** 6.3.x 中 SQLite 与 MySQL 会直接绑定这类值（null 的 `EQUAL` 或 `GREATER` 不匹配任何行，null 的 `INCLUDE` 匹配文本 `null`，无穷大按绑定值比较，NaN 不匹配任何行且在 SQLite 上使 `updateIf` 永不生效），JSON 则抛出 `NullPointerException`（`EQUAL` 的 null 值、`del` 的空条件）或 Gson 的 `IllegalArgumentException`（无穷大或 NaN）。依赖这类值不匹配任何行、或在这些调用外捕获 `NullPointerException`/`IllegalArgumentException` 的模块，应先检查值（判空、`Double.isFinite`）或捕获 `DataAccessException`。数值字段的列中若有手工或其他程序写入的非数字文本，在 SQLite 上按其开头的数字比较
+  的列也如此，而本周期较早的 6.3.0 快照在 `REAL` 列上是精确比较的。对 `float` 字段请传 `float` 值。**自 6.5.0 起，null 或非有限的条件值在所有后端都会被拒绝（#815、#696）。** `getAll`、`exist`、`page`、`del` 与 `updateIf`（以及 `eq(null)` 会构造此类条件的 `Query`）在 SQLite、MySQL 和 JSON 上一致地于读取、删除或写入之前抛出带 `DATA_ENTITY_INVALID` 的 `DataAccessException`：条件值在任何比较方式下为 `null`，或是无穷大或 NaN 的 `Double`/`Float`。唯一例外是 `updateIf` 中 `EQUAL` 下的 `null` 值，仍表示 `IS NULL`（#640）。JSON 上的 `del(WhereCondition.empty())` 也同样被拒绝（与 SQLite、MySQL 一致），`exist(entity)` 对没有 id 的实体在所有后端都返回 `false`。**异常类型变化：** 6.3.x 中 SQLite 与 MySQL 会直接绑定这类值（null 的 `EQUAL` 或 `GREATER` 不匹配任何行，null 的 `INCLUDE` 匹配文本 `null`，无穷大按绑定值比较，NaN 不匹配任何行且在 SQLite 上使 `updateIf` 永不生效），JSON 则抛出 `NullPointerException`（`EQUAL` 的 null 值、`del` 的空条件）或 Gson 的 `IllegalArgumentException`（无穷大或 NaN）。依赖这类值不匹配任何行、或在这些调用外捕获 `NullPointerException`/`IllegalArgumentException` 的模块，应先检查值（判空、`Double.isFinite`）或捕获 `DataAccessException`。数值字段的列中若有手工或其他程序写入的非数字文本，在 SQLite 上按其开头的数字比较
   （`'abc'` 为 0，`'12abc'` 为 12），JSON 则对该行按文本比较。见 `FEATURES.md` 中的 `ultitools.storage.where-comparisons`。
 
 - `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
