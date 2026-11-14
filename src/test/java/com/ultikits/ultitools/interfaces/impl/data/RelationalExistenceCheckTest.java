@@ -17,7 +17,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -38,6 +40,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * as a control: the operator is the same, only the driver differs.
  */
 @DisplayName("Existence check counts rows on every relational driver")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class RelationalExistenceCheckTest {
 
     static final String TABLE = "existence_check_row";

@@ -56,6 +56,10 @@ public class TestHelper {
             // Mock isEnabled()
             Mockito.lenient().when(mock.isEnabled()).thenReturn(true);
 
+            // Mock getLogger(): framework code logs through this instance, and a null logger turns a
+            // recoverable config problem into a NullPointerException in whichever test class runs next.
+            Mockito.lenient().when(mock.getLogger()).thenReturn(Mockito.mock(java.util.logging.Logger.class));
+
             // Mock getPluginLoader()
             org.bukkit.plugin.PluginLoader pluginLoader = Mockito.mock(org.bukkit.plugin.PluginLoader.class);
             Mockito.lenient().when(mock.getPluginLoader()).thenReturn(pluginLoader);

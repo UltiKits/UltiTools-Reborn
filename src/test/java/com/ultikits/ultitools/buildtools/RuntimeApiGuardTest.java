@@ -19,6 +19,8 @@ class RuntimeApiGuardTest {
     }
 
     static RuntimeApiGuard floorGuard() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeFalse(Boolean.getBoolean("runtime.api.floor.skip"),
+                "Runtime API floor fixture explicitly skipped with -Druntime.api.floor.skip=true");
         return new RuntimeApiGuard(target().resolve("runtime-api-floor/gson-2.8.9.jar"),
                 target().resolve("runtime-api-floor/paper-api-1.19.2.jar"));
     }

@@ -28,7 +28,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -58,6 +60,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * #640) still works.
  */
 @DisplayName("Null and non-finite condition values are refused alike on every backend (#815, #696)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class ConditionValueParityTest {
 
     static final String TABLE = "condition_value_row";

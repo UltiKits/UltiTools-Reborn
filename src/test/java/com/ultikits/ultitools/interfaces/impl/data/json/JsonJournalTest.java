@@ -40,7 +40,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -60,6 +62,7 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournal.Record;
  * recovery through a new one over the same directories. No process is killed.
  */
 @Timeout(60)
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonJournalTest {
 
     private static final String USERS = "users";

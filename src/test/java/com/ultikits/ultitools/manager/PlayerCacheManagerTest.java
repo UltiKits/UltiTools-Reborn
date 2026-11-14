@@ -68,6 +68,25 @@ class PlayerCacheManagerTest {
         }
     }
 
+    static class MissingSaverService extends TestService {
+        @PlayerCache(saveBeforeRemove = true)
+        final Map<UUID, String> unsavedCache = new HashMap<>();
+    }
+
+    static class MissingSaverChild extends MissingSaverService {
+    }
+
+    static class SavingChild extends MissingSaverService implements PlayerCacheSaver {
+        UUID savedPlayer;
+        boolean entryPresentDuringSave;
+
+        @Override
+        public void savePlayerData(UUID playerId) {
+            savedPlayer = playerId;
+            entryPresentDuringSave = unsavedCache.containsKey(playerId);
+        }
+    }
+
     static class BaseWithCache {
         @PlayerCache
         protected final Map<UUID, String> inheritedCache = new HashMap<>();
@@ -202,6 +221,70 @@ class PlayerCacheManagerTest {
             TestService service = new TestService();
             manager.registerBean(service);
             assertThat(manager.getTrackedBeanCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Refuses save-before-remove without a saver before tracking any fields")
+        void refusesSaveBeforeRemoveWithoutSaver() {
+            MissingSaverService service = new MissingSaverService();
+            TestService healthy = new TestService();
+            UUID playerId = UUID.randomUUID();
+            service.nameCache.put(playerId, "cached");
+            service.unsavedCache.put(playerId, "unsaved");
+            healthy.nameCache.put(playerId, "healthy");
+            manager.registerBean(healthy);
+
+            assertThatThrownBy(() -> manager.registerBean(service))
+                    .isInstanceOf(PluginModuleException.class)
+                    .hasMessageContaining(MissingSaverService.class.getName())
+                    .hasMessageContaining("unsavedCache")
+                    .hasMessageContaining("saveBeforeRemove")
+                    .hasMessageContaining("PlayerCacheSaver");
+
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(1);
+            manager.onPlayerQuit(playerId);
+            assertThat(service.nameCache).containsKey(playerId);
+            assertThat(service.unsavedCache).containsKey(playerId);
+            assertThat(healthy.nameCache).doesNotContainKey(playerId);
+        }
+
+        @Test
+        @DisplayName("Refuses inherited save declarations and names both bean and declaring class")
+        void refusesInheritedSaveBeforeRemoveWithoutSaver() {
+            assertThatThrownBy(() -> manager.registerBean(new MissingSaverChild()))
+                    .isInstanceOf(PluginModuleException.class)
+                    .hasMessageContaining(MissingSaverChild.class.getName())
+                    .hasMessageContaining(MissingSaverService.class.getName())
+                    .hasMessageContaining("unsavedCache")
+                    .hasMessageContaining("PlayerCacheSaver");
+            assertThat(manager.getTrackedBeanCount()).isZero();
+        }
+
+        @Test
+        @DisplayName("Accepts inherited save fields when the concrete bean supplies the saver")
+        void acceptsInheritedSaveWhenChildImplementsSaver() {
+            SavingChild service = new SavingChild();
+            UUID playerId = UUID.randomUUID();
+            service.unsavedCache.put(playerId, "unsaved");
+            manager.registerBean(service);
+
+            manager.onPlayerQuit(playerId);
+
+            assertThat(service.savedPlayer).isEqualTo(playerId);
+            assertThat(service.entryPresentDuringSave).isTrue();
+            assertThat(service.unsavedCache).doesNotContainKey(playerId);
+        }
+
+        @Test
+        @DisplayName("The live registration entry point also refuses a missing saver")
+        void liveRegistrationRefusesMissingSaver() {
+            try (MockedStatic<UltiTools> ignored = stubLiveManager(manager)) {
+                assertThatThrownBy(() -> PlayerCacheManager.tryRegister(new MissingSaverService()))
+                        .isInstanceOf(PluginModuleException.class)
+                        .hasMessageContaining("unsavedCache")
+                        .hasMessageContaining("PlayerCacheSaver");
+            }
+            assertThat(manager.getTrackedBeanCount()).isZero();
         }
 
         @Test

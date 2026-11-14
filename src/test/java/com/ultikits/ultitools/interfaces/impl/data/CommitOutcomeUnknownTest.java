@@ -37,7 +37,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -72,6 +74,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * 提交失败时结果未知：数据库可能已经应用了提交、只是确认丢失；框架不重试，也不会再次提交。
  */
 @DisplayName("#675 a failed SQLite or MySQL commit has an unknown outcome")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class CommitOutcomeUnknownTest {
 
     private static final String ROW_ID = "r1";

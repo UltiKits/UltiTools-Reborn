@@ -23,8 +23,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -39,6 +41,7 @@ import com.ultikits.ultitools.manager.PluginManager;
  * Tests for JsonStore.
  */
 @SuppressWarnings("PMD.UnusedLocalVariable") // Some variables exist for test setup clarity
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonStoreTest {
 
     @TempDir

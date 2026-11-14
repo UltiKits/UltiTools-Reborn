@@ -115,6 +115,25 @@
     "removedIn": "6.4.0"
   },
   {
+    "key": "com.ultikits.ultitools.annotations.I18n",
+    "className": "com.ultikits.ultitools.annotations.I18n",
+    "kind": "CLASS",
+    "since": "6.5.0",
+    "forRemoval": true,
+    "replacement": "Since 6.5.0, languages come from the {@code lang/*} files the module JAR ships ({@code .json}, {@code .yml}, or {@code .yaml}), not this declaration. Remove the annotation and ship the language files instead. This annotation will be removed in a future major version.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.annotations.UltiToolsModule#i18n()",
+    "className": "com.ultikits.ultitools.annotations.UltiToolsModule",
+    "memberName": "i18n",
+    "kind": "METHOD",
+    "since": "6.5.0",
+    "forRemoval": true,
+    "replacement": "Since 6.5.0, languages come from the {@code lang/*} files the module JAR ships ({@code .json}, {@code .yml}, or {@code .yaml}), not this alias. Remove the attribute and ship the language files instead. This attribute will be removed in a future major version.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.annotations.command.OptionalParam",
     "className": "com.ultikits.ultitools.annotations.command.OptionalParam",
     "kind": "CLASS",

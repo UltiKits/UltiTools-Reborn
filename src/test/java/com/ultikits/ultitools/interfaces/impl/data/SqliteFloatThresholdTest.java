@@ -37,7 +37,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -66,6 +68,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * before the conversion, {@code CAST(weight AS DOUBLE) < ?}, run on the same database.
  */
 @DisplayName("GREATER / LESS on a float field with a threshold of any value class, SQLite (#675 review IN-06)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class SqliteFloatThresholdTest {
 
     static final String TABLE = "float_threshold_row";

@@ -659,11 +659,141 @@ public final class ConfigDocument {
         return style.byteOrderMark() ? "\uFEFF" + text : text;
     }
 
-    /** The emitter's text for {@code out}, comments realigned and whitespace-only lines emptied. */
-    private static String emit(Node out, DocumentStyle style) {
+    /** The emitter's text, with unchanged block scalars' consumed separator lines restored from the source. */
+    private String emit(Node out, DocumentStyle style) {
         StringWriter writer = new StringWriter();
         List<Event> events = serialize(out, writer, style);
-        return WHITESPACE_ONLY_LINE.matcher(realignCommentsAfterBlankLines(writer.toString(), events)).replaceAll("");
+        String text = WHITESPACE_ONLY_LINE.matcher(realignCommentsAfterBlankLines(writer.toString(), events)).replaceAll("");
+        return preserveBlockScalarSeparators(text, out);
+    }
+
+    /**
+     * #883: strip/clip chomping discards trailing empty lines from a scalar's value, not from the operator's file.
+     * SnakeYAML consumes them while scanning, so they have no comment event for the emitter to reproduce. Reuse its
+     * observed scalar boundaries rather than guessing where indentation (including an explicit indicator) ends.
+     * Only unchanged block scalars still carry source marks; set/merge replacements have no marks. Their complete
+     * source spelling, including chomping, significant spaces and consumed empty lines, is copied into the matching
+     * emitted scalar. A scalar without trailing empty lines is left to the existing renderer.
+     * <p>
+     * This grants no write ownership: the gate still parses the result back, verifies every value and compares all
+     * unowned bytes. Unlocatable spans, changed indentation or an unparseable emission keep the original rendering,
+     * which the gate refuses if it cannot preserve the operator's content. Line breaks are restored to the document's
+     * style by renderFrom after this UNIX-line-break emission, just as for every other rendered line.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Independent alignment guards keep each ambiguous restoration fail-closed.
+    private String preserveBlockScalarSeparators(String text, Node out) {
+        List<ScalarNode> written = scalars(out);
+        boolean hasSourceBlock = false;
+        for (ScalarNode scalar : written) {
+            hasSourceBlock |= isBlockScalar(scalar) && scalar.getStartMark() != null;
+        }
+        if (anchored || !hasSourceBlock) {
+            return text;
+        }
+        List<ScalarNode> read;
+        try {
+            read = scalars(compose(text));
+        } catch (ConfigParseException e) {
+            return text;
+        }
+        if (written.size() != read.size()) {
+            return text;
+        }
+        String body = source.startsWith("\uFEFF") ? source.substring(1) : source;
+        StringBuilder result = new StringBuilder(text.length());
+        int copied = 0;
+        for (int i = 0; i < written.size(); i++) {
+            ScalarNode original = written.get(i);
+            ScalarNode emitted = read.get(i);
+            int[] before = isBlockScalar(original) ? scalarLineRegion(body, original) : null;
+            if (before == null) {
+                continue;
+            }
+            int[] after = scalarLineRegion(text, emitted);
+            if (after == null || original.getStartMark().getColumn() != emitted.getStartMark().getColumn()) {
+                continue;
+            }
+            String spelling = body.substring(before[0], before[1]);
+            List<String> lines = OperatorFileWriter.lines(spelling);
+            if (lines.size() < 2 || !lines.get(lines.size() - 1).trim().isEmpty()) {
+                continue;
+            }
+            if (after[0] < copied) {
+                return text;
+            }
+            result.append(text, copied, after[0]);
+            result.append(YAML_LINE_BREAK.matcher(spelling).replaceAll("\n"));
+            copied = after[1];
+        }
+        return result.append(text, copied, text.length()).toString();
+    }
+
+    /** Scalar nodes in serialization order; unlike Serializer's events these retain the source marks. */
+    private static List<ScalarNode> scalars(Node tree) {
+        List<ScalarNode> result = new ArrayList<>();
+        collectScalars(tree, result, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
+        return result;
+    }
+
+    private static void collectScalars(Node node, List<ScalarNode> result, Set<Node> seen) {
+        if (node == null || !seen.add(node)) {
+            return;
+        }
+        if (node instanceof ScalarNode) {
+            result.add((ScalarNode) node);
+        } else if (node instanceof MappingNode) {
+            for (NodeTuple tuple : ((MappingNode) node).getValue()) {
+                collectScalars(tuple.getKeyNode(), result, seen);
+                collectScalars(tuple.getValueNode(), result, seen);
+            }
+        } else if (node instanceof SequenceNode) {
+            for (Node child : ((SequenceNode) node).getValue()) {
+                collectScalars(child, result, seen);
+            }
+        }
+    }
+
+    /**
+     * A block span excludes indentation consumed on the following line. A one-line scalar includes its terminating
+     * line break (the emitter can quote an empty block scalar); only whitespace or a comment may follow its token.
+     * Mark indices count Unicode code points, not UTF-16 characters. Tagged/anchored block headers are not restored.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Validate marks, physical indentation and token tails separately before copying bytes.
+    private static int[] scalarLineRegion(String text, ScalarNode scalar) {
+        if (scalar.getStartMark() == null || scalar.getEndMark() == null) {
+            return null;
+        }
+        boolean block = isBlockScalar(scalar);
+        int start = scalar.getStartMark().getIndex();
+        int end = scalar.getEndMark().getIndex();
+        if (start < 0 || end <= start || end > text.codePointCount(0, text.length())) {
+            return null;
+        }
+        int from = text.offsetByCodePoints(0, start);
+        int to = text.offsetByCodePoints(0, end);
+        if (block) {
+            int columnStart = text.offsetByCodePoints(0, end - scalar.getEndMark().getColumn());
+            // Consecutive CR breaks can leave a nonzero end column. Trim only actual consumed indentation,
+            // never a line break or content merely because its mark reports a column.
+            if (columnStart >= from && text.substring(columnStart, to).replace(" ", "").isEmpty()) {
+                to = columnStart;
+            }
+            return text.charAt(from) == '|' || text.charAt(from) == '>' ? new int[] {from, to} : null;
+        }
+        if (scalar.getStartMark().getLine() != scalar.getEndMark().getLine()) {
+            return null;
+        }
+        java.util.regex.Matcher lineBreak = YAML_LINE_BREAK.matcher(text);
+        if (!lineBreak.find(to)) {
+            return null;
+        }
+        String rest = text.substring(to, lineBreak.start()).trim();
+        return rest.isEmpty() || rest.startsWith("#") ? new int[] {from, lineBreak.end()} : null;
+    }
+
+    private static boolean isBlockScalar(ScalarNode scalar) {
+        return scalar.getScalarStyle() == DumperOptions.ScalarStyle.LITERAL
+                || scalar.getScalarStyle() == DumperOptions.ScalarStyle.FOLDED;
     }
 
     /**

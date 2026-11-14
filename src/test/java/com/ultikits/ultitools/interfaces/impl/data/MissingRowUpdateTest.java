@@ -36,7 +36,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -56,6 +58,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * backend threw a raw {@code NullPointerException}.
  */
 @DisplayName("An update by an id no row has writes nothing and warns, on every backend (#558)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class MissingRowUpdateTest {
 
     private static final String TABLE = "missing_row_entity";

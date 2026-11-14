@@ -26,7 +26,10 @@ public @interface PlayerCache {
 
     /**
      * If true, the framework will call the bean's {@code savePlayerData(UUID)}
-     * method (if it implements {@link PlayerCacheSaver}) before removing the entry.
+     * method before removing the entry. The bean must implement {@link PlayerCacheSaver};
+     * as of 6.5.0, registration throws
+     * {@link com.ultikits.ultitools.exceptions.PluginModuleException} if it does not,
+     * naming the bean class and field. The default {@code false} does not require a saver.
      * <p>
      * This orders the save before the removal; it does not make the removal conditional on the
      * save. If {@code savePlayerData} throws, the failure is logged as a WARNING naming the bean

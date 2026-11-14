@@ -55,7 +55,7 @@ class CloudStateStoreTest {
     private static final String VALID_ID = "01ARYZ6S41TSV4RRFFQ69G5FAV";
     private static final long HANG_BOUND_NANOS = TimeUnit.SECONDS.toNanos(20);
 
-    @TempDir
+    @TempDir(factory = MemoryTempDirFactory.class)
     Path tempDir;
 
     private final AtomicLong clock = new AtomicLong(1_760_000_000_000L);

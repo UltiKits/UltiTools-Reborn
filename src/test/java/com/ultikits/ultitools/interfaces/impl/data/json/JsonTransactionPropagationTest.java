@@ -33,8 +33,10 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
@@ -66,6 +68,7 @@ import com.ultikits.ultitools.manager.PluginManager;
  */
 @Timeout(60)
 @DisplayName("@Transactional propagation on the JSON engine behaves as on the JDBC backends (20.4-10)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonTransactionPropagationTest {
 
     private static final String ROWS = "propagation_rows";

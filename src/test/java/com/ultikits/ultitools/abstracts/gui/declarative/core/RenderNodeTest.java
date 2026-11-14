@@ -1,9 +1,16 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.core;
 
 import mc.obliviate.inventory.Icon;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockbukkit.mockbukkit.MockBukkit;
+
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 import java.util.List;
 
@@ -12,7 +19,28 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * RenderNode 测试。
  */
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 public class RenderNodeTest {
+
+    private static boolean createdServer;
+
+    @BeforeAll
+    static void installServer() {
+        // ItemStack construction resolves the item registry, which needs a real MockBukkit server: with none
+        // the load fails once and the failure is cached for the rest of the JVM.
+        if (Bukkit.getServer() == null && !MockBukkit.isMocked()) {
+            MockBukkit.mock();
+            createdServer = true;
+        }
+    }
+
+    @AfterAll
+    static void releaseServer() {
+        if (createdServer) {
+            MockBukkitHelper.safeUnmock();
+            createdServer = false;
+        }
+    }
 
     @Test
     void testRenderNodeCreation() {

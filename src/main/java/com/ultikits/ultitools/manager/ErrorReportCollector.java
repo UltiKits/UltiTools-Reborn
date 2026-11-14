@@ -4,12 +4,20 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.exceptions.UltiToolsException;
+import com.ultikits.ultitools.utils.CodeSourceLocations;
 import com.ultikits.ultitools.utils.ModuleIds;
+import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 
+import java.io.File;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -65,13 +73,13 @@ public class ErrorReportCollector {
     private volatile int sampleAfterCount = 10;
     private volatile double sampleRate = 0.1;
 
-    // Dedup map: fingerprint -> ErrorReport (reset every dedup window)
+    // Dedup map: fingerprint + module identifier -> ErrorReport (reset every dedup window)
     private final ConcurrentHashMap<String, ErrorReport> dedupMap = new ConcurrentHashMap<>();
 
     // Queue of unique errors ready to be drained
     private final ConcurrentLinkedQueue<ErrorReport> errorQueue = new ConcurrentLinkedQueue<>();
 
-    // Lifetime occurrence counter per fingerprint (never reset, used for sampling)
+    // Lifetime occurrence counter per fingerprint and module (never reset, used for sampling)
     private final ConcurrentHashMap<String, AtomicInteger> lifetimeCounters = new ConcurrentHashMap<>();
 
     // Scheduler for dedup window reset
@@ -135,15 +143,46 @@ public class ErrorReportCollector {
      * @param ctx        trigger context (who/what caused this)
      */
     public void reportError(Throwable throwable, String moduleName, TriggerContext ctx) {
+        reportError(throwable, moduleName, null, ctx);
+    }
+
+    /**
+     * Reports a command or bean failure using its concrete class's JAR to identify its module.
+     * Proxy classes are unwrapped before comparing canonical code-source files with the main classes
+     * of currently loaded modules. Neither a shared class loader nor a shared package implies ownership.
+     * A missing, non-JAR, ambiguous or unmatched source stays unattributed; this method never guesses
+     * from a class name, command description or stack trace. Reporting is best effort, as for
+     * {@link #reportError(Throwable, String, TriggerContext)}.
+     *
+     * @param throwable the exception
+     * @param sourceClass the concrete command executor or bean class, possibly null or proxied
+     * @param ctx the trigger context
+     * @since 6.5.0
+     */
+    public void reportErrorFromClass(Throwable throwable, Class<?> sourceClass, TriggerContext ctx) {
+        if (!enabled || throwable == null) {
+            return;
+        }
+        try {
+            UltiToolsPlugin owner = moduleOf(sourceClass);
+            reportError(throwable, owner == null ? null : owner.getPluginName(), owner, ctx);
+        } catch (RuntimeException unavailable) {
+            reportError(throwable, null, ctx);
+        }
+    }
+
+    private void reportError(Throwable throwable, String moduleName, UltiToolsPlugin owner, TriggerContext ctx) {
         if (!enabled) return;
         if (throwable == null) return;
 
         try {
             String fingerprint = computeFingerprint(throwable);
+            String moduleId = owner == null ? moduleIdentifierOf(moduleName) : ModuleIds.of(owner);
+            String key = groupKeyOf(fingerprint, moduleId);
 
-            // Layer 3: Sampling — after N total occurrences, only accept 1 in M
+            // Layer 3: Sampling — after N total occurrences per module and error, only accept 1 in M
             AtomicInteger lifetime = lifetimeCounters.computeIfAbsent(
-                    fingerprint, k -> new AtomicInteger(0));
+                    key, k -> new AtomicInteger(0));
             int totalCount = lifetime.incrementAndGet();
             if (totalCount > sampleAfterCount) {
                 if (ThreadLocalRandom.current().nextDouble() >= sampleRate) {
@@ -151,8 +190,8 @@ public class ErrorReportCollector {
                 }
             }
 
-            // Layer 1: Fingerprint dedup within window
-            ErrorReport existing = dedupMap.get(fingerprint);
+            // Layer 1: Fingerprint and module dedup within window
+            ErrorReport existing = dedupMap.get(key);
             if (existing != null) {
                 existing.incrementCount();
                 return;
@@ -163,9 +202,9 @@ public class ErrorReportCollector {
                 return;
             }
 
-            // Create new report
-            ErrorReport report = createReport(throwable, fingerprint, moduleName, ctx);
-            ErrorReport prev = dedupMap.putIfAbsent(fingerprint, report);
+            // Create new report with the same module identity used for sampling and dedup
+            ErrorReport report = createReport(throwable, fingerprint, moduleName, moduleId, ctx);
+            ErrorReport prev = dedupMap.putIfAbsent(key, report);
             if (prev != null) {
                 // Another thread beat us — just increment
                 prev.incrementCount();
@@ -180,7 +219,7 @@ public class ErrorReportCollector {
     /**
      * Drain errors into a JsonArray for batch_update.
      * Layer 2: returns at most maxErrorsPerBatch, sorted by count descending.
-     * Performs a final dedup pass to merge entries with the same fingerprint.
+     * Performs a final dedup pass to merge entries with the same fingerprint and module identifier.
      *
      * @param max maximum number of errors to drain
      * @return JsonArray of error reports
@@ -197,8 +236,9 @@ public class ErrorReportCollector {
      * Drains the pending reports as v2 {@code error.report} payloads (plan 22-22, S-55), with the same limit, merge and
      * order as {@link #drainErrors(int)}. Each payload is built by {@link AgentEventEncoders#errorReport} from
      * {@link ErrorReport#view()}, so the message, stack trace and trigger detail are redacted exactly as the v1 report
-     * is, and the fingerprint is this collector's group key padded to eight hex digits. A report the encoder cannot
-     * make valid is dropped. A repeat of a report already drained inside the dedupe window is counted on it and not
+     * is. Attributed reports hash the fingerprint and module identifier together; unattributed fingerprints keep
+     * their legacy value, padded to eight hex digits. A report the encoder cannot make valid is dropped.
+     * A repeat of a report already drained inside the dedupe window is counted on it and not
      * sent again, as before.
      *
      * @param max the most payloads to return
@@ -227,14 +267,15 @@ public class ErrorReportCollector {
 
         if (drained.isEmpty()) return Collections.emptyList();
 
-        // Final dedup pass — merge entries with same fingerprint
+        // Final dedup pass — merge only entries with the same fingerprint and module
         Map<String, ErrorReport> merged = new HashMap<>();
         for (ErrorReport r : drained) {
-            ErrorReport existing = merged.get(r.getFingerprint());
+            String key = groupKeyOf(r.getFingerprint(), r.moduleId);
+            ErrorReport existing = merged.get(key);
             if (existing != null) {
                 existing.mergeFrom(r);
             } else {
-                merged.put(r.getFingerprint(), r);
+                merged.put(key, r);
             }
         }
 
@@ -264,11 +305,16 @@ public class ErrorReportCollector {
 
     /**
      * @param throwable an exception
-     * @return the group key this collector files it under; the panel's error group id is this key padded to eight hex
-     *         digits (S-55)
+     * @return the exception-shape fingerprint; unattributed panel reports use this value padded to eight hex digits,
+     *         while attributed reports also hash in their module identifier
      */
     static String fingerprintOf(Throwable throwable) {
         return computeFingerprint(throwable);
+    }
+
+    /** The normalized module identifier scopes all aggregation; null is the unattributed bucket. */
+    private static String groupKeyOf(String fingerprint, String moduleId) {
+        return fingerprint + '\u0000' + (moduleId == null ? "" : moduleId);
     }
 
     /**
@@ -294,7 +340,7 @@ public class ErrorReportCollector {
      * Create an ErrorReport from a throwable.
      */
     private ErrorReport createReport(Throwable throwable, String fingerprint,
-                                     String moduleName, TriggerContext ctx) {
+                                     String moduleName, String moduleId, TriggerContext ctx) {
         ErrorReport report = new ErrorReport();
         report.fingerprint = fingerprint;
         report.timestamp = System.currentTimeMillis();
@@ -312,17 +358,15 @@ public class ErrorReportCollector {
 
         // Message (truncated)
         String msg = throwable.getMessage();
-        if (msg != null && msg.length() > MAX_MESSAGE_LENGTH) {
-            msg = msg.substring(0, MAX_MESSAGE_LENGTH);
-        }
-        report.message = msg != null ? msg : throwable.getClass().getSimpleName();
+        report.message = msg == null ? throwable.getClass().getSimpleName()
+                : AgentEventEncoders.cut(msg, MAX_MESSAGE_LENGTH);
 
         // Stack trace (truncated)
         report.stackTrace = formatStackTrace(throwable);
 
         // Module name, and the module's UltiCloud identifier for the v2 report
         report.moduleName = moduleName;
-        report.moduleId = moduleIdentifierOf(moduleName);
+        report.moduleId = moduleId;
 
         // Determine if this is a framework-internal error
         report.isFramework = computeIsFramework(throwable, moduleName);
@@ -426,11 +470,7 @@ public class ErrorReportCollector {
             }
 
             pw.flush();
-            String result = sw.toString();
-            if (result.length() > MAX_STACK_TRACE_LENGTH) {
-                result = result.substring(0, MAX_STACK_TRACE_LENGTH);
-            }
-            return result;
+            return AgentEventEncoders.cut(sw.toString(), MAX_STACK_TRACE_LENGTH);
         } catch (Exception e) {
             return throwable.getClass().getName() + ": " + throwable.getMessage();
         }
@@ -460,11 +500,53 @@ public class ErrorReportCollector {
         return topClass.startsWith("com.ultikits.ultitools.");
     }
 
+    /** Finds a unique loaded module by physical JAR provenance, never by package or class loader. */
+    private static UltiToolsPlugin moduleOf(Class<?> sourceClass) {
+        File source = jarOf(sourceClass);
+        if (source == null) {
+            return null;
+        }
+        UltiTools instance = UltiTools.getInstance();
+        PluginManager modules = instance == null ? null : instance.getPluginManager();
+        if (modules == null) {
+            return null;
+        }
+        UltiToolsPlugin match = null;
+        for (UltiToolsPlugin module : modules.getPluginList()) {
+            if (module != null && source.equals(jarOf(module.getClass()))) {
+                if (match != null && match != module) {
+                    return null;
+                }
+                match = module;
+            }
+        }
+        return match;
+    }
+
+    /** Missing or non-JAR sources cannot prove ownership (for example exploded test classes). */
+    private static File jarOf(Class<?> type) {
+        if (type == null) {
+            return null;
+        }
+        try {
+            CodeSource source = ProxyFactory.unwrap(type).getProtectionDomain().getCodeSource();
+            URL location = source == null ? null : source.getLocation();
+            if (location == null || !"file".equalsIgnoreCase(location.getProtocol())) {
+                return null;
+            }
+            File file = CodeSourceLocations.toFile(location).getCanonicalFile();
+            return file.isFile() && file.getName().endsWith(".jar") ? file : null;
+        } catch (IOException | RuntimeException unavailable) {
+            return null;
+        }
+    }
+
     /**
      * The UltiCloud identifier of the loaded module a report names (22-26 fix round, backend contract
      * answer of 2026-10-27): the server groups an {@code error.report} to a module by matching its
      * {@code moduleName} against the catalogue identifier, so the v2 report carries the module's
-     * identify-string, lower-case ({@link ModuleIds}), never free text. A name is attributed to a
+     * normalized identifier ({@link ModuleIds}), never free text. As of 6.5.0 this falls back to a
+     * valid normalized plugin.yml name when the identify-string is missing or invalid. A name is attributed to a
      * loaded module when it equals that module's name or identify-string, ignoring case; anything
      * else -- the framework itself, a Bukkit plugin, the server, a command description, a bean name --
      * gives {@code null}, which the contract allows. Never throws.
@@ -585,18 +667,23 @@ public class ErrorReportCollector {
 
         /**
          * The report's values for the v2 {@code error.report} encoder, field by field (plan 22-22): the raw group key
-         * as fingerprint (the encoder pads it), the exception class, the redacted message, stack trace and trigger
+         * as fingerprint for unattributed reports (the encoder pads it), its SHA-256 with the module identifier
+         * for attributed reports, the exception class, the redacted message, stack trace and trigger
          * detail, the module's UltiCloud identifier ({@code null} when the report names no loaded module), the
          * trigger type name, the player name, {@code className.methodName} of the top frame as location, and the server snapshot with every unknown value ({@code -1}) as {@code null}.
          *
          * @return a view over this report
          */
         AgentEventEncoders.ErrorReportView view() {
+            // The gateway groups by server and fingerprint alone. Scope attributed reports without
+            // changing legacy unattributed fingerprints or the frozen hexadecimal wire schema.
+            final String wireFingerprint = moduleId == null ? fingerprint
+                    : ResourceHashSidecar.sha256(groupKeyOf(fingerprint, moduleId).getBytes(StandardCharsets.UTF_8));
             final String redactedMessage = redact(message);
             final String redactedStackTrace = redact(stackTrace);
             final String redactedDetail = redact(triggerDetail);
             return new AgentEventEncoders.ErrorReportView() {
-                @Override public String fingerprint() { return fingerprint; }
+                @Override public String fingerprint() { return wireFingerprint; }
                 @Override public String exceptionType() { return exceptionType; }
                 @Override public String message() { return redactedMessage; }
                 @Override public String stackTrace() { return redactedStackTrace; }
