@@ -22,7 +22,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 class ConfigDocumentSnakeYamlFloorTest {
 
     private static final String FIXTURE = "# header\n\n# section\na:\n"
-            + "  b: 1 # inline\n  c: [x, y]\n# end\n";
+            + "  b: 1 # inline\n  c: [x, y]\nmessage: |-\n  retained\n\n# end\n";
     private static final String DOCUMENT_CLASS = ConfigDocument.class.getName();
 
     @ParameterizedTest(name = "writes without exception on SnakeYAML {0}")
@@ -31,7 +31,8 @@ class ConfigDocumentSnakeYamlFloorTest {
         byte[] rendered = assertDoesNotThrow(() -> renderIsolated(version),
                 "parse, existing/new key, new section and render must work on SnakeYAML " + version);
         assertThat(new String(rendered, StandardCharsets.UTF_8))
-                .contains("# header", "# section", "# inline", "c: [x, y]", "b: 2", "d: new", "# hello", "created: true");
+                .contains("# header", "# section", "# inline", "c: [x, y]", "b: 2", "d: new", "# hello", "created: true",
+                        "message: |-\n  retained\n\n");
     }
 
     @ParameterizedTest(name = "renders identical bytes on SnakeYAML {0}")

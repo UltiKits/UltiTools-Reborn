@@ -40,7 +40,6 @@ class OperatorFileWriterLayoutRefusalListTest {
                 Arguments.of("spaces inside flow brackets", "w: [ x, y ]\na: 1\n", 1),
                 Arguments.of("a document start marker", "---\nb: 2\na: 1\n", 1),
                 Arguments.of("a document end marker", "b: 2\na: 1\n...\n", 3),
-                Arguments.of("a block scalar followed by a blank line", "s: |\n  x\n\nb: 2\na: 1\n", 3),
                 Arguments.of("a section-closing comment after a blank line", "sec:\n  k: 1\n\n  # closing\nb: 2\na: 1\n", 4),
                 Arguments.of("a comment indented deeper than the next key", "b: 2\n  # indented\nc: 3\na: 1\n", 2),
                 Arguments.of("two indentation widths in one file", "sec:\n  k: 1\nsec2:\n    k: 1\na: 1\n", 4),
@@ -63,6 +62,8 @@ class OperatorFileWriterLayoutRefusalListTest {
         return Stream.of(
                 Arguments.of("one space before an inline comment", "b: 2 # note\nc: 3\na: 1\n"),
                 Arguments.of("a block scalar not followed by a blank line", "s: |\n  x\nb: 2\na: 1\n"),
+                Arguments.of("an unchanged block scalar followed by a blank line (#883, as of 6.5.0)",
+                        "s: |\n  x\n\nb: 2\na: 1\n"),
                 Arguments.of("a comment after a block scalar at the next key's column (#592)",
                         "sec:\n  s: |-\n    x\n  # note\n  k: 1\na: 1\n"),
                 Arguments.of("a section-closing comment after a block scalar (#592)", "sec:\n  s: |-\n    x\n  # note\na: 1\n"),
