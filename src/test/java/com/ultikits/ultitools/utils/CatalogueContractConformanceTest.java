@@ -459,6 +459,9 @@ class CatalogueContractConformanceTest {
     }
 
     static Stream<Arguments> nonStringModuleFields() {
+        // iconUrl/publishedAt/updatedAt are guards: URL/date validation already rejected
+        // the coerced values "43" and "true" before strict JSON string checks were added.
+        // The remaining text fields distinguish strict typing from primitive coercion.
         return Stream.of("identifier", "name", "description", "shortDescription", "iconUrl", "publishedAt", "updatedAt")
                 .flatMap(field -> Stream.of("43", "true").map(json -> Arguments.of(field, json)));
     }
@@ -507,6 +510,8 @@ class CatalogueContractConformanceTest {
             // A 64-digit JSON number would pass the SHA pattern after primitive-to-string coercion.
             String number = "sha256".equals(field)
                     ? "1111111111111111111111111111111111111111111111111111111111111111" : "43";
+            // sha256=true is a guard (the hash pattern rejects "true" either way);
+            // its 64-digit number is the regression proof that the old filter accepted.
             return Stream.of(Arguments.of(field, number), Arguments.of(field, "true"));
         });
     }

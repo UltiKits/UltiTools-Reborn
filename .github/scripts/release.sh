@@ -8,11 +8,6 @@
 # WARNING: --prerelease only labels the GitHub release. It does not prevent
 # permanent Maven Central publication when enabled; published coordinates cannot be overwritten or deleted.
 #
-# Known limitations:
-# A failed `gh release view`, even for an error other than "not found", is treated as an
-# absent release. At worst this creates a second draft for the operator to delete; the
-# retained-byte checks and readback still prevent publishing the wrong bytes.
-#
 # After publication (publish-packages.yml, triggered by the published release):
 # - GitHub Packages: an interrupted deploy can leave a partial package version. The job then fails
 #   closed on every re-run ("unexpected GitHub Packages state") and never overwrites it. Recovery is
@@ -465,19 +460,35 @@ check_tags_point_at_source() {
 # Download whatever a release already holds and compare it byte for byte with the manifest.
 # Sets RELEASE_EXISTS, COMPARE_STATUS, RELEASE_DRAFT and MISSING.
 inspect_release() {
-    local dir="$1" stage="${2:-check}" out rc
+    local dir="$1" stage="${2:-check}" out rc error asset_count
     RELEASE_EXISTS=0
     COMPARE_STATUS="absent"
     RELEASE_DRAFT="false"
     MISSING=()
-    if ! gh release view "$TAG" --repo "$GH_REPO" --json tagName,targetCommitish,isDraft,assets > "${dir}.json" 2>/dev/null; then
-        return 0
+    if LC_ALL=C gh release view "$TAG" --repo "$GH_REPO" --json tagName,targetCommitish,isDraft,assets > "${dir}.json" 2> "${dir}.error"; then
+        rc=0
+    else
+        rc=$?
+        error="$(<"${dir}.error")"
+        # gh uses exit 1 for many errors; only its complete not-found diagnostic means absence.
+        if [ "$rc" = 1 ] && [ "$error" = "release not found" ]; then
+            return 0
+        fi
+        die "Could not inspect release ${TAG} (gh exit ${rc}): ${error}. Stopped without further release changes."
     fi
     RELEASE_EXISTS=1
     mkdir "$dir"
-    # A release with no assets has nothing to download; compare reports any listed asset that
-    # did not arrive, so a failed download can never pass as an empty release.
-    gh release download "$TAG" --repo "$GH_REPO" --dir "$dir" >/dev/null 2>&1 || true
+    asset_count="$(python3 -I -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["assets"]))' "${dir}.json")" \
+        || die "Could not inspect release assets for ${TAG}; stopped without further release changes."
+    # Empty drafts legitimately have nothing to download. For listed assets a transport failure
+    # is not evidence of missing remote bytes. Retry once, discarding only our partial download.
+    if [ "$asset_count" -gt 0 ] && ! gh release download "$TAG" --repo "$GH_REPO" --dir "$dir" >/dev/null 2> "${dir}.error"; then
+        echo "Release asset download failed; retrying once with a clean download directory." >&2
+        rm -rf -- "$dir"
+        mkdir "$dir"
+        gh release download "$TAG" --repo "$GH_REPO" --dir "$dir" >/dev/null 2> "${dir}.error" \
+            || die "Could not download release assets for ${TAG} after two attempts; stopped without classifying this inspection or making further release changes. $(<"${dir}.error")"
+    fi
     if out="$(helper compare --manifest "$MANIFEST" --remote-dir "$dir" --release-json "${dir}.json" --shell)"; then
         rc=0
     else

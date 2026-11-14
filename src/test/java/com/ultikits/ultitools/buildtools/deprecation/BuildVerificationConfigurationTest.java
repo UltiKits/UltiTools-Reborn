@@ -191,13 +191,14 @@ class BuildVerificationConfigurationTest {
                 .isEqualTo("lombok");
         assertThat(value(pom, COMPILER + "/configuration/proc")).isEmpty();
         assertThat(value(pom, execution + "/phase")).isEqualTo("process-classes");
-        assertThat(value(pom, execution + "/goals/goal")).isEqualTo("compile");
+        assertThat(value(pom, execution + "/goals/goal")).isEqualTo("testCompile");
         String config = execution + "/configuration";
+        assertThat(value(pom, config + "/skip")).isEqualTo("false");
         assertThat(value(pom, config + "/compileSourceRoots/compileSourceRoot"))
                 .isEqualTo("${project.basedir}/src/test/java");
-        assertThat(value(pom, config + "/includes/include"))
+        assertThat(value(pom, config + "/testIncludes/include"))
                 .isEqualTo("com/ultikits/ultitools/buildtools/deprecation/**/*.java");
-        assertThat(value(pom, config + "/excludes/exclude")).isEqualTo("**/*Test.java");
+        assertThat(value(pom, config + "/testExcludes/exclude")).isEqualTo("**/*Test.java");
         assertThat(value(pom, config + "/outputDirectory"))
                 .isEqualTo("${project.build.directory}/buildtools-classes");
         assertThat(value(pom, config + "/proc")).isEqualTo("none");

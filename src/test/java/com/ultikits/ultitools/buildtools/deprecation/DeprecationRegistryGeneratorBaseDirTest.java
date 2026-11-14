@@ -293,12 +293,21 @@ class DeprecationRegistryGeneratorBaseDirTest {
         assertThat(prior).as("a nonempty real ledger, not an empty replacement baseline").isNotEmpty();
         Files.copy(Paths.get("pom.xml"), project.resolve("pom.xml"));
         Path sourceRoot = Paths.get("src/main/java");
-        try (java.util.stream.Stream<Path> sources = Files.walk(sourceRoot)) {
-            for (Path source : sources.filter(Files::isRegularFile).collect(java.util.stream.Collectors.toList())) {
-                Path copy = project.resolve("src/main/java").resolve(sourceRoot.relativize(source));
-                Files.createDirectories(copy.getParent());
-                Files.copy(source, copy);
+        // This is a history-preservation fixture, not another whole-tree discovery run (verify
+        // already runs that pipeline). Only ledger owners can affect the prior rows asserted below.
+        // Parsing every unrelated source twice consumed almost the entire 30-second test budget.
+        java.util.Set<Path> ownerSources = new java.util.TreeSet<>();
+        for (com.google.gson.JsonElement row : prior) {
+            String owner = row.getAsJsonObject().get("className").getAsString().split("\\$")[0];
+            Path source = sourceRoot.resolve(owner.replace('.', '/') + ".java");
+            if (Files.isRegularFile(source)) {
+                ownerSources.add(source);
             }
+        }
+        for (Path source : ownerSources) {
+            Path copy = project.resolve("src/main/java").resolve(sourceRoot.relativize(source));
+            Files.createDirectories(copy.getParent());
+            Files.copy(source, copy);
         }
         Path matrix = project.resolve("src/main/java/com/ultikits/testfixtures/deprecationscan/DeclarationMatrixSubject.java");
         Files.createDirectories(matrix.getParent());

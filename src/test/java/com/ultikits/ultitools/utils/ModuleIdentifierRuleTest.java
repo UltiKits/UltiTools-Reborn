@@ -179,6 +179,16 @@ class ModuleIdentifierRuleTest {
         assertThat(CatalogueClient.moduleRef("UltiTools-Chat")).isEqualTo(ModuleIds.of("UltiTools-Chat"));
     }
 
+    @Test
+    void invalidIdentifyStringFallsBackToTheNormalizedPluginName() {
+        for (String invalid : new String[] {null, "", " ", "ulti_chat", "1chat", "ulti..chat"}) {
+            assertThat(ModuleIds.of(module(" UltiTools-Chat ", invalid)))
+                    .as("identify-string %s", invalid).isEqualTo("ultitools-chat");
+        }
+        assertThat(ModuleIds.of(module("not a module id", "invalid_id"))).isNull();
+        assertThat(ModuleIds.of(module("fallback", " VALID-ID "))).isEqualTo("valid-id");
+    }
+
     private void registerCounting(String type, UltiToolsPlugin owner) {
         registry.registerResponder(type, data -> {
             calls.incrementAndGet();

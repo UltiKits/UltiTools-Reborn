@@ -51,6 +51,8 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.annotations.I18n;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
@@ -265,6 +267,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     private boolean languageMigrationOnly;
 
+    /** Per-instance, so a replacement module is checked without retaining its class loader. */
+    private final java.util.concurrent.atomic.AtomicBoolean languageDeclarationChecked =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
 
     /**
      * Constructor for UltiToolsPlugin. For module development only.
@@ -352,9 +358,45 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     @ApiStatus.Internal
     public final void commitLanguageProvenance() {
+        warnMissingDeclaredLanguages();
         saveResources(true);
         migrateBundledLanguageFiles();
         language = createLanguageFromPath(resourceFolderPath);
+    }
+
+    /**
+     * Diagnoses obsolete language declarations once after the load gates accept this instance.
+     * Uses the module's own code source, not disk files or an overridable {@code supported()}.
+     * Complete declarations stay silent; missing codes share one actionable warning.
+     */
+    @SuppressWarnings({"deprecation", "removal"}) // Read retained declarations only for diagnostics.
+    private void warnMissingDeclaredLanguages() {
+        if (!languageDeclarationChecked.compareAndSet(false, true)) {
+            return;
+        }
+        Set<String> declared = new TreeSet<>();
+        I18n annotation = MergedAnnotationResolver.find(getClass(), I18n.class);
+        if (annotation != null) {
+            declared.addAll(Arrays.asList(annotation.value()));
+        }
+        // A direct @I18n hides the meta-annotation in the resolver. Diagnose both declarations.
+        UltiToolsModule module = MergedAnnotationResolver.find(getClass(), UltiToolsModule.class);
+        if (module != null) {
+            declared.addAll(Arrays.asList(module.i18n()));
+        }
+        if (declared.isEmpty()) {
+            return;
+        }
+        CodeSource source = getClass().getProtectionDomain().getCodeSource();
+        if (source != null && source.getLocation() != null) {
+            declared.removeAll(Localized.scanLangResources(source.getLocation()));
+        }
+        if (!declared.isEmpty()) {
+            getLogger().warn("Module '" + getPluginName() + "' uses deprecated @I18n / "
+                    + "@UltiToolsModule(i18n): missing language resources: " + String.join(", ", declared)
+                    + ". Ship lang/<code>.json, .yml or .yaml in this module's JAR. "
+                    + "Declarations have been ignored since 6.3.0 and will be removed in a future major version.");
+        }
     }
 
     /**
