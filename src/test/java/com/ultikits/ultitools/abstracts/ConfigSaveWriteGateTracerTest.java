@@ -526,15 +526,10 @@ class ConfigSaveWriteGateTracerTest {
         assertThat(coordinate(read("composite.yml"), java.util.Arrays.asList("points", "a", "y"))).isEqualTo(5.0);
     }
 
-    /**
-     * Two layouts the renderer cannot reproduce byte for byte - a block scalar followed by a blank line, and a section's
-     * deeper-indented trailing comment after a blank line (carried obligations 2 and 3 of plans 17-63/17-64) - make the
-     * gate refuse every write to the file, whichever setting it changes: the file keeps its bytes and the gate names the
-     * key and the reason. Documented as a refusal in COMPATIBILITY.md (the renderer is not changed by this plan).
-     */
+    /** #883: an unchanged block scalar and its blank separator remain unowned during an ordinary module save. */
     @Test
-    @DisplayName("a file with a block scalar followed by a blank line is not written by a save; the gate names the key")
-    void blockScalarFollowedByABlankLineRefusesTheSave() throws Exception {
+    @DisplayName("saving another setting preserves the block scalar and its following blank line")
+    void blockScalarFollowedByABlankLineIsKeptDuringTheSave() throws Exception {
         String text = "motd: |\n  a\n  b\n\nother: 1\n";
         put("block.yml", text);
         BlockScalar config = new BlockScalar("block.yml");
@@ -544,9 +539,10 @@ class ConfigSaveWriteGateTracerTest {
         countFromHere();
         config.save();
 
-        assertThat(read("block.yml")).isEqualTo(text);
+        assertThat(read("block.yml")).isEqualTo(text.replace("other: 1", "other: 5"));
+        assertThat(config.motd).isEqualTo("a\nb\n");
         assertThat(config.other).isEqualTo(5);
-        assertThat(warnings()).hasSize(1).allSatisfy(warning -> assertThat(warning).contains("block.yml", "other", "layout"));
+        assertThat(warnings()).isEmpty();
     }
 
     @Test

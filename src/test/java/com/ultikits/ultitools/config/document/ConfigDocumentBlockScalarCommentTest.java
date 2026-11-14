@@ -130,12 +130,12 @@ class ConfigDocumentBlockScalarCommentTest {
     }
 
     @Test
-    @DisplayName("a blank line after a block scalar is the value's (a documented refused layout); the comment stays the next key's")
+    @DisplayName("an unchanged block scalar keeps its consumed blank line; the comment stays the next key's")
     void blankLineAfterABlockScalar() throws Exception {
         String text = "a:\n  content: |-\n    one\n\n  # n\n  b: x\n";
         ConfigDocument document = ConfigDocument.parse(text);
 
-        assertThat(document.render()).isEqualTo(text.replace("one\n\n", "one\n"));
+        assertThat(document.render()).isEqualTo(text);
         assertThat(document.blockCommentAsWritten(path("a", "b"))).containsExactly("# n");
     }
 

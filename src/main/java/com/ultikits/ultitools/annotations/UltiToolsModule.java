@@ -48,9 +48,12 @@ public @interface UltiToolsModule {
     boolean config() default true;
 
     /**
-     * @return i18n code
-     * @see <a href="http://www.lingoes.net/en/translator/langcode.htm">I18n Code</a>
+     * @return legacy language declarations, used only for missing-resource diagnostics
+     * @deprecated Since 6.5.0, languages come from the {@code lang/*} files the module JAR ships
+     * ({@code .json}, {@code .yml}, or {@code .yaml}), not this alias. Remove the attribute
+     * and ship the language files instead. This attribute will be removed in a future major version.
      */
+    @Deprecated(since = "6.5.0", forRemoval = true)
     @AliasFor(annotation = I18n.class, attribute = "value")
     String[] i18n() default {};
 
