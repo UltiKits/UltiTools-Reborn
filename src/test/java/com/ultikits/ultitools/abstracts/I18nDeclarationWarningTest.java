@@ -90,8 +90,11 @@ public class I18nDeclarationWarningTest {
         }
         module.commitLanguageProvenance();
 
-        assertThat(warning()).contains("BootModule", "@I18n", "deprecated", "fr", "ja", "lang/")
-                .doesNotContain("missing language resources: en");
+        assertThat(warning()).isEqualTo("[BootModule] Module 'BootModule' uses deprecated @I18n / "
+                + "@UltiToolsModule(i18n): missing language resources: fr, ja"
+                + ". Ship lang/<code>.json, .yml or .yaml in this module's JAR. "
+                + "Declarations have been ignored since 6.3.0 and may be removed as early as 6.6.0.")
+                .doesNotContain("future major version");
         assertThat(module.supported()).containsExactly("en");
     }
 
