@@ -14,7 +14,6 @@ are refused. Previously the cache entry was silently removed without saving. Imp
 `savePlayerData(UUID)` or use `saveBeforeRemove = false` if no save is intended. A rejected
 bean is not added to cache tracking. Save failures still log a warning and remove the entry;
 this change adds no persistence or retry guarantee.
-||||||| d710a1c3
 
 ## Offline runtime API floor checks (as of 6.5.0)
 
