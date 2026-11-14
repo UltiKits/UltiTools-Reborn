@@ -224,7 +224,8 @@ class MainOnlyWorkflowTests(unittest.TestCase):
                          "github.event_name == 'pull_request' && "
                          "github.event.pull_request.head.repo.full_name == github.repository")
         self.assertEqual(workflow["jobs"]["test"]["env"],
-                         {"CODACY_TOKEN_PRESENT": "${{ secrets.CODACY_API_TOKEN != '' }}"})
+                         {"CODACY_TOKEN_PRESENT": "${{ secrets.CODACY_PROJECT_TOKEN != '' }}"})
+        self.assertEqual(codacy["env"], {"CODACY_PROJECT_TOKEN": "${{ secrets.CODACY_PROJECT_TOKEN }}"})
         self.assertIn("/14.1.3/codacy-coverage-reporter-linux", codacy["run"])
         self.assertIn("sha256sum --check --strict", codacy["run"])
         self.assertNotIn("get.sh", codacy["run"])
@@ -237,7 +238,7 @@ class MainOnlyWorkflowTests(unittest.TestCase):
         self.assertIn("15c5f052207d27b8501ab5d5910c68c206ea70b0157ee1725132780530580875", cache["with"]["key"])
         for name, other in workflow["jobs"].items():
             for step in other["steps"]:
-                if "CODACY_API_TOKEN" in str(step):
+                if "CODACY_API_TOKEN" in str(step) or "CODACY_PROJECT_TOKEN" in str(step):
                     self.assertEqual(name, "test")
                     self.assertEqual(step, codacy)
 
@@ -293,12 +294,12 @@ class MainOnlyWorkflowTests(unittest.TestCase):
             curl = root / "curl"
             curl.write_text("#!/bin/sh\nprintf called > \"$NETWORK_MARKER\"\nexit 97\n")
             curl.chmod(0o700)
-            env = dict(os.environ, CODACY_API_TOKEN="", RUNNER_TEMP=folder,
+            env = dict(os.environ, CODACY_PROJECT_TOKEN="", RUNNER_TEMP=folder,
                        NETWORK_MARKER=str(marker), PATH=folder + os.pathsep + os.environ["PATH"])
             process = subprocess.run(["bash", "-c", upload["run"]], env=env,
                                      capture_output=True, text=True)
             self.assertNotEqual(process.returncode, 0)
-            self.assertIn("::error::CODACY_API_TOKEN is required for coverage upload", process.stdout + process.stderr)
+            self.assertIn("::error::CODACY_PROJECT_TOKEN is required for coverage upload", process.stdout + process.stderr)
             self.assertFalse(marker.exists(), "empty token must fail before a network request")
 
     def test_pr_concurrency_is_cancellable_but_each_push_has_its_own_group(self):
