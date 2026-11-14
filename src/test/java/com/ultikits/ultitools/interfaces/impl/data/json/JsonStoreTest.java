@@ -85,12 +85,7 @@ class JsonStoreTest {
         when(mockConfig.getInt(anyString())).thenReturn(10);
         when(mockUltiToolsInstance.isEnabled()).thenReturn(true);
 
-        // 02-12 Task 2: every getOperator(UltiToolsPlugin, Class) call now runs checkOwnership()
-        // first, which consults UltiTools.getInstance().getPluginManager().findOwningPlugin(...).
-        // Each nested class's own @BeforeEach (re-)stubs findOwningPlugin's default Answer to
-        // echo back its own freshly-created mockPlugin's name, so ownership passes by default for
-        // the plugin under test; individual tests override this with a more specific,
-        // entity-scoped stub when they need a genuine refusal.
+        // Tests mint a real DataScope from the requesting plugin and these entity-owner stubs.
         mockPluginManager = mock(PluginManager.class);
         when(mockUltiToolsInstance.getPluginManager()).thenReturn(mockPluginManager);
 
@@ -108,6 +103,11 @@ class JsonStoreTest {
         if (mockedDataStoreManager != null) {
             mockedDataStoreManager.close();
         }
+    }
+
+    @BeforeEach
+    void useInternalDataFolder() {
+        when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir.toFile());
     }
 
     // ==================== Constructor Tests ====================
@@ -154,7 +154,7 @@ class JsonStoreTest {
         @Test
         @DisplayName("Should return DataOperator for annotated entity")
         void testGetOperator() {
-            DataOperator<AnnotatedTestData> operator = store.getOperator(mockPlugin, AnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> operator = store.getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
             
             assertThat(operator).isNotNull();
             assertThat(operator).isInstanceOf(SimpleJsonDataOperator.class);
@@ -163,7 +163,7 @@ class JsonStoreTest {
         @Test
         @DisplayName("Should throw exception for entity without @Table annotation")
         void testGetOperatorNoAnnotation() {
-            assertThatThrownBy(() -> store.getOperator(mockPlugin, NonAnnotatedTestData.class))
+            assertThatThrownBy(() -> store.getOperator(pluginScope(mockPlugin), NonAnnotatedTestData.class))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("No @Table annotation");
         }
@@ -171,8 +171,8 @@ class JsonStoreTest {
         @Test
         @DisplayName("Should cache and return same operator for same entity class")
         void testOperatorCaching() {
-            DataOperator<AnnotatedTestData> operator1 = store.getOperator(mockPlugin, AnnotatedTestData.class);
-            DataOperator<AnnotatedTestData> operator2 = store.getOperator(mockPlugin, AnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> operator1 = store.getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> operator2 = store.getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
             
             assertThat(operator1).isSameAs(operator2);
         }
@@ -180,8 +180,8 @@ class JsonStoreTest {
         @Test
         @DisplayName("Should return different operators for different entity classes")
         void testDifferentOperatorsForDifferentClasses() {
-            DataOperator<AnnotatedTestData> operator1 = store.getOperator(mockPlugin, AnnotatedTestData.class);
-            DataOperator<AnotherAnnotatedTestData> operator2 = store.getOperator(mockPlugin, AnotherAnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> operator1 = store.getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
+            DataOperator<AnotherAnnotatedTestData> operator2 = store.getOperator(pluginScope(mockPlugin), AnotherAnnotatedTestData.class);
             
             assertThat(operator1).isNotSameAs(operator2);
         }
@@ -189,7 +189,7 @@ class JsonStoreTest {
         @Test
         @DisplayName("Should create operator that can insert and retrieve data")
         void testOperatorFunctionality() {
-            DataOperator<AnnotatedTestData> operator = store.getOperator(mockPlugin, AnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> operator = store.getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
             
             // Insert data to verify operator works
             AnnotatedTestData data = new AnnotatedTestData();
@@ -226,7 +226,7 @@ class JsonStoreTest {
         @DisplayName("Should flush all operators without error")
         void testDestroyAllOperators() {
             // Create operators and add data
-            DataOperator<AnnotatedTestData> operator = store.getOperator(mockPlugin, AnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> operator = store.getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
             AnnotatedTestData data = new AnnotatedTestData();
             data.setId("destroy-test-" + System.nanoTime()); // Unique ID
             data.setName("test");
@@ -282,7 +282,7 @@ class JsonStoreTest {
         @Test
         @DisplayName("Full CRUD cycle through JsonStore")
         void testFullCrudCycle() throws IllegalAccessException {
-            DataOperator<AnnotatedTestData> operator = store.getOperator(mockPlugin, AnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> operator = store.getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
             
             // Create
             AnnotatedTestData data = new AnnotatedTestData();
@@ -325,8 +325,8 @@ class JsonStoreTest {
             when(plugin2.getPluginName()).thenReturn("Plugin2");
             when(mockPluginManager.findOwningPlugin(AnotherAnnotatedTestData.class)).thenReturn("Plugin2");
 
-            DataOperator<AnnotatedTestData> op1 = store.getOperator(plugin1, AnnotatedTestData.class);
-            DataOperator<AnotherAnnotatedTestData> op2 = store.getOperator(plugin2, AnotherAnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> op1 = store.getOperator(pluginScope(plugin1), AnnotatedTestData.class);
+            DataOperator<AnotherAnnotatedTestData> op2 = store.getOperator(pluginScope(plugin2), AnotherAnnotatedTestData.class);
 
             assertThat(op1).isNotSameAs(op2);
 
@@ -351,79 +351,13 @@ class JsonStoreTest {
             UltiToolsPlugin plugin2 = mock(UltiToolsPlugin.class);
             when(plugin2.getPluginName()).thenReturn("Plugin2");
 
-            DataOperator<AnnotatedTestData> op1 = store.getOperator(plugin1, AnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> op1 = store.getOperator(pluginScope(plugin1), AnnotatedTestData.class);
             assertThat(op1).isNotNull();
 
-            assertThatThrownBy(() -> store.getOperator(plugin2, AnnotatedTestData.class))
+            assertThatThrownBy(() -> store.getOperator(pluginScope(plugin2), AnnotatedTestData.class))
                     .isInstanceOf(DataAccessException.class)
                     .extracting(e -> ((DataAccessException) e).getErrorCode())
                     .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
-        }
-    }
-
-    // ==================== Ownership Tests (02-12 Task 2, D-14/D-18) ====================
-
-    /**
-     * {@code checkOwnership} is now called as the first statement of both legacy
-     * {@code getOperator} overrides -- closing the residual bypass 02-07 disclosed. JsonStore has
-     * no connection pool to prove empty on refusal (unlike SQLite/MySQL), so these tests assert
-     * against the operator cache instead, via the store's own package-private
-     * {@code getDataOperatorCount()} test seam.
-     */
-    @Nested
-    @DisplayName("Ownership Tests")
-    class OwnershipTests {
-
-        private JsonStore store;
-
-        @BeforeEach
-        void setUp() {
-            store = new JsonStore(tempDir.toString());
-            when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir.toFile());
-        }
-
-        @Test
-        @DisplayName("getOperator(File, Class) should refuse another plugin's unregistered folder, with no cache side effect")
-        void shouldRefuseUnregisteredFolderViaFileOverloadWithNoSideEffects() throws java.io.IOException {
-            java.io.File someOtherPluginsFolder = Files.createTempDirectory("json-other-plugin").toFile();
-            when(mockPluginManager.findScopeForDataFolder(someOtherPluginsFolder)).thenReturn(null);
-
-            assertThatThrownBy(() -> store.getOperator(someOtherPluginsFolder, AnnotatedTestData.class))
-                    .isInstanceOf(DataAccessException.class)
-                    .extracting(e -> ((DataAccessException) e).getErrorCode())
-                    .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
-
-            // getDataOperatorCount() is package-private on JsonStore; this test class is in the
-            // same package (com.ultikits.ultitools.interfaces.impl.data.json), so it is called
-            // directly -- no reflection needed.
-            assertThat(store.getDataOperatorCount())
-                    .as("a refused call must not have built an operator")
-                    .isZero();
-        }
-
-        @Test
-        @DisplayName("The framework's own core data folder should no longer be exempt on getOperator(File, Class) -- CR-01, 02-13")
-        void shouldRefuseFrameworkCoreFolderViaFileOverload() {
-            // mockUltiToolsInstance.getDataFolder() is stubbed to tempDir.toFile() above -- passing
-            // tempDir.toFile() itself used to be exactly the framework-core-folder sentinel
-            // checkOwnership(File, Class) exempted (02-07/02-12). CR-01 (02-REVIEW.md): the
-            // exemption was keyed purely on a value any caller can obtain
-            // (UltiTools#getDataFolder() is public in the published jar), not on any credential.
-            // 02-13 deletes the exemption; no PluginManager stub for this folder is registered
-            // here, so the reverse lookup finds no scope and the call must refuse exactly like any
-            // other unregistered folder -- not silently succeed.
-            //
-            // Fixed outside this plan's own files_modified list (Rule 3 deviation, matching the
-            // precedent 02-07/02-12-SUMMARY.md both recorded for the identical situation): this
-            // test asserted behavior CR-01's fix in DataStore.java directly breaks.
-            assertThatThrownBy(() -> store.getOperator(tempDir.toFile(), AnnotatedTestData.class))
-                    .isInstanceOf(DataAccessException.class)
-                    .extracting(e -> ((DataAccessException) e).getErrorCode())
-                    .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
-
-            assertThat(store.getDataOperatorCount())
-                    .as("a refused call must not have built an operator")
-                    .isZero();
         }
     }
 
@@ -448,7 +382,7 @@ class JsonStoreTest {
         void internalIdentityJournalsUnderThePluginDirectory() throws Exception {
             Path storeRoot = tempDir.resolve("internal-store");
             JsonStore store = new JsonStore(storeRoot.toString());
-            DataOperator<AnnotatedTestData> operator = store.getOperator(mockPlugin, AnnotatedTestData.class);
+            DataOperator<AnnotatedTestData> operator = store.getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
 
             operator.transaction(() -> operator.insert(named("j1", "journaled")));
 
@@ -492,7 +426,7 @@ class JsonStoreTest {
                     JsonJournal.Entry.put("test_table", "r1", "{\"id\":\"r1\",\"name\":\"recovered\"}")));
 
             DataOperator<AnnotatedTestData> operator =
-                    new JsonStore(storeRoot.toString()).getOperator(mockPlugin, AnnotatedTestData.class);
+                    new JsonStore(storeRoot.toString()).getOperator(pluginScope(mockPlugin), AnnotatedTestData.class);
 
             assertThat(operator.getById("r1")).isNotNull();
             assertThat(operator.getById("r1").getName()).isEqualTo("recovered");
@@ -573,6 +507,26 @@ class JsonStoreTest {
 
         public void setData(String data) {
             this.data = data;
+        }
+    }
+
+    /** Build a real ownership scope without exposing a new production factory. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private com.ultikits.ultitools.manager.DataScope pluginScope(UltiToolsPlugin plugin) {
+        java.util.Set<Class<?>> owned = new java.util.HashSet<>();
+        for (Class<?> entity : new Class<?>[]{AnnotatedTestData.class, AnotherAnnotatedTestData.class, NonAnnotatedTestData.class}) {
+            if (java.util.Objects.equals(plugin.getPluginName(), mockPluginManager.findOwningPlugin(entity))) {
+                owned.add(entity);
+            }
+        }
+        try {
+            java.lang.reflect.Constructor<com.ultikits.ultitools.manager.DataScope> constructor =
+                    com.ultikits.ultitools.manager.DataScope.class.getDeclaredConstructor(
+                            String.class, java.io.File.class, java.util.Set.class);
+            constructor.setAccessible(true);
+            return constructor.newInstance(plugin.getPluginName(), tempDir.toFile(), owned);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Cannot construct test DataScope", e);
         }
     }
 }

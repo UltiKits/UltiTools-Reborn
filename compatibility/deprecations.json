@@ -198,7 +198,8 @@
     "forRemoval": true,
     "removeIn": "6.5.0",
     "replacement": "It served only the {@code getOperator(UltiToolsPlugin, Class)} overload removed in 6.4.0; getOperator(DataScope, Class) checks ownership itself. Use getOperator(DataScope, Class) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.5.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.DataStore#checkOwnership(java.io.File,java.lang.Class)",
@@ -209,7 +210,8 @@
     "forRemoval": true,
     "removeIn": "6.5.0",
     "replacement": "It served only the {@code getOperator(File, Class)} overload removed in 6.4.0; getOperator(DataScope, Class) checks ownership itself. Use getOperator(DataScope, Class) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.5.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.DataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin,java.lang.Class)",
@@ -574,7 +576,8 @@
     "forRemoval": true,
     "removeIn": "6.5.0",
     "replacement": "Kept only for binary compatibility with the {@code DataStore} overload removed in 6.4.0. Use DataStore#getOperator(DataScope, Class) instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.5.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.data.json.JsonStore#getOperator(java.io.File,java.lang.Class)",
@@ -585,7 +588,8 @@
     "forRemoval": true,
     "removeIn": "6.5.0",
     "replacement": "Kept only for binary compatibility with the {@code DataStore} overload removed in 6.4.0. Use DataStore#getOperator(DataScope, Class) instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.5.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin,java.lang.Class)",
@@ -596,7 +600,8 @@
     "forRemoval": true,
     "removeIn": "6.5.0",
     "replacement": "Kept only for binary compatibility with the {@code DataStore} overload removed in 6.4.0. Use DataStore#getOperator(DataScope, Class) instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.5.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore#getOperator(java.io.File,java.lang.Class)",
@@ -607,7 +612,8 @@
     "forRemoval": true,
     "removeIn": "6.5.0",
     "replacement": "Kept only for binary compatibility with the {@code DataStore} overload removed in 6.4.0. Use DataStore#getOperator(DataScope, Class) instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.5.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin,java.lang.Class)",
@@ -618,7 +624,8 @@
     "forRemoval": true,
     "removeIn": "6.5.0",
     "replacement": "Kept only for binary compatibility with the {@code DataStore} overload removed in 6.4.0. Use DataStore#getOperator(DataScope, Class) instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.5.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore#getOperator(java.io.File,java.lang.Class)",
@@ -629,7 +636,8 @@
     "forRemoval": true,
     "removeIn": "6.5.0",
     "replacement": "Kept only for binary compatibility with the {@code DataStore} overload removed in 6.4.0. Use DataStore#getOperator(DataScope, Class) instead (a module calls {@code UltiToolsPlugin#getDataOperator(Class)}).",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.5.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser",

@@ -5,6 +5,16 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Removed data-store overloads (as of 6.5.0)
+
+The eight data-store members announced for removal in 6.4.0 are now removed:
+`DataStore#checkOwnership(File, Class)` and `#checkOwnership(UltiToolsPlugin, Class)`, and
+`getOperator(UltiToolsPlugin, Class)` / `getOperator(File, Class)` on `JsonStore`, `MysqlDataStore`
+and `SQLiteDataStore`. Use `DataStore#getOperator(DataScope, Class)`; modules should call
+`UltiToolsPlugin#getDataOperator(Class)`. This is a breaking binary change for third-party callers:
+update and recompile before upgrading, or invoking a removed member can throw `NoSuchMethodError`.
+The scope-based ownership checks, storage paths, caches and transaction wiring are unchanged.
+
 ## UltiCloud client replies and panel-command boundaries (as of 6.5.0)
 
 - **Nested framework commands recheck the remote blocklist.** While a synchronous panel dispatch is active,
@@ -1978,13 +1988,11 @@ warned by name at compile time. The generated registry (`compatibility/DEPRECATI
 The managers above are `@ApiStatus.Internal`; their removed members only acted through a v1 client that could
 never connect, so their removal changes nothing a server operator sees.
 
-**Deprecated in 6.4.0 for removal in 6.5.0.** `DataStore#checkOwnership(File, Class)` and
-`#checkOwnership(UltiToolsPlugin, Class)`, and the public `getOperator(UltiToolsPlugin, Class)` and
-`getOperator(File, Class)` methods of `JsonStore`, `MysqlDataStore` and `SQLiteDataStore`, outlived the
-`DataStore` overloads they served. They keep their 6.3.x behaviour, now carry
-`@Deprecated(since = "6.4.0", forRemoval = true)` with `@removeIn 6.5.0` (the first release the one-MINOR rule
-above allows), and are replaced by `DataStore#getOperator(DataScope, Class)` (a module calls
-`UltiToolsPlugin#getDataOperator(Class)`).
+**Removed in 6.5.0, as announced in 6.4.0.** The two `DataStore#checkOwnership` helpers and
+six concrete-store `getOperator` overloads that outlived the `DataStore` overloads they served are
+removed. Migrate to `DataStore#getOperator(DataScope, Class)` (modules call
+`UltiToolsPlugin#getDataOperator(Class)`) and recompile third-party callers; see
+[Removed data-store overloads](#removed-data-store-overloads-as-of-650).
 
 ## Removal list for 6.3.0
 
