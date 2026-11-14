@@ -102,7 +102,7 @@ Maven Central publishing goes through `central-publishing-maven-plugin` with ser
 - Do not force-push `main`; preserve its history and keep branch protection enabled. If the push's
   `before` commit is unreadable, changed-path classification fails closed and both main-push workflows
   fail rather than guessing which checks or publication to skip.
-- Built `main` pushes require `CODACY_API_TOKEN` for coverage upload and fail visibly if it is empty.
+- Built `main` pushes require the repository's Codacy project token (`CODACY_PROJECT_TOKEN`) for coverage upload and fail visibly if it is empty.
   Restore the repository secret before rerunning the failed CI job. Pull requests without a token
   (including Dependabot) skip that upload; fork pull requests never receive the token.
 - Maven minor/patch updates remain one monthly Dependabot group. If an incompatible bump blocks the
