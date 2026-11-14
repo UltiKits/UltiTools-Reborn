@@ -18,6 +18,9 @@ import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
+import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
+import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.DataScope;
 
 /**
@@ -64,14 +67,14 @@ class DataStoreTest {
         @Test
         @DisplayName("getOperator(DataScope, Class) should return DataOperator")
         void getOperatorShouldReturnDataOperator() throws NoSuchMethodException {
-            Method method = DataStore.class.getMethod("getOperator", com.ultikits.ultitools.manager.DataScope.class, Class.class);
+            Method method = DataStore.class.getMethod("getOperator", DataScope.class, Class.class);
             assertThat(method.getReturnType()).isEqualTo(DataOperator.class);
         }
 
         @Test
         @DisplayName("getOperator(DataScope, Class) should have generic type parameter")
         void getOperatorShouldHaveGenericTypeParameter() throws NoSuchMethodException {
-            Method method = DataStore.class.getMethod("getOperator", com.ultikits.ultitools.manager.DataScope.class, Class.class);
+            Method method = DataStore.class.getMethod("getOperator", DataScope.class, Class.class);
             TypeVariable<?>[] typeParams = method.getTypeParameters();
             assertThat(typeParams).hasSize(1);
             assertThat(typeParams[0].getName()).isEqualTo("T");
@@ -109,9 +112,9 @@ class DataStoreTest {
                 assertThatThrownBy(() -> DataStore.class.getMethod("checkOwnership", requester, Class.class))
                         .isInstanceOf(NoSuchMethodException.class);
                 for (Class<?> store : new Class<?>[]{
-                        com.ultikits.ultitools.interfaces.impl.data.json.JsonStore.class,
-                        com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore.class,
-                        com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore.class}) {
+                        JsonStore.class,
+                        MysqlDataStore.class,
+                        SQLiteDataStore.class}) {
                     assertThatThrownBy(() -> store.getMethod("getOperator", requester, Class.class))
                             .isInstanceOf(NoSuchMethodException.class);
                 }
@@ -122,7 +125,7 @@ class DataStoreTest {
         @DisplayName("Should have getDataSource(DataScope) as a default method")
         void shouldHaveGetDataSourceMethod() throws NoSuchMethodException {
             Method method = DataStore.class.getMethod("getDataSource",
-                    com.ultikits.ultitools.manager.DataScope.class);
+                    DataScope.class);
             assertThat(method).isNotNull();
             assertThat(method.isDefault()).isTrue();
         }
@@ -131,7 +134,7 @@ class DataStoreTest {
         @DisplayName("Should have getOperator(DataScope, Class) as a default method (D-17)")
         void shouldHaveGetOperatorDataScopeMethod() throws NoSuchMethodException {
             Method method = DataStore.class.getMethod("getOperator",
-                    com.ultikits.ultitools.manager.DataScope.class, Class.class);
+                    DataScope.class, Class.class);
             assertThat(method).isNotNull();
             assertThat(method.isDefault()).isTrue();
         }
@@ -140,7 +143,7 @@ class DataStoreTest {
         @DisplayName("Should have getOperatorUnchecked(DataScope, Class) as a default method (CR-01/CR-03, 02-13)")
         void shouldHaveGetOperatorUncheckedMethod() throws NoSuchMethodException {
             Method method = DataStore.class.getMethod("getOperatorUnchecked",
-                    com.ultikits.ultitools.manager.DataScope.class, Class.class);
+                    DataScope.class, Class.class);
             assertThat(method).isNotNull();
             assertThat(method.isDefault()).isTrue();
         }

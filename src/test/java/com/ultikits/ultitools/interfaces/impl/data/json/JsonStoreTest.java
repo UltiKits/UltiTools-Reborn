@@ -358,6 +358,7 @@ class JsonStoreTest {
                     .isInstanceOf(DataAccessException.class)
                     .extracting(e -> ((DataAccessException) e).getErrorCode())
                     .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+            assertThat(store.getDataOperatorCount()).isEqualTo(1);
         }
     }
 

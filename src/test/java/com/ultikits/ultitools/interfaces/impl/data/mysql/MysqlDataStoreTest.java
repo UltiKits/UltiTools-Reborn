@@ -743,7 +743,7 @@ class MysqlDataStoreTest {
         try {
             java.lang.reflect.Constructor<com.ultikits.ultitools.manager.DataScope> constructor =
                     com.ultikits.ultitools.manager.DataScope.class.getDeclaredConstructor(
-                            String.class, java.io.File.class, java.util.Set.class);
+                            String.class, File.class, java.util.Set.class);
             constructor.setAccessible(true);
             return constructor.newInstance(plugin.getPluginName(), tempDir, owned);
         } catch (ReflectiveOperationException e) {

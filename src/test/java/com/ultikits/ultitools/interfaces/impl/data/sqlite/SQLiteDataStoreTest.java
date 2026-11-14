@@ -248,8 +248,8 @@ class SQLiteDataStoreTest {
     class PoolStateTests {
 
         /**
-         * Pins the pool-per-file defect described in 02-VALIDATION.md's Wave 0 requirements: at HEAD,
-         * {@code getOperator(UltiToolsPlugin, Class)} caches by entity class only, so each new entity
+         * Pins the pool-per-file defect described in 02-VALIDATION.md's Wave 0 requirements: before SILENT-03,
+         * the internal module path ({@code UltiToolsPlugin#getDataOperator}) cached by entity class only, so each new entity
          * class for the same plugin (same backing .db file) triggers its own {@code new
          * HikariConfig()}/{@code new HikariDataSource(config)} pair. Both are intercepted with
          * {@code mockConstruction} so the SQLite JDBC driver is never touched: the test counts pool
@@ -530,7 +530,7 @@ class SQLiteDataStoreTest {
         try {
             java.lang.reflect.Constructor<com.ultikits.ultitools.manager.DataScope> constructor =
                     com.ultikits.ultitools.manager.DataScope.class.getDeclaredConstructor(
-                            String.class, java.io.File.class, java.util.Set.class);
+                            String.class, File.class, java.util.Set.class);
             constructor.setAccessible(true);
             return constructor.newInstance(plugin.getPluginName(), tempDir, owned);
         } catch (ReflectiveOperationException e) {
