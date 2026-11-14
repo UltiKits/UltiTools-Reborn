@@ -19,7 +19,7 @@ jobs:
       contents: read
     env:
       # Only a boolean leaves this scope; the token itself stays in the upload step.
-      CODACY_TOKEN_PRESENT: ${{ secrets.CODACY_API_TOKEN != '' }}
+      CODACY_TOKEN_PRESENT: ${{ secrets.CODACY_PROJECT_TOKEN != '' }}
     steps:
     - name: 📥 Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,6 +42,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+        # Include the pinned Maven version in setup-java's dependency hash.
+        cache-dependency-path: |
+          pom.xml
+          .github/scripts/setup-pinned-maven.sh
 
     - name: 🧪 Build & Test with Coverage
       # Verify also exercises packaging, API compatibility and deprecation-registry checks.
@@ -120,14 +124,12 @@ jobs:
       # Main pushes must fail visibly if the secret is missing; secret-free PRs still skip upload.
       if: steps.changes.outputs.build == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' || steps.changes.outputs.build == 'true' && env.CODACY_TOKEN_PRESENT == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       env:
-        CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
-        CODACY_ORGANIZATION_PROVIDER: gh
-        CODACY_USERNAME: UltiKits
-        CODACY_PROJECT_NAME: UltiTools-Reborn
+        # A project token identifies the repository by itself; no organisation, user or project name is needed.
+        CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
       run: |
         set -euo pipefail
-        if [ -z "$CODACY_API_TOKEN" ]; then
-          echo '::error::CODACY_API_TOKEN is required for coverage upload'
+        if [ -z "$CODACY_PROJECT_TOKEN" ]; then
+          echo '::error::CODACY_PROJECT_TOKEN is required for coverage upload'
           exit 1
         fi
         REPORTER_DIR="$HOME/.cache/codacy-coverage-reporter/14.1.3"
@@ -174,6 +176,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+        # Include the pinned Maven version in setup-java's dependency hash.
+        cache-dependency-path: |
+          pom.xml
+          .github/scripts/setup-pinned-maven.sh
     - name: Run real MySQL comparison contracts with fresh reports
       run: mvn -B clean test -Dtest=RelationalLiteralMatchTest,RelationalOrderingContractTest,ConditionValueParityTest -Dultitools.test.mysql.url='jdbc:mysql://127.0.0.1:3306/ultitools_it_ci?allowPublicKeyRetrieval=true&useSSL=false' -Dultitools.test.mysql.user=ultitools_it
     - name: Require every real MySQL lane to execute without skips
@@ -221,6 +227,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+        # Include the pinned Maven version in setup-java's dependency hash.
+        cache-dependency-path: |
+          pom.xml
+          .github/scripts/setup-pinned-maven.sh
 
     - name: Set up pinned Maven for Central staging
       if: steps.changes.outputs.tooling == 'true'

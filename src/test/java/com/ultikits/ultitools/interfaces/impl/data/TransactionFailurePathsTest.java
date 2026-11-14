@@ -42,7 +42,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -76,6 +78,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * {@code transaction(Callable)} 遇到 {@link Error} 时回滚并原样抛出。
  */
 @DisplayName("#634 transaction failure paths never end in an implicit commit")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class TransactionFailurePathsTest {
 
     @TempDir

@@ -15,9 +15,9 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
  * must all be that identifier, lower-case, in the contract's {@code ModuleIdentifier} syntax (a
  * lower-case letter first, segments of lower-case letters and digits joined by a single {@code .} or
  * {@code -}, at most 64 characters). The framework derives it from the module's {@code
- * identify-string}, never from its {@code plugin.yml} name: the two differ for some modules (for
- * example name {@code UltiTools-Chat}, identify-string {@code ultichat}), and the name is free text the
- * server does not match.
+ * identify-string} when valid, falling back to a valid, normalized {@code plugin.yml} name as of
+ * 6.5.0. A valid identify-string always wins: the two differ for some modules (for example name
+ * {@code UltiTools-Chat}, identify-string {@code ultichat}).
  *
  * @since 6.3.1
  */
@@ -50,12 +50,17 @@ public final class ModuleIds {
     }
 
     /**
-     * A loaded module's identifier, from its identify-string.
+     * A loaded module's identifier, preferring its identify-string. As of 6.5.0 a missing or invalid
+     * identify-string falls back to the normalized plugin.yml name, using the same syntax check.
      *
      * @param module the module, possibly {@code null}
-     * @return the identifier, or {@code null} when there is no module or its identify-string cannot be one
+     * @return the identifier, or {@code null} when there is no module or neither value is valid
      */
     public static String of(UltiToolsPlugin module) {
-        return module == null ? null : of(module.getIdentifyString());
+        if (module == null) {
+            return null;
+        }
+        String identifier = of(module.getIdentifyString());
+        return identifier == null ? of(module.getPluginName()) : identifier;
     }
 }

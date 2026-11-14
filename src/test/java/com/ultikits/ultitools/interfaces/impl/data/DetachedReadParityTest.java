@@ -22,7 +22,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -45,6 +47,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * between the two is what fails.
  */
 @DisplayName("Read paths return detached copies on every backend (#522)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class DetachedReadParityTest {
 
     private static DataSource dataSource;

@@ -21,7 +21,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -46,6 +48,7 @@ import lombok.EqualsAndHashCode;
  * 当初漂移的成因。
  */
 @DisplayName("后端间的 id 生成契约")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class BackendIdContractTest {
 
     private static DataSource dataSource;

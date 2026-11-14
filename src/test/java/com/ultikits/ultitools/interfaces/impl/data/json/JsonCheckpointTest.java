@@ -34,7 +34,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.google.gson.JsonParser;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
@@ -55,6 +57,7 @@ import com.ultikits.ultitools.manager.DataScope;
  */
 @Timeout(60)
 @DisplayName("JSON flush is a checkpoint: serialized, safe around commits, dirty entries only, crash atomic")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonCheckpointTest {
 
     private static final String ROWS = "cp_rows";

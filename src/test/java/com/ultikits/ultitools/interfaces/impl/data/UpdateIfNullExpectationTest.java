@@ -37,7 +37,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -67,6 +69,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * #640：{@code updateIf} 在默认 EQUAL 比较下把 null 期望值读作 {@code IS NULL}（JSON：字段不存在或为 null）。
  */
 @DisplayName("#640 updateIf: a null expected value means IS NULL")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class UpdateIfNullExpectationTest {
 
     private static HikariDataSource dataSource;

@@ -5,20 +5,47 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockbukkit.mockbukkit.MockBukkit;
+
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 /**
  * Unit tests for MaterialsCompleter.
  */
 @ExtendWith(MockitoExtension.class)
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 @DisplayName("MaterialsCompleter Tests")
 class MaterialsCompleterTest {
+
+    private static boolean createdServer;
+
+    @BeforeAll
+    static void installServer() {
+        // Material item/block queries resolve through the server-backed registry. With no server the load
+        // fails once and the failure sticks for the rest of the JVM, which is what leaked into later classes;
+        // a bare Mockito server is not enough, the registry needs a real MockBukkit one.
+        if (Bukkit.getServer() == null && !MockBukkit.isMocked()) {
+            MockBukkit.mock();
+            createdServer = true;
+        }
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void releaseServer() {
+        if (createdServer) {
+            MockBukkitHelper.safeUnmock();
+            createdServer = false;
+        }
+    }
 
     @Nested
     @DisplayName("Constructor Tests")

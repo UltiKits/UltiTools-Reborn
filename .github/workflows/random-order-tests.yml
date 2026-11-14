@@ -1,0 +1,78 @@
+name: Random-order unit tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Surefire random seed to replay (leave empty for a fresh seed)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  random-order:
+    # Deliberately distinct from the required checks; this workflow changes no branch protection.
+    name: Random-order unit tests (replayable seed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          # No Maven cache on purpose: the release-tooling suite keeps the cached-Maven set fixed and
+          # keys each entry to the pinned-Maven script, so this replay job resolves from a cold cache.
+
+      - name: Select and record replay seed
+        id: seed
+        env:
+          REPLAY_SEED: ${{ inputs.seed }}
+        run: |
+          python3 -I - <<'PYTHON'
+          import os
+          import re
+          import secrets
+
+          raw = os.environ.get('REPLAY_SEED', '')
+          if raw and (not re.fullmatch(r'[0-9]{1,19}', raw) or int(raw) >= 2**63):
+              raise SystemExit('Seed must be a non-negative signed 64-bit integer.')
+          seed = int(raw) if raw else secrets.randbelow(2**63)
+          replay = f'mvn -B test -Dsurefire.runOrder=random -Dsurefire.runOrder.random.seed={seed}'
+          print(f'Random-order seed: {seed}', flush=True)
+          print(f'Replay: {replay}', flush=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'seed={seed}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write(f'## Random-order unit tests\n\nSeed: `{seed}`\n\nReplay:\n```sh\n{replay}\n```\n')
+          PYTHON
+
+      - name: Run unit tests in random order
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+        run: mvn -B test -Dsurefire.runOrder=random "-Dsurefire.runOrder.random.seed=$SEED"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: random-order-test-results-${{ steps.seed.outputs.seed }}
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7

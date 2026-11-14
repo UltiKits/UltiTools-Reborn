@@ -38,8 +38,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
@@ -75,6 +77,7 @@ import com.ultikits.ultitools.manager.PluginManager;
  */
 @Timeout(60)
 @DisplayName("JSON transaction engine: table write locks, bounded waits, isolation")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonTransactionLockingTest {
 
     /** Bounded wait for every handshake that must happen. */
@@ -89,7 +92,7 @@ class JsonTransactionLockingTest {
     /** The lock-wait bound of the tests that wake a waiter only after its deadline has passed. */
     private static final long LATE_WAKE_BOUND_MILLIS = 200;
 
-    private static final String A_COMMITTED = "A committed";
+    private static final String A_BEFORE_COMMIT = "A still holds the table before commit";
     private static final String B_UPDATE_RETURNED = "B update returned";
     private static final String B_PLAIN_UPDATE_RETURNED = "B plain update returned";
 
@@ -143,14 +146,19 @@ class JsonTransactionLockingTest {
         Queue<String> events = new ConcurrentLinkedQueue<>();
         CountDownLatch aWrote = new CountDownLatch(1);
         CountDownLatch bUpdateReturned = new CountDownLatch(1);
+        CountDownLatch bWaiting = new CountDownLatch(1);
+        JsonLockTable.installStepHook(waiterRegisteredBy("lock-b", bWaiting));
 
         Worker a = Worker.start("lock-a", () -> {
             inTransaction(() -> {
                 update(rows, new LockRow("x", "a"));
                 aWrote.countDown();
-                awaitHandover(bUpdateReturned);
+                awaitHandshake(bWaiting, "thread B never waited for the table");
+                assertThat(bUpdateReturned.getCount()).as("B cannot return while A holds the table").isEqualTo(1L);
+                events.add(A_BEFORE_COMMIT);
             });
-            events.add(A_COMMITTED);
+            // Force the formerly flaky observation window: B may run before A resumes after commit.
+            awaitHandshake(bUpdateReturned, "B did not finish after A released the lock");
         });
         Worker b = Worker.start("lock-b", () -> {
             awaitHandshake(aWrote, "thread A never wrote");
@@ -165,7 +173,7 @@ class JsonTransactionLockingTest {
 
         assertThat(new ArrayList<>(events))
                 .as("B's update must return only after the transaction holding the table has committed")
-                .containsExactly(A_COMMITTED, B_UPDATE_RETURNED);
+                .containsExactly(A_BEFORE_COMMIT,B_UPDATE_RETURNED);
         assertThat(rows.getById("x").getName()).as("the later writer's value stays").isEqualTo("b");
     }
 
@@ -176,16 +184,20 @@ class JsonTransactionLockingTest {
         Queue<String> events = new ConcurrentLinkedQueue<>();
         CountDownLatch aWrote = new CountDownLatch(1);
         CountDownLatch plainReturned = new CountDownLatch(1);
+        CountDownLatch bWaiting = new CountDownLatch(1);
+        JsonLockTable.installStepHook(waiterRegisteredBy("lock-b", bWaiting));
         AtomicReference<String> readInside = new AtomicReference<>();
 
         Worker a = Worker.start("lock-a", () -> {
             inTransaction(() -> {
                 update(rows, new LockRow("x", "a"));
                 aWrote.countDown();
-                awaitHandover(plainReturned);
+                awaitHandshake(bWaiting, "the plain writer never waited for the table");
+                assertThat(plainReturned.getCount()).as("the plain write waits while A holds the table").isEqualTo(1L);
                 readInside.set(rows.getById("x").getName());
+                events.add(A_BEFORE_COMMIT);
             });
-            events.add(A_COMMITTED);
+            awaitHandshake(plainReturned, "the plain write did not finish after A released the lock");
         });
         Worker b = Worker.start("lock-b", () -> {
             awaitHandshake(aWrote, "thread A never wrote");
@@ -198,7 +210,7 @@ class JsonTransactionLockingTest {
 
         assertThat(new ArrayList<>(events))
                 .as("the plain update must return only after the transaction holding the table has committed")
-                .containsExactly(A_COMMITTED, B_PLAIN_UPDATE_RETURNED);
+                .containsExactly(A_BEFORE_COMMIT,B_PLAIN_UPDATE_RETURNED);
         assertThat(readInside.get())
                 .as("a read inside the transaction just before its commit shows its own value")
                 .isEqualTo("a");

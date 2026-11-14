@@ -34,7 +34,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.data.DataEntityTest;
@@ -46,6 +48,7 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator.LikeType;
 
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class SimpleJsonDataOperatorTest {
 
     @TempDir

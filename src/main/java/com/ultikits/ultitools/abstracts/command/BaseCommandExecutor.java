@@ -61,7 +61,8 @@ import lombok.Getter;
  * <p>
  * The default validator chain applies four validators in order: sender type (driven by the
  * class-level {@code @CmdTarget}, overridable per method), permission and operator requirement
- * (driven by {@code @CmdExecutor}), cooldown (applied only after a successful invocation), and
+ * (driven by {@code @CmdExecutor}), cooldown (applied when the mapped invocation completes,
+ * whether it returns normally or throws, but not when dispatch is refused before invocation), and
  * usage locking (acquired and released around the call in a try-finally). Execution flow in
  * {@link #onCommand}: help short-circuit, immutable {@link CommandContext} construction, scored
  * method matching via {@link #matchMethod}, parameter parsing, the validator chain, an
@@ -710,7 +711,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         try {
             ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
             if (erc != null) {
-                erc.reportError(cause, extractModuleName(), triggerCtx);
+                erc.reportErrorFromClass(cause, getClass(), triggerCtx);
             }
         } catch (Exception ignored) {
             // Never re-enter logging from error reporting
@@ -1162,17 +1163,4 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         validatorChain.removeValidator(validator);
     }
 
-    /**
-     * Extract module name from the concrete command executor class.
-     * Uses the simple class name as a reasonable approximation.
-     */
-    private String extractModuleName() {
-        String className = this.getClass().getSimpleName();
-        // Try to derive from CmdExecutor annotation description
-        CmdExecutor annotation = this.getClass().getAnnotation(CmdExecutor.class);
-        if (annotation != null && !annotation.description().isEmpty()) {
-            return annotation.description();
-        }
-        return className;
-    }
 }

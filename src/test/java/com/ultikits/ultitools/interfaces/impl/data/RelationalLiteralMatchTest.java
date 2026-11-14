@@ -35,7 +35,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -63,6 +65,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * {@code EQUAL} and each backend's letter case are unchanged, and that a {@code null} INCLUDE value is refused (6.4.0).
  */
 @DisplayName("Literal INCLUDE / STARTSWITH / ENDSWITH on every backend (#675)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class RelationalLiteralMatchTest {
 
     static final String TABLE = "literal_match_row";
