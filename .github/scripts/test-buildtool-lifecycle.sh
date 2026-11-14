@@ -258,7 +258,7 @@ def mojo(group, artifact, goal, execution):
 
 
 def lifecycle_mojos():
-    return {'compiler': mojo('org.apache.maven.plugins', 'maven-compiler-plugin', 'compile',
+    return {'compiler': mojo('org.apache.maven.plugins', 'maven-compiler-plugin', 'testCompile',
                              'compile-deprecation-buildtools'),
             'surefire': mojo('org.apache.maven.plugins', 'maven-surefire-plugin', 'test', 'default-test'),
             'japicmp': mojo('com.github.siom79.japicmp', 'japicmp-maven-plugin', 'cmp', 'default'),
@@ -639,7 +639,7 @@ def self_test():
             'DeprecationRegistryGenerator: wrote fixture output',
             '[INFO] --- exec-maven-plugin:%s:java (generate-deprecation-registry) @ fixture ---' % mojos['generator'][2],
             '[INFO] --- japicmp-maven-plugin:%s:cmp (default) @ fixture ---' % mojos['japicmp'][2],
-            'maven-compiler-plugin:%s:compile (compile-deprecation-buildtools)' % mojos['compiler'][2],
+            'maven-compiler-plugin:%s:testCompile (compile-deprecation-buildtools)' % mojos['compiler'][2],
             'Tests run: 99999, Failures: 0, Errors: 0, Skipped: 0',
             json.dumps(events[-1])])
         check_lifecycle(noise, 'skip-compilation', product, observation=observation)

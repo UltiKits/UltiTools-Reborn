@@ -188,6 +188,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+        # Include the pinned Maven version in setup-java's dependency hash.
+        cache-dependency-path: |
+          pom.xml
+          .github/scripts/setup-pinned-maven.sh
         server-id: ultikits-sonatype
         server-username-env-var: SONATYPE_USERNAME
         server-password-env-var: SONATYPE_PASSWORD
