@@ -19,7 +19,7 @@ jobs:
       contents: read
     env:
       # Only a boolean leaves this scope; the token itself stays in the upload step.
-      CODACY_TOKEN_PRESENT: ${{ secrets.CODACY_API_TOKEN != '' }}
+      CODACY_TOKEN_PRESENT: ${{ secrets.CODACY_PROJECT_TOKEN != '' }}
     steps:
     - name: 📥 Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,14 +124,12 @@ jobs:
       # Main pushes must fail visibly if the secret is missing; secret-free PRs still skip upload.
       if: steps.changes.outputs.build == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' || steps.changes.outputs.build == 'true' && env.CODACY_TOKEN_PRESENT == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       env:
-        CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
-        CODACY_ORGANIZATION_PROVIDER: gh
-        CODACY_USERNAME: UltiKits
-        CODACY_PROJECT_NAME: UltiTools-Reborn
+        # A project token identifies the repository by itself; no organisation, user or project name is needed.
+        CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
       run: |
         set -euo pipefail
-        if [ -z "$CODACY_API_TOKEN" ]; then
-          echo '::error::CODACY_API_TOKEN is required for coverage upload'
+        if [ -z "$CODACY_PROJECT_TOKEN" ]; then
+          echo '::error::CODACY_PROJECT_TOKEN is required for coverage upload'
           exit 1
         fi
         REPORTER_DIR="$HOME/.cache/codacy-coverage-reporter/14.1.3"
