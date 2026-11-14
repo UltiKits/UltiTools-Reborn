@@ -189,6 +189,26 @@ class ErrorReportCollectorTest {
         }
 
         @Test
+        void messageAndStackTruncationNeverSplitSurrogatePairs() {
+            String emoji = new String(Character.toChars(0x1f600));
+            String message = String.join("", java.util.Collections.nCopies(499, "m")) + emoji;
+            IllegalStateException failure = new IllegalStateException(message);
+            String prefix = failure.toString() + System.lineSeparator() + "\tat ";
+            String frameClass = String.join("", java.util.Collections.nCopies(2047 - prefix.length(), "s"))
+                    + emoji;
+            failure.setStackTrace(new StackTraceElement[] {
+                    new StackTraceElement(frameClass, "fail", "Fixture.java", 1)
+            });
+            collector.reportError(failure, null, null);
+
+            JsonObject payload = collector.drainErrorReportPayloads(10).get(0);
+            assertThat(payload.get("message").getAsString()).hasSize(499);
+            String stack = payload.get("stackTrace").getAsString();
+            assertThat(stack).hasSize(2047);
+            assertThat(Character.isHighSurrogate(stack.charAt(stack.length() - 1))).isFalse();
+        }
+
+        @Test
         @DisplayName("captures player info from TriggerContext")
         void capturesPlayerInfo() {
             Player mockPlayer = mock(Player.class);

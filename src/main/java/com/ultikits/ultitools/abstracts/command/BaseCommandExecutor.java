@@ -701,7 +701,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         try {
             ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
             if (erc != null) {
-                erc.reportError(cause, extractModuleName(), triggerCtx);
+                erc.reportErrorFromClass(cause, getClass(), triggerCtx);
             }
         } catch (Exception ignored) {
             // Never re-enter logging from error reporting
@@ -1153,17 +1153,4 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         validatorChain.removeValidator(validator);
     }
 
-    /**
-     * Extract module name from the concrete command executor class.
-     * Uses the simple class name as a reasonable approximation.
-     */
-    private String extractModuleName() {
-        String className = this.getClass().getSimpleName();
-        // Try to derive from CmdExecutor annotation description
-        CmdExecutor annotation = this.getClass().getAnnotation(CmdExecutor.class);
-        if (annotation != null && !annotation.description().isEmpty()) {
-            return annotation.description();
-        }
-        return className;
-    }
 }

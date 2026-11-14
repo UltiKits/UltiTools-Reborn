@@ -61,7 +61,7 @@ final class AgentEventEncoders {
      * {@code isFramework}, no player UUID).</p>
      */
     interface ErrorReportView {
-        /** @return the collector's hexadecimal fingerprint, one to eight digits */
+        /** @return the collector's hexadecimal fingerprint, one to 64 digits */
         String fingerprint();
 
         /** @return the exception's binary class name */
@@ -292,21 +292,27 @@ final class AgentEventEncoders {
     }
 
     /**
-     * Cuts a string to a number of code points, so a supplementary character is never split into an
-     * unpaired surrogate.
+     * Cuts to the gateway's UTF-16 length limit without splitting a surrogate pair. Zod checks
+     * JavaScript string length, not Unicode code-point count. Shared with the collector so its
+     * earlier in-memory truncation cannot leave a dangling surrogate for this encoder to send.
      *
      * @param value the text, possibly null
-     * @param maxCodePoints the largest allowed length in code points
+     * @param maxUnits the largest allowed length in UTF-16 units
      * @return the text, cut when longer; an empty string for null
      */
-    private static String cut(String value, int maxCodePoints) {
+    static String cut(String value, int maxUnits) {
         if (value == null) {
             return "";
         }
-        if (value.codePointCount(0, value.length()) <= maxCodePoints) {
+        if (value.length() <= maxUnits) {
             return value;
         }
-        return value.substring(0, value.offsetByCodePoints(0, maxCodePoints));
+        int end = maxUnits;
+        if (end > 0 && Character.isHighSurrogate(value.charAt(end - 1))
+                && Character.isLowSurrogate(value.charAt(end))) {
+            end--;
+        }
+        return value.substring(0, end);
     }
 
     /**
@@ -332,7 +338,8 @@ final class AgentEventEncoders {
         return value == null ? JsonNull.INSTANCE : new JsonPrimitive(value);
     }
 
-    private static long seenAt(long value) {
+    /** Clamps error and log timestamps to the shared EpochMs schema range. */
+    static long seenAt(long value) {
         return Math.max(0L, Math.min(SEEN_AT_MAX, value));
     }
 }
