@@ -33,8 +33,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
@@ -71,6 +73,7 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataOperator;
  * case, with no transaction active.
  */
 @DisplayName("A joined @Transactional method's failure marks the transaction rollback-only on SQLite and MySQL (20.4-13)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JdbcTransactionalParticipationTest {
 
     private static final String SQLITE = "sqlite";

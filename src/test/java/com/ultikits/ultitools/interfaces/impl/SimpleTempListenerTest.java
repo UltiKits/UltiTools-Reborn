@@ -25,12 +25,15 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.TempEventHandler;
 import com.ultikits.ultitools.interfaces.TempListener;
 
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class SimpleTempListenerTest {
 
     private static UltiTools originalInstance;

@@ -166,6 +166,7 @@ class ReleaseValidationTests(unittest.TestCase):
             ("maven-ci.yml", "real-mysql"),  # Disposable database verification, no Central staging.
             ("publish-packages.yml", "publish-github"),  # deploy-file, not Central staging.
             ("snapshot-publish.yml", "snapshot-publish"),  # Indexed deferral, not a staging ZIP.
+            ("random-order-tests.yml", "random-order"),  # Unit-test replay, no staging or release probe.
         }
         found = set()
         for path in sorted(WORKFLOWS.glob("*.yml")):
@@ -286,7 +287,7 @@ class ReleaseValidationTests(unittest.TestCase):
                     if str(step.get("uses", "")).startswith("actions/checkout@"):
                         checkouts += 1
                         self.assertEqual((step.get("with") or {}).get("persist-credentials"), "false", path.name)
-        self.assertEqual(checkouts, 7)
+        self.assertEqual(checkouts, 8)
 
     def test_setup_java_uses_canonical_credential_inputs(self):
         expected = {"server-username-env-var": "SONATYPE_USERNAME",

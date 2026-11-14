@@ -52,7 +52,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournal.Entry;
@@ -72,6 +74,7 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  * operator's sibling journal stays inside it.
  */
 @Timeout(60)
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class JsonJournalFileFailureTest {
 
     private static final String USERS = "users";

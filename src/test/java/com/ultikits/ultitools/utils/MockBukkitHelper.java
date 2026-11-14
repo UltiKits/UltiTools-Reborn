@@ -3,6 +3,10 @@ package com.ultikits.ultitools.utils;
 import java.lang.reflect.Field;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Server;
+import org.junit.jupiter.api.extension.AfterAllCallback;
+import org.junit.jupiter.api.extension.BeforeAllCallback;
+import org.junit.jupiter.api.extension.ExtensionContext;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 
@@ -15,6 +19,33 @@ public final class MockBukkitHelper {
 
     private MockBukkitHelper() {
         // 工具类不允许实例化
+    }
+
+    /**
+     * Bare Mockito servers are owned by the class that installs them in {@code @BeforeAll}.
+     * Restore that class's entry state after its {@code @AfterAll}, including a failed setup.
+     * Unlike {@link #safeUnmock()}, this must not unload a pre-existing MockBukkit server.
+     */
+    public static final class ServerStateExtension implements BeforeAllCallback, AfterAllCallback {
+        private static final ExtensionContext.Namespace NAMESPACE =
+                ExtensionContext.Namespace.create(ServerStateExtension.class);
+
+        @Override
+        public void beforeAll(ExtensionContext context) {
+            // Store a non-null holder even when there was no server. Nested classes get their own store.
+            context.getStore(NAMESPACE).put(context.getUniqueId(), new Server[] {Bukkit.getServer()});
+        }
+
+        @Override
+        public void afterAll(ExtensionContext context) throws ReflectiveOperationException {
+            Server[] previous = context.getStore(NAMESPACE).remove(context.getUniqueId(), Server[].class);
+            if (previous != null && Bukkit.getServer() != previous[0]) {
+                // Bukkit.setServer refuses replacement, so restoring the test fixture requires reflection.
+                Field server = Bukkit.class.getDeclaredField("server");
+                server.setAccessible(true);
+                server.set(null, previous[0]);
+            }
+        }
     }
 
     /**

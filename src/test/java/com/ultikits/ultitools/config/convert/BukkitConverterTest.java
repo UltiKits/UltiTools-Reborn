@@ -64,7 +64,13 @@ class BukkitConverterTest {
             assertThat(restored.getAmount()).isEqualTo(input.getAmount());
             assertThat(restored.getItemMeta().getDisplayName()).isEqualTo("Config item");
             assertThat(restored.getItemMeta().getLore()).containsExactly("first", "second");
-            assertThat(restored.getEnchantmentLevel(Enchantment.SHARPNESS)).isEqualTo(2);
+            // Compare by key, not by the static field: the field's instance comes from whichever registry
+            // was live when Enchantment was first initialised, and a later MockBukkit server hands out its
+            // own instance, which made this assertion order-dependent.
+            assertThat(restored.getEnchantments()).hasSize(1);
+            Enchantment restoredEnchantment = restored.getEnchantments().keySet().iterator().next();
+            assertThat(restoredEnchantment.getKey()).isEqualTo(Enchantment.SHARPNESS.getKey());
+            assertThat(restored.getEnchantments().get(restoredEnchantment)).isEqualTo(2);
         }
     }
 

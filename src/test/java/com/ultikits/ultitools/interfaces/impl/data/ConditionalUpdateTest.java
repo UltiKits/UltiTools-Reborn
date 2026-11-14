@@ -25,7 +25,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -47,6 +49,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * operators (H2 in MySQL mode standing in for both relational engines).
  */
 @DisplayName("DataOperator#updateIf applies only while the expected values still hold (#543)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class ConditionalUpdateTest {
 
     private static DataSource dataSource;

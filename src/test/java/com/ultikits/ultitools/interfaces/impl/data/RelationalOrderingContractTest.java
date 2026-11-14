@@ -39,7 +39,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -69,6 +71,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * {@link Json} lane pins JSON's existing double-precision ordering.
  */
 @DisplayName("Typed GREATER / LESS ordering on every backend (#675)")
+@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
 class RelationalOrderingContractTest {
 
     static final String TABLE = "ordering_row";
