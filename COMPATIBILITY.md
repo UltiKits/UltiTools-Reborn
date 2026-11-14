@@ -136,8 +136,8 @@ leave the file unchanged. Add the missing key by hand when a write is refused. N
 
 ## Language declaration deprecation (as of 6.5.0)
 
-`@I18n` and `@UltiToolsModule(i18n = ...)` are deprecated and will be removed in a future
-major version; their signatures remain available in 6.5.0. Since 6.3.0, supported languages
+`@I18n` and `@UltiToolsModule(i18n = ...)` are deprecated for removal and may be removed as early
+as 6.6.0, under the removal policy below; their signatures remain available in 6.5.0. Since 6.3.0, supported languages
 come from the module's own `lang/<code>.json`, `.yml`, or `.yaml` resources, not these declarations.
 Remove the obsolete declarations and ship the language files instead.
 
@@ -332,7 +332,8 @@ stable extension points although their package carries `@ApiStatus.Internal`.
 A `PanelResponderRegistry` responder may now answer any JSON value: an object, an array, a primitive, or no
 content. A future that completes with `null` or `JsonNull` is a success with no content, sent as `ok` with
 `data: null`; in 6.3.0 it was a failure. A responder that returns no future, throws, or completes its future
-exceptionally still fails the request (`module_error`). To allow these shapes the generic signatures changed,
+exceptionally still fails the request (`module_error`). The `module_error` message is value-free by design: when a
+responder's result cannot be serialised as JSON, the message does not name the offending field. To allow these shapes the generic signatures changed,
 with identical erasure, so compiled modules keep linking (japicmp: binary compatible):
 
 - `registerResponder(String, Function<JsonObject, ? extends CompletableFuture<? extends JsonElement>>, String)`
@@ -695,8 +696,10 @@ take.
   command's real output. A plugin command that accepts only the console sender refuses it. Run such commands in
   the server console. There is no automatic console retry.
 - **A panel command's immediate reply is no longer echoed to the console (6.3.1).** It is captured in
-  `command.result` `data.output`, not in the server console, its log files or the panel's log stream. The
-  console records the `[UltiTools] [Remote command] > <command>` audit line and any late output, not a copy
+  `command.result` `data.output` on success; when dispatch is refused, the captured text is in the
+  `command_failed` error's `message` instead. Neither is echoed to the console, its log files or the panel's
+  log stream. The console records the audit line (English: `[UltiTools] [Remote command] > <command>`;
+  its text follows the server's `language` setting) and any late output, not a copy
   of the immediate reply (`CommandExecutionManager#execute` writes the audit line;
   `CommandExecutionManager#executeCaptured` captures the reply and forwards late output).
 - **A panel command's late output is not in its result.** `command.result` is sent when the command's dispatch
@@ -770,9 +773,9 @@ take.
 - **An editable root equal to the server root is not listed.** `files.list` with an empty path lists the editable
   roots by their path relative to the server root; the server root itself has no such path and is omitted, although
   requests for paths inside it are still judged normally. Use sub-directories (`plugins`, `logs`) as editable roots.
-- **A log line with a negative timestamp invalidates its `log.lines` frame.** The framework forwards the line's
-  timestamp unchanged, and the contract requires `ts` of at least 0, so a system clock set before 1970 makes the
-  gateway refuse the frame. Keep the system clock correct.
+- **A panel config edit replaces a module's unsaved in-memory change to the same key.** The panel writes the file and
+  reloads the module's config entity; as in the three-way reload, the value on disk wins and the module's unsaved
+  change to that key is dropped. Modules should save their own changes before an operator edits the same key.
 
 ## Config layer (6.3.0)
 
@@ -1792,6 +1795,9 @@ such spelling: keep binary values out of the keys of a file the framework writes
 - **MINOR** (for example 6.2.x → 6.3.0): feature evolution. **May include removal of public API.**
 - **MAJOR**: reserved for a change of direction at the framework level. It will not be issued
   merely to clean up deprecated API.
+
+Libraries delivered through `plugin.yml` `libraries:` (for example XSeries) follow their own versioning,
+not this framework's version-number contract.
 
 ### When a public API becomes eligible for removal
 

@@ -142,7 +142,7 @@ class RemoteCommandHandlerTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"list", "say hi"})
+    @ValueSource(strings = {"list", "say hi", "executor", "functions"})
     void shippedDefaultsStillAllowOrdinaryCommands(String command) throws Exception {
         config.set("ultipanel.commands.blocklist", shippedBlocklist());
         AtomicInteger dispatches = countDispatches(command.split(" ")[0]);

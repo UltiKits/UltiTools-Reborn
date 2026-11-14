@@ -183,6 +183,22 @@ class FrameworkConfigMigrationGateTest {
     }
 
     @Test
+    void anExistingTenEntryDefaultBlocklistIsNotExtendedOrRewritten() throws Exception {
+        String shipped = new String(resource("/config.yml"), StandardCharsets.UTF_8);
+        String original = shipped.replace("      - execute\n", "")
+                .replace("      - return\n", "").replace("      - function\n", "");
+        assertThat(original).isNotEqualTo(shipped);
+        File file = write(original.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(migrate(file)).isFalse();
+
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original.getBytes(StandardCharsets.UTF_8));
+        assertThat(YamlConfiguration.loadConfiguration(file).getStringList("ultipanel.commands.blocklist"))
+                .containsExactly("op", "deop", "stop", "restart", "reload", "ban-ip", "pardon-ip",
+                        "whitelist", "save-off", "save-all");
+    }
+
+    @Test
     void anAlignedTrailingCommentIsNotWrittenAndTheBuiltInDefaultsAnswer() throws Exception {
         assertRefused("language: zh   # my note\ndatasource:\n  type: sqlite\n", "layout");
     }

@@ -169,7 +169,26 @@ class UltiCloudUatRowsTest {
             "ultitools.lifecycle.reload-keeps-registrations",
             "ultitools.capability.file-write.update-config",
             "ultitools.remote.command-blocklist.empty-list",
-            "ultitools.config.config-yml"));
+            "ultitools.config.config-yml",
+            "ultitools.remote.command-blocklist.default-nested",
+            "ultitools.playercache.save-without-saver.refused",
+            "ultitools.playercache.save-with-saver.called",
+            "ultitools.cloud.error-report.module-command",
+            "ultitools.cloud.error-report.exception-catch-bean",
+            "ultitools.cloud.error-report.non-module-null",
+            "ultitools.cloud.error-report.identifier-fallback",
+            "ultitools.cloud.error-report.same-shape-two-modules",
+            "ultitools.cloud.error-report.jar-path-with-space",
+            "ultitools.cloud.error-report.truncated-message",
+            "ultitools.i18n.declared-missing.warns-once",
+            "ultitools.i18n.declared-missing.alias-merged",
+            "ultitools.i18n.declared-missing.disk-copy-does-not-mask",
+            "ultitools.i18n.complete-declaration.silent",
+            "ultitools.cloud.command.blocklist-alias-namespaced",
+            "ultitools.cloud.command.console-only-execute-run",
+            "ultitools.cloud.player-action.teleport-once",
+            "ultitools.cloud.hello.prerelease-module-version",
+            "ultitools.cloud.capability.renegotiate-on-reload"));
 
     /** Rows of 6.3.0 that protocol 2.0.0 retired (magic-link login and protocol v1 messages), in either document. */
     static final List<String> RETIRED_IDS = Collections.unmodifiableList(Arrays.asList(
