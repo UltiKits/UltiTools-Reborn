@@ -20,10 +20,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,6 +64,7 @@ class RemoteCommandHandlerTest {
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
     private ServerMock server;
+    private YamlConfiguration config;
     private RecordingChannel channel;
     private Ledger ledger;
     private Queue<Runnable> mainThread;
@@ -66,7 +73,7 @@ class RemoteCommandHandlerTest {
     void setUp() {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock(spy(new ServerMock()));
-        YamlConfiguration config = new YamlConfiguration();
+        config = new YamlConfiguration();
         config.set(Capability.COMMANDS.getConfigPath(), true);
         TestHelper.mockUltiToolsInstance(plugin -> {
             when(plugin.getConfig()).thenReturn(config);
@@ -108,6 +115,76 @@ class RemoteCommandHandlerTest {
         assertThat(payload.get("code").getAsString()).isEqualTo("command_blocked");
         assertThat(payload.get("message").getAsString()).contains("ultipanel.commands.blocklist");
         assertThat(payload.getAsJsonObject("details").get("matched").getAsString()).isEqualTo("stop");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "execute run say hi, execute",
+            "minecraft:execute run say hi, execute",
+            "return 1, return",
+            "function foo:bar, function"
+    })
+    void shippedDefaultsRefuseNestedDispatchEntryPoints(String command, String matched) throws Exception {
+        config.set("ultipanel.commands.blocklist", shippedBlocklist());
+        AtomicInteger dispatches = countDispatches(matched);
+
+        handler(new CommandExecutionManager(), () -> false).handle(request(command), channel);
+        drainMainThread();
+
+        assertThat(dispatches.get()).isZero();
+        assertThat(channel.frames()).extracting(frame -> frame.get("type").getAsString())
+                .containsExactly("command.ack", "command.result");
+        JsonObject payload = channel.frames().get(1).getAsJsonObject("payload");
+        assertThat(payload.get("status").getAsString()).isEqualTo("error");
+        assertThat(payload.get("code").getAsString()).isEqualTo("command_blocked");
+        assertThat(payload.getAsJsonObject("details").get("matched").getAsString()).isEqualTo(matched);
+        assertThat(mainThread).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"list", "say hi"})
+    void shippedDefaultsStillAllowOrdinaryCommands(String command) throws Exception {
+        config.set("ultipanel.commands.blocklist", shippedBlocklist());
+        AtomicInteger dispatches = countDispatches(command.split(" ")[0]);
+
+        handler(new CommandExecutionManager(), () -> false).handle(request(command), channel);
+        drainMainThread();
+
+        assertThat(dispatches.get()).isEqualTo(1);
+        assertThat(channel.frames()).hasSize(2);
+        assertThat(channel.frames().get(1).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+    }
+
+    @Test
+    void anOperatorEmptyListAllowsExecuteInsteadOfForcingTheNewDefaults() {
+        config.set("ultipanel.commands.blocklist", Collections.emptyList());
+        AtomicInteger dispatches = countDispatches("execute");
+
+        handler(new CommandExecutionManager(), () -> false).handle(request("execute run say hi"), channel);
+        drainMainThread();
+
+        assertThat(dispatches.get()).isEqualTo(1);
+        assertThat(channel.frames()).hasSize(2);
+        assertThat(channel.frames().get(1).getAsJsonObject("payload").get("status").getAsString()).isEqualTo("ok");
+        assertThat(config.getStringList("ultipanel.commands.blocklist")).isEmpty();
+    }
+
+    @Test
+    void absentKeyFallbackEqualsTheEntireShippedBlocklist() throws Exception {
+        assertThat(config.isSet("ultipanel.commands.blocklist")).isFalse();
+        List<String> shipped = shippedBlocklist();
+        assertThat(shipped).containsExactly("op", "deop", "stop", "restart", "reload", "ban-ip", "pardon-ip",
+                "whitelist", "save-off", "save-all", "execute", "return", "function");
+        assertThat(new CommandExecutionManager()).extracting("blockedCommands").isEqualTo(new HashSet<>(shipped));
+    }
+
+    private List<String> shippedBlocklist() throws Exception {
+        try (InputStream stream = getClass().getResourceAsStream("/config.yml")) {
+            assertThat(stream).as("shipped config.yml").isNotNull();
+            YamlConfiguration shipped = new YamlConfiguration();
+            shipped.load(new InputStreamReader(stream, StandardCharsets.UTF_8));
+            return shipped.getStringList("ultipanel.commands.blocklist");
+        }
     }
 
     @Test
