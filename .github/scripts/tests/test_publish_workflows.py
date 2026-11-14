@@ -142,6 +142,23 @@ class ReleaseValidationTests(unittest.TestCase):
                     self.helper.check_https_host(url, "repo1.maven.org")
         self.helper.check_https_host("https://repo1.maven.org/file", "repo1.maven.org")
 
+    def test_maven_cache_identity_includes_the_maven_pin(self):
+        checked = 0
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            jobs = path.read_text(encoding="utf-8").split("\njobs:", 1)[1]
+            workflow = WorkflowParser("jobs:" + jobs).parse()
+            for name, job in workflow.get("jobs", {}).items():
+                for step in job.get("steps", []):
+                    if step.get("with", {}).get("cache") != "maven":
+                        continue
+                    checked += 1
+                    inputs = step["with"].get("cache-dependency-path", "").splitlines()
+                    with self.subTest(workflow=path.name, job=name):
+                        self.assertIn(".github/scripts/setup-pinned-maven.sh", inputs,
+                                      "setup-java hashes this script, including MAVEN_VERSION, into the key")
+                        self.assertIn("pom.xml", inputs)
+        self.assertEqual(checked, 5)
+
     def test_staging_jobs_pin_maven_before_every_maven_run(self):
         required = {("maven-ci.yml", "release-tooling"), ("publish-packages.yml", "publish-central")}
         exempt = {

@@ -14,6 +14,14 @@ are refused. Previously the cache entry was silently removed without saving. Imp
 `savePlayerData(UUID)` or use `saveBeforeRemove = false` if no save is intended. A rejected
 bean is not added to cache tracking. Save failures still log a warning and remove the entry;
 this change adds no persistence or retry guarantee.
+||||||| d710a1c3
+
+## Offline runtime API floor checks (as of 6.5.0)
+
+The build verifies the pinned Paper API 1.19.2 fixture against its SHA-256. For offline builds
+without that fixture, `-Druntime.api.floor.skip=true` skips its retrieval and the three fixture-dependent
+unit tests; it does not certify API-floor compatibility. CI keeps the check enabled by default.
+The fixture is test-only and is never bundled in the published JAR.
 
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
