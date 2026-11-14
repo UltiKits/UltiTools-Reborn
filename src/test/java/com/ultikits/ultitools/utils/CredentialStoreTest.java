@@ -96,7 +96,7 @@ class CredentialStoreTest {
     private static final String SYNTHETIC_LEGACY_DOCUMENT = "{\"uuid\":\"" + SYNTHETIC_LEGACY_UUID
             + "\",\"cloud_token\":{\"access_token\":\"" + SYNTHETIC_LEGACY_TOKEN + "\"}}";
 
-    @TempDir
+    @TempDir(factory = MemoryTempDirFactory.class)
     Path tempDir;
 
     private Path dataFile;
