@@ -5,6 +5,19 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Language declaration deprecation (as of 6.5.0)
+
+`@I18n` and `@UltiToolsModule(i18n = ...)` are deprecated and will be removed in a future
+major version; their signatures remain available in 6.5.0. Since 6.3.0, supported languages
+come from the module's own `lang/<code>.json`, `.yml`, or `.yaml` resources, not these declarations.
+Remove the obsolete declarations and ship the language files instead.
+
+When an accepted module still declares languages without matching resources in its own JAR,
+loading logs one WARN per module instance naming all missing codes. Both declarations are checked
+and duplicate codes appear once. Complete or empty declarations produce no extra deprecation log.
+On-disk custom files and `supported()` overrides do not satisfy this packaged-resource check;
+existing `supported()` overrides and language selection remain unchanged.
+
 ## Player cache save declarations (as of 6.5.0)
 
 A bean with `@PlayerCache(saveBeforeRemove = true)` must implement `PlayerCacheSaver`,
