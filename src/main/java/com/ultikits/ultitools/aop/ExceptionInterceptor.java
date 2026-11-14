@@ -190,7 +190,8 @@ public class ExceptionInterceptor implements MethodInterceptor {
         // superclass - often a framework base - which tells an operator nothing about which of the
         // several concrete beans failed, and makes two different beans that inherit one method
         // collapse into a single deduplicated error report.
-        String beanName = beanClassOf(invocation, method).getSimpleName();
+        Class<?> beanClass = beanClassOf(invocation, method);
+        String beanName = beanClass.getSimpleName();
 
         // Log unless silent
         if (!annotation.silent()) {
@@ -204,7 +205,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
             if (instance != null) {
                 ErrorReportCollector erc = instance.getErrorReportCollector();
                 if (erc != null) {
-                    erc.reportError(e, beanName,
+                    erc.reportErrorFromClass(e, beanClass,
                             TriggerContext.aop(beanName, method.getName()));
                 }
             }

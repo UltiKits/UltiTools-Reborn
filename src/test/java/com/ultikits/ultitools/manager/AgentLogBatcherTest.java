@@ -91,6 +91,23 @@ class AgentLogBatcherTest {
     }
 
     @Test
+    void outOfRangeTimestampsCannotInvalidateAWholeBatch() {
+        AgentLogBatcher batcher = new AgentLogBatcher(() -> START);
+        RecordingChannel channel = new RecordingChannel();
+        batcher.offer(Long.MIN_VALUE, Level.INFO, "negative timestamp");
+        batcher.offer(Long.MAX_VALUE, Level.WARNING, "too large timestamp");
+        batcher.offer(START, Level.INFO, "ordinary timestamp");
+        batcher.flush(channel);
+
+        assertThat(channel.frames()).hasSize(1);
+        JsonArray lines = onlyLines(channel.frames().get(0));
+        assertThat(lines).hasSize(3);
+        assertThat(lines.get(0).getAsJsonObject().get("ts").getAsLong()).isZero();
+        assertThat(lines.get(1).getAsJsonObject().get("ts").getAsLong()).isEqualTo(8640000000000000L);
+        assertThat(lines.get(2).getAsJsonObject().get("ts").getAsLong()).isEqualTo(START);
+    }
+
+    @Test
     void aBatchNeverExceedsTheLineCountAndTheFramesFollowOneAnother() {
         AtomicLong clock = new AtomicLong(START);
         AgentLogBatcher batcher = new AgentLogBatcher(clock::get);

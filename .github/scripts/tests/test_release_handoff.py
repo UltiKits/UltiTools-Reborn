@@ -218,8 +218,12 @@ def store(path, name):
 
 
 if verb == "view":
+    if os.environ.get("FAKE_GH_VIEW_ERROR"):
+        sys.stderr.write(os.environ["FAKE_GH_VIEW_ERROR"] + "\n")
+        sys.exit(1)
     if rel is None:
-        fail("release not found")
+        sys.stderr.write("release not found\n")
+        sys.exit(1)
     values, _ = parse(rest, ("--json", "--jq"), ())
     if "--json" in values:
         print(json.dumps({"tagName": tag, "targetCommitish": rel["target"], "isDraft": rel["draft"],
@@ -270,6 +274,13 @@ if verb == "download":
     values, _ = parse(rest, ("--dir",), ())
     dest = Path(values.get("--dir", "."))
     dest.mkdir(parents=True, exist_ok=True)
+    failure = os.environ.get("FAKE_GH_DOWNLOAD_ERROR")
+    marker = state_dir / "download-failed"
+    if failure and (failure == "always" or not marker.exists()):
+        marker.write_text("failed")
+        if rel["assets"]:
+            (dest / rel["assets"][0]).write_bytes(b"partial download")
+        fail("simulated asset transport error")
     for name in rel["assets"]:
         if (dest / name).exists():
             fail("%s already exists locally" % name)
@@ -1427,6 +1438,36 @@ class EdgeHandoffTests(HandoffTestCase):
         manifest, authority, uat = self.approved()
         self.fx.tag_origin(TAG, self.fx.git_raw("rev-parse", "HEAD~1"))
         self.assert_blocked_without_writes(self.publish(manifest, authority, uat), TAG)
+
+    def test_release_query_errors_are_not_absence(self):
+        manifest, authority, uat = self.approved()
+        for message in ("HTTP 401: Bad credentials", "HTTP 403: API rate limit exceeded",
+                        "HTTP 500: Internal Server Error", "dial tcp: connection refused",
+                        "HTTP 404: Not Found (repository inaccessible)",
+                        "release not found\ntransport error"):
+            with self.subTest(message=message):
+                self.fx.log.write_text("")
+                result = self.publish(manifest, authority, uat, env={"FAKE_GH_VIEW_ERROR": message})
+                self.assert_blocked_without_writes(result, "Could not inspect release")
+
+    def test_asset_download_retries_with_a_clean_directory(self):
+        manifest, authority, uat = self.approved()
+        assets = {name: (self.retain / name).read_bytes() for name in self.expected_assets()}
+        self.fx.add_release(TAG, self.fx.head(), assets, draft=True)
+        self.fx.log.write_text("")
+        result = self.publish(manifest, authority, uat, "--dry-run", env={"FAKE_GH_DOWNLOAD_ERROR": "once"})
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        self.assertEqual(len([a for a in self.fx.calls("gh") if a[:2] == ["release", "download"]]), 2)
+        self.assertEqual(self.fx.gh_writes(), [])
+
+    def test_repeated_download_errors_stop_before_classifying_or_writing(self):
+        manifest, authority, uat = self.approved()
+        assets = {name: (self.retain / name).read_bytes() for name in self.expected_assets()}
+        self.fx.add_release(TAG, self.fx.head(), assets, draft=True)
+        self.fx.log.write_text("")
+        result = self.publish(manifest, authority, uat, env={"FAKE_GH_DOWNLOAD_ERROR": "always"})
+        self.assert_blocked_without_writes(result, "Could not download release assets")
+        self.assertEqual(len([a for a in self.fx.calls("gh") if a[:2] == ["release", "download"]]), 2)
 
     def test_existing_release_with_different_bytes_is_never_replaced(self):
         manifest, authority, uat = self.approved()

@@ -17,6 +17,49 @@ This does not authorize rewriting a block scalar's own value or its separators. 
 unlocatable spans, and any unrelated layout that cannot be preserved still refuse with the existing warning and
 leave the file unchanged. Add the missing key by hand when a write is refused. No public API changes.
 
+## Error-report ownership and text bounds (as of 6.5.0)
+
+- Command and `@ExceptionCatch` failures now identify the loaded module by the concrete executor or
+  bean class's JAR, including proxied beans and modules sharing a package and class loader. Missing,
+  ambiguous or unmatched JAR sources remain unattributed (`moduleName: null`); packages and descriptions
+  are never used to guess ownership. Existing `ErrorReportCollector#reportError` remains available;
+  the additive `reportErrorFromClass(Throwable, Class<?>, TriggerContext)` entry point resolves ownership.
+- A missing or invalid module `identify-string` falls back to a valid, trimmed, lower-case `plugin.yml`
+  name for error reports, as it already did for module requests. A valid identify-string still wins.
+- Error text now uses the gateway's UTF-16 length limits without splitting surrogate pairs. Log timestamps
+  are clamped to the protocol range (0 through 8,640,000,000,000,000 milliseconds), so one invalid timestamp
+  cannot invalidate the whole batch. Log messages remain bounded in memory and by negotiated UTF-8 byte limits.
+
+## Language declaration deprecation (as of 6.5.0)
+
+`@I18n` and `@UltiToolsModule(i18n = ...)` are deprecated and will be removed in a future
+major version; their signatures remain available in 6.5.0. Since 6.3.0, supported languages
+come from the module's own `lang/<code>.json`, `.yml`, or `.yaml` resources, not these declarations.
+Remove the obsolete declarations and ship the language files instead.
+
+When an accepted module still declares languages without matching resources in its own JAR,
+loading logs one WARN per module instance naming all missing codes. Both declarations are checked
+and duplicate codes appear once. Complete or empty declarations produce no extra deprecation log.
+On-disk custom files and `supported()` overrides do not satisfy this packaged-resource check;
+existing `supported()` overrides and language selection remain unchanged.
+
+## Player cache save declarations (as of 6.5.0)
+
+A bean with `@PlayerCache(saveBeforeRemove = true)` must implement `PlayerCacheSaver`,
+including when the annotated field is inherited. Registration now throws `PluginModuleException`
+naming the bean class and field if the saver is missing, just as unsupported cache field shapes
+are refused. Previously the cache entry was silently removed without saving. Implement
+`savePlayerData(UUID)` or use `saveBeforeRemove = false` if no save is intended. A rejected
+bean is not added to cache tracking. Save failures still log a warning and remove the entry;
+this change adds no persistence or retry guarantee.
+
+## Offline runtime API floor checks (as of 6.5.0)
+
+The build verifies the pinned Paper API 1.19.2 fixture against its SHA-256. For offline builds
+without that fixture, `-Druntime.api.floor.skip=true` skips its retrieval and the three fixture-dependent
+unit tests; it does not certify API-floor compatibility. CI keeps the check enabled by default.
+The fixture is test-only and is never bundled in the published JAR.
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
@@ -210,11 +253,9 @@ what an `error.report` names in `moduleName`. `moduleName` is `null` unless the 
 A module whose `identify-string` is missing or is not a valid identifier (a lower-case letter first, segments of
 lower-case letters and digits joined by one `.` or `-`, at most 64 characters) is addressed by its `plugin.yml`
 name trimmed and lower-cased instead, as in 6.3.0, when that is a valid identifier; if neither is, its
-responders are not declared and one WARNING says so. Error reports never use that fallback: a module whose
-`identify-string` is not a valid identifier sends its error reports with `moduleName` `null`, even when its
-responders are reachable under the `plugin.yml` name. This is deliberate: the `plugin.yml` name may match no
-catalogue entry, and the panel would then attribute the error to a module that does not exist. Give the module a
-valid `identify-string` to have its errors attributed.
+responders are not declared and one WARNING says so. Before 6.5.0, error reports did not use that fallback;
+as of 6.5.0, error reports use the same valid normalized name when the identify-string is missing or invalid.
+Prefer a valid catalogue `identify-string` so module requests and reports use the published module's identifier.
 
 The version in `modules:<identifier>@<X.Y.Z>` is always three numbers. The framework takes the first three runs of
 digits in the `plugin.yml` version and pads missing ones with `0`, so a pre-release or build suffix is not carried:
@@ -563,8 +604,10 @@ take.
   slow `files.list` (about 10 seconds for 100,000 entries) delays the next file or property request, never
   heartbeats, acknowledgements or other request types. More than 64 waiting requests are answered
   `rate_limited`, and a switch turned off while a request already waits does not stop that request.
-- **Error-report attribution.** `error.report.moduleName` names a module only when the report names a loaded
-  module; errors of command executors and AOP beans are reported as the framework's own (`null`).
+- **Error-report attribution.** `error.report.moduleName` is `null` when no loaded module can be identified.
+  As of 6.5.0, command executors and AOP beans are attributed by their concrete class's JAR (see
+  [Error-report ownership and text bounds](#error-report-ownership-and-text-bounds-as-of-650)); an unavailable,
+  ambiguous or unmatched source remains unattributed.
 - **A panel command's audit line follows `language`, and a refusal is in `message`.** The console audit line is
   written through the framework's text catalogue, so it reads `[UltiTools] [Remote command] > <command>` in English
   and `[UltiTools] [远程命令] > <command>` with the default `language: zh`. The text of a refused command (for

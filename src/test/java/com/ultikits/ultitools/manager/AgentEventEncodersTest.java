@@ -108,6 +108,50 @@ class AgentEventEncodersTest {
     }
 
     @Test
+    void supplementaryCharactersRespectTheGatewaysUtf16Bounds() {
+        View view = new View();
+        String emoji = new String(Character.toChars(0x1f600));
+        view.exceptionType = String.join("", java.util.Collections.nCopies(257, emoji));
+        view.message = String.join("", java.util.Collections.nCopies(501, emoji));
+        view.stackTrace = String.join("", java.util.Collections.nCopies(16385, emoji));
+        view.moduleName = String.join("", java.util.Collections.nCopies(65, emoji));
+        view.triggerDetail = view.exceptionType;
+        view.location = view.exceptionType;
+        assertUtf16Bounds(AgentEventEncoders.errorReport(view));
+    }
+
+    @Test
+    void cutsAtOddUtf16BoundariesKeepSurrogatePairsWhole() {
+        View view = new View();
+        String ending = new String(Character.toChars(0x1f600)) + "tail";
+        view.exceptionType = repeat('e', 255) + ending;
+        view.message = repeat('m', 499) + ending;
+        view.stackTrace = repeat('s', 16383) + ending;
+        view.moduleName = repeat('n', 63) + ending;
+        view.triggerDetail = repeat('d', 255) + ending;
+        view.location = repeat('l', 255) + ending;
+        JsonObject payload = AgentEventEncoders.errorReport(view);
+        assertUtf16Bounds(payload);
+        assertThat(payload.get("message").getAsString()).isEqualTo(repeat('m', 499));
+    }
+
+    private static void assertUtf16Bounds(JsonObject payload) {
+        for (String field : new String[] {"exceptionType", "message", "stackTrace", "moduleName", "location"}) {
+            int bound = "message".equals(field) ? 500 : "stackTrace".equals(field) ? 16384
+                    : "moduleName".equals(field) ? 64 : 256;
+            assertUtf16Text(payload.get(field).getAsString(), bound);
+        }
+        assertUtf16Text(payload.getAsJsonObject("trigger").get("detail").getAsString(), 256);
+        assertThat(new RecordingChannel().send("error.report", payload)).isTrue();
+    }
+
+    private static void assertUtf16Text(String value, int bound) {
+        assertThat(value.length()).as("gateway counts UTF-16 units").isLessThanOrEqualTo(bound);
+        assertThat(Character.isHighSurrogate(value.charAt(value.length() - 1)))
+                .as("truncation must not leave a dangling surrogate").isFalse();
+    }
+
+    @Test
     void emptyOptionalValuesBecomeNullAndTheDroppedFieldsNeverAppear() {
         View view = new View();
         view.moduleName = "";
