@@ -136,8 +136,8 @@ leave the file unchanged. Add the missing key by hand when a write is refused. N
 
 ## Language declaration deprecation (as of 6.5.0)
 
-`@I18n` and `@UltiToolsModule(i18n = ...)` are deprecated and will be removed in a future
-major version; their signatures remain available in 6.5.0. Since 6.3.0, supported languages
+`@I18n` and `@UltiToolsModule(i18n = ...)` are deprecated for removal and may be removed as early
+as 6.6.0, under the removal policy below; their signatures remain available in 6.5.0. Since 6.3.0, supported languages
 come from the module's own `lang/<code>.json`, `.yml`, or `.yaml` resources, not these declarations.
 Remove the obsolete declarations and ship the language files instead.
 

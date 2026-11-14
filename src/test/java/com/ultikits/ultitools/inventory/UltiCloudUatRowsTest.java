@@ -188,8 +188,7 @@ class UltiCloudUatRowsTest {
             "ultitools.cloud.command.console-only-execute-run",
             "ultitools.cloud.player-action.teleport-once",
             "ultitools.cloud.hello.prerelease-module-version",
-            "ultitools.cloud.capability.renegotiate-on-reload",
-            "ultitools.sensitive.remote-console.neg-blocked"));
+            "ultitools.cloud.capability.renegotiate-on-reload"));
 
     /** Rows of 6.3.0 that protocol 2.0.0 retired (magic-link login and protocol v1 messages), in either document. */
     static final List<String> RETIRED_IDS = Collections.unmodifiableList(Arrays.asList(
