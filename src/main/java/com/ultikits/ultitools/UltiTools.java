@@ -101,9 +101,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
     // Bukkit server (see the WIRE-11 test-seam decision recorded in 04-03-PLAN.md).
     private static final Logger MODULE_SCAN_LOGGER = Logger.getLogger(UltiTools.class.getName());
 
-    /** D-03: the ten current blocked commands, shipped as the operator-editable blocklist's default. */
+    /** D-03: the operator-editable blocklist's shipped default commands. */
     private static final List<String> DEFAULT_COMMAND_BLOCKLIST = Collections.unmodifiableList(Arrays.asList(
-            "op", "deop", "stop", "restart", "reload", "ban-ip", "pardon-ip", "whitelist", "save-off", "save-all"));
+            "op", "deop", "stop", "restart", "reload", "ban-ip", "pardon-ip", "whitelist", "save-off", "save-all",
+            "execute", "return", "function"));
     private static final List<String> COMMAND_BLOCKLIST_COMMENT = Arrays.asList(
             "Commands the panel may never execute remotely. Fully operator-editable — add or remove entries freely.",
             "面板永远不允许远程执行的命令列表。完全由操作员编辑——可自由增删。");

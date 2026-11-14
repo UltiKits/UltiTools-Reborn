@@ -156,6 +156,33 @@ class FrameworkConfigMigrationGateTest {
     }
 
     @Test
+    void aMissingBlocklistIsInsertedInExactlyTheShippedOrder() throws Exception {
+        File file = write("language: en\n".getBytes(StandardCharsets.UTF_8));
+        YamlConfiguration shipped = new YamlConfiguration();
+        shipped.loadFromString(new String(resource("/config.yml"), StandardCharsets.UTF_8));
+
+        assertThat(migrate(file)).isTrue();
+
+        assertThat(YamlConfiguration.loadConfiguration(file).getStringList("ultipanel.commands.blocklist"))
+                .containsExactlyElementsOf(shipped.getStringList("ultipanel.commands.blocklist"));
+    }
+
+    @Test
+    void anExistingOperatorBlocklistIsNotExtendedOrRewritten() throws Exception {
+        String shipped = new String(resource("/config.yml"), StandardCharsets.UTF_8);
+        String original = shipped.replaceFirst("(?m)^    blocklist:\\n(?:      - [^\\n]+\\n)+",
+                "    blocklist: [stop] # operator policy\n");
+        assertThat(original).isNotEqualTo(shipped);
+        File file = write(original.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(migrate(file)).isFalse();
+
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original.getBytes(StandardCharsets.UTF_8));
+        assertThat(YamlConfiguration.loadConfiguration(file).getStringList("ultipanel.commands.blocklist"))
+                .containsExactly("stop");
+    }
+
+    @Test
     void anAlignedTrailingCommentIsNotWrittenAndTheBuiltInDefaultsAnswer() throws Exception {
         assertRefused("language: zh   # my note\ndatasource:\n  type: sqlite\n", "layout");
     }
@@ -581,7 +608,7 @@ class FrameworkConfigMigrationGateTest {
         }
         assertThat(effective.getStringList("ultipanel.commands.blocklist"))
                 .containsExactly("op", "deop", "stop", "restart", "reload", "ban-ip", "pardon-ip", "whitelist", "save-off",
-                        "save-all");
+                        "save-all", "execute", "return", "function");
         assertThat(effective.getStringList("ultipanel.files.editable-roots")).containsExactly("plugins", "logs");
         assertThat(effective.getLong("ultipanel.logging.action-log.max-size-bytes")).isEqualTo(1_048_576L);
         assertThat(effective.getInt("ultipanel.logging.action-log.max-files")).isEqualTo(5);

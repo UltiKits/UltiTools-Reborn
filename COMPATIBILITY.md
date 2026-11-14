@@ -11,7 +11,8 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
   `BaseCommandExecutor` checks the invoked label, resolved command name, registered label and every registered alias
   before help, validators or the command body. A listed sibling alias blocks the command's other spellings too:
   listing `ultitools` refuses `ul help`, `ulti help` and `ultitools:ul help`, and the synchronous framework target in
-  `execute run ul help`. Matching is case-insensitive and namespace-free. This covers synchronous wrappers only when
+  `execute run ul help` when the operator allows `execute` itself. Matching is case-insensitive and namespace-free.
+  This covers synchronous wrappers only when
   their target enters that executor. The existing in-body refusal
   of panel-issued `ulticloud login`, `login <code>` and `logout` remains independent of the configurable list.
   A nested refusal is captured as ordinary command output **only when the nested command keeps the panel's sender**: a
@@ -55,6 +56,22 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
 - **Module capability versions use only the version core.** Digits in prerelease or build metadata no longer fill a
   missing component: `2.0-rc1` and `2.0+build.9` both declare `2.0.0`, not `2.0.1` or `2.0.9`.
 
+### Remote command defaults (as of 6.5.0)
+
+The shipped `ultipanel.commands.blocklist` now contains 13 entries, in this order: `op`, `deop`, `stop`,
+`restart`, `reload`, `ban-ip`, `pardon-ip`, `whitelist`, `save-off`, `save-all`, **`execute`, `return`, `function`**.
+The three new entries refuse direct nested-dispatch entry points such as `execute run stop` and `function <pack>:x`
+because alias/nested matching has the limits described below. Namespaced forms such as `minecraft:execute` are
+refused too, with `command_blocked` and `details.matched: execute`.
+
+New installs and configurations without this key get the new defaults. **An existing operator list is never
+extended or rewritten**: existing servers keep their old list and must add `execute`, `return` and `function`
+themselves if they want these refusals. To allow those commands, stop the server, delete their three lines from
+`ultipanel.commands.blocklist` in `plugins/UltiTools/config.yml`, and start it again. Keep the remaining entries;
+`[]` disables the entire configurable list. `/ul reload` does not re-read this list.
+
+中文补充：6.5.0 的默认列表新增 `execute`、`return`、`function`，新安装或缺少此键的配置采用新默认值。已有列表绝不追加或改写；旧服务器如需拦截这三项须自行添加。要允许它们，停服后删除列表中对应三行，再启动服务器；`/ul reload` 不会重读此列表。
+
 ### Known limitations of panel command hardening
 
 The remote command blocklist is a guard on what the panel command line resolves to, **not a sandbox**. It checks the
@@ -64,8 +81,9 @@ outer request and resolved command's registered spellings, plus synchronous nest
 scheduled commands. Later work does not inherit the synchronous panel-origin scope. Operators who need those paths
 unavailable must restrict panel command access with **`ultipanel.capabilities.commands: false`** in
 `plugins/UltiTools/config.yml` (the shipped default); do not grant it to untrusted operators. Blocking wrapper names
-such as `execute`, `return` and `function` can narrow direct entry points, but is not a complete sandbox. This change
-adds none of those names to the shipped ten-command blocklist and does not protect against a malicious installed plugin.
+such as `execute`, `return` and `function` narrows direct entry points (all three are now in the shipped default),
+but is not a complete sandbox and does not protect against a malicious installed plugin. Existing operator lists
+are unchanged; allowing these wrapper names restores the corresponding nested-dispatch paths.
 
 Vanilla Brigadier redirects such as `tp` / `teleport` are not Bukkit alias metadata and remain a known limitation:
 listing one redirect spelling does not guarantee that the other is blocked. List each spelling explicitly, or disable
@@ -3210,11 +3228,11 @@ This section governs the third kind.
   framework loads the key at server start it now accepts only a list of which every element is a string (each trimmed and
   lower-cased); anything else - a scalar, a map, or a list with an element that is a mapping, a nested list, null, a number or
   a boolean - is ignored as a whole. One WARNING names `ultipanel.commands.blocklist` and the kind of the value, never the
-  value, and the ten-command default stays in force. An explicit empty list `[]` is valid and blocks nothing, and an absent
+  value, and the shipped default stays in force (13 commands as of 6.5.0). An explicit empty list `[]` is valid and blocks nothing, and an absent
   key, or `blocklist: ~`, keeps the default. The file is never rewritten. To block nothing, write `[]`; to block a command,
   write it as a string element.
 
-  中文补充：**格式错误的 `ultipanel.commands.blocklist` 会被整体拒绝**（自 6.3.0 起，#672）。原来这个值经由会做类型转换的列表读取方法读入，所以普通字符串、空字符串或含映射的列表会装入一个空的或残缺的黑名单，面板就能执行服主本想拦截的命令。现在框架在服务器启动时加载该键，只接受每个元素都是字符串的列表（每项去掉首尾空白并转小写）；其他任何形式——标量、映射，或含映射、嵌套列表、null、数字、布尔元素的列表——都整体忽略，输出一条 WARNING，写明 `ultipanel.commands.blocklist` 和值的种类（不写值本身），十条命令的默认值继续生效。显式的空列表 `[]` 合法，表示不拦截任何命令；键缺失或写成 `blocklist: ~` 时保留默认值。文件绝不被改写。想不拦截任何命令请写 `[]`；想拦截某条命令，把它写成字符串元素。
+  中文补充：**格式错误的 `ultipanel.commands.blocklist` 会被整体拒绝**（自 6.3.0 起，#672）。原来这个值经由会做类型转换的列表读取方法读入，所以普通字符串、空字符串或含映射的列表会装入一个空的或残缺的黑名单，面板就能执行服主本想拦截的命令。现在框架在服务器启动时加载该键，只接受每个元素都是字符串的列表（每项去掉首尾空白并转小写）；其他任何形式——标量、映射，或含映射、嵌套列表、null、数字、布尔元素的列表——都整体忽略，输出一条 WARNING，写明 `ultipanel.commands.blocklist` 和值的种类（不写值本身），随包默认值继续生效（6.5.0 起为十三条命令）。显式的空列表 `[]` 合法，表示不拦截任何命令；键缺失或写成 `blocklist: ~` 时保留默认值。文件绝不被改写。想不拦截任何命令请写 `[]`；想拦截某条命令，把它写成字符串元素。
 - Configuration writes follow the maintainer's rule that operator-written configuration is never
   overwritten automatically (2026-10-04, "what code may write, by file type";
   [#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599)). Changed without a migration period,

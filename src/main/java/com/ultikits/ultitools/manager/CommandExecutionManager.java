@@ -120,7 +120,7 @@ public class CommandExecutionManager {
      */
     private Set<String> blockedCommands = new HashSet<>(Arrays.asList(
         "op", "deop", "stop", "restart", "reload", "ban-ip",
-        "pardon-ip", "whitelist", "save-off", "save-all"
+        "pardon-ip", "whitelist", "save-off", "save-all", "execute", "return", "function"
     ));
 
     public CommandExecutionManager() {
@@ -136,7 +136,7 @@ public class CommandExecutionManager {
      * Distinguishes an absent key from an explicit empty list via {@code isSet(path)} — Bukkit's
      * {@code getStringList} returns an empty list for both, and collapsing that distinction would
      * make D-03's honest "block nothing" escape value silently impossible (T-06-12). The shipped
-     * ten-command default applies only when the key is absent; an explicit empty list is honored
+     * default blocklist applies only when the key is absent; an explicit empty list is honored
      * as the operator deliberately granting every command.
      * <p>
      * A present value is validated as a whole before anything is installed: it must be a list
@@ -163,7 +163,7 @@ public class CommandExecutionManager {
                 return;
             }
             if (!instance.getConfig().isSet(BLOCKLIST_CONFIG_KEY)) {
-                // Absent key — keep the shipped ten-command default this field was constructed with.
+                // Absent key — keep the shipped default blocklist this field was constructed with.
                 return;
             }
             Object raw = instance.getConfig().get(BLOCKLIST_CONFIG_KEY);

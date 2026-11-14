@@ -123,6 +123,9 @@ ultipanel:
       - whitelist
       - save-off
       - save-all
+      - execute
+      - return
+      - function
   files:
     # Directories the panel's file API may read/write/delete within, subject to the capability switches above.
     # 面板文件 API 可以在其中读取/写入/删除的目录，仍受上方能力开关约束。
