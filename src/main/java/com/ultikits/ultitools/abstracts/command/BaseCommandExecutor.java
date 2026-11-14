@@ -60,7 +60,8 @@ import lombok.Getter;
  * <p>
  * The default validator chain applies four validators in order: sender type (driven by the
  * class-level {@code @CmdTarget}, overridable per method), permission and operator requirement
- * (driven by {@code @CmdExecutor}), cooldown (applied only after a successful invocation), and
+ * (driven by {@code @CmdExecutor}), cooldown (applied when the mapped invocation completes,
+ * whether it returns normally or throws, but not when dispatch is refused before invocation), and
  * usage locking (acquired and released around the call in a try-finally). Execution flow in
  * {@link #onCommand}: help short-circuit, immutable {@link CommandContext} construction, scored
  * method matching via {@link #matchMethod}, parameter parsing, the validator chain, an

@@ -31,6 +31,8 @@ class RuntimeGuardConfigurationTest {
         String paper = "/project/build/plugins/plugin[artifactId='maven-antrun-plugin']"
                 + "/executions/execution[id='runtime-api-floor-paper-fixture']";
         assertThat(xpath.evaluate(paper + "/phase", pom)).isEqualTo("generate-test-resources");
+        assertThat(xpath.evaluate("/project/properties/runtime.api.floor.skip", pom)).isEqualTo("false");
+        assertThat(xpath.evaluate(paper + "/configuration/skip", pom)).isEqualTo("${runtime.api.floor.skip}");
         assertThat(xpath.evaluate("count(" + paper + "/configuration/target/checksum[@algorithm='SHA-256'])", pom))
                 .isEqualTo("1");
         assertThat(xpath.evaluate("count(" + paper + "/configuration/target/fail)", pom)).isEqualTo("2");
