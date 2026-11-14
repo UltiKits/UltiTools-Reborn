@@ -1,6 +1,5 @@
 package com.ultikits.ultitools.interfaces;
 
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.manager.DataScope;
 
@@ -14,71 +13,6 @@ public interface DataStore {
      * @return Data storage type
      */
     String getStoreType();
-
-    /**
-     * Ownership check for a data folder: refuses unless {@code dataFolder} belongs to a registered
-     * external plugin whose scope owns {@code dataEntity}. As of 6.4.0 only the shipped stores' own
-     * legacy {@code getOperator(File, Class)} methods call it.
-     *
-     * @param dataFolder the external plugin's data folder
-     * @param dataEntity data entity class
-     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataFolder} matches
-     *         no registered scope, or matches one that does not own {@code dataEntity}
-     * @since 6.3.0
-     * @deprecated It served only the {@code getOperator(File, Class)} overload removed in 6.4.0;
-     *             {@link #getOperator(DataScope, Class)} checks ownership itself. Use
-     *             {@link #getOperator(DataScope, Class)} instead.
-     * @removeIn 6.5.0
-     */
-    @Deprecated(since = "6.4.0", forRemoval = true)
-    default void checkOwnership(java.io.File dataFolder, Class<?> dataEntity) {
-        com.ultikits.ultitools.UltiTools ultiTools = com.ultikits.ultitools.UltiTools.getInstance();
-        DataScope scope = ultiTools != null && ultiTools.getPluginManager() != null
-                ? ultiTools.getPluginManager().findScopeForDataFolder(dataFolder)
-                : null;
-        if (scope == null) {
-            throw new com.ultikits.ultitools.exceptions.DataAccessException(
-                    com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED,
-                    "Data folder is not a registered external plugin -- call UltiToolsAPI.connect(...) "
-                            + "before requesting a data operator.");
-        }
-        if (!scope.owns(dataEntity)) {
-            throw scope.refusalFor(dataEntity);
-        }
-    }
-
-    /**
-     * Ownership check for a plugin: refuses unless the framework's entity registry records
-     * {@code plugin} as the owner of {@code dataEntity}. As of 6.4.0 only the shipped stores' own
-     * legacy {@code getOperator(UltiToolsPlugin, Class)} methods call it.
-     *
-     * @param plugin     the requesting plugin
-     * @param dataEntity data entity class
-     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code plugin} does not own
-     *         {@code dataEntity}
-     * @since 6.3.0
-     * @deprecated It served only the {@code getOperator(UltiToolsPlugin, Class)} overload removed in
-     *             6.4.0; {@link #getOperator(DataScope, Class)} checks ownership itself. Use
-     *             {@link #getOperator(DataScope, Class)} instead.
-     * @removeIn 6.5.0
-     */
-    @Deprecated(since = "6.4.0", forRemoval = true)
-    default void checkOwnership(UltiToolsPlugin plugin, Class<?> dataEntity) {
-        com.ultikits.ultitools.UltiTools ultiTools = com.ultikits.ultitools.UltiTools.getInstance();
-        String owner = ultiTools != null && ultiTools.getPluginManager() != null
-                ? ultiTools.getPluginManager().findOwningPlugin(dataEntity)
-                : null;
-        String requester = plugin.getPluginName();
-        if (!java.util.Objects.equals(requester, owner)) {
-            String message = owner != null
-                    ? "Entity " + dataEntity.getName() + " belongs to module '" + owner + "', not '"
-                            + requester + "' -- use " + owner + "'s exposed service or the EventBus instead."
-                    : "Entity " + dataEntity.getName() + " is not registered to '" + requester
-                            + "' -- use the owning module's exposed service or the EventBus instead.";
-            throw new com.ultikits.ultitools.exceptions.DataAccessException(
-                    com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED, message);
-        }
-    }
 
     /**
      * Get the JDBC {@link javax.sql.DataSource} backing this store for the given scope, needing

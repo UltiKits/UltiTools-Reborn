@@ -4,7 +4,7 @@
     xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <artifactId>UltiTools-API</artifactId>
     <groupId>com.ultikits</groupId>
-    <version>6.5.0-SNAPSHOT</version>
+    <version>6.5.0</version>
     <modelVersion>4.0.0</modelVersion>
     <name>UltiTools-API</name>
     <description>This project is the base of the Ultitools plugin development.</description>
@@ -516,11 +516,18 @@
                              (RemovalConsistencyEvaluator: no unregistered, stale or missing
                              exclusion) and OverBroadExclusionInvariantTest rejects a whole-class
                              entry for a class that still exists. Emptied again when the baseline
-                             advanced from 6.3.2 to 6.4.0: every ledger removal carries removedIn
-                             6.3.0 or 6.4.0, so each symbol is absent from both the baseline and this
-                             tree. A removal made in this cycle adds its entry here together with its
-                             ledger record. -->
+                             advanced from 6.3.2 to 6.4.0: the older removals are absent from both the baseline and this tree.
+                             The eight 6.5.0 data-store removals below were announced in 6.4.0;
+                             their exact signatures are recorded as REMOVED in the ledger. -->
                         <excludes>
+                            <exclude>com.ultikits.ultitools.interfaces.DataStore#checkOwnership(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.DataStore#checkOwnership(java.io.File, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.data.json.JsonStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.data.json.JsonStore#getOperator(java.io.File, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore#getOperator(java.io.File, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.Class)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore#getOperator(java.io.File, java.lang.Class)</exclude>
                         </excludes>
                     </parameter>
                 </configuration>
