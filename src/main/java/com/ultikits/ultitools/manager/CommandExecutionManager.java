@@ -18,6 +18,8 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 
@@ -39,7 +41,7 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public class CommandExecutionManager {
     /** Panel origin exists only inside synchronous main-thread dispatch, including nested commands. */
-    private static final ThreadLocal<Boolean> PANEL_DISPATCH = new ThreadLocal<>();
+    private static final ThreadLocal<CommandExecutionManager> PANEL_DISPATCH = new ThreadLocal<>();
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     /**
@@ -287,7 +289,7 @@ public class CommandExecutionManager {
             }
         }
 
-        if (blockedCommands.contains(baseCommand)) {
+        if (blockedCommands.stream().anyMatch(entry -> baseCommandName(entry).equals(baseCommand))) {
             return AccessDecision.deniedConfigurable(
                     "command '" + baseCommand + "' is on the remote command blocklist",
                     BLOCKLIST_CONFIG_KEY);
@@ -374,7 +376,7 @@ public class CommandExecutionManager {
         UltiTools.getInstance().getLogger().log(Level.INFO,
                 FrameworkText.format("[远程命令] > %s", shown));
         recordCommandDecision(shown, actor, null);
-        mainThread.execute(() -> executeCaptured(command, sink));
+        mainThread.execute(() -> executeCaptured(command, shown, actor, sink));
     }
 
     /**
@@ -451,13 +453,63 @@ public class CommandExecutionManager {
      * @return true only during a panel dispatch, including synchronous nested dispatches
      */
     public static boolean isPanelDispatch() {
-        return Boolean.TRUE.equals(PANEL_DISPATCH.get());
+        return PANEL_DISPATCH.get() != null;
     }
 
-    /** Restores the caller's origin even when a nested dispatch throws. Both panel paths use this. */
-    private static boolean dispatchPanelCommand(CommandSender sender, String command) {
-        Boolean previous = PANEL_DISPATCH.get();
-        PANEL_DISPATCH.set(Boolean.TRUE);
+    /**
+     * Checks an actual framework command reached during synchronous panel dispatch, rather than
+     * attempting to predict how arbitrary aliases or third-party wrappers expand. Called before a
+     * BaseCommandExecutor runs help, validators or a body. The outer request's manager supplies the
+     * policy, including when the nested command changes sender. No origin is inherited by later tasks.
+     *
+     * @param sender receives a refusal as ordinary command feedback
+     * @param commandLine the resolved command name or invoked alias, followed by its arguments
+     * @return whether this panel-originated command was refused; false outside panel dispatch
+     * @since 6.5.0
+     */
+    public static boolean refusePanelCommand(CommandSender sender, String commandLine) {
+        return refusePanelCommand(sender, null, commandLine);
+    }
+
+    /**
+     * Also checks registered names, labels and aliases in both directions. The executor supplies
+     * the actual command; the reverse check resolves blocklist entries on the same server thread.
+     * Neither check parses wrapper expansion.
+     *
+     * @param sender receives a refusal as ordinary command feedback
+     * @param command the actual command entering the executor, or null for a text-only check
+     * @param commandLine the invoked label or resolved name followed by its arguments
+     * @return whether the synchronous panel command was refused
+     * @since 6.5.0
+     */
+    public static boolean refusePanelCommand(CommandSender sender, Command command, String commandLine) {
+        CommandExecutionManager manager = PANEL_DISPATCH.get();
+        if (manager == null) {
+            return false;
+        }
+        String canonical = canonicalCommandLine(commandLine);
+        AccessDecision decision = manager.canonicalCommandDecision(canonical);
+        if (decision.isAllowed() && command != null) {
+            String matched = manager.blocklistedLabel(command, canonical);
+            if (matched != null) {
+                decision = manager.canonicalCommandDecision(matched + argumentsOf(canonical));
+            }
+        }
+        if (decision.isAllowed()) {
+            return false;
+        }
+        String shown = loggedCommandLine(commandLine, canonical);
+        manager.recordCommandDecision(shown, "panel", decision.getMessage());
+        UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "[Remote command] Blocked a nested panel command: " + baseCommandName(canonical));
+        sender.sendMessage(resultMessage(decision.getMessage()));
+        return true;
+    }
+
+    /** Restores the caller's origin even when a nested dispatch throws. */
+    private boolean dispatchPanelCommand(CommandSender sender, String command) {
+        CommandExecutionManager previous = PANEL_DISPATCH.get();
+        PANEL_DISPATCH.set(this);
         try {
             return Bukkit.dispatchCommand(sender, command);
         } finally {
@@ -493,7 +545,18 @@ public class CommandExecutionManager {
         }
     }
 
-    private void executeCaptured(String commandLine, CommandResultSink sink) {
+    private void executeCaptured(String commandLine, String shown, String actor, CommandResultSink sink) {
+        String matched = blocklistedTarget(commandLine);
+        if (matched != null) {
+            // Admission is text-only on the calling thread. Resolve registered spellings on the
+            // server thread, including a listed sibling alias, and report the spelling that matched.
+            AccessDecision decision = canonicalCommandDecision(matched + argumentsOf(commandLine));
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    FrameworkText.format("[远程命令] 已拦截: %s", shown));
+            recordCommandDecision(shown, actor, decision.getMessage());
+            sink.blocked(matched, resultMessage(decision.getMessage()));
+            return;
+        }
         // Paper's feedback sender shares the console's PermissibleBase, so the command runs with
         // console-equivalent permissions; both sendMessage(String) and sendMessage(Component)
         // arrive at the feedback object, which splits a component into one entry per printed line.
@@ -506,14 +569,13 @@ public class CommandExecutionManager {
         boolean accepted;
         try {
             accepted = dispatchPanelCommand(sender, commandLine);
-        } catch (Exception ex) {
-            feedback.take();
-            // The panel receives the message only, so the stack trace lives here or nowhere. The
-            // command name is logged without its arguments: an argument can carry a secret.
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.format("[远程命令] 命令执行异常: %s", baseCommandName(commandLine)), ex);
-            sink.failed(resultMessage(ex.getMessage()));
+        } catch (Exception | LinkageError ex) {
+            commandFailed(commandLine, feedback, sink, ex);
             return;
+        } catch (Error fatal) {
+            // Answer first, but never swallow a VM failure or other non-linkage Error.
+            commandFailed(commandLine, feedback, sink, fatal);
+            throw fatal;
         }
         List<String> lines = feedback.take();
         long elapsed = Math.min(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), MAX_EXECUTION_MS);
@@ -523,6 +585,120 @@ public class CommandExecutionManager {
         }
         BoundedLines bounded = boundLines(lines);
         sink.completed(bounded.lines, bounded.truncated, elapsed);
+    }
+
+    /**
+     * Resolves the outer label on the server thread and checks every registered spelling against
+     * the same text policy as admission. On Paper 1.21.11 {@code bukkit:rl} resolves to
+     * {@code reload}; bare {@code rl} does not exist. A listed sibling alias also refuses the
+     * command's other spellings. Unknown labels keep their admission decision.
+     * <p>
+     * Neither lookup expands wrappers, {@code execute run}, functions or {@code commands.yml}
+     * aliases into their eventual targets. This is a command-line guard, not a sandbox.
+     *
+     * @param commandLine the canonical command line, dispatched unchanged
+     * @return the normalized name or alias that was refused, or null when the line may run
+     */
+    private String blocklistedTarget(String commandLine) {
+        for (Command target : resolvedTargets(commandLine)) {
+            String matched = blocklistedLabel(target, commandLine);
+            if (matched != null) {
+                return matched;
+            }
+        }
+        return null;
+    }
+
+    /** Uses symmetric Bukkit alias metadata, never predictions of wrapper expansion. */
+    private String blocklistedLabel(Command target, String commandLine) {
+        String arguments = argumentsOf(commandLine);
+        for (String candidate : registeredLabels(target)) {
+            String normalized = baseCommandName(candidate);
+            if (!canonicalCommandDecision(normalized + arguments).isAllowed()) {
+                return normalized;
+            }
+        }
+        // Paper can split a primary command and its aliases into different wrappers, with alias
+        // metadata only on the primary. Resolve the configured entry as well as the typed label.
+        String invoked = baseCommandName(commandLine);
+        for (String entry : blockedCommands) {
+            String normalized = baseCommandName(entry);
+            for (Command blocked : resolvedTargets(normalized)) {
+                for (String candidate : registeredLabels(blocked)) {
+                    if (baseCommandName(candidate).equals(invoked)) {
+                        return normalized;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /** A third-party command may return null instead of an empty alias list. */
+    private static List<String> registeredLabels(Command command) {
+        List<String> labels = new ArrayList<>();
+        labels.add(command.getName());
+        labels.add(command.getLabel());
+        List<String> aliases = command.getAliases();
+        if (aliases != null) {
+            labels.addAll(aliases);
+        }
+        return labels;
+    }
+
+    /**
+     * Every command the server's command map resolves this line's label to, at most two and at most
+     * one per distinct resolved name.
+     *
+     * @param commandLine the canonical command line
+     * @return the resolved commands, empty when there is no server or no command map
+     */
+    private static List<Command> resolvedTargets(String commandLine) {
+        if (Bukkit.getServer() == null) {
+            return Collections.emptyList();
+        }
+        CommandMap commandMap = Bukkit.getServer().getCommandMap();
+        if (commandMap == null) {
+            return Collections.emptyList();
+        }
+        List<Command> targets = new ArrayList<>(2);
+        addResolvedTarget(targets, commandMap.getCommand(label(commandLine)));
+        addResolvedTarget(targets, commandMap.getCommand(baseCommandName(commandLine)));
+        return targets;
+    }
+
+    /** Adds {@code resolved} unless an already-added command carries the same name. */
+    private static void addResolvedTarget(List<Command> targets, Command resolved) {
+        if (resolved == null) {
+            return;
+        }
+        for (Command known : targets) {
+            if (known.getName().equalsIgnoreCase(resolved.getName())) {
+                return;
+            }
+        }
+        targets.add(resolved);
+    }
+
+    /** The first token of a canonical command line, namespace included, or "" for an empty line. */
+    private static String label(String commandLine) {
+        int separator = commandLine.indexOf(' ');
+        return separator < 0 ? commandLine : commandLine.substring(0, separator);
+    }
+
+    /** The arguments of a canonical command line including the leading space, or "" without any. */
+    private static String argumentsOf(String commandLine) {
+        int separator = commandLine.indexOf(' ');
+        return separator < 0 ? "" : commandLine.substring(separator);
+    }
+
+    private static void commandFailed(String commandLine, CapturedFeedback feedback, CommandResultSink sink,
+                                      Throwable failure) {
+        feedback.take();
+        // The panel receives only the message. Keep the stack locally, without command arguments.
+        UltiTools.getInstance().getLogger().log(Level.WARNING,
+                FrameworkText.format("[远程命令] 命令执行异常: %s", baseCommandName(commandLine)), failure);
+        sink.failed(resultMessage(failure.getMessage()));
     }
 
     /**

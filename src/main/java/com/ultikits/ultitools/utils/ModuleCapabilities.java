@@ -115,7 +115,9 @@ final class ModuleCapabilities {
     static String version(String pluginVersion) {
         String[] parts = new String[3];
         if (pluginVersion != null) {
-            Matcher matcher = DIGITS.matcher(pluginVersion);
+            // A prerelease/build identifier is not a missing core component (2.0-rc1 is 2.0.0).
+            String core = pluginVersion.split("[-+]", 2)[0];
+            Matcher matcher = DIGITS.matcher(core);
             int count = 0;
             while (count < parts.length && matcher.find()) {
                 parts[count] = withoutLeadingZeros(matcher.group());

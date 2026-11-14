@@ -354,11 +354,46 @@ class InboundWiringTest {
         assertThat(presentAtStop.get()).as("the pre-shutdown flush wrote it again before the stop").isTrue();
     }
 
+    /**
+     * The production window this pins is the one between {@code ul reload} and its reconnect: the
+     * negotiated hello still offers {@code files:write}, the switch has already been read off, and
+     * the next request on that same connection is refused per request. The wait is deterministic —
+     * the established listener consults {@code capabilitiesChangedSinceHello()} before it hands the
+     * connection to {@code outbound.established}, whose welcome telemetry proves it passed without
+     * renegotiating — instead of the timing the original version of this test relied on.
+     */
     @Test
-    @DisplayName("a switch turned off after the handshake refuses the next request and writes nothing (S-66)")
+    @DisplayName("a switch turned off while the offered hello still has files:write is refused per request (S-66)")
+    void switchOffWhileTheHelloStillOffersItRefusesOnThatConnection() throws Exception {
+        connect();
+        await(() -> !stub.gateway().received("status").isEmpty(), "the welcome telemetry of the established connection");
+        config.set(Capability.FILE_WRITE.getConfigPath(), false);
+        assertThat(stub.gateway().received("hello")).as("no renegotiation happened").hasSize(1);
+        assertThat(stub.gateway().received("hello").get(0).getAsJsonObject("payload")
+                .getAsJsonArray("capabilities").toString()).as("the hello still offers the switch").contains("\"files:write\"");
+
+        String id = send("files.write", "with-base-version", null).get("id").getAsString();
+        JsonObject error = reply("error", 1);
+        assertThat(error.get("replyTo").getAsString()).isEqualTo(id);
+        JsonObject payload = error.getAsJsonObject("payload");
+        assertThat(payload.get("code").getAsString()).isEqualTo("capability_not_accepted");
+        assertThat(payload.getAsJsonObject("details").get("capability").getAsString()).isEqualTo("files:write");
+        assertThat(payload.get("message").getAsString()).contains(Capability.FILE_WRITE.getConfigPath());
+        assertThat(stub.gateway().received("files.write.result")).isEmpty();
+        assertThat(new File(System.getProperty("user.dir"), "plugins/UltiChat/config.yml")).doesNotExist();
+        assertThat(stub.gateway().received("hello")).as("the refusal never triggered a renegotiation").hasSize(1);
+    }
+
+    @Test
+    @DisplayName("a switch reloaded off renegotiates capabilities and refuses the next request without a write (S-66)")
     void switchOffAfterHandshakeRefuses() throws Exception {
         connect();
         config.set(Capability.FILE_WRITE.getConfigPath(), false);
+        features.onReload();
+        await(() -> stub.gateway().received("hello").size() >= 2 && CloudAuthManager.status().isConnected(),
+                "the capabilities renegotiated after reload");
+        assertThat(reply("hello", 2).getAsJsonObject("payload").getAsJsonArray("capabilities").toString())
+                .doesNotContain("\"files:write\"");
         String id = send("files.write", "with-base-version", null).get("id").getAsString();
         JsonObject error = reply("error", 1);
         assertThat(error.get("replyTo").getAsString()).isEqualTo(id);

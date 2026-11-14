@@ -182,7 +182,8 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
         if (id == null) {
             String rolledBack = registered.get();
             if (rolledBack != null) {
-                pendingCreates.remove(rolledBack, pending);
+                finishCreate(rolledBack, CloudPlayerLinks.LinkCreation.failed(
+                        CloudPlayerLinks.Failure.NOT_CONNECTED, "This server is not connected to UltiCloud."), false);
             }
             return notConnected();
         }
@@ -225,14 +226,8 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
      */
     void onChannelClosed() {
         for (String id : new ArrayList<>(pendingCreates.keySet())) {
-            Pending pending = pendingCreates.remove(id);
-            if (pending == null) {
-                continue;
-            }
-            cancel(pending);
-            pending.future.complete(CloudPlayerLinks.LinkCreation.failed(
-                    CloudPlayerLinks.Failure.NOT_CONNECTED, "This server is not connected to UltiCloud."));
-            pending.drainHeld();
+            finishCreate(id, CloudPlayerLinks.LinkCreation.failed(
+                    CloudPlayerLinks.Failure.NOT_CONNECTED, "This server is not connected to UltiCloud."), false);
         }
     }
 
@@ -246,14 +241,42 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
     }
 
     private void expireCreate(String id) {
-        Pending pending = pendingCreates.remove(id);
-        if (pending == null) {
+        finishCreate(id, CloudPlayerLinks.LinkCreation.failed(
+                CloudPlayerLinks.Failure.TIMED_OUT, "UltiCloud did not answer the link request in time."), true);
+    }
+
+    /**
+     * The single terminal path for a create. Keep its pending entry until completing the future
+     * has returned, including its synchronous callbacks; events arriving meanwhile are still held.
+     * Membership and draining share the ledger lock with event admission, so nothing can be held
+     * after the last drain. Only discarded, not-yet-started completions lose their busy marker.
+     */
+    private void finishCreate(String id, CloudPlayerLinks.LinkCreation result, boolean deliverHeld) {
+        Pending pending = pendingCreates.get(id);
+        if (pending == null || !pending.terminalClaimed.compareAndSet(false, true)) {
             return;
         }
-        pending.future.complete(CloudPlayerLinks.LinkCreation.failed(
-                CloudPlayerLinks.Failure.TIMED_OUT, "UltiCloud did not answer the link request in time."));
-        for (Held held : pending.drainHeld()) {
-            deliver(held.completion, held.channel);
+        // Cancellation of the caller-owned future must not prevent transport cleanup.
+        pending.future.complete(result);
+        cancel(pending);
+        List<Held> held;
+        synchronized (ledger) {
+            pendingCreates.remove(id, pending);
+            held = pending.drainHeld();
+            if (!deliverHeld) {
+                for (Held item : held) {
+                    if (item.completionId != null) {
+                        busyCompletions.remove(item.completionId);
+                    }
+                }
+            }
+        }
+        for (Held item : held) {
+            // Expiries have no gateway retry: deliver them after even a failed create. Only held
+            // completions are discarded on close/error, with their claims released for redelivery.
+            if (deliverHeld || item.completionId == null) {
+                item.delivery.run();
+            }
         }
     }
 
@@ -279,16 +302,7 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
             throw new InvalidFrameException("invalid_message", request.id(),
                     "Payload does not match the message schema.");
         }
-        Pending pending = pendingCreates.remove(request.replyTo());
-        if (pending == null) {
-            LOGGER.fine("UltiCloud: ignored a link answer for a create this run is not tracking.");
-            return;
-        }
-        cancel(pending);
-        pending.future.complete(creation);
-        for (Held held : pending.drainHeld()) {
-            deliver(held.completion, held.channel);
-        }
+        finishCreate(request.replyTo(), creation, true);
     }
 
     private void onCompleted(CloudRequest request, CloudChannel connection) {
@@ -297,23 +311,24 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
         JsonObject recorded;
         synchronized (ledger) {
             recorded = ledger.receiptFor(id);
+            if (recorded == null) {
+                // Receipt lookup and claiming must be atomic with receipt persistence. Otherwise
+                // a just-finished handler could be called again by a concurrent redelivery.
+                if (!busyCompletions.add(id)) {
+                    return;
+                }
+                Pending pending = pendingCreates.get(request.replyTo());
+                if (pending != null) {
+                    pending.hold(new Held(id, () -> deliver(completion, connection)));
+                    return;
+                }
+            }
         }
         if (recorded != null) {
             sendResult(connection, id, recorded);
-            return;
+        } else {
+            deliver(completion, connection);
         }
-        Pending pending = pendingCreates.get(request.replyTo());
-        if (pending != null) {
-            if (!busyCompletions.add(id)) {
-                return;
-            }
-            pending.hold(new Held(completion, connection));
-            return;
-        }
-        if (!busyCompletions.add(id)) {
-            return;
-        }
-        deliver(completion, connection);
     }
 
     /**
@@ -477,12 +492,15 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
         final CloudPlayerLinks.LinkExpiry expiry = new CloudPlayerLinks.LinkExpiry(request.replyTo(),
                 player.uuid, player.name, expiryReason(reason));
         final CloudPlayerLinks.LinkEventHandler target = owner.handler;
-        handlerThread.execute(new Runnable() {
-            @Override
-            public void run() {
-                target.onExpired(expiry);
+        Runnable delivery = () -> handlerThread.execute(() -> target.onExpired(expiry));
+        synchronized (ledger) {
+            Pending pending = pendingCreates.get(request.replyTo());
+            if (pending != null) {
+                pending.hold(new Held(null, delivery));
+                return;
             }
-        });
+        }
+        delivery.run();
     }
 
     /**
@@ -490,11 +508,9 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
      * @param request the parsed error frame
      */
     void onErrorReply(CloudRequest request) {
-        Pending pending = request.replyTo() == null ? null : pendingCreates.remove(request.replyTo());
-        if (pending == null) {
+        if (request.replyTo() == null) {
             return;
         }
-        cancel(pending);
         String message = "UltiCloud could not process the link request.";
         try {
             PayloadReader reader = new PayloadReader(request.id(), request.payload());
@@ -504,8 +520,8 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
         } catch (InvalidFrameException ex) {
             LOGGER.fine("UltiCloud: an error reply for a link create had an unexpected payload.");
         }
-        pending.future.complete(CloudPlayerLinks.LinkCreation.failed(CloudPlayerLinks.Failure.INTERNAL_ERROR, message));
-        pending.drainHeld();
+        finishCreate(request.replyTo(), CloudPlayerLinks.LinkCreation.failed(
+                CloudPlayerLinks.Failure.INTERNAL_ERROR, message), false);
     }
 
     private void answer(CloudChannel connection, String id, JsonObject result) {
@@ -706,6 +722,7 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
 
     /** One create this run issued and has not answered yet. */
     private static final class Pending {
+        private final AtomicBoolean terminalClaimed = new AtomicBoolean();
         private final CompletableFuture<CloudPlayerLinks.LinkCreation> future = new CompletableFuture<>();
         private final List<Held> held = new ArrayList<>();
         private volatile ScheduledFuture<?> deadline;
@@ -721,14 +738,15 @@ final class PlayerLinkChannel implements CloudPlayerLinks.Transport {
         }
     }
 
-    /** A completion that arrived before its create was answered. */
+    /** A completion or expiry held until its create has settled. */
     private static final class Held {
-        private final CloudPlayerLinks.LinkCompletion completion;
-        private final CloudChannel channel;
+        /** Only completions own busy markers; expiries have no marker to release. */
+        private final String completionId;
+        private final Runnable delivery;
 
-        private Held(CloudPlayerLinks.LinkCompletion completion, CloudChannel channel) {
-            this.completion = completion;
-            this.channel = channel;
+        private Held(String completionId, Runnable delivery) {
+            this.completionId = completionId;
+            this.delivery = delivery;
         }
     }
 

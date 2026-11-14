@@ -457,7 +457,7 @@ public final class CloudFeatures {
                         recordAction(RemoteActionLog.Entry.denied(Capability.PLAYER_ACTIONS,
                                 PlayerActionHandler.TYPE + "." + action, player, PANEL_ACTOR, reason));
                     }
-                }));
+                }, timers));
     }
 
     private static void registerAll(AgentMessageRouter router, List<String> types,

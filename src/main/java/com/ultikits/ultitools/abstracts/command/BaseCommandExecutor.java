@@ -46,6 +46,7 @@ import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
+import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
@@ -357,6 +358,15 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     @Override
     public boolean onCommand(CommandSender sender, Command command, String alias, String[] args) {
+        if (CommandExecutionManager.isPanelDispatch()) {
+            // Pass the actual command so a listed sibling alias also blocks its other spellings.
+            // Synchronous wrappers can hide the outer name, but local commands bypass this check.
+            String arguments = args.length == 0 ? "" : " " + String.join(" ", args);
+            if (CommandExecutionManager.refusePanelCommand(sender, command, command.getName() + arguments)
+                    || CommandExecutionManager.refusePanelCommand(sender, alias + arguments)) {
+                return true;
+            }
+        }
         // Create command context
         // WR-02 (05-REVIEW.md): this.getClass() is the concrete executor class -- the SAME class
         // PluginManager's load-time contract gate inspects (executor.getClass()) -- captured
