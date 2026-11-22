@@ -20,7 +20,7 @@
   | Where | Value | Meaning |
   |---|---|---|
   | `pom.xml` `<java.version>` | `1.8` | `-source` / `-target` bytecode level |
-  | CI toolchain + `paper-api` | JDK 21 · Paper `1.21.11-R0.1-SNAPSHOT` | build toolchain and compile-time API |
+  | CI toolchain + `paper-api` | JDK 25 · Paper `1.21.11-R0.1-SNAPSHOT` | build toolchain and compile-time API |
   | `plugin.yml` `api-version` | `1.19` | Bukkit API level |
 
   The pom uses `-source`/`-target`, **not** `--release`, and the codebase relies on that gap (for example
@@ -80,7 +80,7 @@ All commands run from the repository root.
 
 ## CI
 
-All jobs run on JDK 21 (temurin). **Workflow files change more often than this card does — read
+All jobs run on JDK 25 (temurin). **Workflow files change more often than this card does — read
 `.github/workflows/` rather than trusting the table below whenever behaviour surprises you.**
 
 | Workflow | Trigger | What it does |

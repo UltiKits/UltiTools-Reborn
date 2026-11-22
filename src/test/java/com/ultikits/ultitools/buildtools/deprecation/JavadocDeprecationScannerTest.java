@@ -151,7 +151,7 @@ class JavadocDeprecationScannerTest {
     @Test
     void unavailableParserFailsContextually(@TempDir Path root) {
         assertThatThrownBy(() -> new JavadocDeprecationScanner(getClass().getClassLoader(), () -> null).scan(root))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("full JDK 21")
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("full JDK 25")
                 .hasMessageContaining(root.toString());
     }
 

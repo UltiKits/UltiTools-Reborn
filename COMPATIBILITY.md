@@ -4723,7 +4723,7 @@ descriptor change can no longer pass CI unnoticed.
 | Item | Value |
 |---|---|
 | Server | Paper (plain Spigot is not supported — the code uses Adventure `Component` throughout) |
-| Build JDK | 21 |
+| Build JDK | 25 |
 | Bytecode target | Java 8 (`-source`/`-target`, not `--release`) |
 | `api-version` in `plugin.yml` | `1.19` (Bukkit API level, unrelated to the two rows above) |
 | `api-version` in a module's `plugin.yml` | `630` for a module built for 6.3.0 (UltiTools API level, unrelated to Bukkit's field of the same name); all fifteen UltiKits modules declare `630` |

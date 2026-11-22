@@ -75,7 +75,7 @@ public final class JavadocDeprecationScanner {
     public List<DeprecationEntry> scan(Path srcRoot) throws IOException {
         JavaCompiler compiler = compilerSupplier.get();
         if (compiler == null) {
-            throw new IllegalStateException("A full JDK 21 compiler/parser is required to scan " + srcRoot);
+            throw new IllegalStateException("A full JDK 25 compiler/parser is required to scan " + srcRoot);
         }
         List<Path> files;
         try (Stream<Path> paths = Files.walk(srcRoot)) {

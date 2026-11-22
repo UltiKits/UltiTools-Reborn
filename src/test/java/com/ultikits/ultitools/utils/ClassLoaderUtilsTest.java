@@ -397,7 +397,7 @@ class ClassLoaderUtilsTest {
         @Test
         @DisplayName("GEN-07: 脚本引擎类不再被阻止，能够成功加载")
         void scriptEngineClassesShouldNoLongerBeBlocked() throws Exception {
-            // javax.script.ScriptEngineManager is present on this repository's JDK 21 toolchain
+            // javax.script.ScriptEngineManager is present on this repository's JDK 25 toolchain
             // (measured empirically -- it loads without exception), so it now loads successfully.
             // The point GEN-07 makes is that it must not be a SecurityException any more.
             Class<?> clazz = ClassLoaderUtils.loadClass("javax.script.ScriptEngineManager");

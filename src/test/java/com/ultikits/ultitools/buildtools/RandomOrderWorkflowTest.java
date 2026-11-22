@@ -38,7 +38,7 @@ class RandomOrderWorkflowTest {
         Map<?, ?> java = steps().stream().filter(step -> step.containsKey("uses")
                 && step.get("uses").toString().startsWith("actions/setup-java@")).findFirst().get();
         assertThat(((Map<?, ?>) java.get("with")).get("distribution")).isEqualTo("temurin");
-        assertThat(((Map<?, ?>) java.get("with")).get("java-version")).isEqualTo("21");
+        assertThat(((Map<?, ?>) java.get("with")).get("java-version")).isEqualTo("25");
         Map<?, ?> tests = steps().stream().filter(step -> "Run unit tests in random order".equals(step.get("name")))
                 .findFirst().get();
         assertThat(tests.get("run").toString()).contains("mvn -B test", "-Dsurefire.runOrder=random",

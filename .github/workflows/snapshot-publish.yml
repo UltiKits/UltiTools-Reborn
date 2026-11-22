@@ -27,11 +27,11 @@ jobs:
         id: changes
         run: python3 -I .github/scripts/ci_changed_paths.py
 
-      - name: Set up JDK 21
+      - name: Set up JDK 25
         if: steps.changes.outputs.product == 'true'
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
-          java-version: '21'
+          java-version: '25'
           distribution: 'temurin'
           cache: maven
           # Include the pinned Maven version in setup-java's dependency hash.
