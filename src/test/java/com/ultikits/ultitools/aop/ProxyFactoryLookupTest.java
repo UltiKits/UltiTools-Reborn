@@ -251,12 +251,16 @@ class ProxyFactoryLookupTest {
 
     @Test
     void shouldSkipProbeOnlyWhenTheUnsafeOptionIsUnrecognized() {
-        assertThrows(org.opentest4j.TestAbortedException.class, () -> assertProbeResult(
+        // Derive the abort type from JUnit's declared API instead of importing a transitive dependency.
+        RuntimeException abort = assertThrows(RuntimeException.class,
+                () -> org.junit.jupiter.api.Assumptions.assumeTrue(false, "abort control"));
+        RuntimeException skipped = assertThrows(abort.getClass(), () -> assertProbeResult(
                 "deny", 1, "", "Unrecognized option: --sun-misc-unsafe-memory-access=deny\n"
                         + "Error: Could not create the Java Virtual Machine.\n"));
-        assertThrows(org.opentest4j.AssertionFailedError.class, () -> assertProbeResult(
+        assertTrue(skipped.getMessage().contains("Unsafe probe not executed"), skipped.getMessage());
+        assertThrows(AssertionError.class, () -> assertProbeResult(
                 "deny", 1, "", "UnsupportedOperationException: Cannot define class using reflection"));
-        assertThrows(org.opentest4j.AssertionFailedError.class, () -> assertProbeResult(
+        assertThrows(AssertionError.class, () -> assertProbeResult(
                 "warn", 0, "proxy-loader=target-loader; package-private=intercepted:pkg-original",
                 "WARNING: sun.misc.Unsafe::objectFieldOffset has been called"));
     }
