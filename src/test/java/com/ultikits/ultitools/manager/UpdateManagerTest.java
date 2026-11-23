@@ -386,7 +386,7 @@ class UpdateManagerTest {
                 org.bukkit.configuration.file.YamlConfiguration env = new org.bukkit.configuration.file.YamlConfiguration();
                 env.set("version", "6.3.0");
                 ultiMock.when(UltiTools::getEnv).thenReturn(env);
-                ultiMock.when(UltiTools::getPluginVersion).thenReturn(630);
+                ultiMock.when(UltiTools::getPluginVersion).thenReturn(700);
                 UltiTools instance = mock(UltiTools.class);
                 UltiToolsPlugin demo = mock(UltiToolsPlugin.class);
                 when(demo.getIdentifyString()).thenReturn("demo");
@@ -404,12 +404,12 @@ class UpdateManagerTest {
         }
 
         @Test
-        @DisplayName("the versions request carries apiLevel=630 and minApiLevel=630, and a compatible newer version is offered")
+        @DisplayName("the versions request carries apiLevel=700 and minApiLevel=700, and a compatible newer version is offered")
         void compatibleNewerVersion_isOfferedAndTheRequestCarriesTheLevel() {
             check();
 
             assertThat(versionQueries).hasSize(1);
-            assertThat(versionQueries.get(0)).contains("apiLevel=630").contains("minApiLevel=630");
+            assertThat(versionQueries.get(0)).contains("apiLevel=700").contains("minApiLevel=700");
             assertThat(updateManager.getModuleUpdates()).containsKey("Demo");
             assertThat(updateManager.getModuleUpdates().get("Demo").getLatestVersion()).isEqualTo("1.1");
         }

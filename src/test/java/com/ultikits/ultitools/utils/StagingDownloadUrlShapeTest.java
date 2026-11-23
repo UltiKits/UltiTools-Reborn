@@ -75,12 +75,12 @@ class StagingDownloadUrlShapeTest {
         File serverRoot = new File(tempDir, "server");
         File dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
         File oldJar = ModuleUpdateFixtures.moduleJar(new File(ModuleFileTransactions.modulesFolder(dataFolder),
-                "demo-1.0.jar"), StubCatalogue.MODULE_NAME, "1.0", StubCatalogue.MODULE, "630");
+                "demo-1.0.jar"), StubCatalogue.MODULE_NAME, "1.0", StubCatalogue.MODULE, "700");
         UltiToolsPlugin loaded = ModuleUpdateFixtures.loadedModule(StubCatalogue.MODULE_NAME, "1.0",
                 StubCatalogue.MODULE);
 
         try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class)) {
-            ultiTools.when(UltiTools::getPluginVersion).thenReturn(630);
+            ultiTools.when(UltiTools::getPluginVersion).thenReturn(700);
             Bound bound = boundByStageUpdate(ultiTools, dataFolder, loaded);
 
             ModuleFileTransactions.StageResult result = new ModuleFileTransactions(dataFolder).stageUpdate(

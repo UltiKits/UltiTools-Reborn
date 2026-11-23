@@ -159,7 +159,7 @@ class UpdateCheckShutdownAndOutcomeTest {
                 StubCatalogue.API_ORIGIN + "/v1/catalogue/modules/demo/versions/" + version + "/download"));
     }
 
-    /** Runs the check against the stub with UltiTools 6.3.0 (API level 630) and the given modules. */
+    /** Runs the check with vendored version metadata, module API level 700 and the given modules. */
     private void check(List<UltiToolsPlugin> modules) {
         try (MockedStatic<UltiTools> ultiMock = mockStatic(UltiTools.class)) {
             stubUltiTools(ultiMock, modules);
@@ -171,7 +171,7 @@ class UpdateCheckShutdownAndOutcomeTest {
         YamlConfiguration env = new YamlConfiguration();
         env.set("version", "6.3.0");
         ultiMock.when(UltiTools::getEnv).thenReturn(env);
-        ultiMock.when(UltiTools::getPluginVersion).thenReturn(630);
+        ultiMock.when(UltiTools::getPluginVersion).thenReturn(700);
         UltiTools instance = mock(UltiTools.class);
         PluginManager pm = mock(PluginManager.class);
         when(pm.getPluginList()).thenReturn(modules);

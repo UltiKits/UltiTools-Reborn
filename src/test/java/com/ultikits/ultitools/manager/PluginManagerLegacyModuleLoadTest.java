@@ -58,7 +58,7 @@ class PluginManagerLegacyModuleLoadTest {
     private static final String GENERIC = "but it could not be loaded";
     private static final String NEWER_API = "requires a newer UltiTools-API";
     private static final String UPGRADE_FRAMEWORK = "Upgrade UltiTools-API";
-    private static final int INSTALLED_API_LEVEL = 630;
+    private static final int INSTALLED_API_LEVEL = 710;
 
     @TempDir
     File tempDir;
@@ -111,7 +111,7 @@ class PluginManagerLegacyModuleLoadTest {
     @Test
     @DisplayName("a real module class overriding the now-final unregisterSelf() gets the older-API line, not a stack trace")
     void finalOverride_isReportedAsBuiltAgainstOlderApi() throws Exception {
-        File jar = moduleJar("UltiLegacy-1.2.0.jar", LEGACY_MAIN, "1.2.0", "620");
+        File jar = moduleJar("UltiLegacy-1.2.0.jar", LEGACY_MAIN, "1.2.0", "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, legacyModuleOverridingFinalUnregisterSelf());
 
@@ -121,7 +121,7 @@ class PluginManagerLegacyModuleLoadTest {
         assertThat(line.getMessage())
                 .contains(OLDER_API)
                 .contains("version 1.2.0")
-                .contains("api-version 620")
+                .contains("api-version 700")
                 .contains("https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md")
                 .contains("refusing to load")
                 .contains("overrides final method")
@@ -135,7 +135,7 @@ class PluginManagerLegacyModuleLoadTest {
     @Test
     @DisplayName("a NoSuchMethodError naming a framework member gets the older-API line")
     void noSuchFrameworkMethod_isReportedAsBuiltAgainstOlderApi() throws Exception {
-        File jar = moduleJar("UltiOld.jar", LEGACY_MAIN, "2.0.1", "620");
+        File jar = moduleJar("UltiOld.jar", LEGACY_MAIN, "2.0.1", "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, new NoSuchMethodError(
                 "'void com.ultikits.ultitools.abstracts.UltiToolsPlugin.removedHook()'"));
@@ -143,15 +143,15 @@ class PluginManagerLegacyModuleLoadTest {
         assertThat(loadWith(jar, defs)).isNull();
 
         LogRecord line = onlySevereNaming(jar.getName());
-        assertThat(line.getMessage()).contains(OLDER_API).contains("version 2.0.1").contains("api-version 620")
+        assertThat(line.getMessage()).contains(OLDER_API).contains("version 2.0.1").contains("api-version 700")
                 .contains("removedHook");
         assertThat(line.getThrown()).isNull();
     }
 
     @Test
-    @DisplayName("a missing framework class gets the older-API line; version and api-version are omitted when not declared")
+    @DisplayName("a missing framework class gets the older-API line; an undeclared version is omitted")
     void missingFrameworkClass_isReportedAsBuiltAgainstOlderApi() throws Exception {
-        File jar = moduleJar("UltiNoMeta.jar", LEGACY_MAIN, null, null);
+        File jar = moduleJar("UltiNoMeta.jar", LEGACY_MAIN, null, "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, new NoClassDefFoundError("com/ultikits/ultitools/abstracts/AbstractCommandExecutor"));
 
@@ -159,15 +159,15 @@ class PluginManagerLegacyModuleLoadTest {
 
         LogRecord line = onlySevereNaming(jar.getName());
         assertThat(line.getMessage()).contains(OLDER_API).doesNotContain("version null").doesNotContain("()")
-                .contains("'UltiNoMeta.jar' declares main:");
+                .contains("'UltiNoMeta.jar' (api-version 700) declares main:");
         assertThat(line.getThrown()).isNull();
     }
 
     @Test
-    @DisplayName("only the declared keys are listed: version alone, then api-version alone")
+    @DisplayName("identity includes the declared version when present and always the required API level")
     void identity_listsOnlyTheDeclaredKeys() throws Exception {
-        File versionOnly = moduleJar("UltiVersionOnly.jar", LEGACY_MAIN, "3.1.4", null);
-        File apiOnly = moduleJar("UltiApiOnly.jar", LEGACY_MAIN, null, "620");
+        File versionOnly = moduleJar("UltiVersionOnly.jar", LEGACY_MAIN, "3.1.4", "700");
+        File apiOnly = moduleJar("UltiApiOnly.jar", LEGACY_MAIN, null, "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, new NoClassDefFoundError("com/ultikits/ultitools/Gone"));
 
@@ -175,9 +175,9 @@ class PluginManagerLegacyModuleLoadTest {
         assertThat(loadWith(apiOnly, defs)).isNull();
 
         assertThat(onlySevereNaming(versionOnly.getName()).getMessage())
-                .contains("'UltiVersionOnly.jar' (version 3.1.4) declares main:").doesNotContain("api-version");
+                .contains("'UltiVersionOnly.jar' (version 3.1.4, api-version 700) declares main:");
         assertThat(onlySevereNaming(apiOnly.getName()).getMessage())
-                .contains("'UltiApiOnly.jar' (api-version 620) declares main:");
+                .contains("'UltiApiOnly.jar' (api-version 700) declares main:");
     }
 
     @Test
@@ -193,7 +193,7 @@ class PluginManagerLegacyModuleLoadTest {
         assertThat(line.getMessage())
                 .contains(NEWER_API)
                 .contains("api-version 9999")
-                .contains("installed UltiTools-API is at api-version 630")
+                .contains("installed UltiTools-API is at api-version 710")
                 .contains(UPGRADE_FRAMEWORK)
                 .contains("refusing to load")
                 .contains("FutureHook")
@@ -206,7 +206,7 @@ class PluginManagerLegacyModuleLoadTest {
     @DisplayName("an api-version equal to or below the installed framework's keeps the older-module wording")
     void equalOrLowerApiVersion_keepsTheOlderModuleWording() throws Exception {
         File equal = moduleJar("UltiEqual.jar", LEGACY_MAIN, "1.0.0", String.valueOf(INSTALLED_API_LEVEL));
-        File lower = moduleJar("UltiLower.jar", LEGACY_MAIN, "1.0.0", "620");
+        File lower = moduleJar("UltiLower.jar", LEGACY_MAIN, "1.0.0", "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, legacyModuleOverridingFinalUnregisterSelf());
 
@@ -220,8 +220,10 @@ class PluginManagerLegacyModuleLoadTest {
     }
 
     @Test
-    @DisplayName("an api-version that cannot be compared keeps the older-module wording")
-    void uncomparableApiVersion_keepsTheOlderModuleWording() throws Exception {
+    @DisplayName("an invalid api-version is refused before linkage; an unreadable framework level keeps older-module wording")
+    void invalidApiIsRefusedAndUnreadableFrameworkLevelKeepsTheOlderModuleWording() throws Exception {
+        org.mockito.Mockito.when(UltiTools.getInstance().getDescription()).thenReturn(
+                new org.bukkit.plugin.PluginDescriptionFile("UltiTools", "7.0.0-SNAPSHOT", "unused.Main"));
         File unparsable = moduleJar("UltiWordy.jar", LEGACY_MAIN, "1.0.0", "six-forty");
         File noFrameworkLevel = moduleJar("UltiNoLevel.jar", LEGACY_MAIN, "1.0.0", "9999");
         Map<String, Object> defs = new HashMap<>();
@@ -232,16 +234,16 @@ class PluginManagerLegacyModuleLoadTest {
         // level cannot be read and no comparison is possible.
         assertThat(loadWith(noFrameworkLevel, defs)).isNull();
 
-        for (File jar : new File[] {unparsable, noFrameworkLevel}) {
-            assertThat(onlySevereNaming(jar.getName()).getMessage())
-                    .contains(OLDER_API).doesNotContain(NEWER_API);
-        }
+        assertThat(onlySevereNaming(unparsable.getName()).getMessage())
+                .contains("no valid api-version", "six-forty").doesNotContain(OLDER_API, NEWER_API);
+        assertThat(onlySevereNaming(noFrameworkLevel.getName()).getMessage())
+                .contains(OLDER_API).doesNotContain(NEWER_API);
     }
 
     @Test
     @DisplayName("the Cause names the failure that matched, not the wrapper around it")
     void cause_namesTheMatchedFailure() throws Exception {
-        File jar = moduleJar("UltiWrapped.jar", LEGACY_MAIN, "1.0.0", "620");
+        File jar = moduleJar("UltiWrapped.jar", LEGACY_MAIN, "1.0.0", "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, new NoClassDefFoundError("Could not initialize class " + LEGACY_MAIN)
                 .initCause(new NoClassDefFoundError("com/ultikits/ultitools/Gone")));
@@ -257,7 +259,7 @@ class PluginManagerLegacyModuleLoadTest {
     @Test
     @DisplayName("a missing third-party class keeps the original generic line, stack trace included")
     void missingThirdPartyClass_keepsTheGenericLine() throws Exception {
-        File jar = moduleJar("UltiPapi.jar", LEGACY_MAIN, "1.0.0", "620");
+        File jar = moduleJar("UltiPapi.jar", LEGACY_MAIN, "1.0.0", "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, new NoClassDefFoundError("me/clip/placeholderapi/expansion/PlaceholderExpansion"));
 
@@ -271,7 +273,7 @@ class PluginManagerLegacyModuleLoadTest {
     @Test
     @DisplayName("a NoSuchMethodError naming a non-framework member keeps the original generic line")
     void noSuchThirdPartyMethod_keepsTheGenericLine() throws Exception {
-        File jar = moduleJar("UltiBukkit.jar", LEGACY_MAIN, "1.0.0", "620");
+        File jar = moduleJar("UltiBukkit.jar", LEGACY_MAIN, "1.0.0", "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, new NoSuchMethodError("'void org.bukkit.entity.Player.removedMethod()'"));
 
@@ -288,8 +290,8 @@ class PluginManagerLegacyModuleLoadTest {
     void refusedLegacyModule_doesNotBlockOtherModules() throws Exception {
         File modules = new File(tempDir, "modules");
         assertThat(modules.mkdirs()).isTrue();
-        File legacy = moduleJarIn(modules, "A-legacy.jar", LEGACY_MAIN, "1.2.0", "620");
-        moduleJarIn(modules, "B-current.jar", CurrentPlugin.class.getName(), "1.0.0", "630");
+        File legacy = moduleJarIn(modules, "A-legacy.jar", LEGACY_MAIN, "1.2.0", "700");
+        moduleJarIn(modules, "B-current.jar", CurrentPlugin.class.getName(), "1.0.0", "710");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, legacyModuleOverridingFinalUnregisterSelf());
         try (URLClassLoader loader = new FixtureLoader(defs)) {
