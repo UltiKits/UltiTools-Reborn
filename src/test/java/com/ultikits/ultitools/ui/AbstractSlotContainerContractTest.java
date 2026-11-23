@@ -15,6 +15,7 @@ import java.util.logging.Level;
 import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 /** E12-E17 and E19: the same lifecycle tests apply to reference and real containers. */
 @Timeout(30)
@@ -39,7 +40,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
     }
     @Test void drain_endsWithoutDisposition() {
         AtomicInteger writes = new AtomicInteger();
-        SlotContainer container = service.container(storage(1).disposition(Disposition.COMMIT).store(snapshot -> {
+        SlotContainer container = service.container(committed(1).store(snapshot -> {
             writes.incrementAndGet(); return CompletableFuture.completedFuture(StoreAnswer.written());
         }).initial(viewer.getUniqueId(), List.of(stone(8))).build());
         List<ItemStack> drained = container.drain();
@@ -74,6 +75,22 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
         assertThat(commitContainer.drain()).containsExactly(ItemStack.empty());
         assertThatThrownBy(commitContainer::commit).isInstanceOf(IllegalStateException.class);
     }
+    @Test void return_afterPutIn_endReturnsToContributor() {
+        SlotContainer container = service.container(storage(2).build());
+        PlayerMock other = server.addPlayer();
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 2, container, 0, BindingMode.EDITABLE).build();
+        InMemoryViewerItems first = side(); first.cursor(stone(8));
+        InMemoryViewerItems second = side(); second.cursor(dirt(3));
+        assertThat(engine.apply(grid, viewer, first, new Gesture.Place(SLOT, false))).isTrue();
+        assertThat(engine.apply(grid, other, second, new Gesture.Place(GridSlot.ofIndex(1), false))).isTrue();
+        assertThatThrownBy(container::commit).isInstanceOf(IllegalStateException.class);
+        CompletionStage<EndOutcome> result = container.end();
+        settle();
+        assertThat(completed(result)).isEqualTo(EndOutcome.RETURNED);
+        assertThat(viewer.getInventory().getItem(0)).isEqualTo(stone(8));
+        assertThat(other.getInventory().getItem(0)).isEqualTo(dirt(3));
+        assertThat(undelivered).isEmpty();
+    }
     @Test void return_offlineContributor_goesToUndeliveredOnce() {
         SlotContainer container = service.container(storage(1).initial(viewer.getUniqueId(), List.of(stone(8))).build());
         fixture.disconnect(viewer);
@@ -94,7 +111,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
     }
     @Test void commit_written_movesBaseline() {
         List<ContainerSnapshot> snapshots = new ArrayList<>();
-        SlotContainer container = service.container(storage(1).store(snapshot -> {
+        SlotContainer container = service.container(committed(1).store(snapshot -> {
             snapshots.add(snapshot);
             snapshot.contents().getFirst().setAmount(1);
             return CompletableFuture.completedFuture(StoreAnswer.written());
@@ -115,7 +132,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
         assertThat(snapshots.getLast().sequence()).isGreaterThan(snapshots.getFirst().sequence());
     }
     @Test void commit_refused_returnsPutInsAndLoadsCurrent_keepsTakeOuts() {
-        SlotContainer container = service.container(storage(1).baseline(List.of(stone(8)))
+        SlotContainer container = service.container(committed(1).baseline(List.of(stone(8)))
                 .store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.refused(List.of(stone(10))))).build());
         InMemoryViewerItems side = side();
         side.cursor(dirt(3));
@@ -131,7 +148,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
         assertThat(undelivered).isEmpty();
     }
     @Test void commit_unknown_failsReadOnlyAndRefundsNothing() {
-        SlotContainer container = service.container(storage(1).store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.unknown(null)))
+        SlotContainer container = service.container(committed(1).store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.unknown(null)))
                 .initial(viewer.getUniqueId(), List.of(stone(8))).build());
         assertThat(completed(container.commit())).isEqualTo(CommitOutcome.UNKNOWN);
         settle();
@@ -145,7 +162,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
     }
     @Test void commit_timeout_countsAsUnknown_lateAnswerIgnored() {
         CompletableFuture<StoreAnswer> answer = new CompletableFuture<>();
-        SlotContainer container = service.container(storage(1).commitTimeout(Duration.ofSeconds(1)).store(snapshot -> answer)
+        SlotContainer container = service.container(committed(1).commitTimeout(Duration.ofSeconds(1)).store(snapshot -> answer)
                 .initial(viewer.getUniqueId(), List.of(stone(8))).build());
         CompletionStage<CommitOutcome> result = container.commit();
         fixture.advanceTicks(19);
@@ -196,7 +213,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
     }
     @Test void commit_noChanges_unchangedWithoutStoreCall() {
         AtomicInteger calls = new AtomicInteger();
-        SlotContainer container = service.container(storage(1).baseline(List.of(stone(8))).store(snapshot -> {
+        SlotContainer container = service.container(committed(1).baseline(List.of(stone(8))).store(snapshot -> {
             calls.incrementAndGet(); return CompletableFuture.completedFuture(StoreAnswer.written());
         }).build());
         assertThat(completed(container.commit())).isEqualTo(CommitOutcome.UNCHANGED);
@@ -206,7 +223,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
     @Test void commit_whileCommitting_returnsSameStage() {
         AtomicInteger calls = new AtomicInteger();
         CompletableFuture<StoreAnswer> answer = new CompletableFuture<>();
-        SlotContainer container = service.container(storage(1).initial(viewer.getUniqueId(), List.of(stone(8))).store(snapshot -> {
+        SlotContainer container = service.container(committed(1).initial(viewer.getUniqueId(), List.of(stone(8))).store(snapshot -> {
             calls.incrementAndGet(); return answer;
         }).build());
         CompletionStage<CommitOutcome> first = container.commit();
@@ -220,7 +237,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
     @Test void end_commitDisposition_handlesEachStoreAnswer() {
         for (StoreAnswer answer : List.of(StoreAnswer.written(), StoreAnswer.refused(List.of(ItemStack.empty())), StoreAnswer.unknown(null))) {
             viewer.getInventory().clear();
-            SlotContainer container = service.container(storage(1).disposition(Disposition.COMMIT)
+            SlotContainer container = service.container(committed(1)
                     .initial(viewer.getUniqueId(), List.of(stone(8))).store(snapshot -> CompletableFuture.completedFuture(answer)).build());
             CompletionStage<EndOutcome> result = container.end();
             settle();
@@ -240,7 +257,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
         ContainerStore throwsOnWrite = snapshot -> { throw new IllegalStateException("store"); };
         ContainerStore failedStage = snapshot -> CompletableFuture.failedFuture(new IllegalStateException("store"));
         for (ContainerStore store : List.of(throwsOnWrite, failedStage)) {
-            SlotContainer container = service.container(storage(1).store(store).initial(viewer.getUniqueId(), List.of(stone(8))).build());
+            SlotContainer container = service.container(committed(1).store(store).initial(viewer.getUniqueId(), List.of(stone(8))).build());
             assertThat(completed(container.commit())).isEqualTo(CommitOutcome.UNKNOWN);
             assertThat(container.state()).isEqualTo(ContainerState.FAILED);
             assertThat(undelivered).isEmpty();
@@ -248,7 +265,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
     }
     @Test void commit_foreignAnswer_completesOnContainerThread() throws InterruptedException {
         CompletableFuture<StoreAnswer> answer = new CompletableFuture<>();
-        SlotContainer container = service.container(storage(1).store(snapshot -> answer).initial(viewer.getUniqueId(), List.of(stone(8))).build());
+        SlotContainer container = service.container(committed(1).store(snapshot -> answer).initial(viewer.getUniqueId(), List.of(stone(8))).build());
         AtomicReference<Thread> completionThread = new AtomicReference<>();
         CompletionStage<CommitOutcome> result = container.commit();
         result.thenAccept(ignored -> completionThread.set(Thread.currentThread()));
@@ -261,7 +278,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
         assertThat(completionThread).hasValue(Thread.currentThread());
     }
     @Test void offThread_anyMethod_throws() throws InterruptedException {
-        SlotContainer container = service.container(storage(1).store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.written())).build());
+        SlotContainer container = service.container(committed(1).store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.written())).build());
         List<Runnable> methods = List.of(container::state, () -> container.get(0),
                 container::contents, container::isViewed, () -> container.setReadOnly(false), () -> container.load(List.of(ItemStack.empty())),
                 container::changes, container::commit, container::drain, container::end);

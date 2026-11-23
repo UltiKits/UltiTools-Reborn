@@ -336,7 +336,7 @@ public abstract class AbstractGestureEngineContractTest extends EditableContract
         for (Gesture gesture : gestures()) {
             AtomicInteger calls = new AtomicInteger();
             CompletableFuture<StoreAnswer> answer = new CompletableFuture<>();
-            SlotContainer container = service.container(storage(2).initial(viewer.getUniqueId(), List.of(stone(8), stone(2)))
+            SlotContainer container = service.container(committed(2).initial(viewer.getUniqueId(), List.of(stone(8), stone(2)))
                     .store(snapshot -> answer).policy(request -> { calls.incrementAndGet(); return TransferDecision.allow(); }).build());
             Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 2, container, 0, mode).build();
             if (state == ContainerState.READ_ONLY) { container.setReadOnly(true); }

@@ -114,7 +114,7 @@ public final class ContainerSpec {
             this.disposition = Objects.requireNonNull(disposition, "disposition");
             return this;
         }
-        /** Required when the disposition is COMMIT, optional otherwise (enables {@link SlotContainer#commit()}). */
+        /** Required when the disposition is COMMIT; rejected otherwise. Enables {@link SlotContainer#commit()}. */
         public Builder store(ContainerStore store) { this.store = Objects.requireNonNull(store, "store"); return this; }
         /** Default 30 s; positive, at most 10 minutes. A store answer later than this counts as Unknown. */
         public Builder commitTimeout(Duration timeout) {
@@ -189,8 +189,15 @@ public final class ContainerSpec {
             if (disposition == Disposition.COMMIT && store == null) {
                 throw new IllegalArgumentException("COMMIT requires a store");
             }
+            if (store != null && disposition != Disposition.COMMIT) {
+                throw new IllegalArgumentException("only COMMIT containers have a store");
+            }
         }
-        /** @throws IllegalArgumentException on a missing required or a forbidden attribute (see each method) */
+        /**
+         * @throws IllegalArgumentException on a missing required or a forbidden attribute: storage without a
+         * disposition or an undelivered handler, COMMIT without a store, a store with any other disposition, or
+         * a template with a disposition, a store, an undelivered handler or contributed initial contents
+         */
         public ContainerSpec build() { validate(); return new ContainerSpec(this); }
     }
 }
