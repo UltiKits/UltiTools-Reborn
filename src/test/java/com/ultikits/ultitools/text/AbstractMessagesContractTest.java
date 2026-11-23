@@ -176,12 +176,15 @@ public abstract class AbstractMessagesContractTest {
     @Test
     void render_timeArg_usesTargetLocaleAndTranslationPattern() {
         MessageKey key = MessageKey.of("sample", "date");
-        LocalDate date = LocalDate.of(2026, 11, 23);
+        LocalDate date = LocalDate.of(2026, 3, 5);
         fixture.put(key, Locale.ENGLISH, "<date>");
-        assertThat(plain(messages.render(key, Locale.GERMANY, Arg.time("date", date))))
-                .isEqualTo(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.GERMANY).format(date));
-        fixture.put(key, Locale.ENGLISH, "<date:yyyy-MM-dd>");
-        assertThat(plain(messages.render(key, Locale.US, Arg.time("date", date)))).isEqualTo("2026-11-23");
+        for (Locale locale : List.of(Locale.US, Locale.GERMANY)) {
+            assertThat(plain(messages.render(key, locale, Arg.time("date", date))))
+                    .isEqualTo(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale).format(date));
+        }
+        fixture.put(key, Locale.ENGLISH, "<date:'d MMMM yyyy'>");
+        assertThat(plain(messages.render(key, Locale.US, Arg.time("date", date)))).isEqualTo("5 March 2026");
+        assertThat(plain(messages.render(key, Locale.GERMANY, Arg.time("date", date)))).isEqualTo("5 März 2026");
     }
 
     @Test
@@ -320,12 +323,12 @@ public abstract class AbstractMessagesContractTest {
 
     @Test
     void render_malformedFormat_showsDefaultAndWarnsOnce() {
-        List<String> templates = List.of("<n:'#,##0.0.0'>", "<date:'HH:mm'>", "<date:'{'>");
+        List<String> templates = List.of("<n:'#,##0.0.0'>", "<date:'HH:mm'>", "<date:'{'>", "<n:bogus:'x'>");
         int before = fixture.warnings().size();
         for (int index = 0; index < templates.size(); index++) {
             MessageKey key = MessageKey.of("sample", "bad_format_" + index);
             fixture.put(key, Locale.ENGLISH, templates.get(index));
-            boolean numeric = index == 0;
+            boolean numeric = index == 0 || index == 3;
             Arg arg = numeric ? Arg.number("n", 1234.5) : Arg.time("date", LocalDate.of(2026, 3, 5));
             String expected = numeric ? NumberFormat.getNumberInstance(Locale.US).format(1234.5)
                     : DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.US)
@@ -384,6 +387,28 @@ public abstract class AbstractMessagesContractTest {
         regional.sourceLanguage("other", Locale.US);
         regional.put(sourceOnly, Locale.ENGLISH, "Source language");
         assertThat(plain(regional.messages().render(sourceOnly, Locale.FRENCH))).isEqualTo("Source language");
+    }
+
+    @Test
+    void render_numberArgWithPattern_usesPatternWithTargetSymbols() {
+        MessageKey key = MessageKey.of("sample", "number_pattern");
+        fixture.put(key, Locale.ENGLISH, "<n:'#,##0.00'>");
+        assertThat(plain(messages.render(key, Locale.US, Arg.number("n", 1234.5)))).isEqualTo("1,234.50");
+        assertThat(plain(messages.render(key, Locale.GERMANY, Arg.number("n", 1234.5)))).isEqualTo("1.234,50");
+        fixture.put(key, Locale.ENGLISH, "<n:'de-DE':'#,##0.00'>");
+        assertThat(plain(messages.render(key, Locale.US, Arg.number("n", 1234.5)))).isEqualTo("1.234,50");
+        fixture.put(key, Locale.ENGLISH, "<n:'#,##0'>");
+        assertThat(plain(messages.render(key, Locale.US, Arg.number("n", 1234)))).isEqualTo("1,234");
+    }
+
+    @Test
+    void render_numberArgChoice_selectsTextAndFormatsNestedNumber() {
+        MessageKey key = MessageKey.of("sample", "choice");
+        fixture.put(key, Locale.ENGLISH, "<n:choice:'0#no items|1#one item|1<<n> items'>");
+        for (int index = 0; index < 3; index++) {
+            assertThat(plain(messages.render(key, Locale.US, Arg.number("n", List.of(0, 1, 1234).get(index)))))
+                    .isEqualTo(List.of("no items", "one item", "1,234 items").get(index));
+        }
     }
 
     private static String text(LogRecord record) {

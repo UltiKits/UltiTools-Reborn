@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.text;
 
+import java.text.ChoiceFormat;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.text.NumberFormat;
@@ -27,6 +28,7 @@ import java.util.logging.Logger;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.ComponentLike;
+import net.kyori.adventure.text.minimessage.Context;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.Tag;
 import net.kyori.adventure.text.minimessage.tag.resolver.ArgumentQueue;
@@ -111,7 +113,7 @@ public final class InMemoryMessages implements Messages {
     private TagResolver argumentResolver(Arg arg, Locale locale, MessageKey key) {
         return TagResolver.resolver(arg.name(), (arguments, context) -> {
             try {
-                return Tag.inserting(formatArgument(arg, locale, arguments));
+                return Tag.inserting(formatArgument(arg, locale, arguments, context));
             } catch (RuntimeException malformed) {
                 if (reportedFormats.add(new BadFormat(key, locale, arg.name()))) {
                     LogRecord record = new LogRecord(Level.WARNING, "Invalid format for {0} in {1}, argument {2}");
@@ -124,7 +126,10 @@ public final class InMemoryMessages implements Messages {
         });
     }
 
-    private Component formatArgument(Arg arg, Locale locale, ArgumentQueue arguments) {
+    private Component formatArgument(Arg arg, Locale locale, ArgumentQueue arguments, Context context) {
+        if (arg instanceof Arg.Numeric numeric) {
+            return number(numeric, locale, arguments, context);
+        }
         String pattern = arguments.hasNext() ? arguments.pop().value() : null;
         if (arguments.hasNext()) {
             throw new IllegalArgumentException("Unexpected format argument");
@@ -132,14 +137,36 @@ public final class InMemoryMessages implements Messages {
         if (pattern == null) {
             return defaultValue(arg, locale);
         }
-        return switch (arg) {
-            case Arg.Numeric numeric -> Component.text(new DecimalFormat(pattern,
-                    DecimalFormatSymbols.getInstance(locale)).format(numeric.value()));
-            case Arg.Moment moment -> Component.text(DateTimeFormatter.ofPattern(pattern, locale)
-                    .format(temporal(moment)));
-            case Arg.Unparsed ignored -> throw new IllegalArgumentException("Strings take no format");
-            case Arg.Localized ignored -> throw new IllegalArgumentException("Text takes no format");
-        };
+        if (arg instanceof Arg.Moment moment) {
+            return Component.text(DateTimeFormatter.ofPattern(pattern, locale).format(temporal(moment)));
+        }
+        throw new IllegalArgumentException("This argument kind takes no format");
+    }
+
+    private Component number(Arg.Numeric numeric, Locale locale, ArgumentQueue arguments, Context context) {
+        if (!arguments.hasNext()) {
+            return defaultValue(numeric, locale);
+        }
+        String pattern = arguments.pop().value();
+        if ("choice".equals(pattern)) {
+            if (!arguments.hasNext()) {
+                throw new IllegalArgumentException("Choice pattern expected");
+            }
+            String choice = arguments.pop().value();
+            if (arguments.hasNext()) {
+                throw new IllegalArgumentException("Unexpected choice argument");
+            }
+            return context.deserialize(new ChoiceFormat(choice).format(numeric.value().doubleValue()));
+        }
+        Locale symbols = locale;
+        if (arguments.hasNext()) {
+            symbols = Locale.forLanguageTag(pattern);
+            pattern = arguments.pop().value();
+        }
+        if (arguments.hasNext() || (!pattern.contains("#") && !pattern.contains("0"))) {
+            throw new IllegalArgumentException("Number pattern expected");
+        }
+        return Component.text(new DecimalFormat(pattern, DecimalFormatSymbols.getInstance(symbols)).format(numeric.value()));
     }
 
     private Component safeDefault(Arg arg, Locale locale) {

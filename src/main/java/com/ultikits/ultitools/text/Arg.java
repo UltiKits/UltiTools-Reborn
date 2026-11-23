@@ -10,6 +10,24 @@ import net.kyori.adventure.text.ComponentLike;
  * {@code "Welcome, <player>!"}. Positional arguments are not supported. An argument name takes
  * precedence over a built-in MiniMessage tag of the same name ({@code <newline>}, {@code <score>}, ...).
  *
+ * <p>Formatting is chosen by the translation, in the render locale:
+ * <ul>
+ *   <li>{@link #number}: {@code <n>} uses the locale's default number format;
+ *       {@code <n:'#,##0.00'>} is a {@link java.text.DecimalFormat} pattern with the locale's symbols;
+ *       {@code <n:'de-DE':'#,##0.00'>} names the locale explicitly (Adventure's two-argument form);
+ *       {@code <n:choice:'0#no items|1#one item|1<<n> items'>} selects text with a
+ *       {@link java.text.ChoiceFormat} pattern, and the selected text is parsed as MiniMessage with the
+ *       same arguments, so {@code <n>} inside it prints the formatted number.</li>
+ *   <li>{@link #time}: {@code <t>} uses the locale's MEDIUM style for the fields the value has
+ *       (date and time, date only, or time only); {@code <t:'d MMMM yyyy'>} is a
+ *       {@link java.time.format.DateTimeFormatter} pattern applied with the render locale.
+ *       An {@link java.time.Instant} is shown in the server's default zone
+ *       ({@link java.time.ZoneId#systemDefault()} at render time).</li>
+ *   <li>{@link #string} and {@link #text} take no format argument.</li>
+ * </ul>
+ * Quote a pattern that contains {@code :}, {@code <}, {@code >} or a quote; quoting is always allowed.
+ * There is no boolean choice and no CLDR plural category in 7.0; a later minor may add argument kinds.
+ *
  * <p>A format the engine cannot apply (a malformed pattern, an unknown keyword, a field the value does
  * not have) never makes rendering throw: the value is shown in its kind's default format for the
  * render locale (or {@code String.valueOf(value)} if even that fails), and one WARNING is logged per
