@@ -129,6 +129,7 @@ final class InMemoryGestureEngine implements GestureEngine {
     }
     private void exchange(Plan plan, SlotBinding binding, ItemStack source, boolean cursor, int slot) {
         ItemStack held = plan.item(binding);
+        if (held.equals(source)) { return; }
         int take = allowed(plan, binding, TransferKind.TAKE_OUT, held, count(held));
         int put = allowed(plan, binding, TransferKind.PUT_IN, source, count(source));
         if (take != count(held) || put != count(source)) {

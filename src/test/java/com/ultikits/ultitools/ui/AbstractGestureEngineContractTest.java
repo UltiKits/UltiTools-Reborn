@@ -6,6 +6,8 @@ import com.ultikits.ultitools.item.ItemSpec;
 import com.ultikits.ultitools.text.Text;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -45,75 +47,207 @@ public abstract class AbstractGestureEngineContractTest extends EditableContract
         for (ContainerKind kind : ContainerKind.values()) {
             for (BindingMode mode : BindingMode.values()) {
                 for (int policy = 0; policy < 3; policy++) {
-                    for (int held = 0; held < 4; held++) {
-                        for (int cursor = 0; cursor < 3; cursor++) {
-                            for (int hotbar = 0; hotbar < 3; hotbar++) {
-                                for (Gesture gesture : gestures()) {
-                                    checkCombination(kind, mode, policy, held, cursor, hotbar, gesture);
-                                    combinations++;
-                                }
-                            }
-                        }
+                    Setting setting = new Setting(kind, mode, policy);
+                    combinations += cursorFamily(setting);
+                    combinations += quickOutFamily(setting);
+                    combinations += hotbarFamily(setting);
+                    combinations += quickInFamily(setting);
+                    combinations += spreadFamily(setting);
+                }
+            }
+        }
+        assertThat(combinations).isEqualTo(7392);
+    }
+    private record Setting(ContainerKind kind, BindingMode mode, int policy) { }
+    private static List<ItemStack> slotStates() {
+        return List.of(ItemStack.empty(), stone(5), stone(62), stone(64), dirt(5), namedStone(5), pearl(15), sword(1));
+    }
+    private static List<ItemStack> cursorStates() {
+        return List.of(ItemStack.empty(), stone(3), stone(64), dirt(3), namedStone(3), pearl(3));
+    }
+    private int cursorFamily(Setting setting) {
+        int checked = 0;
+        List<Gesture> cursorGestures = List.of(new Gesture.Pickup(SLOT, false), new Gesture.Pickup(SLOT, true),
+                new Gesture.Place(SLOT, false), new Gesture.Place(SLOT, true), new Gesture.SwapWithCursor(SLOT));
+        for (ItemStack held : slotStates()) {
+            for (ItemStack cursor : cursorStates()) {
+                for (Gesture gesture : cursorGestures) {
+                    InMemoryViewerItems side = side(); side.cursor(cursor);
+                    checkCombination(setting, List.of(held, ItemStack.empty()), side, gesture);
+                    checked++;
+                }
+            }
+        }
+        return checked;
+    }
+    private int quickOutFamily(Setting setting) {
+        int checked = 0;
+        for (ItemStack held : slotStates()) {
+            for (int fill = 0; fill < 3; fill++) {
+                InMemoryViewerItems side = filledInventory(fill);
+                checkCombination(setting, List.of(held, ItemStack.empty()), side, new Gesture.QuickMoveOut(SLOT));
+                checked++;
+            }
+        }
+        return checked;
+    }
+    private InMemoryViewerItems filledInventory(int fill) {
+        InMemoryViewerItems side = side();
+        if (fill != 0) {
+            for (int i = 0; i < 36; i++) { side.slot(i, dirt(64)); }
+        }
+        if (fill == 1) { side.slot(35, stone(60)); }
+        return side;
+    }
+    private int hotbarFamily(Setting setting) {
+        int checked = 0;
+        for (ItemStack held : slotStates()) {
+            for (ItemStack source : cursorStates()) {
+                for (int pressed : List.of(0, 8)) {
+                    InMemoryViewerItems side = side(); side.slot(pressed, source);
+                    checkCombination(setting, List.of(held, ItemStack.empty()), side, new Gesture.HotbarSwap(SLOT, pressed));
+                    checked++;
+                }
+            }
+        }
+        return checked;
+    }
+    private int quickInFamily(Setting setting) {
+        int checked = 0;
+        List<ItemStack> sources = List.of(stone(5), stone(64), dirt(5), namedStone(5), pearl(16), sword(1));
+        for (ItemStack source : sources) {
+            for (ItemStack held : slotStates()) {
+                for (ItemStack second : List.of(ItemStack.empty(), stone(62))) {
+                    InMemoryViewerItems side = side(); side.slot(10, source);
+                    checkCombination(setting, List.of(held, second), side, new Gesture.QuickMoveIn(10));
+                    checked++;
+                }
+            }
+        }
+        return checked;
+    }
+    private int spreadFamily(Setting setting) {
+        int checked = 0;
+        for (ItemStack cursor : cursorStates().subList(1, 6)) {
+            for (ItemStack held : slotStates()) {
+                for (ItemStack second : List.of(ItemStack.empty(), stone(62))) {
+                    for (boolean one : List.of(false, true)) {
+                        InMemoryViewerItems side = side(); side.cursor(cursor);
+                        checkCombination(setting, List.of(held, second), side, new Gesture.Spread(Set.of(SLOT, GridSlot.ofIndex(1)), one));
+                        checked++;
                     }
                 }
             }
         }
-        assertThat(combinations).isEqualTo(7776);
-        System.out.println("Editable exhaustive conservation/atomicity combinations: " + combinations);
+        return checked;
     }
-    private void checkCombination(ContainerKind kind, BindingMode mode, int policy, int held, int cursor, int hotbar, Gesture gesture) {
-        TransferPolicy decision = policyFor(policy);
-        ItemStack slot = slotItem(held);
-        ContainerSpec.Builder builder = kind == ContainerKind.STORAGE ? storage(2) : ContainerSpec.template(2);
-        SlotContainer container = service.container(builder.policy(decision).baseline(List.of(slot, ItemStack.empty())).build());
-        InMemoryViewerItems side = side();
-        side.cursor(stateItem(cursor));
-        int pressed = gesture instanceof Gesture.HotbarSwap swap ? swap.hotbar() : 4;
-        side.slot(pressed, stateItem(hotbar));
-        side.slot(10, stone(5));
-        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 2, container, 0, mode).build();
-        List<ItemStack> originalContainer = container.contents();
-        List<ItemStack> originalSide = playerItems(side);
-        List<ItemStack> all = new ArrayList<>(originalContainer);
-        all.addAll(originalSide);
+    private void checkCombination(Setting setting, List<ItemStack> initial, InMemoryViewerItems side, Gesture gesture) {
+        ContainerSpec.Builder builder = setting.kind() == ContainerKind.STORAGE ? storage(2) : ContainerSpec.template(2);
+        SlotContainer container = service.container(builder.policy(policyFor(setting.policy())).baseline(initial).build());
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 2, container, 0, setting.mode()).build();
+        List<ItemStack> before = container.contents();
+        List<ItemStack> playerBefore = playerItems(side);
         boolean moved = engine.apply(grid, viewer, side, gesture);
+        List<ItemStack> after = container.contents();
+        List<ItemStack> playerAfter = playerItems(side);
+        String context = setting + "/" + gesture + "/" + before + "/" + playerBefore;
+        checkConservation(setting.kind(), before, playerBefore, after, playerAfter, context);
+        checkStackLimits(after, context);
+        checkStackLimits(playerAfter, context);
+        checkRefusal(setting, moved, before, playerBefore, after, playerAfter, context);
+        assertThat(moved).as("O5 return value: %s", context)
+                .isEqualTo(!before.equals(after) || !playerBefore.equals(playerAfter));
+        checkAtMost(setting.policy(), before, after, gesture, context);
+        checkSwap(setting.kind(), before, playerBefore, after, playerAfter, gesture, context);
+        checkRequiredMove(setting, before, playerBefore, gesture, moved, context);
+    }
+    private static void checkConservation(ContainerKind kind, List<ItemStack> before, List<ItemStack> playerBefore,
+            List<ItemStack> after, List<ItemStack> playerAfter, String context) {
         if (kind == ContainerKind.STORAGE) {
-            List<ItemStack> after = new ArrayList<>(container.contents());
-            after.addAll(playerItems(side));
-            assertThat(totals(after)).as("conservation: %s/%s/%s/%s/%s/%s/%s", kind, mode, policy, held, cursor, hotbar, gesture)
-                    .isEqualTo(totals(all));
+            List<ItemStack> allBefore = new ArrayList<>(before); allBefore.addAll(playerBefore);
+            List<ItemStack> allAfter = new ArrayList<>(after); allAfter.addAll(playerAfter);
+            assertThat(totals(allAfter)).as("O1 conservation: %s", context).isEqualTo(totals(allBefore));
         } else {
-            assertThat(playerItems(side)).as("template: %s", gesture).isEqualTo(originalSide);
+            assertThat(playerAfter).as("O2 template real items: %s", context).isEqualTo(playerBefore);
         }
-        if (!moved || policy == 2 || mode == BindingMode.VIEW || partialSwap(gesture, slot, originalSide, pressed, policy)) {
-            assertThat(container.contents()).as("atomicity: %s", gesture).isEqualTo(originalContainer);
-            assertThat(playerItems(side)).isEqualTo(originalSide);
+    }
+    private static void checkStackLimits(List<ItemStack> items, String context) {
+        for (ItemStack item : items) {
+            assertThat(item.getAmount()).as("O3 max stack: %s / %s", context, item).isLessThanOrEqualTo(item.getMaxStackSize());
         }
+    }
+    private static void checkRefusal(Setting setting, boolean moved, List<ItemStack> before, List<ItemStack> playerBefore,
+            List<ItemStack> after, List<ItemStack> playerAfter, String context) {
+        if (setting.policy() == 2 || setting.mode() == BindingMode.VIEW) {
+            assertThat(moved).as("O4 refused: %s", context).isFalse();
+            assertThat(after).as("O4 container: %s", context).isEqualTo(before);
+            assertThat(playerAfter).as("O4 viewer: %s", context).isEqualTo(playerBefore);
+        }
+    }
+    private static void checkAtMost(int policy, List<ItemStack> before, List<ItemStack> after, Gesture gesture, String context) {
+        if (policy != 1) { return; }
+        Map<ItemStack, Integer> oldTotals = totals(before);
+        Map<ItemStack, Integer> newTotals = totals(after);
+        Set<ItemStack> types = new LinkedHashSet<>(oldTotals.keySet()); types.addAll(newTotals.keySet());
+        int delta = types.stream().mapToInt(type -> Math.abs(oldTotals.getOrDefault(type, 0) - newTotals.getOrDefault(type, 0))).sum();
+        int limit = switch (gesture) {
+            case Gesture.Pickup ignored -> 1;
+            case Gesture.Place ignored -> 1;
+            case Gesture.QuickMoveOut ignored -> 1;
+            default -> 2;
+        };
+        assertThat(delta).as("O6 per-transfer bound: %s", context).isLessThanOrEqualTo(limit);
+    }
+    private static void checkSwap(ContainerKind kind, List<ItemStack> before, List<ItemStack> playerBefore,
+            List<ItemStack> after, List<ItemStack> playerAfter, Gesture gesture, String context) {
+        int sourceIndex = switch (gesture) {
+            case Gesture.SwapWithCursor ignored -> 36;
+            case Gesture.HotbarSwap swap -> swap.hotbar();
+            default -> -1;
+        };
+        if (sourceIndex < 0) { return; }
+        ItemStack held = before.getFirst();
+        ItemStack source = playerBefore.get(sourceIndex);
+        if (held.isEmpty() || source.isEmpty() || held.isSimilar(source)) { return; }
+        if (before.equals(after) && playerBefore.equals(playerAfter)) { return; }
+        assertThat(after).as("O7 full container swap: %s", context).containsExactly(source, before.get(1));
+        List<ItemStack> swappedSide = new ArrayList<>(playerBefore);
+        if (kind == ContainerKind.STORAGE) { swappedSide.set(sourceIndex, held); }
+        assertThat(playerAfter).as("O7 full viewer swap: %s", context).isEqualTo(swappedSide);
+    }
+    private static void checkRequiredMove(Setting setting, List<ItemStack> before, List<ItemStack> playerBefore,
+            Gesture gesture, boolean moved, String context) {
+        if (setting.kind() != ContainerKind.STORAGE || setting.mode() != BindingMode.EDITABLE || setting.policy() != 0) { return; }
+        if (shouldMove(before, playerBefore, gesture)) {
+            assertThat(moved).as("O8 required move: %s", context).isTrue();
+        }
+    }
+    private static boolean shouldMove(List<ItemStack> before, List<ItemStack> playerBefore, Gesture gesture) {
+        ItemStack held = before.getFirst();
+        ItemStack cursor = playerBefore.getLast();
+        return switch (gesture) {
+            case Gesture.Pickup ignored -> !held.isEmpty() && cursor.isEmpty();
+            case Gesture.Place ignored -> accepts(held, cursor);
+            case Gesture.SwapWithCursor ignored -> !held.isEmpty() && !cursor.isEmpty() && !held.isSimilar(cursor);
+            case Gesture.HotbarSwap swap -> !held.equals(playerBefore.get(swap.hotbar()));
+            case Gesture.QuickMoveOut ignored -> playerBefore.subList(0, 36).stream().anyMatch(target -> accepts(target, held));
+            case Gesture.QuickMoveIn move -> before.stream().anyMatch(target -> accepts(target, playerBefore.get(move.playerSlot())));
+            case Gesture.Spread spread -> canSpread(before, cursor, spread.one());
+        };
+    }
+    private static boolean canSpread(List<ItemStack> before, ItemStack cursor, boolean one) {
+        int each = one ? 1 : cursor.getAmount() / 2;
+        return each >= 1 && before.stream().anyMatch(target -> accepts(target, cursor));
+    }
+    private static boolean accepts(ItemStack target, ItemStack source) {
+        if (source.isEmpty()) { return false; }
+        return target.isEmpty() || target.isSimilar(source) && target.getAmount() < source.getMaxStackSize();
     }
     private static TransferPolicy policyFor(int policy) {
         return ignored -> switch (policy) {
             case 0 -> TransferDecision.allow();
             case 1 -> TransferDecision.allowAtMost(1);
             default -> TransferDecision.refuse();
-        };
-    }
-    private static ItemStack slotItem(int held) {
-        return switch (held) {
-            case 0 -> ItemStack.empty();
-            case 1 -> stone(5);
-            case 2 -> dirt(5);
-            default -> stone(64);
-        };
-    }
-    private static ItemStack stateItem(int state) { return state == 0 ? ItemStack.empty() : state == 1 ? stone(3) : dirt(3); }
-    private static boolean partialSwap(Gesture gesture, ItemStack held, List<ItemStack> side, int hotbar, int policy) {
-        if (policy != 1 || held.isEmpty()) {
-            return false;
-        }
-        return switch (gesture) {
-            case Gesture.HotbarSwap ignored -> !side.get(hotbar).isEmpty();
-            case Gesture.SwapWithCursor ignored -> !side.getLast().isEmpty();
-            default -> false;
         };
     }
     @Test void hotbarSwap_emptySlot_putsInHotbarStack() {
@@ -373,6 +507,116 @@ public abstract class AbstractGestureEngineContractTest extends EditableContract
         assertThat(engine.apply(grid, viewer, side, new Gesture.Spread(grid.bindings().keySet(), false))).isTrue();
         assertThat(container.contents()).containsExactly(stone(3), stone(3));
         assertThat(side.cursor()).isEqualTo(stone(1));
+    }
+    private Grid pair(SlotContainer container) {
+        return Grid.builder(TITLE, 1).bindRange(0, 0, 2, container, 0, BindingMode.EDITABLE).build();
+    }
+    @Test void place_partialRoom_placesWhatFitsAndKeepsRestOnCursor() {
+        SlotContainer container = service.container(storage(1).baseline(List.of(stone(62))).build());
+        InMemoryViewerItems side = side(); side.cursor(stone(3));
+        assertThat(apply(container, side, new Gesture.Place(SLOT, false))).isTrue();
+        assertThat(container.get(0)).isEqualTo(stone(64));
+        assertThat(side.cursor()).isEqualTo(stone(1));
+    }
+    @Test void place_respectsItemMaxStack() {
+        SlotContainer container = service.container(storage(1).baseline(List.of(pearl(15))).build());
+        InMemoryViewerItems side = side(); side.cursor(pearl(3));
+        assertThat(apply(container, side, new Gesture.Place(SLOT, false))).isTrue();
+        assertThat(container.get(0)).isEqualTo(pearl(16));
+        assertThat(side.cursor()).isEqualTo(pearl(2));
+        container.load(List.of(sword(1))); side.cursor(sword(1));
+        assertThat(apply(container, side, new Gesture.Place(SLOT, false))).isFalse();
+        assertThat(container.get(0)).isEqualTo(sword(1));
+        assertThat(side.cursor()).isEqualTo(sword(1));
+    }
+    @Test void place_similarTypeDifferentMeta_isNotMerged() {
+        SlotContainer container = service.container(storage(1).baseline(List.of(namedStone(5))).build());
+        InMemoryViewerItems side = side(); side.cursor(stone(3));
+        assertThat(apply(container, side, new Gesture.Place(SLOT, false))).isFalse();
+        assertThat(container.get(0)).isEqualTo(namedStone(5));
+        assertThat(side.cursor()).isEqualTo(stone(3));
+        assertThat(apply(container, side, new Gesture.SwapWithCursor(SLOT))).isTrue();
+        assertThat(container.get(0)).isEqualTo(stone(3));
+        assertThat(side.cursor()).isEqualTo(namedStone(5));
+    }
+    @Test void pickup_halfOfOddStack_takesLargerHalf() {
+        SlotContainer container = service.container(storage(1).baseline(List.of(stone(5))).build());
+        InMemoryViewerItems side = side();
+        assertThat(apply(container, side, new Gesture.Pickup(SLOT, true))).isTrue();
+        assertThat(side.cursor()).isEqualTo(stone(3));
+        assertThat(container.get(0)).isEqualTo(stone(2));
+    }
+    @Test void quickMoveIn_overflow_restStaysWithViewer() {
+        SlotContainer container = service.container(storage(2).baseline(List.of(stone(62), stone(63))).build());
+        InMemoryViewerItems side = side(); side.slot(10, stone(64));
+        assertThat(engine.apply(pair(container), viewer, side, new Gesture.QuickMoveIn(10))).isTrue();
+        assertThat(container.contents()).containsExactly(stone(64), stone(64));
+        assertThat(side.slot(10)).isEqualTo(stone(61));
+    }
+    @Test void quickMoveIn_respectsItemMaxStack() {
+        SlotContainer container = service.container(storage(2).build());
+        InMemoryViewerItems side = side(); side.slot(10, pearl(16));
+        assertThat(engine.apply(pair(container), viewer, side, new Gesture.QuickMoveIn(10))).isTrue();
+        assertThat(container.contents()).containsExactly(pearl(16), ItemStack.empty());
+        assertThat(side.slot(10).isEmpty()).isTrue();
+        container.load(List.of(pearl(15), ItemStack.empty())); side.slot(10, pearl(16));
+        assertThat(engine.apply(pair(container), viewer, side, new Gesture.QuickMoveIn(10))).isTrue();
+        assertThat(container.contents()).containsExactly(pearl(16), pearl(15));
+        assertThat(side.slot(10).isEmpty()).isTrue();
+    }
+    @Test void spread_partialRoom_keepsRemainderOnCursor() {
+        SlotContainer container = service.container(storage(2).baseline(List.of(stone(62), ItemStack.empty())).build());
+        InMemoryViewerItems side = side(); side.cursor(stone(10));
+        Grid grid = pair(container);
+        assertThat(engine.apply(grid, viewer, side, new Gesture.Spread(grid.bindings().keySet(), false))).isTrue();
+        assertThat(container.contents()).containsExactly(stone(64), stone(5));
+        assertThat(side.cursor()).isEqualTo(stone(3));
+    }
+    @Test void spread_one_placesOneEach() {
+        SlotContainer container = service.container(storage(2).build());
+        InMemoryViewerItems side = side(); side.cursor(stone(5));
+        Grid grid = pair(container);
+        assertThat(engine.apply(grid, viewer, side, new Gesture.Spread(grid.bindings().keySet(), true))).isTrue();
+        assertThat(container.contents()).containsExactly(stone(1), stone(1));
+        assertThat(side.cursor()).isEqualTo(stone(3));
+    }
+    @Test void pickup_atMost_takesPart() {
+        SlotContainer container = service.container(storage(1).baseline(List.of(stone(5)))
+                .policy(request -> TransferDecision.allowAtMost(2)).build());
+        InMemoryViewerItems side = side();
+        assertThat(apply(container, side, new Gesture.Pickup(SLOT, false))).isTrue();
+        assertThat(side.cursor()).isEqualTo(stone(2));
+        assertThat(container.get(0)).isEqualTo(stone(3));
+    }
+    @Test void place_atMost_placesPart() {
+        SlotContainer container = service.container(storage(1).policy(request -> TransferDecision.allowAtMost(2)).build());
+        InMemoryViewerItems side = side(); side.cursor(stone(5));
+        assertThat(apply(container, side, new Gesture.Place(SLOT, false))).isTrue();
+        assertThat(container.get(0)).isEqualTo(stone(2));
+        assertThat(side.cursor()).isEqualTo(stone(3));
+    }
+    @Test void quickMoveOut_atMost_movesPart() {
+        SlotContainer container = service.container(storage(1).baseline(List.of(stone(5)))
+                .policy(request -> TransferDecision.allowAtMost(2)).build());
+        InMemoryViewerItems side = side();
+        assertThat(apply(container, side, new Gesture.QuickMoveOut(SLOT))).isTrue();
+        assertThat(side.slot(0)).isEqualTo(stone(2));
+        assertThat(container.get(0)).isEqualTo(stone(3));
+    }
+    @Test void quickMoveIn_atMost_limitsEachTransfer() {
+        SlotContainer container = service.container(storage(2).policy(request -> TransferDecision.allowAtMost(2)).build());
+        InMemoryViewerItems side = side(); side.slot(10, stone(64));
+        assertThat(engine.apply(pair(container), viewer, side, new Gesture.QuickMoveIn(10))).isTrue();
+        assertThat(container.contents()).containsExactly(stone(2), stone(2));
+        assertThat(side.slot(10)).isEqualTo(stone(60));
+    }
+    @Test void spread_atMost_limitsEachTransfer() {
+        SlotContainer container = service.container(storage(2).policy(request -> TransferDecision.allowAtMost(2)).build());
+        InMemoryViewerItems side = side(); side.cursor(stone(10));
+        Grid grid = pair(container);
+        assertThat(engine.apply(grid, viewer, side, new Gesture.Spread(grid.bindings().keySet(), false))).isTrue();
+        assertThat(container.contents()).containsExactly(stone(2), stone(2));
+        assertThat(side.cursor()).isEqualTo(stone(6));
     }
     @Test void template_place_leavesViewerItemsUnchanged() {
         SlotContainer container = service.container(ContainerSpec.template(1).build());

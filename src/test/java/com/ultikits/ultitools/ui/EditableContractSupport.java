@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import org.bukkit.Material;
+import net.kyori.adventure.text.Component;
 import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -65,6 +66,13 @@ abstract class EditableContractSupport {
     protected void settle() { fixture.advanceTicks(AbstractUiServiceContractTest.SETTLE_TICKS); }
     protected static ItemStack stone(int amount) { return stack(Material.STONE, amount); }
     protected static ItemStack dirt(int amount) { return stack(Material.DIRT, amount); }
+    protected static ItemStack namedStone(int amount) {
+        ItemStack item = stone(amount);
+        item.editMeta(meta -> meta.displayName(Component.text("Named")));
+        return item;
+    }
+    protected static ItemStack pearl(int amount) { return stack(Material.ENDER_PEARL, amount); }
+    protected static ItemStack sword(int amount) { return stack(Material.IRON_SWORD, amount); }
     protected static ItemStack stack(Material type, int amount) { return amount == 0 ? ItemStack.empty() : new ItemStack(type, amount); }
     protected static int quantity(List<ItemStack> items, Material type) {
         return items.stream().filter(item -> !item.isEmpty() && item.getType() == type).mapToInt(ItemStack::getAmount).sum();
