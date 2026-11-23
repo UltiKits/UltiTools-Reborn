@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.ui;
 
+import java.util.List;
+import java.util.concurrent.CompletionStage;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -19,7 +22,7 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>Unloading the owning module ends every session of that owner that has not completed: before the unload
  * returns, on the unloading thread, each screen is closed and each result completed, with
  * {@code Closed(OWNER_UNLOADED)} or with the outcome already chosen if there was one. Stopping the server
- * unloads every module, so no session is left incomplete. {@code show} after the unload returns a session
+ * unloads every module, so no session is left incomplete. {@code show} while or after the owner unloads returns a session
  * whose result is already {@code Closed(OWNER_UNLOADED)} and opens nothing.
  */
 @ApiStatus.NonExtendable
@@ -34,4 +37,21 @@ public interface UiService {
     GridSession show(Player viewer, Grid grid);
     /** Shows a grid with explicit options. */
     GridSession show(Player viewer, Grid grid, ShowOptions options);
+
+    /**
+     * A new container owned by this module. Call on the server thread (the container's thread).
+     * @throws IllegalStateException if called off that thread, or while or after the owner unloads
+     */
+    SlotContainer container(ContainerSpec spec);
+
+    /**
+     * Gives {@code items} to {@code player}: into the storage slots of their inventory (never armour or off-hand),
+     * the rest dropped at their feet. Runs in a task of the player's entity context; if that task cannot run because
+     * the player has quit, or the player is offline when it runs, nothing is given and every item not yet given is in
+     * {@link Delivery#undelivered()}. During the owner's unload, a call on the unloading thread gives at once, before
+     * it returns; a call from another thread during the unload, or any call after it, gives nothing and returns a
+     * stage already completed with every item undelivered. The stage always completes normally, exactly once.
+     * May be called from any thread.
+     */
+    CompletionStage<Delivery> deliver(Player player, List<ItemStack> items);
 }
