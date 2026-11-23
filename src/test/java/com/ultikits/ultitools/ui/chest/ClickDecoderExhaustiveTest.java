@@ -91,7 +91,8 @@ class ClickDecoderExhaustiveTest {
 
     private static ClickDecision expected(ClickInput input) {
         return switch (input.kind()) {
-            case ICON -> new ClickDecision.Report(SLOT, ICON_KINDS.get(input.click()));
+            case ICON -> input.click() == ClickType.DOUBLE_CLICK
+                    ? CANCEL : new ClickDecision.Report(SLOT, ICON_KINDS.get(input.click()));
             case EMPTY -> CANCEL;
             case PLAYER_STORAGE -> storage(input.action());
             case OUTSIDE -> switch (input.action()) {

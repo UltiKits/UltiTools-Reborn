@@ -19,7 +19,8 @@ public final class ClickDecoder {
         return switch (input.kind()) {
             case PLAYER_STORAGE -> storage(input);
             case OUTSIDE -> outside(input.action());
-            case ICON -> new ClickDecision.Report(input.slot(), clickKind(input.click()));
+            case ICON -> input.click() == ClickType.DOUBLE_CLICK
+                    ? CANCEL : new ClickDecision.Report(input.slot(), clickKind(input.click()));
             case BOUND_EDITABLE, BOUND_VIEW -> bound(input);
             default -> CANCEL;
         };

@@ -111,6 +111,16 @@ class ChestBackendClickTest extends ChestTestFixture {
         assertThat(player.getItemOnCursor().isEmpty()).isTrue();
     }
 
+    @Test void anIconDoubleClickSequenceOnlyReportsTheFirstLeftClick() {
+        List<ClickKind> clicks = new ArrayList<>();
+        open(Grid.builder(Text.plain("Double"), 1).set(0, 0, ItemSpec.builder(Material.DIAMOND).build(),
+                event -> clicks.add(event.kind())).build());
+        assertThat(click(0, ClickType.LEFT, InventoryAction.PICKUP_ALL).isCancelled()).isTrue();
+        assertThat(click(0, ClickType.DOUBLE_CLICK, InventoryAction.COLLECT_TO_CURSOR).isCancelled()).isTrue();
+        tick();
+        assertThat(clicks).containsExactly(ClickKind.LEFT);
+    }
+
     @Test void bottomWhitelistAndOutsideDropsStayAllowedButCollectAndBundleAreBlocked() {
         SlotContainer box = container(1, List.of(stack(Material.STONE, 8)));
         open(grid(box, BindingMode.EDITABLE));
