@@ -4,7 +4,6 @@ import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
@@ -35,7 +34,7 @@ import java.util.Set;
  */
 public final class ReleaseBoundaryInvariant {
 
-    private static final String SNAPSHOT_MARKER = "SNAPSHOT";
+    private static final String PROJECT_VERSION_PATTERN = "[0-9]+\\.[0-9]+\\.[0-9]+(-SNAPSHOT)?";
 
     private ReleaseBoundaryInvariant() {
     }
@@ -68,6 +67,11 @@ public final class ReleaseBoundaryInvariant {
             Set<RegistryKey> excludeKeys, boolean japicmpSkipped) {
         Objects.requireNonNull(excludeKeys, "excludeKeys");
         List<String> violations = new ArrayList<>();
+        if (projectVersion == null || !projectVersion.matches(PROJECT_VERSION_PATTERN)) {
+            violations.add("Project version '" + projectVersion
+                    + "' must match N.N.N or N.N.N-SNAPSHOT (three numeric components, optional exact -SNAPSHOT suffix)");
+            return violations;
+        }
         if (isBaselineReset(projectVersion)) {
             return violations;
         }
@@ -108,8 +112,7 @@ public final class ReleaseBoundaryInvariant {
     }
 
     private static boolean isSnapshot(String version) {
-        return version != null
-                && version.toUpperCase(Locale.ROOT).contains(SNAPSHOT_MARKER);
+        return version != null && version.endsWith("-SNAPSHOT");
     }
 
     /**

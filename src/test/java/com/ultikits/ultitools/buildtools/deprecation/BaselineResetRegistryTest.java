@@ -67,6 +67,23 @@ class BaselineResetRegistryTest {
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("REPORT_MISSING_OR_EMPTY");
     }
 
+    @org.junit.jupiter.params.ParameterizedTest(name = "generator version {0}: valid={1}, reset={2}")
+    @org.junit.jupiter.params.provider.CsvFileSource(resources = "/buildtools/project-version-cases.csv", numLinesToSkip = 1)
+    void generatorValidatesVersionBeforeWritingRegistry(
+            String version, boolean valid, boolean reset, @TempDir Path root) throws Exception {
+        pom(root, version, "7.0.0", true);
+        if (valid && reset) {
+            DeprecationRegistryGenerator.run(root);
+            assertThat(root.resolve("compatibility/deprecations.json")).isRegularFile();
+        } else {
+            assertThatThrownBy(() -> DeprecationRegistryGenerator.run(root))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(valid ? "japicmp.skip=false" : "must match N.N.N or N.N.N-SNAPSHOT");
+            assertThat(root.resolve("compatibility/deprecations.json")).doesNotExist();
+            assertThat(root.resolve("compatibility/DEPRECATIONS.md")).doesNotExist();
+        }
+    }
+
     private static void pom(Path root, String version, String baseline, boolean skip) throws Exception {
         Files.createDirectories(root.resolve("src/main/java"));
         String xml = "<project><version>" + version + "</version><properties>"

@@ -128,9 +128,9 @@ public final class DeprecationRegistryGenerator {
     private static void run(Path baseDir, Document pomDocument, boolean japicmpSkipped)
             throws IOException, ReflectiveOperationException {
         String projectVersion = readProjectVersion(pomDocument);
-        String currentVersion = stripSnapshotSuffix(projectVersion);
-        // Also runs when Surefire is skipped: no post-baseline build may silently disable comparison.
+        // Validate before version normalization or any registry read/write, even with Surefire skipped.
         failOnViolations(collectReleaseBoundaryViolations(pomDocument, japicmpSkipped));
+        String currentVersion = stripSnapshotSuffix(projectVersion);
         boolean baselineReset = ReleaseBoundaryInvariant.isBaselineReset(projectVersion);
 
         Path ledgerJson = baseDir.resolve(LEDGER_JSON);
@@ -170,7 +170,7 @@ public final class DeprecationRegistryGenerator {
     }
 
     /**
-     * Strips a trailing {@code -SNAPSHOT} (case-insensitive), if present, so a newly-{@code REMOVED}
+     * Strips the exact trailing {@code -SNAPSHOT} of a validated project version, if present, so a newly-{@code REMOVED}
      * entry's {@code removedIn} reads {@code "6.3.0"} rather than {@code "6.3.0-SNAPSHOT"} --
      * matching the convention every pre-existing removed entry's hand-written {@code @removeIn}
      * javadoc tag already used (WR-05, 16-REVIEW-cloud.md).
@@ -182,7 +182,7 @@ public final class DeprecationRegistryGenerator {
         if (version == null) {
             return null;
         }
-        return version.replaceFirst("(?i)-SNAPSHOT$", "");
+        return version.replaceFirst("-SNAPSHOT$", "");
     }
 
     /**

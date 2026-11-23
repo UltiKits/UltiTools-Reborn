@@ -152,6 +152,33 @@ class ReleaseBoundaryInvariantTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest(name = "version {0}: valid={1}, reset={2}")
+    @org.junit.jupiter.params.provider.CsvFileSource(resources = "/buildtools/project-version-cases.csv", numLinesToSkip = 1)
+    void sharedVersionCasesRejectUnsupportedShapesAndBoundSkipping(
+            String version, boolean valid, boolean reset) {
+        assertThat(ReleaseBoundaryInvariant.isBaselineReset(version)).as(version).isEqualTo(reset);
+        for (boolean skip : new boolean[] {false, true}) {
+            List<String> violations = ReleaseBoundaryInvariant.evaluate(version, "7.0.0",
+                    Collections.emptySet(), skip);
+            if (!valid) {
+                assertThat(violations).as("invalid project version %s, skip=%s", version, skip)
+                        .anySatisfy(message -> assertThat(message).contains("must match N.N.N or N.N.N-SNAPSHOT"));
+            } else if (skip && !reset) {
+                assertThat(violations).as(version)
+                        .anySatisfy(message -> assertThat(message).contains("japicmp.skip=false"));
+            } else {
+                assertThat(violations).as(version).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void numericVersionSegmentsOrderTenAfterNine() {
+        assertThat(ReleaseBoundaryInvariant.evaluate("7.10.0", "7.9.0", Collections.emptySet(), false)).isEmpty();
+        assertThat(ReleaseBoundaryInvariant.evaluate("7.9.0", "7.10.0", Collections.emptySet(), false))
+                .anySatisfy(message -> assertThat(message).contains("strictly less"));
+    }
+
     @Test
     void laterDevelopmentAndReleasesRejectOldMissingOrUnreleasedBaselines() {
         for (String version : Arrays.asList("7.0.1-SNAPSHOT", "7.0.1", "7.1.0-SNAPSHOT")) {

@@ -1,5 +1,6 @@
 """Exercise the real build mojos in tiny offline projects, without a server or credentials."""
 import copy
+import csv
 import os
 import subprocess
 import tempfile
@@ -77,17 +78,51 @@ class BuildConfigurationTests(unittest.TestCase):
                                 timeout=660)
         return result, warm_output + result.stdout.decode("utf-8", "replace")
 
+    def assert_compatibility_version(self, version, baseline, skip):
+        self.assertRegex(version or "", r"\A[0-9]+\.[0-9]+\.[0-9]+(?:-SNAPSHOT)?\Z",
+                         "Project version must match N.N.N or N.N.N-SNAPSHOT")
+        self.assertIn(skip, ("true", "false"))
+        if version not in ("7.0.0-SNAPSHOT", "7.0.0"):
+            self.assertEqual(skip, "false", "After 7.0.0 set japicmp.skip=false")
+            self.assertRegex(baseline, r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
+            baseline_parts = tuple(map(int, baseline.split(".")))
+            self.assertGreaterEqual(baseline_parts, (7, 0, 0))
+            if not version.endswith("-SNAPSHOT"):
+                self.assertLess(baseline_parts, tuple(map(int, version.split("."))),
+                                "The baseline must be strictly less than the project version")
+
+    def test_shared_project_version_cases(self):
+        cases = ROOT / "src/test/resources/buildtools/project-version-cases.csv"
+        with cases.open(encoding="utf-8", newline="") as source:
+            for row in csv.DictReader(source):
+                version = row["version"]
+                valid = row["valid"] == "true"
+                reset = row["baselineReset"] == "true"
+                for skip in ("false", "true"):
+                    with self.subTest(version=version, skip=skip):
+                        if not valid:
+                            with self.assertRaisesRegex(AssertionError, "must match N.N.N or N.N.N-SNAPSHOT"):
+                                self.assert_compatibility_version(version, "7.0.0", skip)
+                        elif skip == "true" and not reset:
+                            with self.assertRaisesRegex(AssertionError, "japicmp.skip=false"):
+                                self.assert_compatibility_version(version, "7.0.0", skip)
+                        else:
+                            self.assert_compatibility_version(version, "7.0.0", skip)
+
+    def test_release_baseline_uses_numeric_segments(self):
+        self.assert_compatibility_version("7.10.0", "7.9.0", "false")
+        for version, baseline in (("7.9.0", "7.10.0"), ("7.1.0", "7.1.0")):
+            with self.subTest(version=version, baseline=baseline):
+                with self.assertRaisesRegex(AssertionError, "strictly less"):
+                    self.assert_compatibility_version(version, baseline, "false")
+
     def test_compatibility_reset_is_bounded_and_generator_gets_the_effective_switch(self):
         properties = required(POM, "m:properties", NS)
         version = required(POM, "m:version", NS).text
         skip = required(properties, "m:japicmp.skip", NS).text
         baseline = required(properties, "m:japicmp.baseline.version", NS).text
         assert baseline is not None
-        self.assertIn(skip, ("true", "false"))
-        if version not in ("7.0.0-SNAPSHOT", "7.0.0"):
-            self.assertEqual(skip, "false", "After 7.0.0 set japicmp.skip=false")
-            self.assertRegex(baseline, r"^[0-9]+\.[0-9]+\.[0-9]+$")
-            self.assertGreaterEqual(tuple(map(int, baseline.split("."))), (7, 0, 0))
+        self.assert_compatibility_version(version, baseline, skip)
         plugins = required(POM, "m:build/m:plugins", NS)
         comparison = required(plugins, "m:plugin[m:artifactId='japicmp-maven-plugin']", NS)
         self.assertEqual(comparison.findtext("m:configuration/m:skip", namespaces=NS), "${japicmp.skip}")

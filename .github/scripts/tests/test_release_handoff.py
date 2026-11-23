@@ -15,6 +15,7 @@ No test contacts a network service, creates a real tag or release, or publishes 
 Standard library only.
 """
 
+import csv
 import hashlib
 import json
 import os
@@ -793,6 +794,26 @@ class TracerHandoffTests(HandoffTestCase):
 
 
 class ReleaseDocumentationTests(unittest.TestCase):
+
+    def test_formal_version_gate_uses_the_shared_version_cases(self):
+        gate = shell_function(RELEASE_SH.read_text(), "check_formal_version")
+        command = ('die() { printf "%s\\n" "$1" >&2; exit 1; }\n' + gate
+                   + 'VERSION="$1"\ncheck_formal_version\nprintf "%s\\n" "$TAG"\n')
+        with (REPO_ROOT / "src/test/resources/buildtools/project-version-cases.csv").open(
+                encoding="utf-8", newline="") as source:
+            for row in csv.DictReader(source):
+                version = row["version"]
+                with self.subTest(version=version):
+                    result = subprocess.run([cast(str, BASH), "-ec", command, "version-gate", version],
+                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, timeout=30)
+                    formal = row["valid"] == "true" and not version.endswith("-SNAPSHOT")
+                    if formal:
+                        self.assertEqual(result.returncode, 0, result.stderr.decode())
+                        self.assertEqual(result.stdout.decode().strip(), "v" + version)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("version", result.stderr.decode().lower())
 
     def test_help_explains_prerelease_does_not_prevent_permanent_central_publication(self):
         result = subprocess.run([cast(str, BASH), str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
