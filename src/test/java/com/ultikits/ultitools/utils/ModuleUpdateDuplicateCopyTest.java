@@ -70,8 +70,13 @@ class ModuleUpdateDuplicateCopyTest {
 
     /** A module JAR declaring {@code main} and nothing else of note. */
     private File copy(String fileName, String main) throws IOException {
+        return copy(fileName, main, "700");
+    }
+
+    private File copy(String fileName, String main, String apiVersion) throws IOException {
         File jar = new File(modules, fileName);
-        String yml = "name: DemoCopy\nversion: '0.9'\nmain: " + main + "\nidentify-string: demo\n";
+        String yml = "name: DemoCopy\nversion: '0.9'\nmain: " + main + "\nidentify-string: demo\n"
+                + (apiVersion == null ? "" : "api-version: " + apiVersion + "\n");
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
             out.putNextEntry(new JarEntry("plugin.yml"));
             out.write(yml.getBytes(StandardCharsets.UTF_8));
@@ -166,6 +171,18 @@ class ModuleUpdateDuplicateCopyTest {
             }
         }
         assertThat(SecurityPolicy.isValidModuleJar(invalid)).as("the start-up rejects it").isFalse();
+
+        ModuleFileTransactions.StageResult result = stage();
+
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
+        assertThat(downloads).containsExactly("demo-1.1.jar");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"630", "699", "''", "'26.3'", "1.21", "abc"})
+    void apiRefusedCopyCannotShadowTheUpdate(String declaration) throws IOException {
+        copy("a-demo-0.9.jar", MAIN, declaration);
 
         ModuleFileTransactions.StageResult result = stage();
 

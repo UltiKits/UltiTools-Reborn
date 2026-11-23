@@ -13,7 +13,7 @@ import com.ultikits.ultitools.UltiTools;
  * <p>A module declares its UltiTools API level as the integer {@code api-version} in
  * {@code plugin.yml}. UltiTools-API 7.0 is a new baseline: a declared integer below
  * {@link #MIN_INSTALLABLE_API_LEVEL} is refused before the module's main class loads.
- * Missing or non-integer declarations retain the existing manual-loading behavior.
+ * Missing or non-integer declarations are refused too, including on manual loading.
  *
  * <p>{@code /upm} requires an integer declaration and installs or stages updates only from this
  * floor through the framework's own level. Its catalogue version requests send both bounds.
@@ -78,7 +78,22 @@ public final class ModuleApiLevels {
      * @return {@code true} when {@code floor <= moduleLevel <= frameworkLevel}
      */
     public static boolean isInstallable(int moduleLevel, int floor, int frameworkLevel) {
-        return moduleLevel >= floor && !PluginManager.requiresNewerFramework(moduleLevel, frameworkLevel);
+        return meetsFloor(moduleLevel, floor) && !PluginManager.requiresNewerFramework(moduleLevel, frameworkLevel);
+    }
+
+    /**
+     * The minimum admission shared by manual loading, installation and staged updates.
+     * The loader keeps its existing post-instantiation upper-bound check.
+     *
+     * @param moduleLevel the parsed declaration, or {@code null} when invalid or absent
+     * @return whether the module declares an integer at or above the minimum
+     */
+    public static boolean isLoadable(Integer moduleLevel) {
+        return meetsFloor(moduleLevel, MIN_INSTALLABLE_API_LEVEL);
+    }
+
+    private static boolean meetsFloor(Integer moduleLevel, int floor) {
+        return moduleLevel != null && moduleLevel >= floor;
     }
 
     /**

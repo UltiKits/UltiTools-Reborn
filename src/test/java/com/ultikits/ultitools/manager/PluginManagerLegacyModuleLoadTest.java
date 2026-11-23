@@ -149,9 +149,9 @@ class PluginManagerLegacyModuleLoadTest {
     }
 
     @Test
-    @DisplayName("a missing framework class gets the older-API line; version and api-version are omitted when not declared")
+    @DisplayName("a missing framework class gets the older-API line; an undeclared version is omitted")
     void missingFrameworkClass_isReportedAsBuiltAgainstOlderApi() throws Exception {
-        File jar = moduleJar("UltiNoMeta.jar", LEGACY_MAIN, null, null);
+        File jar = moduleJar("UltiNoMeta.jar", LEGACY_MAIN, null, "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, new NoClassDefFoundError("com/ultikits/ultitools/abstracts/AbstractCommandExecutor"));
 
@@ -159,14 +159,14 @@ class PluginManagerLegacyModuleLoadTest {
 
         LogRecord line = onlySevereNaming(jar.getName());
         assertThat(line.getMessage()).contains(OLDER_API).doesNotContain("version null").doesNotContain("()")
-                .contains("'UltiNoMeta.jar' declares main:");
+                .contains("'UltiNoMeta.jar' (api-version 700) declares main:");
         assertThat(line.getThrown()).isNull();
     }
 
     @Test
-    @DisplayName("only the declared keys are listed: version alone, then api-version alone")
+    @DisplayName("identity includes the declared version when present and always the required API level")
     void identity_listsOnlyTheDeclaredKeys() throws Exception {
-        File versionOnly = moduleJar("UltiVersionOnly.jar", LEGACY_MAIN, "3.1.4", null);
+        File versionOnly = moduleJar("UltiVersionOnly.jar", LEGACY_MAIN, "3.1.4", "700");
         File apiOnly = moduleJar("UltiApiOnly.jar", LEGACY_MAIN, null, "700");
         Map<String, Object> defs = new HashMap<>();
         defs.put(LEGACY_MAIN, new NoClassDefFoundError("com/ultikits/ultitools/Gone"));
@@ -175,7 +175,7 @@ class PluginManagerLegacyModuleLoadTest {
         assertThat(loadWith(apiOnly, defs)).isNull();
 
         assertThat(onlySevereNaming(versionOnly.getName()).getMessage())
-                .contains("'UltiVersionOnly.jar' (version 3.1.4) declares main:").doesNotContain("api-version");
+                .contains("'UltiVersionOnly.jar' (version 3.1.4, api-version 700) declares main:");
         assertThat(onlySevereNaming(apiOnly.getName()).getMessage())
                 .contains("'UltiApiOnly.jar' (api-version 700) declares main:");
     }
@@ -220,8 +220,10 @@ class PluginManagerLegacyModuleLoadTest {
     }
 
     @Test
-    @DisplayName("an api-version that cannot be compared keeps the older-module wording")
-    void uncomparableApiVersion_keepsTheOlderModuleWording() throws Exception {
+    @DisplayName("an invalid api-version is refused before linkage; an unreadable framework level keeps older-module wording")
+    void invalidApiIsRefusedAndUnreadableFrameworkLevelKeepsTheOlderModuleWording() throws Exception {
+        org.mockito.Mockito.when(UltiTools.getInstance().getDescription()).thenReturn(
+                new org.bukkit.plugin.PluginDescriptionFile("UltiTools", "7.0.0-SNAPSHOT", "unused.Main"));
         File unparsable = moduleJar("UltiWordy.jar", LEGACY_MAIN, "1.0.0", "six-forty");
         File noFrameworkLevel = moduleJar("UltiNoLevel.jar", LEGACY_MAIN, "1.0.0", "9999");
         Map<String, Object> defs = new HashMap<>();
@@ -232,10 +234,10 @@ class PluginManagerLegacyModuleLoadTest {
         // level cannot be read and no comparison is possible.
         assertThat(loadWith(noFrameworkLevel, defs)).isNull();
 
-        for (File jar : new File[] {unparsable, noFrameworkLevel}) {
-            assertThat(onlySevereNaming(jar.getName()).getMessage())
-                    .contains(OLDER_API).doesNotContain(NEWER_API);
-        }
+        assertThat(onlySevereNaming(unparsable.getName()).getMessage())
+                .contains("no valid api-version", "six-forty").doesNotContain(OLDER_API, NEWER_API);
+        assertThat(onlySevereNaming(noFrameworkLevel.getName()).getMessage())
+                .contains(OLDER_API).doesNotContain(NEWER_API);
     }
 
     @Test

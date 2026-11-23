@@ -268,7 +268,7 @@ class PluginManagerClassScanningTest {
         File jar = new File(folder, name);
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
             output.putNextEntry(new JarEntry("plugin.yml"));
-            output.write(pluginYml.getBytes(StandardCharsets.UTF_8));
+            output.write((pluginYml + "api-version: 700\n").getBytes(StandardCharsets.UTF_8));
             output.closeEntry();
             for (Class<?> type : classes) {
                 writeClassEntry(output, type);
@@ -711,7 +711,7 @@ class PluginManagerClassScanningTest {
         File jar = new File(tempDir, name);
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
             output.putNextEntry(new JarEntry("plugin.yml"));
-            output.write(("main: " + mainClassName + "\n").getBytes(StandardCharsets.UTF_8));
+            output.write(("main: " + mainClassName + "\napi-version: 700\n").getBytes(StandardCharsets.UTF_8));
             output.closeEntry();
             for (Object entry : entries) {
                 writeClassEntry(output, entry);

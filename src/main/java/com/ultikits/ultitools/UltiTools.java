@@ -65,6 +65,7 @@ import com.ultikits.ultitools.manager.FileOperationManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.EarlyLogCapture;
 import com.ultikits.ultitools.manager.LogStreamManager;
+import com.ultikits.ultitools.manager.ModuleJarAdmission;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.RemoteActionLog;
@@ -144,6 +145,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * class loader is built, decided after the modules load.
      */
     private ModuleFileTransactions moduleFileTransactions;
+    /** Metadata and minimum-API decisions shared by this start's class path and discovery. */
+    private ModuleJarAdmission moduleJarAdmission;
     /**
      * The official languages the framework ships ({@code lang/<code>.json} in its jar), the codes a custom
      * language name may be based on (#608). {@link #supported()} returns them.
@@ -374,6 +377,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // JAR, and decided after the modules load (initPluginModules). Their log lines wait for
         // the language to be loaded.
         moduleFileTransactions = new ModuleFileTransactions(getDataFolder());
+        moduleJarAdmission = new ModuleJarAdmission();
         ultiToolsClassLoader = new ModuleClassLoader(getModuleUrls(), getClassLoader());
         this.eventBus = new EventBus();
 
@@ -538,7 +542,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     private void initPluginModules() {
-        pluginManager = new PluginManager();
+        pluginManager = new PluginManager(moduleJarAdmission);
         File file = ModuleFileTransactions.modulesFolder(getDataFolder());
         if (!file.exists()) {
             //noinspection ResultOfMethodCallIgnored
@@ -1079,7 +1083,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     private URL[] getModuleUrls() {
         return moduleClassPath(moduleFileTransactions, ModuleFileTransactions.modulesFolder(getDataFolder()),
-                getServerJar());
+                getServerJar(), moduleJarAdmission);
     }
 
     /**
@@ -1093,12 +1097,18 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @return the URLs to build the module class loader from
      */
     static URL[] moduleClassPath(ModuleFileTransactions transactions, File modulesFolder, URL serverJar) {
+        return moduleClassPath(transactions, modulesFolder, serverJar, new ModuleJarAdmission());
+    }
+
+    /** Builds the class path using the same admission snapshot later consumed by discovery. */
+    static URL[] moduleClassPath(ModuleFileTransactions transactions, File modulesFolder, URL serverJar,
+                                 ModuleJarAdmission admission) {
         transactions.applyBeforeLoad();
         List<URL> urls = new ArrayList<>();
         if (serverJar != null) {
             urls.add(serverJar);
         }
-        urls.addAll(collectModuleJarUrls(modulesFolder));
+        urls.addAll(collectModuleJarUrls(modulesFolder, admission));
         return urls.toArray(new URL[0]);
     }
 
@@ -1116,6 +1126,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
      *         {@code null} or does not exist
      */
     static List<URL> collectModuleJarUrls(File pluginDir) {
+        return collectModuleJarUrls(pluginDir, new ModuleJarAdmission());
+    }
+
+    /** API refusals are silent here; discovery reports each once after language initialization. */
+    static List<URL> collectModuleJarUrls(File pluginDir, ModuleJarAdmission admission) {
         List<URL> urls = new ArrayList<>();
         if (pluginDir == null || !pluginDir.exists()) {
             return urls;
@@ -1129,6 +1144,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 MODULE_SCAN_LOGGER.log(Level.WARNING,
                         "[UltiTools-API] Skipped module JAR (failed security validation), not added "
                                 + "to module classpath: " + f.getName());
+                continue;
+            }
+            ModuleJarAdmission.Entry result = admission.inspect(f);
+            String main = result.getMetadata().getMain();
+            // Unreadable metadata or a missing main keeps its existing discovery diagnostic.
+            if (main != null && !main.trim().isEmpty() && !result.isApiAllowed()) {
                 continue;
             }
             try {

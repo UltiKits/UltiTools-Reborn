@@ -70,7 +70,7 @@ class ModuleJarOrderTest {
         for (String name : SORTED) {
             try (JarOutputStream out = new JarOutputStream(new FileOutputStream(new File(modules, name)))) {
                 out.putNextEntry(new JarEntry("plugin.yml"));
-                out.write(("name: " + name + "\nmain: com.example.Main\n").getBytes(StandardCharsets.UTF_8));
+                out.write(("name: " + name + "\nmain: com.example.Main\napi-version: 700\n").getBytes(StandardCharsets.UTF_8));
                 out.closeEntry();
             }
         }
