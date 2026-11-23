@@ -10,16 +10,10 @@ import com.ultikits.ultitools.abstracts.gui.declarative.widgets.TextButton;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
-import mc.obliviate.inventory.Gui;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness.SnapshotProbe;
+import com.ultikits.ultitools.text.Text;
 
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.event.inventory.InventoryCloseEvent;
-import org.bukkit.event.inventory.InventoryOpenEvent;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,7 +33,6 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
@@ -48,46 +41,35 @@ import static org.mockito.Mockito.when;
  * (frozen case {@code 2f791fb2270f5f79ad9dda6980078a1017a16129bc53190799c3c6d2982b86f5}, issue
  * #679).
  * <p>
- * The first frame runs through {@link GuiScheduler#runOnMainThread}, so the scheduler's last
- * frame time is still zero and a request raised during that frame passes the scheduler's
- * "run now" branch. Without a renderer-owned guard, a {@code setState} inside a child's
- * {@code initState} therefore re-enters {@code performBuild} while the parent Container has not
- * yet recorded that child, and reconciliation mounts a second State for the same widget.
- * <p>
- * Reproductions use {@code new GuiScheduler(mockPlugin, 1000L)}: only the request raised while
- * the last frame time is zero runs inline, so the pre-fix re-entrance happens exactly once and
- * fails as an assertion rather than recursing. Deferred frames are drained with
- * {@code performTicks}.
+ * The first frame runs synchronously through {@link GuiScheduler#runOnMainThread}. A request
+ * raised by a child's {@code initState} must not reconcile the partially mounted tree. These
+ * probes verify ownership and lifecycle counts before and after advancing the viewer's entity
+ * scheduler; follow-up frames run on later ticks rather than a millisecond interval.
  */
 @DisplayName("GuiRenderer coalesces rebuild requests raised during a build (case 2f791fb2)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class GuiRendererMountReentrancyTest {
 
-    /** Long enough that only a request raised while the last frame time is zero runs inline. */
-    private static final long DEFERRING_INTERVAL_MS = 1000L;
+    /** Enough entity ticks for a scheduled frame and its coalesced follow-up. */
+    private static final int DRAIN_TICKS = 6;
 
-    /** Enough ticks for a frame deferred by the 1000 ms interval (about 20 ticks) to run. */
-    private static final int DRAIN_TICKS = 25;
-
-    private ServerMock server;
-    private Plugin mockPlugin;
+    private GuiTestHarness harness;
     private Player player;
 
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
-        mockPlugin = MockBukkit.createMockPlugin();
+        ServerMock server = MockBukkit.mock();
         player = server.addPlayer();
-        // DeclarativeGui-based tests use the default GuiScheduler, whose plugin is this mocked
-        // instance; executeFrame logs frame failures through plugin.getLogger(), so stub it
-        // before the mock is published.
+        harness = new GuiTestHarness();
+        // Failure logging still uses the framework logger, independently of entity scheduling.
         TestHelper.mockUltiToolsInstance(ultiTools -> when(ultiTools.getLogger())
                 .thenReturn(Logger.getLogger(GuiRendererMountReentrancyTest.class.getName())));
     }
 
     @AfterEach
     void tearDown() {
+        harness.close();
         MockBukkitHelper.safeUnmock();
     }
 
@@ -98,8 +80,8 @@ class GuiRendererMountReentrancyTest {
     @Test
     @DisplayName("A Container child calling setState in initState gets exactly one State, owned by the Container")
     void containerChildSetStateInInitStateCreatesExactlyOneState() {
-        TestGui gui = newGui(1);
-        GuiRenderer renderer = newRenderer(gui, DEFERRING_INTERVAL_MS);
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiRenderer renderer = newRenderer(gui);
         Probe probe = new Probe();
         Supplier<Widget> supplier = () -> Container.builder()
                 .child(new ProbeWidget(probe, () -> new ReadyLabelState("child")))
@@ -130,8 +112,8 @@ class GuiRendererMountReentrancyTest {
     @Test
     @DisplayName("A value source that delivers on subscribe is subscribed once, its value shown, and released at close")
     void synchronousSubscriptionValueSubscribesOnceAndShowsValue() {
-        TestGui gui = newGui(1);
-        GuiRenderer renderer = newRenderer(gui, DEFERRING_INTERVAL_MS);
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiRenderer renderer = newRenderer(gui);
         Probe probe = new Probe();
         ValueSource source = new ValueSource("v1");
         Supplier<Widget> supplier = () -> Container.builder()
@@ -164,15 +146,15 @@ class GuiRendererMountReentrancyTest {
     @Test
     @DisplayName("The first click after opening keeps its state change on the next frame")
     void firstClickStateChangeSurvivesNextFrame() {
-        TestGui gui = newGui(1);
-        GuiRenderer renderer = newRenderer(gui, DEFERRING_INTERVAL_MS);
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiRenderer renderer = newRenderer(gui);
         Probe probe = new Probe();
         Supplier<Widget> supplier = () -> Container.builder()
                 .child(new ProbeWidget(probe, () -> new CounterState("counter")))
                 .build();
 
         renderer.initialize(supplier, rootContext(1));
-        renderer.handleClick(clickAt(0));
+        gui.click(0);
         drain();
 
         assertEquals("n=1", displayNameAt(gui, 0),
@@ -183,8 +165,8 @@ class GuiRendererMountReentrancyTest {
     @Test
     @DisplayName("Requests raised by two children during one build coalesce into exactly one follow-up frame")
     void requestsDuringOneBuildCoalesceIntoOneFollowUpFrame() {
-        TestGui gui = newGui(1);
-        GuiRenderer renderer = newRenderer(gui, DEFERRING_INTERVAL_MS);
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiRenderer renderer = newRenderer(gui);
         Probe probe = new Probe();
         AtomicInteger supplierCalls = new AtomicInteger();
         Supplier<Widget> supplier = () -> {
@@ -200,7 +182,7 @@ class GuiRendererMountReentrancyTest {
         drain();
         int afterDrain = supplierCalls.get();
 
-        assertEquals("afterOpen=2, afterDrain=2, createState=2",
+        assertEquals("afterOpen=1, afterDrain=2, createState=2",
                 "afterOpen=" + afterOpen + ", afterDrain=" + afterDrain
                         + ", createState=" + (probe.createCount("a") + probe.createCount("b")),
                 "both initState requests raised during the first build must coalesce into one "
@@ -210,8 +192,8 @@ class GuiRendererMountReentrancyTest {
     @Test
     @DisplayName("A request for a sibling already built in this frame is honoured after the build")
     void requestForAlreadyBuiltSiblingIsHonouredAfterBuild() {
-        TestGui gui = newGui(1);
-        GuiRenderer renderer = newRenderer(gui, DEFERRING_INTERVAL_MS);
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiRenderer renderer = newRenderer(gui);
         Probe probe = new Probe();
         SiblingHolder holder = new SiblingHolder();
         // Children in walk order: A renders the shared text; C switches its own child to D when
@@ -235,8 +217,8 @@ class GuiRendererMountReentrancyTest {
     @Test
     @DisplayName("A root StatefulWidget whose initState calls setState builds before any didUpdateWidget")
     void rootStatefulWidgetFirstBuildPrecedesDidUpdateWidget() {
-        TestGui gui = newGui(1);
-        GuiRenderer renderer = newRenderer(gui, DEFERRING_INTERVAL_MS);
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiRenderer renderer = newRenderer(gui);
         Probe probe = new Probe();
         Supplier<Widget> supplier = () -> new ProbeWidget(probe, () -> new ReadyLabelState("root"));
 
@@ -261,17 +243,15 @@ class GuiRendererMountReentrancyTest {
     @Test
     @DisplayName("A child added by a later frame that calls setState in initState does not re-enter the build")
     void laterFrameNewChildSetStateInInitStateDoesNotReenter() {
-        TestGui gui = newGui(1);
-        // Zero interval: every request outside a build runs inline, as in later frame work
-        // that has lasted at least one interval. The one-shot counter bounds the pre-fix
-        // recursion to a single nested build.
-        GuiRenderer renderer = newRenderer(gui, 0L);
+        SnapshotProbe gui = new SnapshotProbe();
+        // The one-shot request exercises a child mounted by a later entity frame.
+        GuiRenderer renderer = newRenderer(gui);
         Probe probe = new Probe();
         AtomicBoolean withLateChild = new AtomicBoolean(false);
         AtomicInteger oneShot = new AtomicInteger();
         Supplier<Widget> supplier = () -> {
             Container.Builder builder = Container.builder()
-                    .child(TextButton.builder().text("leaf").slot(0).build());
+                    .child(TextButton.builder().text(Text.plain("leaf")).slot(0).build());
             if (withLateChild.get()) {
                 builder.child(new ProbeWidget(probe, () -> new OneShotRequestState("late", oneShot)));
             }
@@ -281,6 +261,7 @@ class GuiRendererMountReentrancyTest {
         renderer.initialize(supplier, rootContext(1));
         withLateChild.set(true);
         renderer.scheduleBuild();
+        harness.tick();
 
         ProbeState first = probe.statesOf("late").get(0);
         Element owner = first.owner;
@@ -300,8 +281,8 @@ class GuiRendererMountReentrancyTest {
     @Test
     @DisplayName("A frame that throws does not stop later frames from rendering")
     void failedFrameDoesNotWedgeRenderer() {
-        TestGui gui = newGui(1);
-        GuiRenderer renderer = newRenderer(gui, 0L);
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiRenderer renderer = newRenderer(gui);
         AtomicInteger frames = new AtomicInteger();
         // No State is created in the failing frame, so it raises no rebuild request.
         Supplier<Widget> supplier = () -> {
@@ -309,12 +290,14 @@ class GuiRendererMountReentrancyTest {
             if (frame == 2) {
                 throw new IllegalStateException("frame 2 fails on purpose");
             }
-            return TextButton.builder().text("frame" + frame).slot(0).build();
+            return TextButton.builder().text(Text.plain("frame" + frame)).slot(0).build();
         };
 
         renderer.initialize(supplier, rootContext(1));
-        renderer.scheduleBuild(); // frame 2 throws; GuiScheduler.executeFrame logs it
-        renderer.scheduleBuild(); // frame 3 must build normally
+        renderer.scheduleBuild();
+        harness.tick(); // frame 2 throws; GuiScheduler.executeFrame logs it
+        renderer.scheduleBuild();
+        harness.tick(); // frame 3 must build normally
 
         assertEquals("frames=3, slot0=frame3",
                 "frames=" + frames.get() + ", slot0=" + displayNameAt(gui, 0),
@@ -326,24 +309,22 @@ class GuiRendererMountReentrancyTest {
     void closeAndReopenDeclarativeGuiStartsCleanEachTime() {
         Probe probe = new Probe();
         AtomicInteger builds = new AtomicInteger();
-        ReopenPage page = new ReopenPage(player, probe, builds);
+        ReopenPage page = new ReopenPage(harness, player, probe, builds);
 
-        page.setInventory(Bukkit.createInventory(page, 9));
-        page.onOpen(mock(InventoryOpenEvent.class));
+        harness.open(page);
         drain();
         int createdFirstOpen = probe.createCount("page-child");
         String slotFirstOpen = displayNameAt(page, 0);
-        page.onClose(mock(InventoryCloseEvent.class));
+        harness.close(page);
         int buildsAtFirstClose = builds.get();
         drain();
         int buildsAfterFirstClose = builds.get() - buildsAtFirstClose;
 
-        page.setInventory(Bukkit.createInventory(page, 9));
-        page.onOpen(mock(InventoryOpenEvent.class));
+        harness.open(page);
         drain();
         int createdSecondOpen = probe.createCount("page-child") - createdFirstOpen;
         String slotSecondOpen = displayNameAt(page, 0);
-        page.onClose(mock(InventoryCloseEvent.class));
+        harness.close(page);
         int buildsAtSecondClose = builds.get();
         drain();
         int buildsAfterSecondClose = builds.get() - buildsAtSecondClose;
@@ -369,47 +350,22 @@ class GuiRendererMountReentrancyTest {
     // ------------------------------------------------------------------
 
     private void drain() {
-        server.getScheduler().performTicks(DRAIN_TICKS);
+        harness.fixture().advanceTicks(DRAIN_TICKS);
     }
 
-    private static InventoryClickEvent clickAt(int rawSlot) {
-        InventoryClickEvent event = mock(InventoryClickEvent.class);
-        when(event.getRawSlot()).thenReturn(rawSlot);
-        when(event.getSlot()).thenReturn(rawSlot);
-        return event;
-    }
 
     private BuildContext rootContext(int rows) {
         return BuildContext.root(player, "mount-reentrancy-gui", rows);
     }
 
-    private TestGui newGui(int rows) {
-        TestGui gui = new TestGui(player, "mount-reentrancy-gui", "Test", rows);
-        gui.setInventory(Bukkit.createInventory(gui, rows * 9));
-        return gui;
+    private GuiRenderer newRenderer(SnapshotProbe gui) {
+        return new GuiRenderer(Text.plain("Test"), 1, new GuiScheduler(harness.scheduler(), player), gui);
     }
 
-    private GuiRenderer newRenderer(Gui gui, long frameIntervalMs) {
-        return new GuiRenderer(gui, player, new GuiScheduler(mockPlugin, frameIntervalMs));
-    }
+    private static String displayNameAt(SnapshotProbe gui, int slot) { return gui.label(slot); }
 
-    private static String displayNameAt(Gui gui, int slot) {
-        ItemStack stack = gui.getInventory().getItem(slot);
-        if (stack == null) {
-            return "<empty>";
-        }
-        ItemMeta meta = stack.getItemMeta();
-        return meta == null ? "<no meta>" : meta.getDisplayName();
-    }
+    private String displayNameAt(DeclarativeGui page, int slot) { return GuiTestHarness.label(harness.current(page), slot); }
 
-    /**
-     * Minimal concrete {@link Gui}; {@code Gui} is abstract only to force subclassing.
-     */
-    private static final class TestGui extends Gui {
-        TestGui(Player player, String id, String title, int rows) {
-            super(player, id, title, rows);
-        }
-    }
 
     /**
      * Per-test lifecycle registry. Every {@link ProbeState} reports createState, initState,
@@ -568,7 +524,7 @@ class GuiRendererMountReentrancyTest {
 
         @Override
         protected Widget render() {
-            return TextButton.builder().text(label).slot(0).build();
+            return TextButton.builder().text(Text.plain(label)).slot(0).build();
         }
     }
 
@@ -599,7 +555,7 @@ class GuiRendererMountReentrancyTest {
 
         @Override
         protected Widget render() {
-            return TextButton.builder().text(label).slot(0).build();
+            return TextButton.builder().text(Text.plain(label)).slot(0).build();
         }
     }
 
@@ -619,7 +575,7 @@ class GuiRendererMountReentrancyTest {
         @Override
         protected Widget render() {
             return TextButton.builder()
-                    .text("n=" + count)
+                    .text(Text.plain("n=" + count))
                     .slot(0)
                     .onClick(() -> setState(() -> count++))
                     .build();
@@ -643,7 +599,7 @@ class GuiRendererMountReentrancyTest {
 
         @Override
         protected Widget render() {
-            return TextButton.builder().text(initialised ? id : "uninitialised").slot(slot).build();
+            return TextButton.builder().text(Text.plain(initialised ? id : "uninitialised")).slot(slot).build();
         }
     }
 
@@ -670,7 +626,7 @@ class GuiRendererMountReentrancyTest {
 
         @Override
         protected Widget render() {
-            return TextButton.builder().text(holder.text).slot(0).build();
+            return TextButton.builder().text(Text.plain(holder.text)).slot(0).build();
         }
     }
 
@@ -692,7 +648,7 @@ class GuiRendererMountReentrancyTest {
         @Override
         protected Widget render() {
             if (!switched) {
-                return TextButton.builder().text("c").slot(1).build();
+                return TextButton.builder().text(Text.plain("c")).slot(1).build();
             }
             return new ProbeWidget(probe, () -> new SiblingRequesterState("d", holder));
         }
@@ -715,7 +671,7 @@ class GuiRendererMountReentrancyTest {
 
         @Override
         protected Widget render() {
-            return TextButton.builder().text("b").slot(3).build();
+            return TextButton.builder().text(Text.plain("b")).slot(3).build();
         }
     }
 
@@ -735,7 +691,7 @@ class GuiRendererMountReentrancyTest {
 
         @Override
         protected Widget render() {
-            return TextButton.builder().text("d").slot(2).build();
+            return TextButton.builder().text(Text.plain("d")).slot(2).build();
         }
     }
 
@@ -788,20 +744,20 @@ class GuiRendererMountReentrancyTest {
 
         @Override
         protected Widget render() {
-            return TextButton.builder().text(requested ? "late-requested" : "late").slot(1).build();
+            return TextButton.builder().text(Text.plain(requested ? "late-requested" : "late")).slot(1).build();
         }
     }
 
     /**
-     * A DeclarativeGui page (production default scheduler) whose Container child calls setState
+     * A DeclarativeGui page using the scheduler facade whose Container child calls setState
      * in initState. Counts its own build calls.
      */
     private static final class ReopenPage extends DeclarativeGui {
         private final Probe probe;
         private final AtomicInteger builds;
 
-        ReopenPage(Player player, Probe probe, AtomicInteger builds) {
-            super(player, "mount-reentrancy-reopen-page", "Test", 1);
+        ReopenPage(GuiTestHarness harness, Player player, Probe probe, AtomicInteger builds) {
+            super(harness.ui(), harness.scheduler(), player, "mount-reentrancy-reopen-page", Text.plain("Test"), 1);
             this.probe = probe;
             this.builds = builds;
         }
