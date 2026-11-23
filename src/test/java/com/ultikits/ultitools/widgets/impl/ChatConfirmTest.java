@@ -330,25 +330,30 @@ class ChatConfirmTest {
         }
 
         private void assertTargetCallback(int index, Runnable expected, Runnable other) {
-            List<ClickCallback<Audience>> callbacks = new ArrayList<>();
-            List<ClickCallback.Options> options = new ArrayList<>();
             UUID targetId = UUID.randomUUID();
             when(mockPlayer.getUniqueId()).thenReturn(targetId);
             Player sameTarget = mock(Player.class);
             when(sameTarget.getUniqueId()).thenReturn(targetId);
             Player otherPlayer = mock(Player.class);
             when(otherPlayer.getUniqueId()).thenReturn(UUID.randomUUID());
+
+            assertCallbackForAudience(index, otherPlayer, expected, other, 0);
+            assertCallbackForAudience(index, Audience.empty(), expected, other, 0);
+            assertCallbackForAudience(index, sameTarget, expected, other, 1);
+        }
+
+        private void assertCallbackForAudience(int index, Audience audience, Runnable expected,
+                                               Runnable other, int expectedRuns) {
+            List<ClickCallback<Audience>> callbacks = new ArrayList<>();
+            List<ClickCallback.Options> options = new ArrayList<>();
             try (MockedStatic<MessageUtils> delivery = mockStatic(MessageUtils.class);
                  MockedStatic<ClickEvent> clicks = captureCallbacks(callbacks, options)) {
+                // Paper consumes the use before the UUID guard, so each audience needs a fresh prompt.
                 new ChatConfirm(mockPlayer, "Title", "Description", "Yes", "No",
                         mockOnConfirm, mockOnCancel).show();
                 assertThat(callbacks).hasSize(2);
-                ClickCallback<Audience> callback = callbacks.get(index);
-                callback.accept(otherPlayer);
-                callback.accept(Audience.empty());
-                verify(expected, never()).run();
-                callback.accept(sameTarget);
-                verify(expected, times(1)).run();
+                callbacks.get(index).accept(audience);
+                verify(expected, times(expectedRuns)).run();
                 verify(other, never()).run();
             }
         }

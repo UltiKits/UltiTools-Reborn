@@ -14,6 +14,19 @@ who used that manager directly must migrate to Adventure's `ClickEvent.callback`
 audience is a player whose UUID matches the target player's UUID. Each button has its own
 one-use callback; the text, colours and message delivery are unchanged.
 
+- **Lifetime:** prompts expire on the server after Paper's default callback lifetime (about 12 hours).
+  Clicking an expired button does nothing. In 6.x, pending callbacks did not expire.
+- **Command pipeline:** clicks no longer fire `PlayerCommandPreprocessEvent`, produce the console's
+  `issued server command: /ultitools_callback ...` log line, or pass through other plugins' command blockers.
+- **Action exceptions:** Paper logs exceptions thrown by a button's action without disconnecting the player;
+  the 6.x callback command silently swallowed exceptions.
+- **Independent buttons:** clicking confirm and then cancel, or cancel and then confirm, runs each action once
+  while both callbacks remain valid. This was also possible in 6.x. Modules that need mutually exclusive
+  actions must enforce that condition in their own actions.
+- **Module unload:** unloading a module does not revoke its pending callbacks. Until the callback expires
+  (by default about 12 hours after registration), clicking an unused old button can still run action code
+  from the unloaded module. In 6.x, these callbacks were retained without an expiry.
+
 中文补充：7.0 删除 `ChatCallbackManager` 与隐藏命令 `/ultitools_callback`，直接使用过它的模块
 须改用 `ClickEvent.callback`。聊天确认按钮仅接受目标玩家（比较 UUID）点击，确认、取消各自一次；
 文字、颜色与发送方式不变。
