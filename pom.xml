@@ -701,6 +701,13 @@
             <version>26.3.build.258-stable</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Paper exposes the resolver API to plugin library loaders. -->
+        <dependency>
+            <groupId>org.apache.maven.resolver</groupId>
+            <artifactId>maven-resolver-api</artifactId>
+            <version>1.9.18</version>
+            <scope>provided</scope>
+        </dependency>
         <!--
             Log4j 2, provided by the Paper server at runtime and never shaded. The panel's log
             stream mirrors the server console (as of 6.3.0): Paper prints its own output (command
