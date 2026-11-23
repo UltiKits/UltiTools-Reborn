@@ -16,7 +16,6 @@ import java.util.Collections;
 import java.util.List;
 
 import org.bukkit.command.Command;
-import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.AfterEach;
@@ -415,7 +414,7 @@ class PluginManagerCommandContractTest {
 
                 assertDoesNotThrow(
                         () -> assemble.invoke(pluginManager, goodContainer, goodPlugin, ModuleFixture.class, loader));
-                assertTrue(Arrays.asList(goodContainer.getBeanNamesForType(CommandExecutor.class)).contains("good"),
+                assertTrue(Arrays.asList(goodContainer.getBeanNamesForType(BaseCommandExecutor.class)).contains("good"),
                         "the surviving module's command executor bean must still be present after assembly");
             } finally {
                 instanceField.set(null, null);

@@ -1427,10 +1427,10 @@ public class PluginManager {
 
     private static List<BaseCommandExecutor> baseCommandExecutors(SimpleContainer context) {
         List<BaseCommandExecutor> executors = new ArrayList<>();
-        for (String beanName : context.getBeanNamesForType(CommandExecutor.class)) {
-            CommandExecutor commandExecutor = context.getBean(beanName, CommandExecutor.class);
-            if (commandExecutor instanceof BaseCommandExecutor) {
-                executors.add((BaseCommandExecutor) commandExecutor);
+        for (String beanName : context.getBeanNamesForType(BaseCommandExecutor.class)) {
+            BaseCommandExecutor commandExecutor = context.getBean(beanName, BaseCommandExecutor.class);
+            if (commandExecutor != null) {
+                executors.add(commandExecutor);
             }
         }
         return executors;
@@ -3358,12 +3358,10 @@ public class PluginManager {
     /**
      * Refuses to load a module whose {@link BaseCommandExecutor} bean declares {@code @CmdCD} or
      * {@code @UsageLimit} -- on a {@code @CmdMapping} method or on the executor class itself --
-     * while its OWN validator chain (the exact chain {@code onCommand} dispatches through, not a
-     * freshly built default one) holds no instance of the corresponding validator type
-     * (SILENT-11 / D-01 half 2, D-04). Every {@link CommandExecutor} bean in {@code pluginContext}
-     * is checked; a bean that is not a {@link BaseCommandExecutor} (the legacy
-     * {@code AbstractCommandExecutor} generation -- removed in 6.3.0 -- never had a {@link
-     * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain} at all) is skipped.
+     * while its OWN validator chain (the exact dispatch chain, not a freshly built default one)
+     * holds no instance of the corresponding validator type (SILENT-11 / D-01 half 2, D-04).
+     * Every {@link BaseCommandExecutor} bean in {@code pluginContext} is discovered directly;
+     * discovery does not require the legacy Bukkit {@link CommandExecutor} interface.
      * <p>
      * This is a STRUCTURAL check only -- it asks whether the required validator TYPE is present
      * in the chain, never whether a given invocation would actually be blocked. No opt-out exists
@@ -3373,15 +3371,15 @@ public class PluginManager {
      * accepted escape hatch.
      *
      * @param pluginContext the just-assembled, just-{@code refresh()}ed container to scan for
-     *                       {@link CommandExecutor} beans
+     *                       {@link BaseCommandExecutor} beans
      * @throws PluginModuleException fail-closed (D-01, D-04), naming the offending class and,
      *                                when known, the offending mapping method
      */
     static void validateCommandExecutorContracts(SimpleContainer pluginContext) {
-        for (String beanName : pluginContext.getBeanNamesForType(CommandExecutor.class)) {
-            CommandExecutor commandExecutor = pluginContext.getBean(beanName, CommandExecutor.class);
-            if (commandExecutor instanceof BaseCommandExecutor) {
-                validateCommandExecutorContract((BaseCommandExecutor) commandExecutor);
+        for (String beanName : pluginContext.getBeanNamesForType(BaseCommandExecutor.class)) {
+            BaseCommandExecutor commandExecutor = pluginContext.getBean(beanName, BaseCommandExecutor.class);
+            if (commandExecutor != null) {
+                validateCommandExecutorContract(commandExecutor);
             }
         }
     }
