@@ -291,7 +291,12 @@ class DeprecationRegistryGeneratorBaseDirTest {
         com.google.gson.JsonArray prior = com.google.gson.JsonParser.parseString(
                 new String(priorBytes, StandardCharsets.UTF_8)).getAsJsonArray();
         assertThat(prior).as("a nonempty real ledger, not an empty replacement baseline").isNotEmpty();
-        Files.copy(Paths.get("pom.xml"), project.resolve("pom.xml"));
+        // Pin this cumulative-history fixture below its synthetic @removeIn 7.0.0 deadline and
+        // outside the reset. Its semantics must not change with the product's current version.
+        String fixturePom = new String(Files.readAllBytes(Paths.get("pom.xml")), StandardCharsets.UTF_8)
+                .replaceFirst("<version>[^<]+</version>", "<version>6.6.0-SNAPSHOT</version>")
+                .replace("<japicmp.skip>true</japicmp.skip>", "<japicmp.skip>false</japicmp.skip>");
+        Files.write(project.resolve("pom.xml"), fixturePom.getBytes(StandardCharsets.UTF_8));
         Path sourceRoot = Paths.get("src/main/java");
         // This is a history-preservation fixture, not another whole-tree discovery run (verify
         // already runs that pipeline). Only ledger owners can affect the prior rows asserted below.

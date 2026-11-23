@@ -77,6 +77,31 @@ class BuildConfigurationTests(unittest.TestCase):
                                 timeout=660)
         return result, warm_output + result.stdout.decode("utf-8", "replace")
 
+    def test_compatibility_reset_is_bounded_and_generator_gets_the_effective_switch(self):
+        properties = required(POM, "m:properties", NS)
+        version = required(POM, "m:version", NS).text
+        skip = required(properties, "m:japicmp.skip", NS).text
+        baseline = required(properties, "m:japicmp.baseline.version", NS).text
+        assert baseline is not None
+        self.assertIn(skip, ("true", "false"))
+        if version not in ("7.0.0-SNAPSHOT", "7.0.0"):
+            self.assertEqual(skip, "false", "After 7.0.0 set japicmp.skip=false")
+            self.assertRegex(baseline, r"^[0-9]+\.[0-9]+\.[0-9]+$")
+            self.assertGreaterEqual(tuple(map(int, baseline.split("."))), (7, 0, 0))
+        plugins = required(POM, "m:build/m:plugins", NS)
+        comparison = required(plugins, "m:plugin[m:artifactId='japicmp-maven-plugin']", NS)
+        self.assertEqual(comparison.findtext("m:configuration/m:skip", namespaces=NS), "${japicmp.skip}")
+        self.assertEqual(comparison.findtext("m:executions/m:execution/m:phase", namespaces=NS), "verify")
+        self.assertEqual(comparison.findtext(
+            "m:configuration/m:parameter/m:breakBuildOnBinaryIncompatibleModifications", namespaces=NS), "true")
+        self.assertEqual(comparison.findtext(
+            "m:configuration/m:parameter/m:ignoreMissingOldVersion", namespaces=NS), "false")
+        self.assertIsNotNone(comparison.find("m:configuration/m:parameter/m:excludes", NS))
+        generator = required(plugins, "m:plugin[m:artifactId='exec-maven-plugin']", NS)
+        self.assertEqual([item.text for item in generator.findall("m:configuration/m:arguments/m:argument", NS)],
+                         ["${project.basedir}", "${japicmp.skip}"])
+        self.assertEqual(generator.findtext("m:executions/m:execution/m:phase", namespaces=NS), "verify")
+
     def test_paper_baseline_is_pinned_and_jsr305_is_explicit(self):
         dependencies = required(POM, "m:dependencies", NS)
         paper = required(dependencies, "m:dependency[m:artifactId='paper-api']", NS)

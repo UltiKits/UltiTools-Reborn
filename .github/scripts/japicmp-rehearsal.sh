@@ -274,9 +274,9 @@ grep -q "<ignoreMissingOldVersion>false</ignoreMissingOldVersion>" pom.xml \
 grep -q "<excludes></excludes>" pom.xml \
     || die_fail "Failed to empty the japicmp <excludes> block -- pom.xml mutation did not match. Aborting before running mvn."
 
-note "GREEN leg: mvn -B -o clean verify -DskipTests (exclusion list empty, baseline ${CANDIDATE_VERSION})"
+note "GREEN leg: mvn -B -o clean verify -DskipTests -Djapicmp.skip=false (exclusion list empty, baseline ${CANDIDATE_VERSION})"
 GREEN_EXIT=0
-mvn -B -o "-Dmaven.repo.local=$LOCAL_REPOSITORY" clean verify -DskipTests >"$GREEN_LOG" 2>&1 || GREEN_EXIT=$?
+mvn -B -o "-Dmaven.repo.local=$LOCAL_REPOSITORY" clean verify -DskipTests -Djapicmp.skip=false >"$GREEN_LOG" 2>&1 || GREEN_EXIT=$?
 cat "$GREEN_LOG"
 note "GREEN leg exit code: ${GREEN_EXIT}"
 
@@ -292,9 +292,9 @@ perl -i -pe "s/^(public )class(\\s+${BREAK_TARGET_SIMPLE_NAME}\\b)/\$1final clas
 grep -qE "public final class ${BREAK_TARGET_SIMPLE_NAME}\\b" "$BREAK_TARGET_FILE" \
     || die_fail "Failed to inject the 'final' modifier into ${BREAK_TARGET_FILE} -- pattern did not match ${BREAK_TARGET_SIMPLE_NAME}'s declaration."
 
-note "RED leg: mvn -B -o clean verify -DskipTests (same scratch pom, ${BREAK_TARGET_SIMPLE_NAME} now final)"
+note "RED leg: mvn -B -o clean verify -DskipTests -Djapicmp.skip=false (same scratch pom, ${BREAK_TARGET_SIMPLE_NAME} now final)"
 RED_EXIT=0
-mvn -B -o "-Dmaven.repo.local=$LOCAL_REPOSITORY" clean verify -DskipTests >"$RED_LOG" 2>&1 || RED_EXIT=$?
+mvn -B -o "-Dmaven.repo.local=$LOCAL_REPOSITORY" clean verify -DskipTests -Djapicmp.skip=false >"$RED_LOG" 2>&1 || RED_EXIT=$?
 cat "$RED_LOG"
 note "RED leg exit code: ${RED_EXIT}"
 
