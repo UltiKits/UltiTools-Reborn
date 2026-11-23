@@ -12,7 +12,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.SimpleFormatter;
-import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;

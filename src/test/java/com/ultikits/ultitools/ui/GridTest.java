@@ -3,6 +3,8 @@ package com.ultikits.ultitools.ui;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.ultikits.ultitools.item.ItemSpec;
 import com.ultikits.ultitools.text.Text;
@@ -150,8 +152,8 @@ class GridTest {
     }
 
     private static SlotContainer sizedContainer(int size) {
-        SlotContainer container = org.mockito.Mockito.mock(SlotContainer.class);
-        org.mockito.Mockito.when(container.size()).thenReturn(size);
+        SlotContainer container = mock(SlotContainer.class);
+        when(container.size()).thenReturn(size);
         return container;
     }
 

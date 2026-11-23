@@ -4,20 +4,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.fail;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 import com.ultikits.ultitools.item.ItemSpec;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Objects;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletionStage;
-import org.bukkit.Material;
+import org.bukkit.entity.Item;
 import org.bukkit.inventory.ItemStack;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -106,7 +112,7 @@ public abstract class AbstractUiServiceContractTest {
         private final Map<UiSession<?>, Map<GridSlot, ItemStack>> closingPictures = new IdentityHashMap<>();
 
         private static Map<GridSlot, ItemStack> picture(Grid grid) {
-            Map<GridSlot, ItemStack> result = new java.util.LinkedHashMap<>();
+            Map<GridSlot, ItemStack> result = new LinkedHashMap<>();
             grid.bindings().forEach((slot, binding) -> result.put(slot, binding.container().get(binding.index())));
             return result;
         }
@@ -794,7 +800,7 @@ public abstract class AbstractUiServiceContractTest {
         assertThat(atCompletion).hasValue(ContainerState.ENDED);
         assertThat(container.isViewed()).isFalse();
         assertThat(viewer.getInventory().getItem(0)).isEqualTo(UiTestItems.stone(8));
-        assertThat(java.util.Arrays.stream(viewer.getInventory().getStorageContents()).filter(java.util.Objects::nonNull)
+        assertThat(Arrays.stream(viewer.getInventory().getStorageContents()).filter(Objects::nonNull)
                 .filter(item -> !item.isEmpty()).mapToInt(ItemStack::getAmount).sum()).isEqualTo(8);
         assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.RETURNED);
         assertThat(backend.closed()).containsExactly(first, second);
@@ -870,7 +876,7 @@ public abstract class AbstractUiServiceContractTest {
         assertThat(delivery.dropped()).containsExactly(UiTestItems.stone(6));
         assertThat(delivery.undelivered()).isEmpty();
         assertThat(viewer.getInventory().getItem(5)).isEqualTo(UiTestItems.stone(64));
-        assertThat(viewer.getWorld().getEntitiesByClass(org.bukkit.entity.Item.class)).anySatisfy(item ->
+        assertThat(viewer.getWorld().getEntitiesByClass(Item.class)).anySatisfy(item ->
                 assertThat(item.getItemStack()).isEqualTo(UiTestItems.stone(6)));
         assertThat(entity).hasValue(true);
     }
@@ -952,10 +958,10 @@ public abstract class AbstractUiServiceContractTest {
         backend(Grid.class);
         viewer.setItemOnCursor(UiTestItems.dirt(3));
         SlotContainer container = service.container(editableStorage(1).baseline(List.of(UiTestItems.stone(8))).build());
-        Player observed = org.mockito.Mockito.spy(viewer);
+        Player observed = spy(viewer);
         service.show(observed, bound(container)); settle();
-        org.mockito.Mockito.verify(observed, org.mockito.Mockito.never()).getItemOnCursor();
-        org.mockito.Mockito.verify(observed, org.mockito.Mockito.never()).setItemOnCursor(org.mockito.ArgumentMatchers.any());
+        verify(observed, never()).getItemOnCursor();
+        verify(observed, never()).setItemOnCursor(any());
         assertThat(viewer.getItemOnCursor()).isEqualTo(UiTestItems.dirt(3));
         assertThat(container.get(0)).isEqualTo(UiTestItems.stone(8));
     }
