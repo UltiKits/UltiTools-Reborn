@@ -21,7 +21,7 @@ record ArgumentMapping(Class<?> javaType, boolean greedy, ArgumentType<?> type, 
     }
 
     private static ArgumentType<?> single(Class<?> type, NativeArgumentTypes nativeTypes) {
-        if (type.equals(String.class)) return StringArgumentType.string();
+        if (type.equals(String.class)) return new TokenArgumentType();
         if (type.equals(int.class) || type.equals(Integer.class)) return IntegerArgumentType.integer();
         if (type.equals(long.class) || type.equals(Long.class)) return LongArgumentType.longArg();
         if (type.equals(double.class) || type.equals(Double.class)) return DoubleArgumentType.doubleArg();
@@ -29,7 +29,12 @@ record ArgumentMapping(Class<?> javaType, boolean greedy, ArgumentType<?> type, 
         if (type.equals(boolean.class) || type.equals(Boolean.class)) return BoolArgumentType.bool();
         if (type.equals(short.class) || type.equals(Short.class)) return IntegerArgumentType.integer(Short.MIN_VALUE, Short.MAX_VALUE);
         if (type.equals(byte.class) || type.equals(Byte.class)) return IntegerArgumentType.integer(Byte.MIN_VALUE, Byte.MAX_VALUE);
-        return nativeTypes.type(type);
+        try { return nativeTypes.type(type); }
+        catch (CommandCompilationException absent) {
+            var parser = com.ultikits.ultitools.abstracts.command.parser.TypeParserRegistry.getInstance().getParser(type);
+            if (parser == null) throw absent;
+            return new TypeParserArgumentType<>(parser);
+        }
     }
 
     Object value(CommandContext<CommandSourceStack> context, String name, boolean empty)
@@ -39,14 +44,19 @@ record ArgumentMapping(Class<?> javaType, boolean greedy, ArgumentType<?> type, 
         String text = (String) raw;
         if (javaType.equals(String.class)) return text;
         Class<?> element = javaType.getComponentType();
-        String[] tokens = text.isBlank() ? new String[0] : text.trim().split("\\s+");
-        Object result = Array.newInstance(element, tokens.length);
-        for (int i = 0; i < tokens.length; i++) {
-            StringReader reader = new StringReader(tokens[i]);
+        if (element.equals(String.class)) return text.isBlank() ? new String[0] : text.trim().split("\\s+");
+        var values = new java.util.ArrayList<Object>();
+        StringReader reader = new StringReader(text);
+        reader.skipWhitespace();
+        while (reader.canRead()) {
+            int start = reader.getCursor();
             Object parsed = single(element, nativeTypes).parse(reader, context.getSource());
-            if (reader.canRead()) throw CommandSyntaxException.BUILT_IN_EXCEPTIONS.dispatcherUnknownArgument().createWithContext(reader);
-            Array.set(result, i, narrow(element, nativeTypes.resolve(element, parsed, context.getSource())));
+            if (reader.getCursor() == start) throw CommandSyntaxException.BUILT_IN_EXCEPTIONS.dispatcherUnknownArgument().createWithContext(reader);
+            values.add(narrow(element, nativeTypes.resolve(element, parsed, context.getSource())));
+            reader.skipWhitespace();
         }
+        Object result = Array.newInstance(element, values.size());
+        for (int i = 0; i < values.size(); i++) Array.set(result, i, values.get(i));
         return result;
     }
 
