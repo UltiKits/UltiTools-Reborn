@@ -46,9 +46,16 @@ both lines uses `Material.<COLOR>_STAINED_GLASS_PANE` directly.
 Inject `ItemRenderer` with `@Autowired` and call `render(spec, player)` when the viewer is known,
 or `render(spec, locale)` when a locale is already available. Rendering needs a running Paper server.
 Each call returns a new, independent `ItemStack`; the renderer is a framework singleton.
+The framework resolves its `Messages` and `LocaleResolver` dependencies lazily from the root container;
+module child containers inherit the same renderer. Creating a description alone needs no running server.
+Unknown or block-only item keys fail at render time with `IllegalArgumentException`. Paper validates the
+rendered component values, including its own lore-line limit; the renderer propagates Paper's rejection
+rather than maintaining a second copy of that limit.
 
 中文补充：`ItemSpec` 只描述物品，不创建物品栈，也不提前固定观看者语言。通过 `@Autowired`
 取得 `ItemRenderer`，在展示时按玩家或明确的 `Locale` 渲染；每次得到独立物品栈，渲染需要运行中的 Paper。
+描述本身可脱离服务器创建。渲染器首次取用时才从根容器解析文本与语言服务，模块子容器共用该实例。
+未知键和纯方块键在渲染时抛 `IllegalArgumentException`；说明行等组件限制由 Paper 校验，框架不复制上限规则。
 
 ### Item construction migration
 
@@ -102,9 +109,22 @@ Lore defaults to non-italic only when italic is unset; explicit italic styling i
 New writes use `ItemStack.serializeItemsAsBytes` and `java.util.Base64`, rather than a Bukkit Java object stream.
 Reading uses the MIME Base64 decoder, so line-wrapped strings are accepted.
 Empty decoded stacks become `null` slots, preserving the array's length and empty-slot positions.
+Decoded bytes starting with `0xAC 0xED` are read as the legacy Bukkit object stream written by 6.x
+`ItemStackUtils`; the old reader is private and no new writes use that format. This does not promise
+support for every module-specific serialization scheme. New strings are not a format that 6.x readers understand.
+`serializeItem` and `deserializeItem` use the same array format for one item; `deserializeItem` returns the
+first slot, or `null` for an empty array or empty slot. `isValidSerialized` reports whether the array can be read.
+Conversion failures are logged at SEVERE and return `null`; these strings are for trusted saved item data,
+not untrusted Java object streams. Keep backups when upgrading: cross-Minecraft-version data upgrading,
+and historical 1.21.x item strings read on 26.3, have not been verified by this change.
 
 中文补充：`ItemStackUtils` 保留五个静态入口及失败返回 `null` 的约定。7.0 以 Paper 物品字节格式
 加 Base64 写入，读取接受换行；空物品恢复成 `null`，不改变数组长度和空槽位置。
+解码后以 `0xAC 0xED` 开头的内容走私有旧格式读取器，可读 6.x `ItemStackUtils` 保存的对象流，
+但不再生成旧格式，也不承诺支持模块各自的所有存档格式；6.x 读取器不识别新写出的格式。
+单物品方法复用数组格式，读取空数组或首槽为空时返回 `null`；`isValidSerialized` 判断数组能否读出。
+转换失败记 SEVERE 并返回 `null`，仅用于可信物品存档，不接收不可信的 Java 对象流。
+升级前保留备份；跨 Minecraft 版本的数据升级及 1.21.x 历史串在 26.3 的读取，本改动未验证。
 
 ## Removed data-store overloads (as of 6.5.0)
 
