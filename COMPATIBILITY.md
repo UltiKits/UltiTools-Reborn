@@ -498,7 +498,7 @@ As of 6.4.0 every entry below is removed; see
 [Removal list for 6.4.0](#removal-list-for-640) for the migration. The table records their 6.3.1 behaviour.
 
 Every entry below is `@Deprecated(since = "6.3.1", forRemoval = true)` with a `@deprecated` paragraph and
-`@removeIn 6.4.0`, and appears in `compatibility/DEPRECATIONS.md`. Behaviour codes: **R** refuses explicitly
+`@removeIn 6.4.0`, and appears in `compatibility/archive/6.x/DEPRECATIONS.md`. Behaviour codes: **R** refuses explicitly
 (a failure result, or one INFO line per run); **F** forwards to the 6.3.1 equivalent; **E** an entry point that
 only stores a v1 client nothing connects, with one INFO line per run; **S** a kept v1 sender, handler or
 listener of an `@ApiStatus.Internal` manager, unchanged since 6.3.0, which the framework never reaches;
@@ -1661,7 +1661,7 @@ Bukkit's own alias restrictions remain: integral Vector coordinates deserialize 
 fractional coordinates deserialize normally. Leaving `parser` at `DefaultConfigParser.class` selects the new registry,
 not that legacy class. Third-party subclasses retain their old executable behavior, not the new
 built-in collection semantics. The six announcements are indexed in
-[`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
+[`compatibility/archive/6.x/DEPRECATIONS.md`](compatibility/archive/6.x/DEPRECATIONS.md).
 
 For a custom type, remove `parser = ...` from the field and place a public top-level converter
 with a public no-argument constructor in the module's `@UltiToolsModule.scanBasePackages`.
@@ -2013,7 +2013,7 @@ your module JAR, where it conflicts at runtime with the UltiTools already instal
 
 6.4.0 removes the public API that 6.3.0 and 6.3.1 announced for removal in 6.4.0. Every entry below carried
 `@Deprecated(forRemoval = true)` and `@removeIn 6.4.0` in a released version, so a module still using one was
-warned by name at compile time. The generated registry (`compatibility/DEPRECATIONS.md`) marks each one
+warned by name at compile time. The archived registry (`compatibility/archive/6.x/DEPRECATIONS.md`) marks each one
 `REMOVED` in 6.4.0. A module compiled against 6.3.x that calls a removed member fails with
 `NoSuchMethodError` or `NoClassDefFoundError` on 6.4.0; recompile against 6.4.0 and apply the migration.
 
