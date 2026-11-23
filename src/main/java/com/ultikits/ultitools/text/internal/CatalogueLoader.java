@@ -1,0 +1,152 @@
+package com.ultikits.ultitools.text.internal;
+
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.utils.CodeSourceLocations;
+import java.io.IOException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.jar.JarFile;
+import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
+import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
+
+/** Reads module-owned YAML resources without logging, publishing or writing files. */
+@ApiStatus.Internal
+public final class CatalogueLoader {
+    /** Parsed entries, deferred diagnostics and unmodified shipped UTF-8 contents. */
+    @ApiStatus.Internal
+    public record Loaded(Catalogue catalogue, List<String> diagnostics, Map<String, String> shippedFiles) {
+        /** Makes the result collections immutable. */
+        public Loaded {
+            diagnostics = List.copyOf(diagnostics);
+            shippedFiles = Map.copyOf(shippedFiles);
+        }
+    }
+
+    /** Loads only resources from the explicitly supplied module code source. */
+    public Loaded load(String namespace, Locale sourceLocale, @Nullable URL location) {
+        List<String> diagnostics = new ArrayList<>();
+        Map<String, String> files = new LinkedHashMap<>();
+        if (location != null) {
+            Path source = CodeSourceLocations.toFile(location).toPath();
+            try {
+                if (Files.isDirectory(source)) {
+                    readDirectory(source.resolve("messages"), files, diagnostics);
+                } else {
+                    readJar(source, files, diagnostics);
+                }
+            } catch (IOException failure) {
+                diagnostics.add(source + ": " + failure.getMessage());
+            }
+        }
+        return new Loaded(parseFiles(namespace, sourceLocale, files, diagnostics), diagnostics, files);
+    }
+
+    private static void readDirectory(Path directory, Map<String, String> files, List<String> diagnostics)
+            throws IOException {
+        if (!Files.isDirectory(directory)) {
+            return;
+        }
+        try (var paths = Files.list(directory)) {
+            for (Path path : paths.filter(Files::isRegularFile).sorted().toList()) {
+                if (path.getFileName().toString().endsWith(".yml")) {
+                    try {
+                        files.put(path.getFileName().toString(), Files.readString(path, StandardCharsets.UTF_8));
+                    } catch (IOException failure) {
+                        diagnostics.add(path + ": " + failure.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    private static void readJar(Path path, Map<String, String> files, List<String> diagnostics) throws IOException {
+        try (JarFile jar = new JarFile(path.toFile())) {
+            for (var entry : jar.stream().filter(entry -> !entry.isDirectory()).sorted(
+                    java.util.Comparator.comparing(java.util.jar.JarEntry::getName)).toList()) {
+                String name = entry.getName();
+                if (name.startsWith("messages/") && name.endsWith(".yml")
+                        && name.indexOf('/', "messages/".length()) < 0) {
+                    try (var input = jar.getInputStream(entry)) {
+                        files.put(name.substring("messages/".length()), new String(input.readAllBytes(), StandardCharsets.UTF_8));
+                    } catch (IOException failure) {
+                        diagnostics.add(path + "!/" + name + ": " + failure.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    private static Catalogue parseFiles(String namespace, Locale sourceLocale, Map<String, String> files,
+            List<String> diagnostics) {
+        Catalogue.Builder builder = new Catalogue.Builder(namespace, sourceLocale);
+        java.util.Set<Locale> loaded = new java.util.HashSet<>();
+        files.forEach((file, text) -> {
+            var locale = LocaleNames.parse(file.substring(0, file.length() - 4));
+            if (locale.isEmpty()) {
+                diagnostics.add(file + ": Invalid catalogue locale");
+            } else if (!loaded.add(locale.orElseThrow())) {
+                diagnostics.add(file + ": Duplicate normalized catalogue locale");
+            } else {
+                parseFile(namespace, file, text, diagnostics).ifPresent(values -> builder.putAll(locale.orElseThrow(), values));
+            }
+        });
+        return builder.build();
+    }
+
+    private static java.util.Optional<Map<String, String>> parseFile(String namespace, String file, String text,
+            List<String> diagnostics) {
+        try {
+            LoaderOptions options = new LoaderOptions();
+            options.setAllowDuplicateKeys(false);
+            Object root = new Yaml(new SafeConstructor(options)).load(text);
+            Map<String, String> values = new LinkedHashMap<>();
+            if (root != null) {
+                if (!(root instanceof Map<?, ?> mapping)) {
+                    throw new IllegalArgumentException("Catalogue root must be a mapping");
+                }
+                flatten(namespace, file, "", mapping, values, diagnostics);
+            }
+            return java.util.Optional.of(values);
+        } catch (RuntimeException malformed) {
+            diagnostics.add(file + ": " + malformed.getMessage());
+            return java.util.Optional.empty();
+        }
+    }
+
+    private static void flatten(String namespace, String file, String prefix, Map<?, ?> mapping,
+            Map<String, String> values, List<String> diagnostics) {
+        mapping.forEach((key, value) -> flattenEntry(namespace, file, prefix, key, value, values, diagnostics));
+    }
+
+    private static void flattenEntry(String namespace, String file, String prefix, Object key, @Nullable Object value,
+            Map<String, String> values, List<String> diagnostics) {
+        String path = prefix.isEmpty() ? String.valueOf(key) : prefix + '.' + key;
+        try {
+            if (!(key instanceof String)) {
+                throw new IllegalArgumentException("Catalogue keys must be strings");
+            }
+            new MessageKey(namespace, path);
+            if (value instanceof Map<?, ?> nested) {
+                flatten(namespace, file, path, nested, values, diagnostics);
+            } else if (value instanceof String template) {
+                if (values.putIfAbsent(path, template) != null) {
+                    diagnostics.add(file + ": Duplicate flattened path " + path);
+                }
+            } else {
+                diagnostics.add(file + ": Non-string value at " + path);
+            }
+        } catch (IllegalArgumentException invalid) {
+            diagnostics.add(file + ": " + invalid.getMessage());
+        }
+    }
+}
