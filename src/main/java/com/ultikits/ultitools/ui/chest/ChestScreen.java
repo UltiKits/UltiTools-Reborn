@@ -25,6 +25,10 @@ public final class ChestScreen implements InventoryHolder {
     private Inventory inventory;
     private Grid grid;
     private TaskHandle syncTask;
+    private TaskHandle reopenTask;
+    private Component title;
+    private Component pendingTitle;
+    private boolean reopening;
     private boolean closed;
 
     ChestScreen(GridSession session, BackendCallbacks<?> callbacks, Scheduler scheduler, Grid grid, Component title) {
@@ -32,6 +36,7 @@ public final class ChestScreen implements InventoryHolder {
         this.callbacks = callbacks;
         this.scheduler = scheduler;
         this.grid = grid;
+        this.title = title;
         inventory = Bukkit.createInventory(this, grid.rows() * Grid.COLUMNS, title);
     }
 
@@ -61,9 +66,41 @@ public final class ChestScreen implements InventoryHolder {
         });
     }
 
+    boolean reopening() { return reopening; }
+
+    void changeTitle(Component next) {
+        pendingTitle = title.equals(next) ? null : next;
+        reopenLater();
+    }
+
+    void reopenLater() {
+        if (closed || pendingTitle == null || reopenTask != null) { return; }
+        reopenTask = scheduler.entity(session.viewer()).run(() -> {
+            reopenTask = null;
+            if (pendingTitle == null || !session.isOpen() || !session.viewer().isOnline()) { return; }
+            if (!showing(session.viewer().getOpenInventory()) || !session.viewer().getItemOnCursor().isEmpty()) { return; }
+            reopen();
+        });
+    }
+
+    private void reopen() {
+        Component nextTitle = pendingTitle;
+        Inventory next = Bukkit.createInventory(this, grid.rows() * Grid.COLUMNS, nextTitle);
+        next.setContents(inventory.getContents());
+        reopening = true;
+        try {
+            if (session.viewer().openInventory(next) != null) {
+                inventory = next;
+                title = nextTitle;
+                pendingTitle = null;
+            }
+        } finally { reopening = false; }
+    }
+
     void close() {
         closed = true;
         if (syncTask != null) { syncTask.cancel(); }
+        if (reopenTask != null) { reopenTask.cancel(); }
         if (session.viewer().isOnline() && showing(session.viewer().getOpenInventory())) {
             session.viewer().closeInventory();
         }

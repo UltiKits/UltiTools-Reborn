@@ -59,6 +59,9 @@ public final class ChestBackend implements UiBackend, BoundSlotRenderer {
         if (screen == null) { return; }
         screen.grid(next);
         render(screen, next);
+        if (!previous.title().equals(next.title())) {
+            screen.changeTitle(messages.render(next.title(), session.viewer()));
+        }
     }
 
     @Override public void redraw(GridSession session, Map<GridSlot, ItemStack> picture) {

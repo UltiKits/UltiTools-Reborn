@@ -31,9 +31,14 @@ public final class ChestListener implements Listener {
         event.setCancelled(true);
         if (!accepts(screen, event.getView())) { screen.synchronizeClient(); return; }
         ClickDecision decision = ClickDecoder.decode(input(screen, event));
-        if (decision instanceof ClickDecision.Allow) { event.setCancelled(previouslyCancelled); return; }
+        if (decision instanceof ClickDecision.Allow) {
+            event.setCancelled(previouslyCancelled);
+            screen.reopenLater();
+            return;
+        }
         dispatch(screen, event.getView(), decision);
         screen.synchronizeClient();
+        screen.reopenLater();
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
@@ -45,15 +50,20 @@ public final class ChestListener implements Listener {
         Map<Integer, SlotKind> targets = new LinkedHashMap<>();
         event.getRawSlots().forEach(raw -> targets.put(raw, screen.kind(raw)));
         ClickDecision decision = DragDecoder.decode(event.getType(), targets);
-        if (decision instanceof ClickDecision.Allow) { event.setCancelled(previouslyCancelled); return; }
+        if (decision instanceof ClickDecision.Allow) {
+            event.setCancelled(previouslyCancelled);
+            screen.reopenLater();
+            return;
+        }
         dispatch(screen, event.getView(), decision);
         screen.synchronizeClient();
+        screen.reopenLater();
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onClose(InventoryCloseEvent event) {
         if (event.getView().getTopInventory().getHolder(false) instanceof ChestScreen screen) {
-            screen.callbacks().closed(ChestCloseReasons.map(event.getReason()));
+            if (!screen.reopening()) { screen.callbacks().closed(ChestCloseReasons.map(event.getReason())); }
         }
     }
 
