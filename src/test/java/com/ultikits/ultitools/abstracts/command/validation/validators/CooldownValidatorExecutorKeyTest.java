@@ -74,7 +74,7 @@ class CooldownValidatorExecutorKeyTest {
     private CommandContext contextFor(Object executor) {
         return CommandContext.builder()
                 .sender(player)
-                .command(mock(Command.class))
+                .commandName("test")
                 .alias("go")
                 .rawArgs(new String[]{})
                 .matchedMethod(mapping)

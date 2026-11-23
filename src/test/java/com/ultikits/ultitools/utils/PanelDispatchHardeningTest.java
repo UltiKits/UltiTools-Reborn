@@ -434,7 +434,7 @@ class PanelDispatchHardeningTest {
         server.getCommandMap().register("ultitools", new Command("ulticloud") {
             @Override
             public boolean execute(CommandSender sender, String label, String[] args) {
-                return authentication.onCommand(sender, this, label, args);
+                return com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(authentication, sender, this, label, args);
             }
         });
         register("execute", (sender, args) -> Bukkit.dispatchCommand(sender, "ulticloud logout"));
@@ -467,7 +467,7 @@ class PanelDispatchHardeningTest {
             @Override
             public boolean execute(CommandSender sender, String label, String[] args) {
                 if (executor != null) {
-                    return executor.onCommand(sender, this, label, args);
+                    return com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, this, label, args);
                 }
                 calls.incrementAndGet();
                 sender.sendMessage("split wrapper body");
@@ -499,7 +499,7 @@ class PanelDispatchHardeningTest {
         Command command = new Command("ul") {
             @Override
             public boolean execute(CommandSender sender, String label, String[] args) {
-                return executor.onCommand(sender, this, label, args);
+                return com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, this, label, args);
             }
         };
         command.setAliases(Arrays.asList("ulti", "ultitools"));
@@ -529,7 +529,7 @@ class PanelDispatchHardeningTest {
         Command command = new Command("guarded") {
             @Override
             public boolean execute(CommandSender sender, String label, String[] args) {
-                return executor.onCommand(sender, this, label, args);
+                return com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, this, label, args);
             }
         };
         command.setAliases(Arrays.asList("guarded", "shortcut"));

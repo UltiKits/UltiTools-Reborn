@@ -69,7 +69,7 @@ class BaseCommandExecutorTabCompletionTest {
         mockPlugin = mock(UltiToolsPlugin.class);
         TestHelper.mockUltiToolsInstance(ultiTools ->
                 when(ultiTools.getCommandManager()).thenReturn(mockCommandManager));
-        when(mockCommandManager.getPluginByCommand(any())).thenReturn(mockPlugin);
+        when(mockCommandManager.getPluginByLabel(any())).thenReturn(mockPlugin);
     }
 
     @AfterEach
@@ -90,7 +90,7 @@ class BaseCommandExecutorTabCompletionTest {
         void unprivilegedPlayerExcludedFromPermissionGatedMapping() {
             PermissionAwareExecutor executor = new PermissionAwareExecutor();
 
-            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
             assertThat(completions).doesNotContain("secret");
         }
@@ -101,7 +101,7 @@ class BaseCommandExecutorTabCompletionTest {
             grant("fixture.secret");
             PermissionAwareExecutor executor = new PermissionAwareExecutor();
 
-            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
             assertThat(completions).contains("secret");
         }
@@ -112,12 +112,12 @@ class BaseCommandExecutorTabCompletionTest {
             PermissionAwareExecutor executor = new PermissionAwareExecutor();
 
             List<String> nonOpCompletions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
             assertThat(nonOpCompletions).doesNotContain("adminonly");
 
             player.setOp(true);
             List<String> opCompletions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
             assertThat(opCompletions).contains("adminonly");
         }
 
@@ -126,7 +126,7 @@ class BaseCommandExecutorTabCompletionTest {
         void ungatedMappingAlwaysReturned() {
             PermissionAwareExecutor executor = new PermissionAwareExecutor();
 
-            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
             assertThat(completions).contains("open");
         }
@@ -136,7 +136,7 @@ class BaseCommandExecutorTabCompletionTest {
         void withheldMappingContributesNoPlaceholder() {
             OnlySecretExecutor executor = new OnlySecretExecutor();
 
-            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
             assertThat(completions).isEmpty();
         }
@@ -150,11 +150,11 @@ class BaseCommandExecutorTabCompletionTest {
             // Task 2's own acceptance criteria re-assert permission holds on that populated path.
             PermissionAwareExecutor executor = new PermissionAwareExecutor();
 
-            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
             assertThat(completions).doesNotContain("secretparam");
 
             grant("fixture.secretparam");
-            completions = executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+            completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
             assertThat(completions).contains("secretparam");
         }
     }
@@ -187,7 +187,7 @@ class BaseCommandExecutorTabCompletionTest {
             FirstTokenExecutor executor = new FirstTokenExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
             assertThat(completions).contains("example", "spawn");
         }
@@ -198,7 +198,7 @@ class BaseCommandExecutorTabCompletionTest {
             FirstTokenExecutor executor = new FirstTokenExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"open", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"open", ""});
 
             // If this ever fails, the position-0 assertion above proves nothing: the two would be
             // broken together rather than the first one alone.
@@ -211,7 +211,7 @@ class BaseCommandExecutorTabCompletionTest {
             FirstTokenExecutor executor = new FirstTokenExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
             // The literal branch must not be displaced by the new one -- both formats are valid
             // at position 0 and a user needs to see both.
@@ -224,7 +224,7 @@ class BaseCommandExecutorTabCompletionTest {
             FirstTokenExecutor executor = new FirstTokenExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"exa"});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"exa"});
 
             assertThat(completions).contains("example");
             assertThat(completions).doesNotContain("spawn");
@@ -236,7 +236,7 @@ class BaseCommandExecutorTabCompletionTest {
             FirstTokenExecutor executor = new FirstTokenExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
             assertThat(completions).doesNotHaveDuplicates();
         }
@@ -252,7 +252,7 @@ class BaseCommandExecutorTabCompletionTest {
             MultiTokenExecutor executor = new MultiTokenExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"give", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"give", ""});
 
             // Entered through the executor's OWN onTabComplete -- not TabCompletionManager
             // directly. Seven pre-existing test classes have passed against TabCompletionManager
@@ -266,7 +266,7 @@ class BaseCommandExecutorTabCompletionTest {
         void resolvesMatchedMethodAndParameterNameAtLaterPosition() {
             MultiTokenExecutor executor = new MultiTokenExecutor();
 
-            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture",
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture",
                     new String[]{"teleport", "steve", ""});
 
             // At HEAD, TabCompletionManager.createContext leaves matchedMethod/parameterName
@@ -285,7 +285,7 @@ class BaseCommandExecutorTabCompletionTest {
             ProxiedMultiTokenExecutor executor = new ProxiedMultiTokenExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"give", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"give", ""});
 
             assertThat(completions).containsExactlyInAnyOrder("alice", "bob", "charlie");
         }
@@ -297,7 +297,7 @@ class BaseCommandExecutorTabCompletionTest {
             MultiTokenExecutor executor = new MultiTokenExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"mode", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"mode", ""});
 
             assertThat(completions).containsExactly("Pick a mode");
         }
@@ -311,7 +311,7 @@ class BaseCommandExecutorTabCompletionTest {
             // behaviour (deliberate, named change; see the plan's SUMMARY).
             MultiTokenExecutor executor = new MultiTokenExecutor();
 
-            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
             assertThat(completions).containsExactly("give", "mode", "teleport");
         }
@@ -321,7 +321,7 @@ class BaseCommandExecutorTabCompletionTest {
         void overLongArgumentVectorReturnsEmptyListWithoutThrowing() {
             MultiTokenExecutor executor = new MultiTokenExecutor();
 
-            List<String> completions = assertDoesNotThrow(() -> executor.onTabComplete(
+            List<String> completions = assertDoesNotThrow(() -> com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, 
                     player, mockCommand, "fixture", new String[]{"give", "alice", "extra", "waytoolong"}));
 
             assertThat(completions).isEmpty();
@@ -333,12 +333,12 @@ class BaseCommandExecutorTabCompletionTest {
             PermissionAwareExecutor executor = new PermissionAwareExecutor();
 
             List<String> denied =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"secretgive", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"secretgive", ""});
             assertThat(denied).isEmpty();
 
             grant("fixture.secretgive");
             List<String> allowed =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"secretgive", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"secretgive", ""});
             assertThat(allowed).containsExactly("hiddenTarget");
         }
     }
@@ -364,7 +364,7 @@ class BaseCommandExecutorTabCompletionTest {
             SignatureShapeExecutor executor = new SignatureShapeExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"zero", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"zero", ""});
 
             assertThat(completions).containsExactly("zeroResult");
         }
@@ -375,7 +375,7 @@ class BaseCommandExecutorTabCompletionTest {
             SignatureShapeExecutor executor = new SignatureShapeExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"playeronly", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"playeronly", ""});
 
             assertThat(completions).containsExactly("playerOnlyResult:" + player.getName());
         }
@@ -387,7 +387,7 @@ class BaseCommandExecutorTabCompletionTest {
             SignatureShapeExecutor executor = new SignatureShapeExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"stringonly", "ab"});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"stringonly", "ab"});
 
             assertThat(completions).containsExactly("abResult");
         }
@@ -399,7 +399,7 @@ class BaseCommandExecutorTabCompletionTest {
             SignatureShapeExecutor executor = new SignatureShapeExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"playerstring", "ab"});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"playerstring", "ab"});
 
             assertThat(completions).containsExactly("abResult:" + player.getName());
         }
@@ -409,7 +409,7 @@ class BaseCommandExecutorTabCompletionTest {
         void playerCommandArgsSignatureStillWorks() {
             SignatureShapeExecutor executor = new SignatureShapeExecutor();
 
-            List<String> completions = executor.onTabComplete(
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, 
                     player, mockCommand, "fixture", new String[]{"playercommandargs", ""});
 
             assertThat(completions).containsExactly("threeArgResult");
@@ -440,7 +440,7 @@ class BaseCommandExecutorTabCompletionTest {
             KeyNotationExecutor executor = new KeyNotationExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"give", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"give", ""});
 
             assertThat(completions).contains("otherOnline", "tabPlayer");
         }
@@ -452,7 +452,7 @@ class BaseCommandExecutorTabCompletionTest {
             KeyNotationExecutor executor = new KeyNotationExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"goto", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"goto", ""});
 
             assertThat(completions).contains("fixtureworld");
         }
@@ -463,7 +463,7 @@ class BaseCommandExecutorTabCompletionTest {
             KeyNotationExecutor executor = new KeyNotationExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"build", "sto"});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"build", "sto"});
 
             assertThat(completions).contains("STONE");
         }
@@ -474,7 +474,7 @@ class BaseCommandExecutorTabCompletionTest {
             KeyNotationExecutor executor = new KeyNotationExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"toggle", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"toggle", ""});
 
             assertThat(completions).containsExactlyInAnyOrder("true", "false");
         }
@@ -485,7 +485,7 @@ class BaseCommandExecutorTabCompletionTest {
             KeyNotationExecutor executor = new KeyNotationExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"legacy", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"legacy", ""});
 
             assertThat(completions).containsExactlyInAnyOrder("alpha", "beta");
         }
@@ -497,7 +497,7 @@ class BaseCommandExecutorTabCompletionTest {
             KeyNotationExecutor executor = new KeyNotationExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"hint", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"hint", ""});
 
             assertThat(completions).containsExactly("Pick a notation");
         }
@@ -512,7 +512,7 @@ class BaseCommandExecutorTabCompletionTest {
             KeyNotationExecutor executor = new KeyNotationExecutor();
 
             List<String> completions =
-                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"trap", ""});
+                    com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"trap", ""});
 
             assertThat(completions).containsExactly("trapped");
         }
@@ -526,7 +526,7 @@ class BaseCommandExecutorTabCompletionTest {
                 KeyNotationExecutor executor = new KeyNotationExecutor();
 
                 List<String> completions =
-                        executor.onTabComplete(player, mockCommand, "fixture", new String[]{"custom", ""});
+                        com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{"custom", ""});
 
                 assertThat(completions).containsExactlyInAnyOrder("customOne", "customTwo");
             } finally {

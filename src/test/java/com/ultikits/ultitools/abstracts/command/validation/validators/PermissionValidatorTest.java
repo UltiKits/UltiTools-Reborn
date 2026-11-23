@@ -103,7 +103,7 @@ class PermissionValidatorTest {
     private CommandContext createPlayerContext(Method method) {
         return CommandContext.builder()
                 .sender(mockPlayer)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -113,7 +113,7 @@ class PermissionValidatorTest {
     private CommandContext createConsoleContext(Method method) {
         return CommandContext.builder()
                 .sender(mockConsole)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -396,7 +396,7 @@ class PermissionValidatorTest {
             PermissionValidator validator = new PermissionValidator("base.perm", false);
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -414,7 +414,7 @@ class PermissionValidatorTest {
             PermissionValidator validator = new PermissionValidator("", true);
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -455,7 +455,7 @@ class PermissionValidatorTest {
 
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -476,7 +476,7 @@ class PermissionValidatorTest {
 
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)

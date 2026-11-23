@@ -147,7 +147,7 @@ class CooldownValidatorTest {
     private CommandContext createPlayerContext(Method method) {
         return CommandContext.builder()
                 .sender(mockPlayer)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -162,7 +162,7 @@ class CooldownValidatorTest {
     private CommandContext createPlayerContext(Method method, Class<?> executorClass) {
         return CommandContext.builder()
                 .sender(mockPlayer)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -173,7 +173,7 @@ class CooldownValidatorTest {
     private CommandContext createConsoleContext(Method method) {
         return CommandContext.builder()
                 .sender(mockConsole)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -226,7 +226,7 @@ class CooldownValidatorTest {
         void shouldPassWhenNoMethodMatched() {
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -320,7 +320,7 @@ class CooldownValidatorTest {
         void shouldNotApplyWhenNoMethodMatched() {
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -369,7 +369,7 @@ class CooldownValidatorTest {
             CommandContext context1 = createPlayerContext(method);
             CommandContext context2 = CommandContext.builder()
                     .sender(mockPlayer2)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(method)
@@ -819,7 +819,7 @@ class CooldownValidatorTest {
 
             CommandContext otherContext = CommandContext.builder()
                     .sender(otherPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(method)
@@ -891,7 +891,7 @@ class CooldownValidatorTest {
                 Player sender = mock(Player.class);
                 lenient().when(sender.getUniqueId()).thenReturn(senderUuid);
                 CommandContext context = CommandContext.builder()
-                        .sender(sender).command(mockCommand).alias("test")
+                        .sender(sender).commandName(mockCommand.getName()).alias("test")
                         .rawArgs(new String[]{}).matchedMethod(method).build();
                 validator.validate(context);
                 validator.applyCooldown(context);
@@ -919,7 +919,7 @@ class CooldownValidatorTest {
                 Player sender = mock(Player.class);
                 lenient().when(sender.getUniqueId()).thenReturn(senderUuid);
                 CommandContext context = CommandContext.builder()
-                        .sender(sender).command(mockCommand).alias("test")
+                        .sender(sender).commandName(mockCommand.getName()).alias("test")
                         .rawArgs(new String[]{}).matchedMethod(method).build();
                 validator.validate(context);
                 validator.applyCooldown(context);

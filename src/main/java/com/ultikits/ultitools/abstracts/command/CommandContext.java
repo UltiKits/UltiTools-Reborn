@@ -2,7 +2,6 @@ package com.ultikits.ultitools.abstracts.command;
 
 import lombok.Builder;
 import lombok.Getter;
-import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -30,9 +29,9 @@ public final class CommandContext {
     private final CommandSender sender;
 
     /**
-     * The Bukkit command object.
+     * The primary command label, without a namespace or slash.
      */
-    private final Command command;
+    private final String commandName;
 
     /**
      * The alias used to invoke the command.
@@ -48,7 +47,7 @@ public final class CommandContext {
      * The parsed parameters mapped by their names.
      */
     @Builder.Default
-    private final Map<String, String[]> parsedParams = Collections.emptyMap();
+    private final Map<String, Object> parsedParams = Collections.emptyMap();
 
     /**
      * The matched method for execution.
@@ -151,7 +150,7 @@ public final class CommandContext {
      * @return the parameter values, or null if not found
      */
     @Nullable
-    public String[] getParam(String name) {
+    public Object getParam(String name) {
         return parsedParams.get(name);
     }
 
@@ -162,9 +161,12 @@ public final class CommandContext {
      * @return the first parameter value, or null if not found
      */
     @Nullable
-    public String getParamValue(String name) {
-        String[] values = parsedParams.get(name);
-        return (values != null && values.length > 0) ? values[0] : null;
+    public Object getParamValue(String name) {
+        Object value = parsedParams.get(name);
+        if (value != null && value.getClass().isArray()) {
+            return java.lang.reflect.Array.getLength(value) == 0 ? null : java.lang.reflect.Array.get(value, 0);
+        }
+        return value;
     }
 
     /**
@@ -173,8 +175,8 @@ public final class CommandContext {
      * @param params the parameters to add
      * @return a new context with the merged parameters
      */
-    public CommandContext withParsedParams(Map<String, String[]> params) {
-        Map<String, String[]> merged = new HashMap<>(this.parsedParams);
+    public CommandContext withParsedParams(Map<String, Object> params) {
+        Map<String, Object> merged = new HashMap<>(this.parsedParams);
         merged.putAll(params);
         return this.toBuilder()
                 .parsedParams(Collections.unmodifiableMap(merged))

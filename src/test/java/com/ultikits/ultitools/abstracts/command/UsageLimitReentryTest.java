@@ -64,7 +64,7 @@ class UsageLimitReentryTest {
         @CmdMapping(format = "sender")
         public void senderScoped(CommandSender sender) {
             if (senderBodies.incrementAndGet() == 1) {
-                onCommand(nestedSender == null ? sender : nestedSender, command, "reenter", new String[]{"sender"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(this, nestedSender == null ? sender : nestedSender, command, "reenter", new String[]{"sender"});
                 if (throwAfterReentry) {
                     throw new IllegalStateException("outer body failed after re-entering");
                 }
@@ -75,7 +75,7 @@ class UsageLimitReentryTest {
         @CmdMapping(format = "all")
         public void allScoped(CommandSender sender) {
             if (allBodies.incrementAndGet() == 1) {
-                onCommand(nestedSender == null ? sender : nestedSender, command, "reenter", new String[]{"all"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(this, nestedSender == null ? sender : nestedSender, command, "reenter", new String[]{"all"});
                 if (throwAfterReentry) {
                     throw new IllegalStateException("outer body failed after re-entering");
                 }
@@ -119,7 +119,7 @@ class UsageLimitReentryTest {
         ReenteringExecutor executor = executor();
         Player player = player();
 
-        executor.onCommand(player, command, "reenter", new String[]{"sender"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "reenter", new String[]{"sender"});
 
         assertEquals(1, executor.senderBodies.get(), "only the outer body ran; the nested call was refused");
         verify(player).sendMessage(org.mockito.ArgumentMatchers.contains("请先等待上一条命令执行完毕"));
@@ -135,7 +135,7 @@ class UsageLimitReentryTest {
         executor.throwAfterReentry = true;
         Player player = player();
 
-        executor.onCommand(player, command, "reenter", new String[]{"sender"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "reenter", new String[]{"sender"});
 
         assertFalse(executor.getLockValidator().isLocked(player.getUniqueId(), pathKey("senderScoped")));
     }
@@ -145,13 +145,13 @@ class UsageLimitReentryTest {
     void allScopeRefusesTheNestedCallFromAnySender() {
         ReenteringExecutor samePlayer = executor();
         Player player = player();
-        samePlayer.onCommand(player, command, "reenter", new String[]{"all"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(samePlayer, player, command, "reenter", new String[]{"all"});
         assertEquals(1, samePlayer.allBodies.get());
 
         ReenteringExecutor viaConsole = executor();
         viaConsole.nestedSender = mock(ConsoleCommandSender.class);
         Player other = player();
-        viaConsole.onCommand(other, command, "reenter", new String[]{"all"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(viaConsole, other, command, "reenter", new String[]{"all"});
         assertEquals(1, viaConsole.allBodies.get(), "the console's nested call meets the player's server-wide lock");
         verify(viaConsole.nestedSender).sendMessage(
                 org.mockito.ArgumentMatchers.contains("请先等待其他玩家发送的命令执行完毕"));
@@ -166,9 +166,9 @@ class UsageLimitReentryTest {
         executor.throwAfterReentry = true;
         Player player = player();
 
-        executor.onCommand(player, command, "reenter", new String[]{"all"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "reenter", new String[]{"all"});
         executor.throwAfterReentry = false;
-        executor.onCommand(player(), command, "reenter", new String[]{"all"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player(), command, "reenter", new String[]{"all"});
 
         assertEquals(2, executor.allBodies.get(), "a later dispatch by anyone runs: nothing was left held");
     }

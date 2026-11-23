@@ -50,7 +50,7 @@ public class MethodInvocationCompleter implements TabCompleter {
         if (suggestMethods == null || suggestMethods.length == 0) {
             // If no method found, return the suggestName as a hint
             UltiToolsPlugin plugin = UltiTools.getInstance().getCommandManager()
-                    .getPluginByCommand(context.getCommand());
+                    .getPluginByLabel(context.getCommandName());
             if (plugin != null) {
                 String hint = plugin.i18n(suggestName);
                 if (hint != null && !hint.isEmpty()) {
@@ -165,7 +165,7 @@ public class MethodInvocationCompleter implements TabCompleter {
             if (!declaringClass.isInstance(target)) {
                 // Need to get bean from container
                 UltiToolsPlugin plugin = UltiTools.getInstance().getCommandManager()
-                        .getPluginByCommand(context.getCommand());
+                        .getPluginByLabel(context.getCommandName());
                 if (plugin != null) {
                     target = plugin.getContext().getBean(declaringClass);
                 }
@@ -194,7 +194,7 @@ public class MethodInvocationCompleter implements TabCompleter {
                     result = suggestMethod.invoke(target, context.getSender(), context.getCurrentInput());
                     break;
                 case SENDER_COMMAND_ARGS:
-                    result = suggestMethod.invoke(target, context.getSender(), context.getCommand(),
+                    result = suggestMethod.invoke(target, context.getSender(), resolveCommand(context.getCommandName()),
                             context.getArgs());
                     break;
                 case STRING_ONLY:
@@ -213,7 +213,7 @@ public class MethodInvocationCompleter implements TabCompleter {
                     result = suggestMethod.invoke(target, context.getPlayer(), context.getCurrentInput());
                     break;
                 case PLAYER_COMMAND_ARGS:
-                    result = suggestMethod.invoke(target, context.getPlayer(), context.getCommand(),
+                    result = suggestMethod.invoke(target, context.getPlayer(), resolveCommand(context.getCommandName()),
                             context.getArgs());
                     break;
                 case UNSUPPORTED:
@@ -263,6 +263,11 @@ public class MethodInvocationCompleter implements TabCompleter {
             logger.log(Level.WARNING, "Failed to invoke suggest method: " + suggestMethod.getName(), e);
             return Collections.emptyList();
         }
+    }
+
+    private static Command resolveCommand(String label) {
+        var server = org.bukkit.Bukkit.getServer();
+        return server == null || label == null ? null : server.getCommandMap().getCommand(label);
     }
 
     /**

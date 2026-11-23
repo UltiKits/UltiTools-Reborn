@@ -129,7 +129,7 @@ class LiteralCompletionPrefixTest {
     }
 
     private List<String> complete(BaseCommandExecutor executor, String... args) {
-        return executor.onTabComplete(player, command, "fixture", args);
+        return com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, command, "fixture", args);
     }
 
     @Test

@@ -23,63 +23,7 @@ class CommandDispatchRegressionTest {
 
     private final Fixture executor = new Fixture();
 
-    @Nested
-    @DisplayName("#396 empty varargs binds an empty array, not null")
-    class EmptyVarargs {
 
-        private Object parse(String[] values, Class<?> type) throws Exception {
-            Method m = BaseCommandExecutor.class
-                    .getDeclaredMethod("parseParameterValue", String[].class, Class.class);
-            m.setAccessible(true);
-            return m.invoke(executor, values, type);
-        }
-
-        /**
-         * The defect: {@code validateParameterCount} deliberately accepts a varargs command with no
-         * trailing arguments, {@code parseParameters} hands the binder a zero-length array, and the
-         * binder turned that into {@code null}. {@code /friend msg <player>} with no message died
-         * in {@code String.join} with a {@code NullPointerException}.
-         * <p>
-         * {@code BaseCommandExecutorTest} already covers the acceptance half and stops one step
-         * short of this one, which is why the defect survived.
-         */
-        @Test
-        @DisplayName("String[] with no values -> zero-length array")
-        void emptyStringArrayIsNotNull() throws Exception {
-            Object bound = parse(new String[0], String[].class);
-
-            assertThat(bound)
-                    .as("a varargs parameter that legitimately received zero values must be handed "
-                            + "the empty array; null makes every handler that touches it throw")
-                    .isNotNull()
-                    .isInstanceOf(String[].class);
-            assertThat((String[]) bound).isEmpty();
-        }
-
-        @Test
-        @DisplayName("null values for an array type -> zero-length array")
-        void nullValuesForArrayTypeIsNotNull() throws Exception {
-            assertThat((String[]) parse(null, String[].class)).isEmpty();
-        }
-
-        @Test
-        @DisplayName("component type is preserved, not erased to Object[]")
-        void componentTypeIsPreserved() throws Exception {
-            Object bound = parse(new String[0], int[].class);
-
-            assertThat(bound).isInstanceOf(int[].class);
-            assertThat((int[]) bound).isEmpty();
-        }
-
-        @Test
-        @DisplayName("control: the String and non-array cases are unchanged")
-        void nonArrayBehaviourIsUnchanged() throws Exception {
-            // These two were already correct and must stay that way -- without them, returning the
-            // empty array for *everything* would also pass the assertions above.
-            assertThat(parse(new String[0], String.class)).isEqualTo("");
-            assertThat(parse(new String[0], Integer.class)).isNull();
-        }
-    }
 
     @Nested
     @DisplayName("#385 the user sees the cause, never the literal word null")

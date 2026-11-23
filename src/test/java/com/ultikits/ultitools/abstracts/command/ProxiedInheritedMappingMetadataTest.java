@@ -175,7 +175,7 @@ class ProxiedInheritedMappingMetadataTest {
         Method mapping = executor.getMappings().get("work");
         return CommandContext.builder()
                 .sender(sender)
-                .command(command)
+                .commandName(command.getName())
                 .alias("inherited")
                 .rawArgs(new String[]{"work"})
                 .executorClass(executor.getClass())
@@ -187,8 +187,8 @@ class ProxiedInheritedMappingMetadataTest {
     private void assertCooldownRefusesTheSecondDispatch(CooldownBase executor) {
         Player player = player();
 
-        executor.onCommand(player, command, "inherited", new String[]{"go"});
-        executor.onCommand(player, command, "inherited", new String[]{"go"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "inherited", new String[]{"go"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "inherited", new String[]{"go"});
 
         assertEquals(1, executor.bodies.get(),
                 "the base class's class-level @CmdCD(60) must refuse the same player's second dispatch");
@@ -264,12 +264,12 @@ class ProxiedInheritedMappingMetadataTest {
 
         for (PlayerMappingInheritor executor : Arrays.asList(new PlayerMappingInheritor(), proxied)) {
             CommandSender console = mock(CommandSender.class);
-            executor.onCommand(console, command, "inherited", new String[]{"p"});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, command, "inherited", new String[]{"p"});
             // SenderTypeValidator's player-only message; i18n returns its key in this test.
             verify(console).sendMessage("只有游戏内可以执行这个指令！");
             assertEquals(0, executor.bodies.get(), "a console must not run the inherited PLAYER mapping");
 
-            executor.onCommand(player(), command, "inherited", new String[]{"p"});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player(), command, "inherited", new String[]{"p"});
             assertEquals(1, executor.bodies.get(), "a player runs the inherited PLAYER mapping");
         }
     }

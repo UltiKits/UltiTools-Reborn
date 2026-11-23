@@ -78,6 +78,20 @@ final class CommandBindings {
         return node;
     }
 
+    int dispatch(String label, String input, CommandSourceStack source)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        Binding binding = find(label);
+        if (binding == null) throw ProxyTreeFactory.unknown();
+        var proxy = new ProxyTreeFactory(this).create(label, binding.command().tree());
+        String actual = input.split("\\s+", 2)[0];
+        var root = com.mojang.brigadier.builder.LiteralArgumentBuilder.<CommandSourceStack>literal(actual)
+                .requires(proxy.getRequirement()).executes(proxy.getCommand()).build();
+        proxy.getChildren().forEach(root::addChild);
+        var dispatcher = new com.mojang.brigadier.CommandDispatcher<CommandSourceStack>();
+        dispatcher.getRoot().addChild(root);
+        return dispatcher.execute(input, source);
+    }
+
     synchronized Object ownerByLabel(String input) {
         String label = input.toLowerCase(Locale.ROOT);
         int namespace = label.indexOf(':');

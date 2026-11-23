@@ -90,7 +90,7 @@ class SenderTypeValidatorTest {
     private CommandContext createPlayerContext(Method method) {
         return CommandContext.builder()
                 .sender(mockPlayer)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -100,7 +100,7 @@ class SenderTypeValidatorTest {
     private CommandContext createConsoleContext(Method method) {
         return CommandContext.builder()
                 .sender(mockConsole)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -327,14 +327,14 @@ class SenderTypeValidatorTest {
             SenderTypeValidator validator = new SenderTypeValidator(CmdTarget.CmdTargetType.PLAYER);
             CommandContext playerContext = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
                     .build();
             CommandContext consoleContext = CommandContext.builder()
                     .sender(mockConsole)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -350,14 +350,14 @@ class SenderTypeValidatorTest {
             SenderTypeValidator validator = new SenderTypeValidator(CmdTarget.CmdTargetType.BOTH);
             CommandContext playerContext = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
                     .build();
             CommandContext consoleContext = CommandContext.builder()
                     .sender(mockConsole)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)

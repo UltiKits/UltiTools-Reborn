@@ -5,7 +5,6 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -21,17 +20,13 @@ import javax.annotation.Nullable;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
-import org.bukkit.command.TabExecutor;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.command.parser.TypeParseException;
-import com.ultikits.ultitools.abstracts.command.parser.TypeParserRegistry;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
@@ -46,7 +41,6 @@ import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
-import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
@@ -63,10 +57,9 @@ import lombok.Getter;
  * class-level {@code @CmdTarget}, overridable per method), permission and operator requirement
  * (driven by {@code @CmdExecutor}), cooldown (applied when the mapped invocation completes,
  * whether it returns normally or throws, but not when dispatch is refused before invocation), and
- * usage locking (acquired and released around the call in a try-finally). Execution flow in
- * {@link #onCommand}: help short-circuit, immutable {@link CommandContext} construction, scored
- * method matching via {@link #matchMethod}, parameter parsing, the validator chain, an
- * argument-count check, then invocation. Subclasses MUST implement {@link #handleHelp}.
+ * usage locking (acquired and released around the call in a try-finally). Brigadier matches
+ * and parses the command; the typed invocation then runs this executor's validator chain and
+ * its existing synchronous or asynchronous body. Subclasses implement {@link #handleHelp}.
  * <p>
  * <b>Validator release at unload (case 48, @since 6.3.0).</b> {@code CooldownValidator} and
  * {@code UsageLockValidator} register themselves with {@link PlayerCacheManager} at their first
@@ -82,7 +75,7 @@ import lombok.Getter;
  * @since 6.2.0
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes the mapped @CmdMapping method -- see 08-GATE05-TRIAGE.md
-public abstract class BaseCommandExecutor implements TabExecutor {
+public abstract class BaseCommandExecutor {
     
     private final BiMap<String, Method> mappings = HashBiMap.create();
     
@@ -106,7 +99,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     @Getter
     private final UsageLockValidator lockValidator;
     
-    private final TypeParserRegistry parserRegistry;
 
     /**
      * Executors that have dispatched at least once and have not been torn down (case 48): the
@@ -131,7 +123,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * again on its first dispatch (case 48).
      */
     public BaseCommandExecutor() {
-        this.parserRegistry = TypeParserRegistry.getInstance();
         this.cooldownValidator = new CooldownValidator();
         this.lockValidator = new UsageLockValidator();
         this.validatorChain = createDefaultValidatorChain();
@@ -162,7 +153,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * @param validatorChain the custom validator chain
      */
     public BaseCommandExecutor(ValidatorChain validatorChain) {
-        this.parserRegistry = TypeParserRegistry.getInstance();
         this.cooldownValidator = new CooldownValidator();
         this.lockValidator = new UsageLockValidator();
         this.validatorChain = validatorChain;
@@ -356,93 +346,55 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         return "help";
     }
     
-    @Override
-    public boolean onCommand(CommandSender sender, Command command, String alias, String[] args) {
-        if (CommandExecutionManager.isPanelDispatch()) {
-            // Pass the actual command so a listed sibling alias also blocks its other spellings.
-            // Synchronous wrappers can hide the outer name, but local commands bypass this check.
-            String arguments = args.length == 0 ? "" : " " + String.join(" ", args);
-            if (CommandExecutionManager.refusePanelCommand(sender, command, command.getName() + arguments)
-                    || CommandExecutionManager.refusePanelCommand(sender, alias + arguments)) {
-                return true;
-            }
-        }
-        // Create command context
-        // WR-02 (05-REVIEW.md): this.getClass() is the concrete executor class -- the SAME class
-        // PluginManager's load-time contract gate inspects (executor.getClass()) -- captured
-        // here so CooldownValidator/UsageLockValidator can resolve a class-level @CmdCD/
-        // @UsageLimit against it instead of only Method#getDeclaringClass(), which for an
-        // inherited, unoverridden @CmdMapping method is an ancestor, not this class.
-        CommandContext context = CommandContext.builder()
-                .sender(sender)
-                .command(command)
-                .alias(alias)
-                .rawArgs(args)
-                .executorClass(this.getClass())
-                .executor(this)
-                .build();
-
-        // Handle help command. Gated on who the sender is, which it was not before #381: this
-        // returned before the context was even built, so handleHelp ran for a console on a
-        // @CmdTarget(PLAYER) command and for a sender the permission would have refused.
-        if (args.length == 1 && getHelpCommand().equals(args[0])) {
-            return handleGatedHelp(context);
-        }
-
-        // Match method
-        Method method = matchMethod(args);
-        if (method == null) {
-            sender.sendMessage(ChatColor.RED + String.format(
-                    UltiTools.getInstance().i18n("未知指令，请使用/%s %s获取帮助"),
-                    command.getName(), getHelpCommand()));
-            // Same gate as the explicit help subcommand: an unmatched argument vector must not
-            // become a way around it (#381).
-            return handleGatedHelp(context);
-        }
-        
-        // Update context with matched method
-        String format = mappings.inverse().get(method);
-        context = context.withMatchedMethod(method, format);
-        
-        // Parse parameters
-        Map<String, String[]> parsedParams = parseParameters(args, format);
-        context = context.withParsedParams(parsedParams);
-        
-        // Validate. From its first dispatch on, this executor counts as a user of its chain's
-        // validators, so another executor's unload leaves them registered (case 48).
+    /**
+     * Runs the validation and invocation stage after Brigadier has produced typed arguments.
+     * This is an internal bridge, not a second command matching entry point.
+     *
+     * @param context the complete, typed invocation context
+     * @return true after handling the invocation
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public final boolean invokeTyped(CommandContext context) {
         joinDispatchedExecutors();
         ValidatorChain.ChainValidationResult validationResult = validatorChain.validate(context);
         if (!validationResult.isValid()) {
-            String errorMsg = validationResult.getErrorMessage();
-            if (errorMsg != null) {
-                sender.sendMessage(errorMsg);
-            }
+            if (validationResult.getErrorMessage() != null) context.getSender().sendMessage(validationResult.getErrorMessage());
             notifyRefused(context, validationResult);
             return true;
         }
-        
-        // Check parameter count and build the method parameters. A refusal here -- by return or by
-        // an exception, such as a module's TypeParser throwing a runtime exception -- releases what
-        // the validators acquired (#568). The refusal hooks run outside the try: a hook that throws
-        // must not be caught below and make every hook run a second time.
         Object[] methodParams;
         try {
-            methodParams = validateParameterCount(args, format, sender, command)
-                    ? buildMethodParams(context, method)
-                    : null;
-        } catch (RuntimeException e) {
-            notifyRefusedAndRethrow(context, validationResult, e);
-            throw e;
+            methodParams = buildMethodParams(context, context.getMatchedMethod());
+        } catch (RuntimeException exception) {
+            notifyRefusedAndRethrow(context, validationResult, exception);
+            throw exception;
         }
         if (methodParams == null) {
             notifyRefused(context, validationResult);
             return true;
         }
-        
-        // Execute command
-        executeCommand(context, method, methodParams, validationResult);
-
+        executeCommand(context, context.getMatchedMethod(), methodParams, validationResult);
         return true;
+    }
+
+    /**
+     * Gives the compiler this executor's help literal.
+     * @return the help literal
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public final String helpCommand() { return getHelpCommand(); }
+
+    /**
+     * Invokes the completion hook without a Bukkit command object.
+     * @param sender the requesting sender
+     * @param label the command label
+     * @param args the input arguments
+     * @return custom suggestions, or null to retain native argument suggestions
+     */
+    @Nullable
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public final List<String> suggestions(CommandSender sender, String label, String[] args) {
+        return suggest(sender, label, args);
     }
 
     /**
@@ -482,7 +434,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * @param context          the command context
      * @param method           the method to execute
      * @param params           the method parameters
-     * @param validationResult the chain result produced by {@code onCommand}'s validation step
+     * @param validationResult the chain result produced by {@code invokeTyped}'s validation step
      *                         for THIS invocation; its
      *                         {@link ValidatorChain.ChainValidationResult#getPassedValidators()}
      *                         is the sole source that drives each validator's
@@ -647,7 +599,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     /**
      * Runs the sender-type and permission validators, then shows help if they pass.
      * <p>
-     * Before 6.3.0 the help short-circuit sat at the very top of {@link #onCommand}, ahead of the
+     * Before 6.3.0 the help short-circuit sat at the very top of {@link #invokeTyped}, ahead of the
      * {@code CommandContext} being built, so it bypassed the entire validator chain (#381). Two
      * consequences were measured on a real server: a console received the full help of a
      * {@code @CmdTarget(PLAYER)} command -- including, in one module, an admin section gated only
@@ -674,7 +626,8 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * @return {@code true} always -- Bukkit's contract for a handled command
      * @since 6.3.0
      */
-    private boolean handleGatedHelp(CommandContext context) {
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public final boolean handleGatedHelp(CommandContext context) {
         for (CommandValidator validator : validatorChain.getValidators()) {
             if (!(validator instanceof SenderTypeValidator) && !(validator instanceof PermissionValidator)) {
                 continue;
@@ -814,328 +767,39 @@ public abstract class BaseCommandExecutor implements TabExecutor {
 
 
     /**
-     * Matches arguments to a registered method.
-     *
-     * @param args the command arguments
-     * @return the matched method, or null if not found
-     */
-    @Nullable
-    protected Method matchMethod(String[] args) {
-        if (args.length == 0) {
-            return mappings.getOrDefault("", null);
-        }
-        
-        Method bestMatch = null;
-        int bestScore = -1;
-        
-        for (Map.Entry<String, Method> entry : mappings.entrySet()) {
-            String format = entry.getKey();
-            String[] formatArgs = format.split(" ");
-            
-            int score = calculateMatchScore(formatArgs, args);
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = entry.getValue();
-            }
-        }
-        
-        return bestMatch;
-    }
-    
-    /**
-     * Calculates a match score for format vs actual args.
-     * Weights: an exact literal match scores 10, a {@code <param>} placeholder scores 1, and an
-     * exact-length match earns a +5 bonus. A format string is written against these three numbers.
-     *
-     * @param formatArgs the format arguments
-     * @param actualArgs the actual arguments
-     * @return the match score (-1 if no match)
-     */
-    private int calculateMatchScore(String[] formatArgs, String[] actualArgs) {
-        if (formatArgs.length == 0 && actualArgs.length == 0) {
-            return 100;
-        }
-        
-        boolean hasVarargs = formatArgs.length > 0 && formatArgs[formatArgs.length - 1].endsWith("...>");
-        
-        // Check length compatibility
-        if (!hasVarargs && formatArgs.length != actualArgs.length) {
-            // Allow partial match for shorter actual args
-            if (actualArgs.length > formatArgs.length) {
-                return -1;
-            }
-        }
-        
-        int score = 0;
-        int minLength = Math.min(formatArgs.length, actualArgs.length);
-        
-        for (int i = 0; i < minLength; i++) {
-            String formatArg = formatArgs[i];
-            String actualArg = actualArgs[i];
-            
-            if (isParameter(formatArg)) {
-                score += 1; // Parameter match
-            } else if (formatArg.equalsIgnoreCase(actualArg)) {
-                score += 10; // Exact match (higher priority)
-            } else {
-                return -1; // No match
-            }
-        }
-        
-        // Bonus for exact length match
-        if (formatArgs.length == actualArgs.length) {
-            score += 5;
-        }
-        
-        return score;
-    }
-    
-    private boolean isParameter(String arg) {
-        return arg.startsWith("<") && arg.endsWith(">");
-    }
-    
-    /**
-     * Parses command arguments into named parameters.
-     *
-     * @param args   the command arguments
-     * @param format the command format
-     * @return map of parameter names to values
-     */
-    protected Map<String, String[]> parseParameters(String[] args, String format) {
-        if (args.length == 0 || format == null || format.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        
-        String[] formatArgs = format.split(" ");
-        Map<String, String[]> params = new HashMap<>();
-        List<String> varargValues = new ArrayList<>();
-        
-        int formatIndex = 0;
-        for (int i = 0; i < args.length && formatIndex < formatArgs.length; i++) {
-            String formatArg = formatArgs[formatIndex];
-            
-            if (isParameter(formatArg)) {
-                String paramName = extractParameterName(formatArg);
-                
-                if (formatArg.endsWith("...>")) {
-                    // Varargs - collect remaining arguments
-                    varargValues.add(args[i]);
-                } else {
-                    params.put(paramName, new String[]{args[i]});
-                    formatIndex++;
-                }
-            } else {
-                formatIndex++;
-            }
-        }
-        
-        // Handle varargs
-        if (formatArgs.length > 0 && formatArgs[formatArgs.length - 1].endsWith("...>")) {
-            String paramName = extractParameterName(formatArgs[formatArgs.length - 1]);
-            params.put(paramName, varargValues.toArray(new String[0]));
-        }
-        
-        return params;
-    }
-    
-    private String extractParameterName(String formatArg) {
-        if (formatArg.endsWith("...>")) {
-            return formatArg.substring(1, formatArg.length() - 4);
-        }
-        return formatArg.substring(1, formatArg.length() - 1);
-    }
-    
-    /**
-     * Validates the parameter count.
-     */
-    protected boolean validateParameterCount(String[] args, String format, CommandSender sender, Command command) {
-        // An empty format is a bare command taking no arguments, and must short-circuit
-        // before the split: "".split(" ") returns a length-1 array holding one empty
-        // string, so both comparisons below read the wrong thing -- with no arguments it
-        // sees 1 != 0 and rejects, and with one argument it sees 1 == 1 and accepts.
-        // The removed AbstractCommandExecutor.checkParameters (deleted 6.3.0) carried the
-        // equivalent guard.
-        if (format.isEmpty()) {
-            if (args.length == 0) {
-                return true;
-            }
-            sender.sendMessage(String.format(
-                    UltiTools.getInstance().i18n("指令正确用法"),
-                    command.getName(), format));
-            return false;
-        }
-
-        String[] formatArgs = format.split(" ");
-        
-        boolean hasVarargs = formatArgs.length > 0 && formatArgs[formatArgs.length - 1].endsWith("...>");
-        
-        if (hasVarargs) {
-            // Varargs allows any number of additional arguments
-            if (args.length < formatArgs.length - 1) {
-                sender.sendMessage(String.format(
-                        UltiTools.getInstance().i18n("指令正确用法"),
-                        command.getName(), format));
-                return false;
-            }
-        } else if (formatArgs.length != args.length) {
-            sender.sendMessage(String.format(
-                    UltiTools.getInstance().i18n("指令正确用法"),
-                    command.getName(), format));
-            return false;
-        }
-        
-        return true;
-    }
-    
-    /**
-     * Builds the method parameters from the command context.
-     *
-     * @param context the command context
-     * @param method  the method to invoke
-     * @return the method parameters, or null if parsing fails
+     * Builds the mapped method's arguments from already typed values.
+     * @param context the invocation context
+     * @param method the mapped method
+     * @return the arguments, or null when an override refuses the invocation
      */
     @Nullable
     protected Object[] buildMethodParams(CommandContext context, Method method) {
         Parameter[] parameters = method.getParameters();
-        if (parameters.length == 0) {
-            return new Object[0];
-        }
-
-        List<Object> paramList = new ArrayList<>();
-
-        for (Parameter parameter : parameters) {
-            Object resolved = resolveParameter(context, parameter);
-            if (resolved == PARSE_FAILED_SENTINEL) {
-                return null;
+        Object[] values = new Object[parameters.length];
+        for (int index = 0; index < parameters.length; index++) {
+            Parameter parameter = parameters[index];
+            CmdParam annotation = parameter.getAnnotation(CmdParam.class);
+            if (annotation != null) values[index] = context.getParam(annotation.value());
+            else if (parameter.isAnnotationPresent(CmdSender.class) || CommandSender.class.isAssignableFrom(parameter.getType())) {
+                values[index] = parameter.getType().isInstance(context.getSender()) ? context.getSender() : null;
             }
-            paramList.add(resolved);
         }
-
-        return paramList.toArray();
+        return values;
     }
 
-    private static final Object PARSE_FAILED_SENTINEL = new Object();
-
-    private Object resolveParameter(CommandContext context, Parameter parameter) {
-        Class<?> paramType = parameter.getType();
-
-        if (parameter.isAnnotationPresent(CmdSender.class)) {
-            return resolveSender(context, paramType);
-        }
-
-        if (isSenderType(paramType) && !parameter.isAnnotationPresent(CmdParam.class)) {
-            return resolveSender(context, paramType);
-        }
-
-        if (parameter.isAnnotationPresent(CmdParam.class)) {
-            return resolveCmdParam(context, parameter, paramType);
-        }
-
+    /**
+     * Optional completion fallback for parameters with no explicit suggestion source.
+     * Literal suggestions are always supplied by Brigadier.
+     * @param sender the requesting sender
+     * @param label the command label
+     * @param args the current input including its partial token
+     * @return custom suggestions, or null for native argument suggestions
+     */
+    @Nullable
+    protected List<String> suggest(CommandSender sender, String label, String[] args) {
         return null;
     }
 
-    private static boolean isSenderType(Class<?> paramType) {
-        return paramType.equals(Player.class) || paramType.equals(CommandSender.class);
-    }
-
-    private Object resolveSender(CommandContext context, Class<?> paramType) {
-        if (paramType.equals(Player.class) && context.isPlayer()) {
-            return context.getPlayer();
-        }
-        if (paramType.equals(CommandSender.class)) {
-            return context.getSender();
-        }
-        return null;
-    }
-
-    private Object resolveCmdParam(CommandContext context, Parameter parameter, Class<?> paramType) {
-        CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
-        String[] values = context.getParam(cmdParam.value());
-        try {
-            return parseParameterValue(values, paramType);
-        } catch (TypeParseException e) {
-            context.getSender().sendMessage(ChatColor.RED + e.getMessage());
-            return PARSE_FAILED_SENTINEL;
-        }
-    }
-    
-    /**
-     * Parses a parameter value to the target type.
-     *
-     * @param values the string values
-     * @param type   the target type
-     * @return the parsed value
-     */
-    protected Object parseParameterValue(String[] values, Class<?> type) throws TypeParseException {
-        if (values == null || values.length == 0) {
-            if (type.equals(String.class)) {
-                return "";
-            }
-            // An array parameter that legitimately received zero values gets the empty array, not
-            // null (#396). validateParameterCount deliberately accepts a varargs command with no
-            // trailing arguments -- `msg <player> <message...>` passes with just the player -- and
-            // parseParameters hands this method the zero-length array that produces. Returning
-            // null there meant every handler that touched its own varargs parameter threw:
-            // `/friend msg <player>` with no message died in String.join with a
-            // NullPointerException. This mirrors both the String case above and Java's own varargs
-            // semantics, where a zero-argument call yields a zero-length array.
-            if (type.isArray()) {
-                return java.lang.reflect.Array.newInstance(type.getComponentType(), 0);
-            }
-            return null;
-        }
-        
-        if (type.isArray()) {
-            Class<?> componentType = type.getComponentType();
-            return parserRegistry.parseArray(values, componentType);
-        } else {
-            if (type.equals(String.class) && values.length > 1) {
-                return String.join(" ", values);
-            }
-            return parserRegistry.parse(values[0], type);
-        }
-    }
-    
-    @Override
-    @Nullable
-    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        return suggest(sender, command, args);
-    }
-    
-    /**
-     * Generates tab completion suggestions.
-     * Override this method to provide custom suggestions.
-     *
-     * @param player  the player requesting completion
-     * @param command the command
-     * @param args    the current arguments
-     * @return list of suggestions
-     */
-    protected List<String> suggest(Player player, Command command, String[] args) {
-        return CommandTabCompletionDispatch.suggest(mappings, player, command, args, this);
-    }
-
-    /**
-     * Generates suggestions for any sender. Player requests continue through the legacy
-     * {@link #suggest(Player, Command, String[])} override hook.
-     *
-     * @param sender the sender requesting completion
-     * @param command the command
-     * @param args the current arguments
-     * @return the suggestions, with unavailable mappings silently excluded by default;
-     *         null for a non-player with no candidates, preserving Bukkit's default completion
-     */
-    @Nullable
-    protected List<String> suggest(CommandSender sender, Command command, String[] args) {
-        if (sender instanceof Player) {
-            return suggest((Player) sender, command, args);
-        }
-        List<String> suggestions = CommandTabCompletionDispatch.suggest(mappings, sender, command, args, this);
-        // An empty list suppresses Bukkit's player-name fallback; non-players had that fallback
-        // before sender-aware providers were introduced, including player-only module overrides.
-        return suggestions.isEmpty() ? null : suggestions;
-    }
-    
     /**
      * Gets all registered command mappings.
      *

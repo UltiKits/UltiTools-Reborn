@@ -50,7 +50,7 @@ class ConsoleTabCompletionTest {
     }
 
     private List<String> complete(BaseCommandExecutor executor, CommandSender sender, String... args) {
-        return executor.onTabComplete(sender, command, "fixture", args);
+        return com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, sender, command, "fixture", args);
     }
 
     @Test
@@ -341,7 +341,7 @@ class ConsoleTabCompletionTest {
         @Override protected void handleHelp(CommandSender sender) {
             // Help is not exercised by completion requests.
         }
-        @Override protected List<String> suggest(Player player, Command currentCommand, String[] args) {
+        @Override protected List<String> suggest(CommandSender player, String label, String[] args) {
             return Arrays.asList("overrideResult");
         }
         @CmdMapping(format = "<player>")
@@ -386,7 +386,7 @@ class ConsoleTabCompletionTest {
     @CmdExecutor(alias = "gated", permission = "fixture.class", requireOp = true)
     static class ClassGatedExecutor extends SenderExecutor { }
     static class LegacyOverrideExecutor extends SenderExecutor {
-        @Override protected List<String> suggest(Player player, Command currentCommand, String[] args) {
+        @Override protected List<String> suggest(CommandSender player, String label, String[] args) {
             return Arrays.asList("overrideResult");
         }
     }

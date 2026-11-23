@@ -34,13 +34,13 @@ class TabCompletionContextTest {
     @Test
     void legacyPlayerBuilderAndFactoryExposeSender() {
         assertSame(mockPlayer, TabCompletionContext.builder().player(mockPlayer).build().getSender());
-        assertSame(mockPlayer, TabCompletionContext.of(mockPlayer, mockCommand, new String[]{""}).getSender());
+        assertSame(mockPlayer, TabCompletionContext.of(mockPlayer, mockCommand.getName(), new String[]{""}).getSender());
     }
 
     @Test
     void senderBuilderAndFactoryDerivePlayerWithoutConflictingIdentity() {
         org.bukkit.command.CommandSender console = org.mockito.Mockito.mock(org.bukkit.command.CommandSender.class);
-        TabCompletionContext context = TabCompletionContext.of(console, mockCommand, new String[]{"sp"});
+        TabCompletionContext context = TabCompletionContext.of(console, mockCommand.getName(), new String[]{"sp"});
         assertSame(console, context.getSender());
         assertNull(context.getPlayer());
         assertSame(mockPlayer, TabCompletionContext.builder().sender(mockPlayer).build().getPlayer());
@@ -51,7 +51,7 @@ class TabCompletionContextTest {
 
     @Test
     void legacyPackageConstructorIsPreserved() {
-        TabCompletionContext context = new TabCompletionContext(mockPlayer, mockCommand, new String[]{""},
+        TabCompletionContext context = new TabCompletionContext(mockPlayer, null, mockCommand.getName(), new String[]{""},
                 0, "", null, null, null);
         assertSame(mockPlayer, context.getSender());
         assertSame(mockPlayer, context.getPlayer());
@@ -70,7 +70,7 @@ class TabCompletionContextTest {
 
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(args)
                     .currentArgIndex(1)
                     .partialArg("arg2")
@@ -80,7 +80,7 @@ class TabCompletionContextTest {
                     .build();
 
             assertEquals(mockPlayer, context.getPlayer());
-            assertEquals(mockCommand, context.getCommand());
+            assertEquals(mockCommand.getName(), context.getCommandName());
             assertArrayEquals(args, context.getArgs());
             assertEquals(1, context.getCurrentArgIndex());
             assertEquals("arg2", context.getPartialArg());
@@ -94,12 +94,12 @@ class TabCompletionContextTest {
         void builderAllowsnullvalues() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(null)
-                    .command(null)
+                    .commandName(null)
                     .args(null)
                     .build();
 
             assertNull(context.getPlayer());
-            assertNull(context.getCommand());
+            assertNull(context.getCommandName());
             assertNull(context.getArgs());
         }
 
@@ -109,7 +109,7 @@ class TabCompletionContextTest {
             TabCompletionContext context = TabCompletionContext.builder().build();
 
             assertNull(context.getPlayer());
-            assertNull(context.getCommand());
+            assertNull(context.getCommandName());
             assertNull(context.getArgs());
             assertEquals(0, context.getCurrentArgIndex());
             assertNull(context.getPartialArg());
@@ -273,10 +273,10 @@ class TabCompletionContextTest {
         void ofCreatescontextwithcorrectfields() {
             String[] args = {"arg1", "arg2", "arg3"};
 
-            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand, args);
+            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand.getName(), args);
 
             assertEquals(mockPlayer, context.getPlayer());
-            assertEquals(mockCommand, context.getCommand());
+            assertEquals(mockCommand.getName(), context.getCommandName());
             assertArrayEquals(args, context.getArgs());
             assertEquals(2, context.getCurrentArgIndex()); // last index
             assertEquals("arg3", context.getPartialArg()); // last arg
@@ -287,10 +287,10 @@ class TabCompletionContextTest {
         void ofHandlesemptyargs() {
             String[] args = new String[0];
 
-            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand, args);
+            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand.getName(), args);
 
             assertEquals(mockPlayer, context.getPlayer());
-            assertEquals(mockCommand, context.getCommand());
+            assertEquals(mockCommand.getName(), context.getCommandName());
             assertArrayEquals(args, context.getArgs());
             assertEquals(0, context.getCurrentArgIndex());
             assertEquals("", context.getPartialArg());
@@ -301,7 +301,7 @@ class TabCompletionContextTest {
         void ofHandlessinglearg() {
             String[] args = {"only"};
 
-            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand, args);
+            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand.getName(), args);
 
             assertEquals(0, context.getCurrentArgIndex());
             assertEquals("only", context.getPartialArg());
@@ -312,7 +312,7 @@ class TabCompletionContextTest {
         void ofSetspartialtolastarg() {
             String[] args = {"first", "second", "partial"};
 
-            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand, args);
+            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand.getName(), args);
 
             assertEquals("partial", context.getPartialArg());
             assertEquals(2, context.getCurrentArgIndex());
@@ -332,7 +332,7 @@ class TabCompletionContextTest {
 
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(args)
                     .currentArgIndex(1)
                     .partialArg("b")
@@ -342,7 +342,7 @@ class TabCompletionContextTest {
                     .build();
 
             assertSame(mockPlayer, context.getPlayer());
-            assertSame(mockCommand, context.getCommand());
+            assertSame(mockCommand.getName(), context.getCommandName());
             assertSame(args, context.getArgs());
             assertEquals(1, context.getCurrentArgIndex());
             assertEquals("b", context.getPartialArg());

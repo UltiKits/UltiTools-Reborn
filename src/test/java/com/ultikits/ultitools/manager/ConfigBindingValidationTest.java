@@ -945,7 +945,7 @@ class ConfigBindingValidationTest {
         private CommandContext contextFor(Player player, Method method, Object executor) {
             return CommandContext.builder()
                     .sender(player)
-                    .command(mock(Command.class))
+                    .commandName("test")
                     .alias("go")
                     .rawArgs(new String[]{})
                     .matchedMethod(method)
@@ -1314,8 +1314,8 @@ class ConfigBindingValidationTest {
             Command command = mock(Command.class);
             lenient().when(command.getName()).thenReturn("boundinherited");
 
-            proxy.onCommand(player, command, "boundinherited", new String[]{"go"});
-            proxy.onCommand(player, command, "boundinherited", new String[]{"go"});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(proxy, player, command, "boundinherited", new String[]{"go"});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(proxy, player, command, "boundinherited", new String[]{"go"});
 
             assertEquals(1, proxy.bodies.get(), "the bound 12-second cooldown must refuse the second dispatch");
             verify(player, never()).sendMessage(contains("never resolved"));

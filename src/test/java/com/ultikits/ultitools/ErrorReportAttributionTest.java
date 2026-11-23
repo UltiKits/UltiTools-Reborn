@@ -60,7 +60,7 @@ public class ErrorReportAttributionTest {
                 BaseCommandExecutor executor = (BaseCommandExecutor) type.getDeclaredConstructor().newInstance();
                 Command command = mock(Command.class);
                 when(command.getName()).thenReturn("probe");
-                assertThat(executor.onCommand(mock(CommandSender.class), command, "probe", new String[0])).isTrue();
+                assertThat(com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mock(CommandSender.class), command, "probe", new String[0])).isTrue();
                 assertModule(collector, "module-" + suffix.toLowerCase(java.util.Locale.ROOT));
             }
         }

@@ -11,8 +11,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
-import org.bukkit.command.Command;
-import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -350,19 +348,6 @@ public class TabCompletionManager {
     }
     
     /**
-     * Generates suggestions using the appropriate completer.
-     *
-     * @param player  the player requesting completion
-     * @param command the command
-     * @param args    the current arguments
-     * @return list of suggestions
-     */
-    public List<String> suggest(Player player, Command command, String[] args) {
-        TabCompletionContext context = TabCompletionContext.of(player, command, args);
-        return suggest(context);
-    }
-    
-    /**
      * Generates suggestions using the given context.
      *
      * @param context the completion context
@@ -464,28 +449,6 @@ public class TabCompletionManager {
     }
     
     /**
-     * Creates a context for tab completion with common defaults.
-     *
-     * @param player  the player
-     * @param command the command
-     * @param args    the arguments
-     * @return a tab completion context
-     */
-    public TabCompletionContext createContext(
-            Player player, Command command, String[] args) {
-        int currentIndex = args.length > 0 ? args.length - 1 : 0;
-        String partial = args.length > 0 ? args[args.length - 1] : "";
-        
-        return TabCompletionContext.builder()
-                .player(player)
-                .command(command)
-                .args(args)
-                .currentArgIndex(currentIndex)
-                .partialArg(partial)
-                .build();
-    }
-    
-    /**
      * Helper method to filter suggestions by current input.
      *
      * @param suggestions the suggestions to filter
@@ -511,40 +474,6 @@ public class TabCompletionManager {
         return filtered;
     }
     
-    /**
-     * Suggests command format first arguments from mappings.
-     *
-     * @param mappings the command mappings (format -> method)
-     * @param context  the completion context
-     * @return list of first argument suggestions
-     */
-    public List<String> suggestFirstArgs(Map<String, Method> mappings, TabCompletionContext context) {
-        if (mappings == null || mappings.isEmpty()) {
-            return Collections.emptyList();
-        }
-        
-        String input = context.getCurrentInput().toLowerCase();
-        List<String> suggestions = new ArrayList<>();
-        
-        for (String format : mappings.keySet()) {
-            String[] parts = format.split(" ");
-            if (parts.length > 0) {
-                String firstArg = parts[0];
-                // Skip parameter placeholders
-                if (!firstArg.startsWith("<") && !firstArg.endsWith(">")) {
-                    if (firstArg.toLowerCase().startsWith(input)) {
-                        if (!suggestions.contains(firstArg)) {
-                            suggestions.add(firstArg);
-                        }
-                    }
-                }
-            }
-        }
-        
-        Collections.sort(suggestions);
-        return suggestions;
-    }
-
     /**
      * One key's registration: the completer and the owner it was attributed to, replaced and
      * removed as a unit. Compared by identity, so a sweep's conditional removal never matches a

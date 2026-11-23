@@ -126,7 +126,7 @@ class MethodInvocationCompleterTest {
         void completeReturnsemptyWhenmatchedmethodnull() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(null)
@@ -145,7 +145,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -166,7 +166,7 @@ class MethodInvocationCompleterTest {
             // No suggest annotation for "item" parameter
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -192,7 +192,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -217,7 +217,7 @@ class MethodInvocationCompleterTest {
             // "action" parameter has suggest = "suggestActions()"
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -241,7 +241,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{"Player1"})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -266,7 +266,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -305,7 +305,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -326,7 +326,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -348,7 +348,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -370,7 +370,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{"player"})  // lowercase
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -418,7 +418,7 @@ class MethodInvocationCompleterTest {
             // The "player" parameter has suggest = "suggestPlayers"
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -439,7 +439,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -465,7 +465,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -503,7 +503,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -526,7 +526,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{"3"})  // start with "3" to match "3param-result"
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -582,7 +582,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -607,7 +607,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -643,12 +643,12 @@ class MethodInvocationCompleterTest {
             Method method = ExecutorWithMissingSuggest.class.getMethod("testMethod", String.class);
             ExecutorWithMissingSuggest executor = new ExecutorWithMissingSuggest();
             
-            when(mockCommandManager.getPluginByCommand(mockCommand)).thenReturn(mockPlugin);
+            when(mockCommandManager.getPluginByLabel(mockCommand.getName())).thenReturn(mockPlugin);
             when(mockPlugin.i18n("nonExistentMethod")).thenReturn("Use a valid value");
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -668,12 +668,12 @@ class MethodInvocationCompleterTest {
             Method method = ExecutorWithMissingSuggest.class.getMethod("testMethod", String.class);
             ExecutorWithMissingSuggest executor = new ExecutorWithMissingSuggest();
             
-            when(mockCommandManager.getPluginByCommand(mockCommand)).thenReturn(mockPlugin);
+            when(mockCommandManager.getPluginByLabel(mockCommand.getName())).thenReturn(mockPlugin);
             when(mockPlugin.i18n("nonExistentMethod")).thenReturn("");
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -692,11 +692,11 @@ class MethodInvocationCompleterTest {
             Method method = ExecutorWithMissingSuggest.class.getMethod("testMethod", String.class);
             ExecutorWithMissingSuggest executor = new ExecutorWithMissingSuggest();
             
-            when(mockCommandManager.getPluginByCommand(mockCommand)).thenReturn(null);
+            when(mockCommandManager.getPluginByLabel(mockCommand.getName())).thenReturn(null);
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -726,7 +726,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
@@ -752,7 +752,7 @@ class MethodInvocationCompleterTest {
             
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)

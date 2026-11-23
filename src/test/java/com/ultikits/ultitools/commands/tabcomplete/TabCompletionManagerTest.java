@@ -331,7 +331,7 @@ class TabCompletionManagerTest {
             String[] args = {"test"};
             
             // This method creates a context internally
-            List<String> suggestions = manager.suggest(mockPlayer, mockCommand, args);
+            List<String> suggestions = manager.suggest(TabCompletionContext.of(mockPlayer, mockCommand.getName(), args));
             
             assertNotNull(suggestions);
         }
@@ -341,7 +341,7 @@ class TabCompletionManagerTest {
         void suggestHandlesemptyargs() {
             String[] args = new String[0];
             
-            List<String> suggestions = manager.suggest(mockPlayer, mockCommand, args);
+            List<String> suggestions = manager.suggest(TabCompletionContext.of(mockPlayer, mockCommand.getName(), args));
             
             assertNotNull(suggestions);
         }
@@ -364,7 +364,7 @@ class TabCompletionManagerTest {
         void suggestUsesbuiltincompleterForatprefix() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{"t"})
                     .currentArgIndex(0)
                     .parameterName("@boolean")
@@ -381,7 +381,7 @@ class TabCompletionManagerTest {
         void suggestDelegatestomethodcompleterWhennoatparameter() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .parameterName("normalParam")
@@ -398,7 +398,7 @@ class TabCompletionManagerTest {
         void suggestReturnsemptyWhenatcompleternotfound() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .parameterName("@nonexistent")
@@ -467,10 +467,10 @@ class TabCompletionManagerTest {
         void createContextCreatescontextwithcorrectvalues() {
             String[] args = {"arg1", "arg2", "partial"};
             
-            TabCompletionContext context = manager.createContext(mockPlayer, mockCommand, args);
+            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand.getName(), args);
             
             assertEquals(mockPlayer, context.getPlayer());
-            assertEquals(mockCommand, context.getCommand());
+            assertEquals(mockCommand.getName(), context.getCommandName());
             assertArrayEquals(args, context.getArgs());
             assertEquals(2, context.getCurrentArgIndex());
             assertEquals("partial", context.getPartialArg());
@@ -481,7 +481,7 @@ class TabCompletionManagerTest {
         void createContextHandlesemptyargs() {
             String[] args = new String[0];
             
-            TabCompletionContext context = manager.createContext(mockPlayer, mockCommand, args);
+            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand.getName(), args);
             
             assertEquals(0, context.getCurrentArgIndex());
             assertEquals("", context.getPartialArg());
@@ -492,7 +492,7 @@ class TabCompletionManagerTest {
         void createContextHandlessinglearg() {
             String[] args = {"only"};
             
-            TabCompletionContext context = manager.createContext(mockPlayer, mockCommand, args);
+            TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand.getName(), args);
             
             assertEquals(0, context.getCurrentArgIndex());
             assertEquals("only", context.getPartialArg());
@@ -572,139 +572,7 @@ class TabCompletionManagerTest {
         }
     }
 
-    @Nested
-    @DisplayName("suggestFirstArgs() Method Tests")
-    class SuggestFirstArgsMethodTests {
 
-        @Test
-        @DisplayName("suggestFirstArgs() should extract first args from mappings")
-        void suggestFirstArgs_extractsFirstArgs() throws NoSuchMethodException {
-            Map<String, Method> mappings = new HashMap<>();
-            Method testMethod = String.class.getMethod("toString");
-            mappings.put("add <player>", testMethod);
-            mappings.put("remove <player>", testMethod);
-            mappings.put("list", testMethod);
-            
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .args(new String[]{""})
-                    .currentArgIndex(0)
-                    .build();
-            
-            List<String> suggestions = manager.suggestFirstArgs(mappings, context);
-            
-            assertEquals(3, suggestions.size());
-            assertTrue(suggestions.contains("add"));
-            assertTrue(suggestions.contains("remove"));
-            assertTrue(suggestions.contains("list"));
-        }
-
-        @Test
-        @DisplayName("suggestFirstArgs() should filter by current input")
-        void suggestFirstArgsFiltersByInput() throws NoSuchMethodException {
-            Map<String, Method> mappings = new HashMap<>();
-            Method testMethod = String.class.getMethod("toString");
-            mappings.put("add <player>", testMethod);
-            mappings.put("addall", testMethod);
-            mappings.put("remove <player>", testMethod);
-            
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .args(new String[]{"add"})
-                    .currentArgIndex(0)
-                    .build();
-            
-            List<String> suggestions = manager.suggestFirstArgs(mappings, context);
-            
-            assertEquals(2, suggestions.size());
-            assertTrue(suggestions.contains("add"));
-            assertTrue(suggestions.contains("addall"));
-        }
-
-        @Test
-        @DisplayName("suggestFirstArgs() should skip parameter placeholders")
-        void suggestFirstArgs_skipsParameterPlaceholders() throws NoSuchMethodException {
-            Map<String, Method> mappings = new HashMap<>();
-            Method testMethod = String.class.getMethod("toString");
-            mappings.put("<player>", testMethod);
-            mappings.put("action", testMethod);
-            
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .args(new String[]{""})
-                    .currentArgIndex(0)
-                    .build();
-            
-            List<String> suggestions = manager.suggestFirstArgs(mappings, context);
-            
-            assertEquals(1, suggestions.size());
-            assertTrue(suggestions.contains("action"));
-        }
-
-        @Test
-        @DisplayName("suggestFirstArgs() should return sorted results")
-        void suggestFirstArgsReturnsSortedResults() throws NoSuchMethodException {
-            Map<String, Method> mappings = new HashMap<>();
-            Method testMethod = String.class.getMethod("toString");
-            mappings.put("zebra", testMethod);
-            mappings.put("apple", testMethod);
-            mappings.put("mango", testMethod);
-            
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .args(new String[]{""})
-                    .currentArgIndex(0)
-                    .build();
-            
-            List<String> suggestions = manager.suggestFirstArgs(mappings, context);
-            
-            assertEquals("apple", suggestions.get(0));
-            assertEquals("mango", suggestions.get(1));
-            assertEquals("zebra", suggestions.get(2));
-        }
-
-        @Test
-        @DisplayName("suggestFirstArgs() should return empty for null mappings")
-        void suggestFirstArgsReturnsemptyFornullmappings() {
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .args(new String[]{""})
-                    .currentArgIndex(0)
-                    .build();
-            
-            List<String> suggestions = manager.suggestFirstArgs(null, context);
-            
-            assertTrue(suggestions.isEmpty());
-        }
-
-        @Test
-        @DisplayName("suggestFirstArgs() should return empty for empty mappings")
-        void suggestFirstArgsReturnsemptyForemptymappings() {
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .args(new String[]{""})
-                    .currentArgIndex(0)
-                    .build();
-            
-            List<String> suggestions = manager.suggestFirstArgs(Collections.emptyMap(), context);
-            
-            assertTrue(suggestions.isEmpty());
-        }
-
-        @Test
-        @DisplayName("suggestFirstArgs() should not include duplicates")
-        void suggestFirstArgs_noDuplicates() throws NoSuchMethodException {
-            Map<String, Method> mappings = new HashMap<>();
-            Method testMethod = String.class.getMethod("toString");
-            mappings.put("add <player>", testMethod);
-            mappings.put("add <item>", testMethod);
-            mappings.put("add", testMethod);
-            
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .args(new String[]{""})
-                    .currentArgIndex(0)
-                    .build();
-            
-            List<String> suggestions = manager.suggestFirstArgs(mappings, context);
-            
-            // Should only have one "add"
-            assertEquals(1, suggestions.stream().filter(s -> s.equals("add")).count());
-        }
-    }
 
     // ============================================================================================
     // 05-06 Task 1: resolveSuggestValue() and suggest(TabCompletionContext, String) -- dual notation

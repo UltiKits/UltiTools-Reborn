@@ -44,21 +44,28 @@ final class CommandTreeCompiler {
         if (annotation == null || annotation.alias().length == 0) {
             throw new CommandCompilationException(executor.getClass().getName() + ": missing @CmdExecutor aliases");
         }
-        List<String> labels = Arrays.stream(annotation.alias()).map(s -> s.toLowerCase(Locale.ROOT)).toList();
+        return compile(executor, description, Arrays.asList(annotation.alias()), annotation.permission(),
+                annotation.requireOp(), invocation, help);
+    }
+
+    CompiledCommand compile(BaseCommandExecutor executor, String description, List<String> aliases,
+            String permission, boolean requireOp, Invocation invocation, Command<CommandSourceStack> help) {
+        List<String> labels = aliases.stream().map(s -> s.toLowerCase(Locale.ROOT)).toList();
         Spec root = new Spec(labels.getFirst(), null, null);
-        List<Method> methods = new ArrayList<>(ReflectionUtil.getAllMethods(executor.getClass()));
+        List<Method> methods = new ArrayList<>(executor.getMappings().values());
         methods.sort(Comparator.comparing(Method::toGenericString));
         for (Method method : methods) {
             CmdMapping mapping = method.getAnnotation(CmdMapping.class);
             if (mapping != null) add(root, executor.getClass(), method, mapping.format());
         }
         StringBuilder signature = new StringBuilder(labels.toString());
-        signature.append('|').append(annotation.permission()).append(':').append(annotation.requireOp());
+        signature.append('|').append(permission).append(':').append(requireOp);
         appendSignature(root, signature);
         LiteralCommandNode<CommandSourceStack> tree = (LiteralCommandNode<CommandSourceStack>)
-                build(root, invocation, help, List.of());
+                build(root, invocation, help, new SuggestionBridge(executor), List.of());
         if (tree.getCommand() == null) tree = copyRootWithHelp(tree, help);
-        if (tree.getChild("help") == null) tree.addChild(LiteralArgumentBuilder.<CommandSourceStack>literal("help").executes(help).build());
+        String helpLiteral = executor.helpCommand().toLowerCase(Locale.ROOT);
+        if (tree.getChild(helpLiteral) == null) tree.addChild(LiteralArgumentBuilder.<CommandSourceStack>literal(helpLiteral).executes(help).build());
         return new CompiledCommand(labels.getFirst(), labels.subList(1, labels.size()), description, tree, signature.toString());
     }
 
@@ -128,21 +135,22 @@ final class CommandTreeCompiler {
     }
 
     private CommandNode<CommandSourceStack> build(Spec spec, Invocation invocation,
-            Command<CommandSourceStack> help, List<Spec> ancestors) {
+            Command<CommandSourceStack> help, SuggestionBridge suggestions, List<Spec> ancestors) {
         List<Spec> path = new ArrayList<>(ancestors);
         if (spec.argument != null) path.add(spec);
         ArgumentBuilder<CommandSourceStack, ?> builder = spec.argument == null
                 ? LiteralArgumentBuilder.<CommandSourceStack>literal(spec.name)
-                : RequiredArgumentBuilder.<CommandSourceStack, Object>argument(spec.name, cast(spec.argument.type()));
-        if (spec.method != null) builder.executes(context -> invoke(context, spec.method, path, null, invocation));
+                : RequiredArgumentBuilder.<CommandSourceStack, Object>argument(spec.name, cast(spec.argument.type()))
+                        .suggests(suggestions.provider(spec.firstMethod, spec.name, spec.argument.type()));
+        if (spec.method != null) builder.executes(new MappingCommand(spec.method, path, null, invocation));
         for (Spec child : spec.children.values()) {
-            builder.then(build(child, invocation, help, path));
+            builder.then(build(child, invocation, help, suggestions, path));
             if (child.argument != null && child.argument.greedy()) {
                 if (spec.method != null) throw invalid(spec.method.getDeclaringClass(), child.firstMethod,
                         child.format, "duplicate executable path for empty greedy arguments with " + spec.method.getName());
                 List<Spec> greedyPath = new ArrayList<>(path);
                 greedyPath.add(child);
-                builder.executes(context -> invoke(context, child.method, greedyPath, child.name, invocation));
+                builder.executes(new MappingCommand(child.method, greedyPath, child.name, invocation));
             }
         }
         return builder.build();
@@ -172,6 +180,13 @@ final class CommandTreeCompiler {
 
     private static CommandCompilationException invalid(Class<?> owner, Method method, String format, String reason) {
         return new CommandCompilationException(owner.getName() + "#" + method.getName() + " [" + format + "]: " + reason);
+    }
+
+    record MappingCommand(Method method, List<Spec> path, String empty, Invocation invocation)
+            implements Command<CommandSourceStack> {
+        @Override public int run(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+            return invoke(context, method, path, empty, invocation);
+        }
     }
 
     private static final class Spec {

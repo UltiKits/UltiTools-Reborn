@@ -521,7 +521,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             ErrorReportCollector collector = instance == null ? null : instance.getErrorReportCollector();
             if (collector != null) {
                 collector.reportError(cause, null,
-                        TriggerContext.command(context.getSender(), context.getCommand().getName()));
+                        TriggerContext.command(context.getSender(), context.getCommandName()));
             }
         } catch (RuntimeException ignored) {
             // Never re-enter logging from error reporting, matching BaseCommandExecutor's own path.
