@@ -11,6 +11,7 @@ import net.bytebuddy.implementation.attribute.MethodAttributeAppender;
 import net.bytebuddy.matcher.ElementMatchers;
 
 import java.lang.annotation.Annotation;
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -200,9 +201,10 @@ public class ProxyFactory {
                     // Overriding methods do not inherit annotations; copy them for the same reason.
                     .attribute(MethodAttributeAppender.ForInstrumentedMethod.INCLUDING_RECEIVER)
                     .make()
-                    .load(targetClass.getClassLoader(), ClassLoadingStrategy.Default.INJECTION)
+                    .load(targetClass.getClassLoader(), ClassLoadingStrategy.UsingLookup.of(
+                            MethodHandles.privateLookupIn(targetClass, MethodHandles.lookup())))
                     .getLoaded();
-        } catch (RuntimeException e) {
+        } catch (IllegalAccessException | RuntimeException e) {
             // GATE-05 group two (08-21): routed to the typed container hierarchy -- the
             // generated proxy class IS the bean in this framework's design, so a failure to
             // build it is a bean-creation failure.
