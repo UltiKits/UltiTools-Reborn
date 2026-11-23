@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.scheduling.Scheduler;
+
 import java.io.File;
 import java.io.IOException;
 import java.lang.annotation.Annotation;
@@ -3224,6 +3226,9 @@ public class PluginManager {
         pluginContext.setDisplayName(plugin.getPluginName());
 
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
+        if (taskManager != null) {
+            pluginContext.registerType(Scheduler.class, taskManager.schedulerFor(plugin));
+        }
         pluginContext.registerShutdownHook();
         pluginContext.setClassLoader(loader);
 
