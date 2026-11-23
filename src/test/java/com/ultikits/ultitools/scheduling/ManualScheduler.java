@@ -97,7 +97,7 @@ public final class ManualScheduler implements Scheduler {
         @Override public void elapseAsync(Duration atLeast) { advance(atLeast); }
 
         private void advance(Duration elapsed) {
-            if (Thread.currentThread() != tickThread) {
+            if (Thread.currentThread() != tickThread) { // NOPMD - thread identity is the intended check
                 throw new IllegalStateException("Clock advances must run on the tick thread");
             }
             if (elapsed.isNegative()) {
@@ -300,7 +300,8 @@ public final class ManualScheduler implements Scheduler {
 
         @Override
         public boolean isCurrentThread() {
-            return !asynchronous && Thread.currentThread() == engine.tickThread;
+            // Thread identity is the intended check, so == is deliberate.
+            return !asynchronous && Thread.currentThread() == engine.tickThread; // NOPMD
         }
 
         @Override

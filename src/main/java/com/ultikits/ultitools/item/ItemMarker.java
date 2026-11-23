@@ -73,15 +73,23 @@ public record ItemMarker<P, C>(NamespacedKey key, PersistentDataType<P, C> type,
             throw new IllegalArgumentException("PersistentDataContainer marker values are not immutable");
         }
         if (value instanceof List<?> list) {
-            List<Object> elements = new ArrayList<>(list.size());
-            for (Object element : list) {
-                elements.add(freeze(element));
-            }
-            return List.copyOf(elements);
+            return freezeList(list);
         }
         if (value == null || !value.getClass().isArray()) {
             return value;
         }
+        return freezeArray(value);
+    }
+
+    private static List<Object> freezeList(List<?> list) {
+        List<Object> elements = new ArrayList<>(list.size());
+        for (Object element : list) {
+            elements.add(freeze(element));
+        }
+        return List.copyOf(elements);
+    }
+
+    private static Object freezeArray(Object value) {
         Class<?> component = value.getClass().getComponentType();
         Class<?> leaf = component;
         while (leaf.isArray()) {
@@ -103,7 +111,7 @@ public record ItemMarker<P, C>(NamespacedKey key, PersistentDataType<P, C> type,
     }
 
     private static boolean equalValues(Object first, Object second) {
-        if (first == second) {
+        if (first == second) { // NOPMD - identity shortcut before the element-wise comparison
             return true;
         }
         if (first instanceof List<?> left && second instanceof List<?> right) {
