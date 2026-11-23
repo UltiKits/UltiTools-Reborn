@@ -74,7 +74,9 @@ class AopProxyResolverTest {
 
     @ExceptionCatch
     public static sealed class SealedWithClassLevel permits ClassLevelSealedChild {
-        public void work() { }
+        public void work() {
+            // Fixture method: only its class-level annotation matters.
+        }
     }
 
     public static final class ClassLevelSealedChild extends SealedWithClassLevel { }

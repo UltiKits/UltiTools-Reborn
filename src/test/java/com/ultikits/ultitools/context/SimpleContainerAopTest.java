@@ -57,7 +57,9 @@ class SimpleContainerAopTest {
 
     public static sealed class SealedManaged permits SealedChild {
         @Transactional
-        public void work() { }
+        public void work() {
+            // Fixture method: only its annotation matters.
+        }
     }
 
     public static final class SealedChild extends SealedManaged { }
@@ -73,8 +75,12 @@ class SimpleContainerAopTest {
             @Override public void publish(LogRecord record) {
                 messages.add(record.getMessage());
             }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() {
+                // Nothing is buffered.
+            }
+            @Override public void close() {
+                // Nothing to release.
+            }
         };
         logger.addHandler(handler);
         try {

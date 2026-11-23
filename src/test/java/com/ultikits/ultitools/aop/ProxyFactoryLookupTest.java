@@ -229,6 +229,9 @@ class ProxyFactoryLookupTest {
                 new File(testClasses().toURI()).getPath(),
                 new File(ProxyFactory.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getPath(),
                 new File(ByteBuddy.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getPath());
+        // Fixed argv: this JVM's launcher, a literal @ValueSource flag, the test runtime classpath and a constant
+        // class name. No shell, and no operator, player or network data reaches it.
+        // nosemgrep: java_inject_rule-CommandInjection, java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
         ProcessBuilder command = new ProcessBuilder(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "--sun-misc-unsafe-memory-access=" + unsafeAccess,
@@ -305,6 +308,8 @@ class ProxyFactoryLookupTest {
         command.add(Path.of(System.getProperty("java.home"), "bin", tool).toString());
         command.addAll(Arrays.asList(arguments));
         Path output = temporaryDirectory.resolve(tool + ".log");
+        // Fixed argv: a JDK tool from this JVM's home plus arguments written by this test (paths under @TempDir).
+        // nosemgrep: java_inject_rule-CommandInjection, java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
         Process child = new ProcessBuilder(command).redirectErrorStream(true)
                 .redirectOutput(output.toFile()).start();
         try {

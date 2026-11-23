@@ -4,6 +4,7 @@ import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.Collections;
+import java.util.Objects;
 
 public final class ProxyFactoryDefinitionProbe {
 
@@ -22,7 +23,8 @@ public final class ProxyFactoryDefinitionProbe {
             Class<?> proxyClass = factory.createProxyClass(target, Collections.singleton(method));
             Object proxy = proxyClass.getDeclaredConstructor().newInstance();
             Object result = method.invoke(proxy);
-            if (proxyClass.getClassLoader() != loader || proxyClass.getPackage() != target.getPackage()
+            if (!Objects.equals(proxyClass.getClassLoader(), loader)
+                    || !Objects.equals(proxyClass.getPackage(), target.getPackage())
                     || !"intercepted:pkg-original".equals(result)) {
                 throw new AssertionError("Proxy definition lost its runtime package or interception: " + result);
             }
