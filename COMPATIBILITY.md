@@ -16,16 +16,18 @@ contain no XSeries or `XVersionUtils` references for the native-material and tel
 rows; without such a build, record the row as blocked, not fail.
 
 ```java
-ItemStack item = ItemStackBuilder.of(Material.STONE).build();
+// Inject ItemRenderer with @Autowired in the consuming bean.
+ItemStack item = itemRenderer.render(ItemSpec.builder(Material.STONE).build(), player);
 player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
-ItemStack enchanted = ItemStackBuilder.of(Material.FISHING_ROD).enchant(Enchantment.LUCK_OF_THE_SEA, 1).build();
+ItemStack enchanted = itemRenderer.render(ItemSpec.builder(Material.FISHING_ROD)
+        .data(DataComponentTypes.ENCHANTMENTS, ItemEnchantments.itemEnchantments()
+                .add(Enchantment.LUCK_OF_THE_SEA, 1).build()).build(), player);
 player.sendActionBar(Component.text("Ready"));
 ```
 
 Call the sound and enchantment APIs during gameplay, not from static initializers or enum constructors.
-`ItemStackBuilder.of(String)` accepts only current Bukkit material names or namespaced names through
-`Material.matchMaterial`. Unknown names and block-only materials return `null`; historical aliases,
-numeric IDs and old names renamed after 1.20 (for example `GRASS`, `CHAIN` and `SCUTE`) return `null`.
+`ItemStackBuilder` is removed in 7.0; use `ItemSpec` and an injected `ItemRenderer` instead
+(see [item construction migration](#item-construction-migration)).
 The native `Material`, `ItemStack` and `Enchantment` entrypoints remain available. GUI glass colours,
 button materials, teleport sound (volume 1, pitch 0) and notification text remain unchanged.
 The unused `Sounds` enum and `Colors.getCode()` are removed; the `Colors` enum itself remains.
@@ -34,8 +36,8 @@ both lines uses `Material.<COLOR>_STAINED_GLASS_PANE` directly.
 
 7.0 不再提供 XSeries 与 `XVersionUtils`；保留 XSeries 的模块须自行打包并重定位
 （shade + relocate），UltiTools 模块不能使用 Paper 的 `libraries:`。推荐使用上面的 Paper
-原生材质、音效、附魔和快捷栏上方文字 API。字符串工厂仅接受当前材质名或命名空间名；
-非物品材质、历史别名、数字 ID 及 1.20 之后改过名的旧名字返回 `null`，不提供旧名称兼容。
+原生材质、音效、附魔和快捷栏上方文字 API。旧 `ItemStackBuilder` 已删除，物品创建改用
+`ItemSpec` 描述和按观看者语言渲染的 `ItemRenderer`，迁移对照见下一小节。
 下面 6.x 小节保留历史行为，不是 7.0 的运行库供应承诺。
 
 ## Item descriptions and storage (as of 7.0.0)
@@ -53,6 +55,28 @@ Each call returns a new, independent `ItemStack`; the renderer is a framework si
 Use `ItemSpec` for descriptions that will be rendered for a viewer. Text belongs in the module's
 language catalogue as MiniMessage; fixed Adventure components can be supplied through `Text.literal`.
 Typed attributes cover names, lore, models, glint and tooltip display; other components use `data` or `remove`.
+
+`ItemStackBuilder` is removed, including its existing-stack and string factories. Recompile callers
+against 7.0 and replace them using this table; names and lore belong in language files, not `&` colour codes.
+
+| 6.x call | 7.0 replacement |
+|---|---|
+| `ItemStackBuilder.of(Material.X).name("&aA").lore("&7b").build()` | `ItemSpec.builder(Material.X).name(key).addLore(key2).build()` then `itemRenderer.render(spec, player)`; catalogue values use MiniMessage |
+| `.amount(n)` | `.amount(n)`; accepted range is 1–99, rather than silently clamping |
+| `.glow()` | `.glint(true)`; no dummy enchantment is added |
+| `.enchant(e, lvl)` | `.data(DataComponentTypes.ENCHANTMENTS, ItemEnchantments.itemEnchantments().add(e, lvl).build())` |
+| `.hideAttributes()` / `.flags(...)` | `.hiddenInTooltip(Set.of(DataComponentTypes.ATTRIBUTE_MODIFIERS, ...))` with the component types to hide |
+| `.hideAll()` | `.tooltipHidden(true)` to hide the whole tooltip |
+| `.unbreakable()` | `.data(DataComponentTypes.UNBREAKABLE)`; this is a non-valued flag in Paper 26.3 |
+| `.customModelData(n)` | `.data(DataComponentTypes.CUSTOM_MODEL_DATA, CustomModelData.customModelData().addFloat(n).build())` |
+| `.leatherColor(c)` | `.data(DataComponentTypes.DYED_COLOR, DyedItemColor.dyedItemColor(c))` |
+| `.skullOwner(player)` | `.data(DataComponentTypes.PROFILE, ResolvableProfile.resolvableProfile(player.getPlayerProfile()))` |
+| `ItemStackBuilder.of(existingStack)...` | `stack.setData(...)` / `stack.unsetData(...)`; clone the stack first if an independent copy is needed |
+| `ItemStackBuilder.of(String)` | `Registry.ITEM.get(Key.key(name))`; unknown or block-only keys return `null` |
+
+中文补充：旧构建器及其字符串、已有物品入口全部移除，模块须按上表迁移并重新编译。
+名字和说明行放语言文件，以 MiniMessage 描述；`.glint(true)` 只覆盖光效，不添加伪附魔；
+`.tooltipHidden(true)` 隐藏整个提示框；数量范围改为 1–99，越界拒绝而非静默截断。
 
 For changes to an existing stack, use Paper's `setData` and `unsetData` directly.
 Pass-through values are applied unchanged, not localized. Patches are applied in insertion order,
