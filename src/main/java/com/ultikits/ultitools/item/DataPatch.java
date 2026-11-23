@@ -14,6 +14,7 @@ public sealed interface DataPatch permits DataPatch.Assign, DataPatch.Flag, Data
 
     /**
      * Assigns a component value unchanged.
+     * The value must be immutable with value equals; Paper's own component values are.
      * @param <T> component value type
      * @param type component type
      * @param value component value

@@ -15,6 +15,7 @@ import io.papermc.paper.datacomponent.DataComponentTypes;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -129,6 +130,21 @@ public abstract class AbstractItemRendererContractTest {
         assertThat(stack.getData(DataComponentTypes.MAX_DAMAGE)).isNull();
         ItemSpec emptyLore = ItemSpec.builder(Key.key("minecraft:diamond")).lore(List.of()).build();
         assertThat(renderer.render(emptyLore, Locale.US).getData(DataComponentTypes.LORE)).isNull();
+    }
+
+    @Test
+    void render_hiddenInTooltip_writesTooltipDisplay() {
+        for (boolean hidden : List.of(false, true)) {
+            ItemSpec spec = ItemSpec.builder(Key.key("minecraft:diamond")).tooltipHidden(hidden)
+                    .hiddenInTooltip(Set.of(DataComponentTypes.ATTRIBUTE_MODIFIERS)).build();
+            ItemStack stack = renderer.render(spec, Locale.US);
+            assertThat(stack.getData(DataComponentTypes.TOOLTIP_DISPLAY)).isNotNull().satisfies(display -> {
+                assertThat(display.hiddenComponents()).containsExactly(DataComponentTypes.ATTRIBUTE_MODIFIERS);
+                assertThat(display.hideTooltip()).isEqualTo(spec.tooltipHidden());
+            });
+        }
+        ItemSpec defaults = ItemSpec.builder(Key.key("minecraft:diamond")).build();
+        assertThat(renderer.render(defaults, Locale.US).getData(DataComponentTypes.TOOLTIP_DISPLAY)).isNull();
     }
 
     @Test

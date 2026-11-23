@@ -5,7 +5,9 @@ import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Text;
 import io.papermc.paper.datacomponent.DataComponentType;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -17,9 +19,15 @@ import org.bukkit.persistence.PersistentDataType;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * An immutable description of what to create, not an already-created stack. An {@link ItemRenderer}
- * renders its name and lore once the viewer's locale is known; Paper does not translate item text
- * per client. Building needs no running server. Value equality compares every attribute for GUI diffs.
+ * Deeply immutable and thread-safe provided pass-through values are immutable
+ * (see {@link Builder#data(DataComponentType.Valued, Object)}); equals/hashCode compare every attribute,
+ * including marker values by content, and the GUI diff relies on it.
+ * An {@link ItemRenderer} renders its name and lore once the viewer's locale is known; Paper does not
+ * translate item text per client.
+ *
+ * <p>Building from a Key with amount, text, model, glint, tooltip flags and markers needs no running
+ * server; builder(Material) and any DataComponentType argument need Paper's registries
+ * (a server or MockBukkit).
  */
 public final class ItemSpec {
     private static final Set<String> TYPED_COMPONENTS = Set.of(
@@ -32,6 +40,8 @@ public final class ItemSpec {
     private final @Nullable Key model;
     private final @Nullable Boolean glint;
     private final boolean tooltipHidden;
+    private final Set<DataComponentType> hiddenInTooltip;
+    private final Set<NamespacedKey> hiddenTooltipKeys;
     private final List<DataPatch> patches;
     private final List<ItemMarker<?, ?>> markers;
 
@@ -43,13 +53,22 @@ public final class ItemSpec {
         model = builder.model;
         glint = builder.glint;
         tooltipHidden = builder.tooltipHidden;
+        hiddenInTooltip = Collections.unmodifiableSet(new LinkedHashSet<>(builder.hiddenInTooltip.values()));
+        hiddenTooltipKeys = Set.copyOf(builder.hiddenInTooltip.keySet());
         patches = List.copyOf(builder.patches);
         markers = List.copyOf(builder.markers.values());
     }
 
-    /** Returns a builder for the item key, initially with amount 1. */
+    /**
+     * Returns a builder for the item key, initially with amount 1.
+     * @throws IllegalArgumentException for {@code minecraft:air}
+     */
     public static Builder builder(Key itemType) {
-        return new Builder(Objects.requireNonNull(itemType, "itemType"));
+        Objects.requireNonNull(itemType, "itemType");
+        if ("minecraft:air".equals(itemType.asString())) {
+            throw new IllegalArgumentException("Air is not a renderable item: " + itemType);
+        }
+        return new Builder(itemType);
     }
 
     /**
@@ -99,6 +118,11 @@ public final class ItemSpec {
         return tooltipHidden;
     }
 
+    /** Components whose tooltip lines are hidden ({@code TOOLTIP_DISPLAY} {@code hiddenComponents}); unmodifiable, may be empty. */
+    public Set<DataComponentType> hiddenInTooltip() {
+        return hiddenInTooltip;
+    }
+
     /** Returns unmodifiable pass-through changes in insertion order. */
     public List<DataPatch> patches() {
         return patches;
@@ -118,6 +142,9 @@ public final class ItemSpec {
         builder.model = model;
         builder.glint = glint;
         builder.tooltipHidden = tooltipHidden;
+        for (DataComponentType type : hiddenInTooltip) {
+            builder.hiddenInTooltip.put(type.getKey(), type);
+        }
         builder.patches.addAll(patches);
         for (ItemMarker<?, ?> marker : markers) {
             builder.markers.put(marker.key(), marker);
@@ -138,13 +165,13 @@ public final class ItemSpec {
                 && itemType.equals(other.itemType) && Objects.equals(name, other.name)
                 && lore.equals(other.lore) && Objects.equals(model, other.model)
                 && Objects.equals(glint, other.glint) && patches.equals(other.patches)
-                && markers.equals(other.markers);
+                && markers.equals(other.markers) && hiddenTooltipKeys.equals(other.hiddenTooltipKeys);
     }
 
     /** Returns a hash of every attribute. */
     @Override
     public int hashCode() {
-        return Objects.hash(itemType, amount, name, lore, model, glint, tooltipHidden, patches, markers);
+        return Objects.hash(itemType, amount, name, lore, model, glint, tooltipHidden, hiddenTooltipKeys, patches, markers);
     }
 
     /** Returns every attribute for diagnostics. */
@@ -152,7 +179,7 @@ public final class ItemSpec {
     public String toString() {
         return "ItemSpec[itemType=" + itemType + ", amount=" + amount + ", name=" + name + ", lore=" + lore
                 + ", model=" + model + ", glint=" + glint + ", tooltipHidden=" + tooltipHidden
-                + ", patches=" + patches + ", markers=" + markers + ']';
+                + ", hiddenInTooltip=" + hiddenInTooltip + ", patches=" + patches + ", markers=" + markers + ']';
     }
 
     /** A non-thread-safe builder; repeated builds produce independent immutable descriptions. */
@@ -164,6 +191,7 @@ public final class ItemSpec {
         private @Nullable Key model;
         private @Nullable Boolean glint;
         private boolean tooltipHidden;
+        private final Map<NamespacedKey, DataComponentType> hiddenInTooltip = new LinkedHashMap<>();
         private final List<DataPatch> patches = new ArrayList<>();
         private final Map<NamespacedKey, ItemMarker<?, ?>> markers = new LinkedHashMap<>();
 
@@ -234,7 +262,27 @@ public final class ItemSpec {
         }
 
         /**
+         * Replaces the set of components whose tooltip lines are hidden, for example
+         * {@code DataComponentTypes.ATTRIBUTE_MODIFIERS} to hide "+7 Attack Damage". Any component type is
+         * allowed. An empty set hides none. Types are compared by key; for two types with the same key the
+         * first is kept. The renderer writes it together with {@link #tooltipHidden(boolean)} into one
+         * {@code TOOLTIP_DISPLAY} value.
+         */
+        public Builder hiddenInTooltip(Set<? extends DataComponentType> types) {
+            Objects.requireNonNull(types, "types");
+            Map<NamespacedKey, DataComponentType> copy = new LinkedHashMap<>();
+            for (DataComponentType type : types) {
+                Objects.requireNonNull(type, "type");
+                copy.putIfAbsent(type.getKey(), type);
+            }
+            hiddenInTooltip.clear();
+            hiddenInTooltip.putAll(copy);
+            return this;
+        }
+
+        /**
          * Appends a component value, applied unchanged and without localization.
+         * The value must be immutable with value equals; Paper's own component values are.
          * @throws IllegalArgumentException for any of the five typed component keys
          */
         public <T> Builder data(DataComponentType.Valued<T> type, T value) {
@@ -267,7 +315,10 @@ public final class ItemSpec {
             return this;
         }
 
-        /** Adds a marker, replacing a previous marker with the same key in its original position. */
+        /**
+         * Adds a marker, replacing a previous marker with the same key in its original position.
+         * The value must be immutable with value equals; Paper's own component values are.
+         */
         public <P, C> Builder marker(NamespacedKey key, PersistentDataType<P, C> type, C value) {
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(type, "type");

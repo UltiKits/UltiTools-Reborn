@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import io.papermc.paper.datacomponent.DataComponentTypes;
+import io.papermc.paper.datacomponent.item.ItemLore;
+import io.papermc.paper.datacomponent.item.TooltipDisplay;
 import java.util.List;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Material;
@@ -45,19 +47,14 @@ class MockBukkitDataComponentProbeTest {
     }
 
     @Test
-    void componentValues_reportEqualityForUsedPaperTypes() {
-        io.papermc.paper.datacomponent.item.ItemLore firstLore =
-                io.papermc.paper.datacomponent.item.ItemLore.lore(List.of(Component.text("line")));
-        io.papermc.paper.datacomponent.item.ItemLore secondLore =
-                io.papermc.paper.datacomponent.item.ItemLore.lore(List.of(Component.text("line")));
-        io.papermc.paper.datacomponent.item.TooltipDisplay firstTooltip =
-                io.papermc.paper.datacomponent.item.TooltipDisplay.tooltipDisplay().hideTooltip(true).build();
-        io.papermc.paper.datacomponent.item.TooltipDisplay secondTooltip =
-                io.papermc.paper.datacomponent.item.TooltipDisplay.tooltipDisplay().hideTooltip(true).build();
+    void componentValues_mockBukkitEquality_isAsMeasured() {
+        ItemLore firstLore = ItemLore.lore(List.of(Component.text("line")));
+        ItemLore secondLore = ItemLore.lore(List.of(Component.text("line")));
+        TooltipDisplay firstTooltip = TooltipDisplay.tooltipDisplay().hideTooltip(true).build();
+        TooltipDisplay secondTooltip = TooltipDisplay.tooltipDisplay().hideTooltip(true).build();
         assertThat(firstLore.lines()).isEqualTo(secondLore.lines());
-        assertThat(firstTooltip.hideTooltip()).isEqualTo(secondTooltip.hideTooltip());
-        System.out.println("Component equality probe: ItemLore=" + firstLore.equals(secondLore)
-                + ", TooltipDisplay=" + firstTooltip.equals(secondTooltip));
+        assertThat(firstLore).as("MockBukkit 4.123.0 measurement, not Paper; see U5").isNotEqualTo(secondLore);
+        assertThat(firstTooltip).as("MockBukkit 4.123.0 measurement, not Paper; see U5").isEqualTo(secondTooltip);
     }
 
     @Test

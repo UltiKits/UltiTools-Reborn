@@ -43,8 +43,9 @@ final class MinimalItemRenderer implements ItemRenderer {
         if (spec.glint() != null) {
             stack.setData(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, spec.glint());
         }
-        if (spec.tooltipHidden()) {
-            stack.setData(DataComponentTypes.TOOLTIP_DISPLAY, TooltipDisplay.tooltipDisplay().hideTooltip(true).build());
+        if (spec.tooltipHidden() || !spec.hiddenInTooltip().isEmpty()) {
+            stack.setData(DataComponentTypes.TOOLTIP_DISPLAY, TooltipDisplay.tooltipDisplay()
+                    .hideTooltip(spec.tooltipHidden()).hiddenComponents(spec.hiddenInTooltip()).build());
         }
         for (DataPatch patch : spec.patches()) {
             switch (patch) {
