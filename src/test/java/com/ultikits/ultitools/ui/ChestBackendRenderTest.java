@@ -13,8 +13,12 @@ import static org.mockito.Mockito.verify;
 
 import com.ultikits.ultitools.item.ItemSpec;
 import com.ultikits.ultitools.text.Text;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
@@ -83,6 +87,27 @@ class ChestBackendRenderTest extends ChestTestFixture {
         assertThat(top().isEmpty()).isTrue();
         backend.redraw(session, Map.of(GridSlot.ofIndex(0), stack(Material.STONE, 8)));
         assertThat(top().isEmpty()).isTrue();
+    }
+
+    @Test void pagingAnUnchangedContainerThenReplacingItEndsUnchangedWithoutWriting() throws Exception {
+        AtomicInteger writes = new AtomicInteger();
+        SlotContainer box = service.container(ContainerSpec.storage(18).disposition(Disposition.COMMIT)
+                .baseline(Collections.nCopies(18, ItemStack.empty()))
+                .store(snapshot -> {
+                    writes.incrementAndGet();
+                    return CompletableFuture.completedFuture(new StoreAnswer.Written());
+                }).undelivered((contributor, items) -> { /* This unchanged container owes no items. */ }).build());
+        GridSession session = open(grid(box, BindingMode.EDITABLE));
+        session.update(Grid.builder(session.current().title(), 1)
+                .bindRange(0, 0, 9, box, 9, BindingMode.EDITABLE).build());
+        tick();
+        assertThat(box.state()).isEqualTo(ContainerState.EDITABLE);
+        session.update(grid(box, BindingMode.EDITABLE));
+        tick();
+        open(Grid.builder(Text.plain("Replacement"), 1).build());
+        assertThat(box.end().toCompletableFuture().get(2, TimeUnit.SECONDS)).isEqualTo(EndOutcome.UNCHANGED);
+        assertThat(writes).hasValue(0);
+        assertThat(session.isOpen()).isFalse();
     }
 
     @Test void closingAnOldSessionDoesNotCloseAForeignInventory() {
