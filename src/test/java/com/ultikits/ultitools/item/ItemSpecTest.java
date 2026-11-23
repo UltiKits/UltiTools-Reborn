@@ -99,7 +99,7 @@ class ItemSpecTest {
             assertThat(spec.toBuilder().build()).hasSameHashCodeAs(spec);
         }
         assertThat(base.equals(base)).isTrue();
-        assertThat(base.equals(null)).isFalse();
+        assertThat(base).isNotEqualTo(null);
         assertThat(base.equals("other")).isFalse();
         assertThat(base.toString()).contains("minecraft:diamond", "amount=1", "name=null", "lore=[]",
                 "model=null", "glint=null", "tooltipHidden=false", "patches=[]", "markers=[]");
@@ -406,7 +406,7 @@ class ItemSpecTest {
         assertThat(marker.hashCode()).isEqualTo(originalHash);
         assertThat(marker.toString()).contains("value=[[1, 2], [[3, 4]], null]");
         assertThat(marker.equals(marker)).isTrue();
-        assertThat(marker.equals(null)).isFalse();
+        assertThat(marker).isNotEqualTo(null);
         assertThat(marker.equals("not a marker")).isFalse();
         assertThat(marker).isNotEqualTo(new ItemMarker<>(MARKER, type, new Object[0]));
         assertThat(marker).isNotEqualTo(new ItemMarker<>(MARKER, type,
