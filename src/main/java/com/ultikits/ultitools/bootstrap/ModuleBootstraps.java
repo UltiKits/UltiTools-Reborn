@@ -36,7 +36,10 @@ final class ModuleBootstraps {
                         ? failure.getCause() : failure;
                 admission.markBootstrapFailed(module.getKey(), cause);
                 failures.put(module.getKey(), cause);
-                logger.log(Level.SEVERE, "Module bootstrap failed: " + module.getKey().getFileName(), cause);
+                // Early output stays English; translated discovery diagnostics follow during enable.
+                logger.log(Level.SEVERE, String.format("[UltiTools] Module '%s' failed in its bootstrap phase (%s): "
+                        + "%s: %s -- the module is not loaded at this start. Fix or remove the module and restart the server.",
+                        module.getKey().getFileName(), bootstrapper, cause.getClass().getName(), cause.getMessage()), cause);
             }
         }
         return new Run(failures, attempted);

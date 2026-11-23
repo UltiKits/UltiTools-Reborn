@@ -55,6 +55,10 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
         }
         ModuleClassLoader loader = ModuleClassLoader.create(urls, getClass().getClassLoader());
         ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, LOGGER);
+        // Early output is English only: neither the language dictionary nor panel capture exists yet.
+        int moduleJars = urls.length - (serverJar == null ? 0 : 1);
+        LOGGER.info(String.format("[UltiTools] Bootstrap: processed pending module changes; %d module JAR(s) "
+                + "on the module class path; %d module bootstrap(s) ran, %d failed.", moduleJars, run.attempted, run.failures.size()));
         return new BootstrapResult(transactions, admission, loader, classPathFailure, run.failures, run.attempted);
     }
 
