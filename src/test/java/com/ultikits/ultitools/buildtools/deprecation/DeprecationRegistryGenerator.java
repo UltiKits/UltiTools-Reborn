@@ -205,13 +205,13 @@ public final class DeprecationRegistryGenerator {
     }
 
     /**
-     * Runs {@link ReleaseBoundaryInvariant} (Phase 21 D-12) and returns one message per violation -
-     * fires when {@code ${project.version}} carries no {@code -SNAPSHOT} and
-     * {@code japicmp.baseline.version} is not a released version strictly less than the project
-     * version. A populated {@code <excludes>} list is legal at the release boundary; its entries are
-     * held to the removal ledger by {@link #collectRemovalConsistencyViolations}. The one-time
-     * 7.0.0 baseline reset is exempt; every later version also enforces re-enabling comparison,
-     * including SNAPSHOT builds and invocations that skip test execution.
+     * Runs {@link ReleaseBoundaryInvariant} and returns one message per violation. All project
+     * versions must match {@code N.N.N} or {@code N.N.N-SNAPSHOT}. Outside the one-time 7.0.0
+     * reset, a formal release requires a released baseline strictly less than the project version.
+     * Every later build also requires comparison enabled and a released baseline at least 7.0.0,
+     * including SNAPSHOT builds and invocations that skip test execution. A populated
+     * {@code <excludes>} list is legal at the release boundary; its entries are held to the removal
+     * ledger by {@link #collectRemovalConsistencyViolations}.
      */
     private static List<String> collectReleaseBoundaryViolations(Document pomDocument, boolean japicmpSkipped) {
         String projectVersion = readProjectVersion(pomDocument);

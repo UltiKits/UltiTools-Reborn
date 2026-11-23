@@ -24,13 +24,13 @@ import java.util.Set;
  * development cycle advances the baseline to it and retires those exclusions - once a removal is
  * no longer newer than the baseline, {@link RemovalConsistencyEvaluator} stops requiring it.
  *
- * <p>Pure logic over three already-derived inputs - the project version string, the configured
- * japicmp baseline version string, and the pom's {@code <exclude>} key set - mirroring
- * {@link RemovalConsistencyEvaluator}'s separation from file I/O so this is unit-testable without
- * running Maven. {@link DeprecationRegistryGenerator} is the sole caller, reading all three inputs
- * from the same parsed {@code pom.xml} {@link org.w3c.dom.Document} it already holds. The check is
- * dormant on 6.x {@code -SNAPSHOT} builds. Only {@code 7.0.0-SNAPSHOT}/{@code 7.0.0} may reset
- * the baseline; every later version must enable comparison against a released baseline >=7.0.0.
+ * <p>Pure logic over the project version, configured japicmp baseline, pom's {@code <exclude>}
+ * key set, and effective comparison skip switch, mirroring {@link RemovalConsistencyEvaluator}'s
+ * separation from file I/O. {@link DeprecationRegistryGenerator} checks these inputs before registry
+ * generation; build-configuration tests also call this logic directly. Project versions must match
+ * {@code N.N.N} or {@code N.N.N-SNAPSHOT}. The released-predecessor check is dormant on valid 6.x
+ * {@code -SNAPSHOT} builds. Only {@code 7.0.0-SNAPSHOT}/{@code 7.0.0} may reset the baseline;
+ * every later version, including SNAPSHOT builds, must enable comparison against a released baseline >=7.0.0.
  */
 public final class ReleaseBoundaryInvariant {
 
@@ -40,9 +40,10 @@ public final class ReleaseBoundaryInvariant {
     }
 
     /**
-     * Evaluates the D-12 invariant. Returns an empty list when {@code projectVersion} carries the
-     * SNAPSHOT marker (the invariant is dormant during the development cycle); otherwise returns at
-     * most one violation, naming why the baseline is not a usable released predecessor.
+     * Evaluates the version-shape, one-time reset and released-predecessor rules with comparison
+     * enabled. Valid SNAPSHOT versions skip only the released-predecessor rule; after 7.0.0 they
+     * still require a released baseline at least 7.0.0. Returns all applicable violation messages,
+     * or an empty list when the build satisfies the rules.
      *
      * @param projectVersion  {@code ${project.version}} as read from {@code pom.xml}
      * @param baselineVersion the configured {@code japicmp.baseline.version}, possibly {@code null}
