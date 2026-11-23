@@ -55,7 +55,9 @@ class AopProxyResolverTest {
 
     public static class SingleTransactionalMethod {
         @Transactional
-        public void work() { }
+        public void work() {
+            // Intentionally empty: the resolver only inspects the annotation.
+        }
     }
 
     public static final class FinalManaged {
