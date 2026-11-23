@@ -307,17 +307,33 @@ class NoV1RuntimePathTest {
                         @Override
                         public void visitInvokeDynamicInsn(String indyName, String indyDesc, Handle bootstrap,
                                 Object... bootstrapArguments) {
-                            // A method or constructor reference is an invokedynamic whose bootstrap argument is a
-                            // method handle: it emits neither NEW nor INVOKE*, so each handle is checked as a call.
                             for (Object argument : bootstrapArguments) {
-                                if (!(argument instanceof Handle)) {
-                                    continue;
+                                if (argument instanceof Handle) {
+                                    checkHandle((Handle) argument);
                                 }
-                                Handle handle = (Handle) argument;
-                                if (handle.getTag() == Opcodes.H_NEWINVOKESPECIAL && CLIENT.equals(handle.getOwner())) {
-                                    findings.add(where + " constructs " + CLIENT);
-                                }
-                                checkCall(handle.getOwner(), handle.getName(), handle.getDesc());
+                            }
+                        }
+
+                        private void checkHandle(Handle handle) {
+                            switch (handle.getTag()) {
+                                case Opcodes.H_GETFIELD:
+                                case Opcodes.H_GETSTATIC:
+                                case Opcodes.H_PUTFIELD:
+                                case Opcodes.H_PUTSTATIC:
+                                    Type fieldType = Type.getType(handle.getDesc());
+                                    if (CLIENT_DESC.equals(fieldType.getDescriptor())) {
+                                        String owner = handle.getOwner();
+                                        findings.add(where + " references a v1 client field "
+                                                + owner.substring(owner.lastIndexOf('/') + 1) + "." + handle.getName());
+                                    }
+                                    break;
+                                default:
+                                    if (handle.getTag() == Opcodes.H_NEWINVOKESPECIAL
+                                            && CLIENT.equals(handle.getOwner())) {
+                                        findings.add(where + " constructs " + CLIENT);
+                                    }
+                                    checkCall(handle.getOwner(), handle.getName(), handle.getDesc());
+                                    break;
                             }
                         }
 
