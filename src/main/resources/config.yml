@@ -10,8 +10,14 @@ datasource:
   # 越高性能消耗越小，但是数据丢失可能性越大
   flushRate: 10
 
-# en for English, zh 为中文
-language: "zh"
+# auto follows each player's client language; a locale such as en or zh forces all players.
+# auto 按玩家客户端语言显示；en、zh 等具体语言代码对全服强制生效。
+language: "auto"
+# Console language and fallback when a player's language has no translation.
+# 控制台语言，以及玩家语言缺少翻译时的后备语言。
+# If absent: the forced language in forced mode, otherwise en. Existing configs are not rewritten.
+# 未设置时：强制模式沿用强制语言，自动模式使用 en；不会自动改写已有配置。
+fallback-language: "zh"
 
 mysql:
   enable: false
