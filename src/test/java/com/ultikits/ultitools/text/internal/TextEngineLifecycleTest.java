@@ -79,6 +79,26 @@ class TextEngineLifecycleTest {
                 .isInstanceOf(PluginModuleException.class).hasMessageContaining("UltiTools framework", "ultitools");
     }
 
+    @Test
+    void sourceLanguage_normalizesAndDefaultsWithoutConstructionLogs() throws Exception {
+        Path source = source("source-language", "greeting: Hello\n");
+        Files.writeString(source.resolve("messages/zh.yml"), "greeting: Chinese\n");
+        Path overrides = temporary.resolve("source-overrides");
+        var chinese = engine.prepare("sample", "Sample", source.toUri().toURL(), overrides, "zh-CN");
+        assertThat(chinese.loaded().catalogue().sourceLocale()).isEqualTo(Locale.CHINA);
+        assertThat(chinese.loaded().diagnostics()).anyMatch(message -> message.contains("no shipped"));
+        assertThat(diagnostics).isEmpty();
+        var defaults = engine.prepare("sample", "Sample", source.toUri().toURL(), overrides, (String) null);
+        assertThat(defaults.loaded().catalogue().sourceLocale()).isEqualTo(Locale.ENGLISH);
+        var invalid = engine.prepare("sample", "Sample", source.toUri().toURL(), overrides, "???");
+        engine.publish(invalid, this);
+        assertThat(engine.catalogue("sample").sourceLocale()).isEqualTo(Locale.ENGLISH);
+        assertThat(diagnostics).hasSize(1);
+        assertThat(diagnostics.getFirst().getMessage()).contains("invalid source-language", "using en");
+        engine.publish(invalid, this);
+        assertThat(diagnostics).hasSize(1);
+    }
+
     private TextEngine.Prepared prepare(String folder, String contents) throws Exception {
         return engine.prepare("sample", "Sample", source(folder, contents).toUri().toURL(),
                 temporary.resolve("operator/messages"), Locale.ENGLISH);

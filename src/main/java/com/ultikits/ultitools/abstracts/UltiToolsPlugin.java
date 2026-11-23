@@ -312,7 +312,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 CodeSource source = getClass().getProtectionDomain().getCodeSource();
                 preparedMessages = textEngine.prepare(MessageKey.namespaceFor(pluginName), pluginName,
                         source == null ? null : source.getLocation(),
-                        new File(resourceFolderPath, "messages").toPath(), java.util.Locale.ENGLISH);
+                        new File(resourceFolderPath, "messages").toPath(), pluginConfig.getString("source-language"));
             }
         }
         prepareConfigConverters();

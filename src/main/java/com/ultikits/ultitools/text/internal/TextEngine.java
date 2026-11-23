@@ -8,6 +8,8 @@ import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Messages;
 import java.net.URL;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -71,7 +73,29 @@ public final class TextEngine implements AutoCloseable {
             throw conflict(namespace, pluginName, "UltiTools framework");
         }
         checkNamespace(namespace, pluginName);
-        return new Prepared(pluginName, codeSource, overrideDirectory, loader.load(namespace, sourceLocale, codeSource));
+        CatalogueLoader.Loaded loaded = loader.load(namespace, sourceLocale, codeSource);
+        if (!loaded.catalogue().hasLocale(sourceLocale)) {
+            List<String> diagnostics = new ArrayList<>(loaded.diagnostics());
+            diagnostics.add("Module '" + pluginName + "' has no shipped messages catalogue for source language '"
+                    + sourceLocale.toLanguageTag() + "'");
+            loaded = new CatalogueLoader.Loaded(loaded.catalogue(), diagnostics, loaded.shippedFiles());
+        }
+        return new Prepared(pluginName, codeSource, overrideDirectory, loaded);
+    }
+
+    /** Prepares resources using plugin.yml's optional source-language, defaulting to English. */
+    public Prepared prepare(String namespace, String pluginName, @Nullable URL codeSource,
+            Path overrideDirectory, @Nullable String sourceLanguage) {
+        Locale source = sourceLanguage == null ? Locale.ENGLISH
+                : LocaleNames.parse(sourceLanguage).orElse(Locale.ENGLISH);
+        Prepared prepared = prepare(namespace, pluginName, codeSource, overrideDirectory, source);
+        if (sourceLanguage == null || LocaleNames.parse(sourceLanguage).isPresent()) {
+            return prepared;
+        }
+        List<String> diagnostics = new ArrayList<>(prepared.loaded().diagnostics());
+        diagnostics.add("Module '" + pluginName + "' has invalid source-language '" + sourceLanguage + "'; using en");
+        return new Prepared(pluginName, codeSource, overrideDirectory, new CatalogueLoader.Loaded(
+                prepared.loaded().catalogue(), diagnostics, prepared.loaded().shippedFiles()));
     }
 
     /** Publishes accepted module resources, then emits the diagnostics deferred during construction. */
