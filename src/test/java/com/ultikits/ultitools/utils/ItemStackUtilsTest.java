@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mockStatic;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
@@ -12,6 +14,7 @@ import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.util.io.BukkitObjectOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +24,7 @@ import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockito.MockedStatic;
+import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
 
 @Timeout(30)
 class ItemStackUtilsTest {
@@ -106,6 +110,42 @@ class ItemStackUtilsTest {
     @Test
     void isValidSerialized_itemArray_returnsTrue() {
         assertThat(ItemStackUtils.isValidSerialized(ItemStackUtils.serializeItem(namedItem()))).isTrue();
+    }
+
+    @Test
+    void deserializeItems_legacyLineWrappedStream_roundTripsItemsAndNullSlots() throws IOException {
+        String encoded = legacyString(new ItemStack[] {namedItem(), null});
+        assertThat(encoded).contains("\n");
+        assertThat(Base64.getMimeDecoder().decode(encoded)).startsWith((byte) 0xAC, (byte) 0xED);
+        ItemStack[] restored = ItemStackUtils.deserializeItems(encoded);
+        assertThat(restored).hasSize(2);
+        assertNamedItem(restored[0]);
+        assertThat(restored[1]).isNull();
+        assertThat(ItemStackUtils.isValidSerialized(encoded)).isTrue();
+    }
+
+    @Test
+    void deserializeItems_legacyWrongObjectType_returnsNull() throws IOException {
+        assertThat(ItemStackUtils.deserializeItems(legacyString(new Object[] {"not an item"}))).isNull();
+    }
+
+    @Test
+    void deserializeItems_legacyTruncatedStream_returnsNull() {
+        String encoded = Base64.getEncoder().encodeToString(new byte[] {(byte) 0xAC, (byte) 0xED});
+        assertThat(ItemStackUtils.deserializeItems(encoded)).isNull();
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String legacyString(Object[] items) throws IOException {
+        try (ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+             BukkitObjectOutputStream output = new BukkitObjectOutputStream(bytes)) {
+            output.writeInt(items.length);
+            for (Object item : items) {
+                output.writeObject(item);
+            }
+            output.flush();
+            return Base64Coder.encodeLines(bytes.toByteArray());
+        }
     }
 
     private static ItemStack namedItem() {

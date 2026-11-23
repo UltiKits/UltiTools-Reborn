@@ -1,9 +1,12 @@
 package com.ultikits.ultitools.utils;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.util.Base64;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.util.io.BukkitObjectInputStream;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -41,7 +44,7 @@ public final class ItemStackUtils {
 
     /**
      * Deserializes a Base64-encoded array of Paper item bytes, accepting MIME line breaks.
-     * Empty items are returned as null slots.
+     * Empty items are returned as null slots. Legacy Bukkit object streams saved by 6.x are also accepted.
      *
      * @param data the Base64-encoded string
      * @return the item array, or null for absent input or a deserialization failure
@@ -52,16 +55,31 @@ public final class ItemStackUtils {
         }
         try {
             byte[] bytes = Base64.getMimeDecoder().decode(data);
-            ItemStack[] items = ItemStack.deserializeItemsFromBytes(bytes);
+            ItemStack[] items = isLegacy(bytes) ? readLegacy(bytes) : ItemStack.deserializeItemsFromBytes(bytes);
             for (int index = 0; index < items.length; index++) {
-                if (items[index].isEmpty()) {
+                if (items[index] != null && items[index].isEmpty()) {
                     items[index] = null;
                 }
             }
             return items;
-        } catch (RuntimeException e) { // NOPMD - Paper throws unspecified unchecked exceptions for malformed item bytes
+        } catch (IOException | ClassNotFoundException | RuntimeException e) { // NOPMD - Paper throws unspecified unchecked exceptions for malformed item bytes
             LOGGER.log(Level.SEVERE, "Failed to deserialize ItemStack array", e);
             return null;
+        }
+    }
+
+    private static boolean isLegacy(byte[] bytes) {
+        return bytes.length >= 2 && bytes[0] == (byte) 0xAC && bytes[1] == (byte) 0xED;
+    }
+
+    @SuppressWarnings("deprecation")
+    private static ItemStack[] readLegacy(byte[] bytes) throws IOException, ClassNotFoundException {
+        try (BukkitObjectInputStream input = new BukkitObjectInputStream(new ByteArrayInputStream(bytes))) {
+            ItemStack[] items = new ItemStack[input.readInt()];
+            for (int index = 0; index < items.length; index++) {
+                items[index] = (ItemStack) input.readObject();
+            }
+            return items;
         }
     }
 
