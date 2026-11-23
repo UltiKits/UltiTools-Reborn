@@ -28,8 +28,9 @@ Call the sound and enchantment APIs during gameplay, not from static initializer
 numeric IDs and old names renamed after 1.20 (for example `GRASS`, `CHAIN` and `SCUTE`) return `null`.
 The native `Material`, `ItemStack` and `Enchantment` entrypoints remain available. GUI glass colours,
 button materials, teleport sound (volume 1, pitch 0) and notification text remain unchanged.
-The unused `Sounds` enum (including `getKey()`) and `Colors.getCode()` are removed;
-`Colors` and `Colors.getGlassPaneMaterial()` remain available.
+The unused `Sounds` enum and `Colors.getCode()` are removed; the `Colors` enum itself remains.
+`Colors.getGlassPaneMaterial()` is new in 7.0.0 and does not exist in 6.x; code that has to compile on
+both lines uses `Material.<COLOR>_STAINED_GLASS_PANE` directly.
 
 7.0 不再提供 XSeries 与 `XVersionUtils`；保留 XSeries 的模块须自行打包并重定位
 （shade + relocate），UltiTools 模块不能使用 Paper 的 `libraries:`。推荐使用上面的 Paper
@@ -282,6 +283,25 @@ transaction rewrite is added for this unusual upgrade sequence.
 旧副本被拒、新副本提供类定义；索引保留两份文件身份，不自动删除旧 JAR。请获取重新构建的模块并停服替换，
 不要只改 API 声明。已知限制：升级框架前，先在旧框架下让所有挂起的模块更新完成一次启动确认，避免拒载之外
 再看到一次旧事务回滚。
+
+## Class-name filter audit and no-op SecurityPolicy methods removed (as of 7.0.0)
+
+The observe-only class-name filter audit and its startup summaries are removed. The deprecated
+`SecurityPolicy.isSafeClassName(String)`, `isSafeParameterType(Class<?>)`,
+`addTrustedPackage(String)` and `addDangerousClass(String)` no-op methods are removed, as are
+`getSecurityPolicySummary()` and the `ClassLoaderUtils.recordClassloadFilterAudit(String, String)` /
+`emitClassloadFilterAuditSummary(String)` audit bridges. There is no replacement name filter or
+audit configuration. `SecurityPolicy.isValidModuleJar(File)` and
+`isSafeFileStructure(long, int)` still reject invalid archives, files above 100 MB and archives
+above 10,000 entries; these checks do not sandbox loaded code.
+
+Module-scan diagnostics still report skipped classes through the plugin logger at `SEVERE`,
+displayed as `ERROR` in the console and `error` in the panel stream. The 6.3.0 history below
+records the audit's behaviour in that release, not its availability in 7.0.0.
+
+中文补充：7.0.0 删除仅作观察的类名过滤审计、启动汇总和上述七个公开方法，不提供替代过滤器或审计配置。
+模块扫描诊断仍通过插件日志报告跳过的类；JAR 结构检查、100 MB 大小上限和 10,000 条目上限保留，
+但并不隔离已加载代码。下方 6.3.0 的历史记录不代表 7.0.0 仍提供该审计。
 
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 

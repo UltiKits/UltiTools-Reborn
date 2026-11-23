@@ -117,7 +117,7 @@ public class ClassLoaderSecurityTest {
 
     @Test
     public void testValidateNullAndEmptyClassNames() {
-        // GEN-07 (D-13): SecurityPolicy.isSafeClassName no longer gates this. These three still
+        // These three invalid names still
         // throw SecurityException, but now solely because ClassLoaderUtils.validateClassName's own
         // VALID_CLASS_NAME_PATTERN format regex rejects them -- the removed filter is not why any
         // more (Test 9). A null name is explicitly guarded before the regex runs, so it throws
@@ -155,30 +155,6 @@ public class ClassLoaderSecurityTest {
                 ClassLoaderUtils.loadClass(className);
             }, "Should block invalid format: " + className);
         }
-    }
-
-    @Test
-    public void testSecurityPolicyConfigurationIsNowANoOp() {
-        // GEN-07: addTrustedPackage/addDangerousClass no longer mutate anything, and
-        // isSafeClassName is unconditionally true regardless of either call.
-        SecurityPolicy.addTrustedPackage("com.example.trusted");
-        assertTrue(SecurityPolicy.isSafeClassName("com.example.trusted.TestClass"));
-
-        SecurityPolicy.addDangerousClass("com.example.dangerous.BadClass");
-        assertTrue(SecurityPolicy.isSafeClassName("com.example.dangerous.BadClass"),
-                "GEN-07: addDangerousClass is a no-op, isSafeClassName stays true");
-    }
-
-    @Test
-    public void testParameterTypeSafety() {
-        // Safe parameter types
-        assertTrue(SecurityPolicy.isSafeParameterType(String.class));
-        assertTrue(SecurityPolicy.isSafeParameterType(Integer.class));
-        assertTrue(SecurityPolicy.isSafeParameterType(java.util.List.class));
-
-        // GEN-07: isSafeParameterType is now unconditionally true, including for a type the
-        // pre-6.3.0 whitelist would have refused.
-        assertTrue(SecurityPolicy.isSafeParameterType(ProcessBuilder.class));
     }
 
     @Test
