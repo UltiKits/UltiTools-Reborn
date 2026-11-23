@@ -25,7 +25,8 @@ import com.ultikits.ultitools.UltiTools;
  */
 final class PluginLoggerBridge extends Handler {
 
-    // Shared by bridge instances: Paper can re-log stderr through either one on this thread.
+    // Static so the re-entry guard covers every bridge instance on this thread:
+    // Paper can re-log stderr through the plugin logger.
     private static final ThreadLocal<Boolean> WRITING_FALLBACK = new ThreadLocal<>();
 
     /**

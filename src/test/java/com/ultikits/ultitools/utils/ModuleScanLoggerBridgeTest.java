@@ -233,6 +233,15 @@ class ModuleScanLoggerBridgeTest {
     }
 
     @Test
+    void verbosePluginLoggerReceivesPerClassScanDetail() {
+        pluginLogger.setLevel(Level.FINE);
+        recordSkipped("verbose-scan", "com.example.Gone", new NoClassDefFoundError("missing"));
+        assertThat(atPluginLogger).extracting(LogRecord::getLevel).containsExactly(Level.FINE);
+        scanSummary("verbose-scan");
+        assertThat(atPluginLogger).extracting(LogRecord::getLevel).containsExactly(Level.FINE, Level.SEVERE);
+    }
+
+    @Test
     @DisplayName("a handler of the plugin logger that throws does not break the scan that emits the line")
     void throwingPluginLoggerHandlerDoesNotBreakTheCaller() {
         addThrowingPluginLoggerHandler();

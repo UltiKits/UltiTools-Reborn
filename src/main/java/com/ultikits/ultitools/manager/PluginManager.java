@@ -1631,6 +1631,7 @@ public class PluginManager {
 
         try {
             // Validate the main class name format, then check the module hierarchy below.
+            // Do not use loadPluginClass: its com.ultikits. prefix check would reject third-party modules.
             Class<?> aClass = ClassLoaderUtils.loadClass(mainClassName);
             if (!UltiToolsPlugin.class.isAssignableFrom(aClass)
                     || aClass.isInterface()
@@ -1702,7 +1703,7 @@ public class PluginManager {
                     + e.getMessage() + " -- refusing to load.", e);
             return null;
         } catch (SecurityException e) {
-            // Security violations must be logged — only triggers for actually dangerous classes
+            // Name-format validation or the classloader (for example, package sealing) can reject the class.
             Bukkit.getLogger().log(Level.WARNING,
                 "[UltiTools-API] Security violation while loading declared main class '"
                     + mainClassName + "' for module '" + pluginJar.getName() + "': " + e.getMessage());
@@ -1979,6 +1980,7 @@ public class PluginManager {
                     "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
             }
         } catch (SecurityException e) {
+            // This includes malformed entry names and classloader rejections such as package sealing.
             Bukkit.getLogger().log(Level.WARNING,
                 "[UltiTools-API] Security violation during entity scan: " + className + " - " + e.getMessage());
         }

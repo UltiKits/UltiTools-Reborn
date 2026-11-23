@@ -199,6 +199,25 @@ Paper 版本，不承诺兼容旧服务器；本文其他位置的 6.x 旧服务
 `world`：Paper 的 `Location.deserialize` 抛出 `unknown world`，其序列化层记录失败并返回 null，
 框架的 Bukkit 转换器随后以 `ConversionException` 拒绝这个配置值。
 
+## Class-name filter audit and no-op SecurityPolicy methods removed (as of 7.0.0)
+
+The observe-only class-name filter audit and its startup summaries are removed. The deprecated
+`SecurityPolicy.isSafeClassName(String)`, `isSafeParameterType(Class<?>)`,
+`addTrustedPackage(String)` and `addDangerousClass(String)` no-op methods are removed, as are
+`getSecurityPolicySummary()` and the `ClassLoaderUtils.recordClassloadFilterAudit(String, String)` /
+`emitClassloadFilterAuditSummary(String)` audit bridges. There is no replacement name filter or
+audit configuration. `SecurityPolicy.isValidModuleJar(File)` and
+`isSafeFileStructure(long, int)` still reject invalid archives, files above 100 MB and archives
+above 10,000 entries; these checks do not sandbox loaded code.
+
+Module-scan diagnostics still report skipped classes through the plugin logger at `SEVERE`,
+displayed as `ERROR` in the console and `error` in the panel stream. The 6.3.0 history below
+records the audit's behaviour in that release, not its availability in 7.0.0.
+
+中文补充：7.0.0 删除仅作观察的类名过滤审计、启动汇总和上述七个公开方法，不提供替代过滤器或审计配置。
+模块扫描诊断仍通过插件日志报告跳过的类；JAR 结构检查、100 MB 大小上限和 10,000 条目上限保留，
+但并不隔离已加载代码。下方 6.3.0 的历史记录不代表 7.0.0 仍提供该审计。
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
@@ -3880,7 +3899,7 @@ its meaning.
   3 秒，且 4 个工作线程同时阻塞，这个已按超时答复的请求仍会在之后入队，并占用 64 个等待位置中的一个，直到有工作线程空出；
   其间后来的请求可能被当作队列已满而拒绝。不会发出错误的回复。
 
-### Framework text follows `language` (6.3.0)
+### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
 
 Each corrects a declared behaviour the framework did not deliver. The panel protocol is unchanged.
 
@@ -3903,16 +3922,18 @@ Each corrects a declared behaviour the framework did not deliver. The panel prot
   English log messages that carried full-width punctuation (`Configuration save failed！File path：…`,
   `… load failed！`) now use ASCII punctuation; a tool that matched the full-width form must be updated.
   `FrameworkText` (`com.ultikits.ultitools.utils`, `@ApiStatus.Internal`) is added for this.
-- **Module-scan diagnostics** report skipped classes through the plugin logger at `SEVERE`,
-  displayed as `ERROR` in the console and `error` in the panel stream. As of 7.0.0, the
-  observe-only class-name filter audit and its startup summaries are removed. The deprecated
-  `SecurityPolicy.isSafeClassName(String)`, `isSafeParameterType(Class<?>)`,
-  `addTrustedPackage(String)` and `addDangerousClass(String)` no-op methods are removed, as are
-  `getSecurityPolicySummary()` and the `ClassLoaderUtils.recordClassloadFilterAudit(String, String)` /
-  `emitClassloadFilterAuditSummary(String)` audit bridges. There is no replacement name filter or
-  audit configuration. `SecurityPolicy.isValidModuleJar(File)` and
-  `isSafeFileStructure(long, int)` still reject invalid archives, files above 100 MB and archives
-  above 10,000 entries; these checks do not sandbox loaded code.
+- **The class-load audit is quiet on a clean start** (#557). The audit (new in 6.3.0) reports which classes the
+  name-based filters removed in 6.3.0 would have refused. A module for which nothing would have been refused is
+  logged at `FINE` on the audit's own logger and is not forwarded to the console, and a module with at least one
+  such class gets ONE `INFO` line naming the jar and the count, through the plugin logger. (Earlier 6.3.0 snapshots
+  printed each summary as two `WARN` lines, twice per module, through the standard error stream, with an internal
+  requirement code.) The module-scan diagnostics (also new in 6.3.0) log their `SEVERE` summary for a skipped class
+  through the plugin logger, so the console shows it as `ERROR` and the panel stream as `error` (#571; earlier
+  6.3.0 snapshots printed it as `WARN` through the standard error stream). `SecurityPolicy`'s one-time deprecation
+  warning (new in 6.3.0) carries no internal code either.
+
+  中文补充：模块扫描诊断（6.3.0 新增）的 `SEVERE` 汇总（某模块跳过了加载失败的类）经插件日志输出，控制台显示为 `ERROR`，
+  并以 `error` 级别推送到面板（#571；本周期较早的 6.3.0 快照经标准错误流输出，显示为 `WARN`）。
 
 ### JSON transactions (6.3.0) — staged, atomic and durable
 
