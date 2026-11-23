@@ -241,6 +241,9 @@ public final class UiRuntime implements AutoCloseable {
         log(record);
     }
     void log(LogRecord record) { logger.log(record); }
+    static void rethrowFatal(Throwable failure) {
+        if (failure instanceof VirtualMachineError fatal) { throw fatal; }
+    }
 
     @Override public void close() {
         checkThread();

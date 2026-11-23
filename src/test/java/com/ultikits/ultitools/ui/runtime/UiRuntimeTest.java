@@ -14,6 +14,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
+import com.ultikits.ultitools.item.ItemSpec;
+import net.kyori.adventure.key.Key;
+import com.ultikits.ultitools.ui.GridItem;
+import com.ultikits.ultitools.ui.ClickKind;
 import com.ultikits.ultitools.scheduling.ManualScheduler;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.BindingMode;
@@ -168,6 +172,40 @@ class UiRuntimeTest {
         assertThat(completed(session.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.CLOSED_BY_CODE));
         assertThat(completions).hasValue(1);
         verify(backend).close(session);
+        warning(failure);
+    }
+    @Test void closeError_completesExactlyOnceAndLaterShowStillOpens() {
+        UiBackend backend = backend();
+        AssertionError failure = new AssertionError("close linkage");
+        UiSession<Boolean> session = show(); settle();
+        doThrow(failure).when(backend).close(session);
+        AtomicInteger completions = new AtomicInteger();
+        session.result().thenAccept(ignored -> completions.incrementAndGet());
+        session.close(); settle();
+        UiSession<Boolean> later = show(); settle();
+        assertThat(completed(session.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.CLOSED_BY_CODE));
+        assertThat(completions).hasValue(1);
+        assertThat(later.isOpen()).isTrue();
+        verify(backend).open(eq(later), any());
+        warning(failure);
+    }
+    @Test void actionError_doesNotWedgeOtherModulesForViewer() {
+        UiBackend backend = backend();
+        AssertionError failure = new AssertionError("module linkage");
+        GridSlot slot = GridSlot.ofIndex(0);
+        ItemSpec icon = ItemSpec.builder(
+                Key.key("minecraft", "stone")).build();
+        RuntimeGridSession first = (RuntimeGridSession) service.show(viewer, Grid.builder(TITLE, 1)
+                .set(slot, GridItem.of(icon, click -> { throw failure; })).build());
+        settle();
+        first.clicked(slot, ClickKind.LEFT);
+        settle();
+        assertThat(first.isOpen()).isTrue();
+        UiSession<Boolean> later = runtime.service("OtherModule").show(viewer, Confirm.builder(TITLE).build());
+        settle(); later.close(); settle();
+        assertThat(completed(first.result())).isEqualTo(new UiResult.Closed<>(CloseReason.REPLACED));
+        assertThat(completed(later.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.CLOSED_BY_CODE));
+        verify(backend).open(eq(later), any());
         warning(failure);
     }
     @Test void backendReentryAndResultDependents_neverHoldRuntimeLock() {

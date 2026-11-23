@@ -6,6 +6,9 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import com.ultikits.ultitools.scheduling.TaskHandle;
 import com.ultikits.ultitools.scheduling.ManualScheduler;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.TaskContext;
@@ -85,6 +88,48 @@ class ViewerLaneTest {
         clock.advanceTicks(3);
         assertThat(calls).hasValue(1000);
         assertThat(lane.isRetired()).isTrue();
+    }
+    @Test void actionError_doesNotBlockQueuedOrLaterWork() {
+        ViewerLane lane = new ViewerLane(scheduler, viewer, pump, logger);
+        List<Integer> seen = new ArrayList<>();
+        lane.execute(() -> { throw new AssertionError("module action"); });
+        lane.execute(() -> seen.add(1));
+        clock.advanceTicks(1);
+        lane.execute(() -> seen.add(2));
+        clock.advanceTicks(1);
+        assertThat(seen).containsExactly(1, 2);
+    }
+    @Test void failedDrain_retriesOnEntityContext() { retryDrain(new AssertionError("scheduler wrapper")); }
+    @Test void cancelledDrain_retriesOnEntityContext() { retryDrain(new CancellationException()); }
+    private void retryDrain(Throwable failure) {
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        TaskHandle failed = mock(TaskHandle.class);
+        when(failed.completion()).thenReturn(completion.minimalCompletionStage());
+        TaskContext context = mock(TaskContext.class);
+        AtomicInteger attempts = new AtomicInteger();
+        doAnswer(invocation -> attempts.getAndIncrement() == 0 ? failed
+                : scheduler.entity(viewer).run(invocation.getArgument(0))).when(context).run(any(Runnable.class));
+        Scheduler unreliable = mock(Scheduler.class);
+        when(unreliable.entity(viewer)).thenReturn(context);
+        ViewerLane lane = new ViewerLane(unreliable, viewer, pump, logger);
+        List<Boolean> seen = new ArrayList<>();
+        lane.execute(() -> seen.add(RecordingScheduler.inEntityTask(viewer)));
+        completion.completeExceptionally(failure);
+        clock.advanceTicks(3);
+        assertThat(attempts).hasValue(2);
+        assertThat(seen).containsExactly(true);
+        assertThat(lane.isRetired()).isFalse();
+    }
+    @Test void vmError_releasesDrainAndResubmitsPendingWork() {
+        ViewerLane lane = new ViewerLane(scheduler, viewer, pump, logger);
+        List<Boolean> seen = new ArrayList<>();
+        lane.execute(() -> { throw new InternalError("simulated VM failure"); });
+        lane.execute(() -> seen.add(RecordingScheduler.inEntityTask(viewer)));
+        clock.advanceTicks(3);
+        assertThat(seen).containsExactly(true);
+        lane.execute(() -> seen.add(RecordingScheduler.inEntityTask(viewer)));
+        clock.advanceTicks(1);
+        assertThat(seen).containsExactly(true, true);
     }
     @Test void offlineSubmission_runsOnGlobalWithoutEntityTask() {
         viewer.disconnect();

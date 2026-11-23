@@ -79,15 +79,21 @@ class RuntimeSession<R> implements UiSession<R> {
             result = chosen;
             closing = backend;
         }
-        if (closing != null) {
-            try { closing.close(this); } catch (RuntimeException failure) {
-                runtime.warn(service.owner(), "Backend close failed", failure);
+        try {
+            if (closing != null) {
+                try { closing.close(this); } catch (Throwable failure) {
+                    runtime.warn(service.owner(), "Backend close failed", failure);
+                    UiRuntime.rethrowFatal(failure);
+                }
+            }
+        } finally {
+            try { detachBindings(); } catch (Throwable failure) {
+                runtime.warn(service.owner(), "Container detach failed", failure);
+                UiRuntime.rethrowFatal(failure);
+            } finally {
+                completion.complete(result);
             }
         }
-        try { detachBindings(); } catch (RuntimeException failure) {
-            runtime.warn(service.owner(), "Container detach failed", failure);
-        }
-        completion.complete(result);
     }
 
     final void openTask(ShowOptions options) {

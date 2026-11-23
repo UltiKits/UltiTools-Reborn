@@ -171,8 +171,9 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
 
     private void runAction(GridAction action, GridSlot slot, ClickKind kind) {
         if (!isOpen()) { return; }
-        try { action.onClick(new Click(viewer, slot, kind, this)); } catch (Exception failure) {
+        try { action.onClick(new Click(viewer, slot, kind, this)); } catch (Throwable failure) {
             runtime.warn(service.owner(), "Grid action failed", failure);
+            UiRuntime.rethrowFatal(failure);
         }
     }
 
