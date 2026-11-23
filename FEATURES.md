@@ -301,8 +301,8 @@ behaviour, so these rows reconcile against no annotation.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.gui.toolbar-material | The bottom-toolbar background item of a `BaseInventoryPage` is one gray stained glass pane | gui | a shipped module page built on `BaseInventoryPage`, such as the content page UltiRemoteBag opens for `/bag <page>` | n/a | n/a | internal | none | BaseInventoryPage#createBackgroundIcon |
-| ultitools.teleport.sound | After the framework's own `TeleportService` teleports a player, it plays the Enderman teleport sound to that player at volume 1 and pitch 0 | event | a shipped module teleporting a player through the framework's `TeleportService`, such as UltiSocial's `/friend tp <player>` | n/a | n/a | internal | none | InMemeryTeleportService#teleport |
+| ultitools.gui.toolbar-material | The bottom-toolbar background item of a `BaseInventoryPage` is one gray stained glass pane | gui | a shipped module page built on `BaseInventoryPage`, such as the content page UltiRemoteBag opens for `/bag <page>`; use a module built against UltiTools-API 7.0 with no XSeries or `XVersionUtils` references; without such a build record blocked, not fail | n/a | n/a | internal | none | BaseInventoryPage#createBackgroundIcon |
+| ultitools.teleport.sound | After the framework's own `TeleportService` teleports a player, it plays the Enderman teleport sound to that player at volume 1 and pitch 0 | event | a shipped module teleporting a player through the framework's `TeleportService`, such as UltiSocial's `/friend tp <player>`; use a module built against UltiTools-API 7.0 with no XSeries or `XVersionUtils` references; without such a build record blocked, not fail | n/a | n/a | internal | none | InMemeryTeleportService#teleport |
 
 ## Economy
 

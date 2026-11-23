@@ -5,6 +5,38 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Native item and sound APIs (as of 7.0.0)
+
+UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads
+accepting `XMaterial` or `XEnchantment`. Rebuild modules against 7.0 and prefer Paper's native APIs.
+A module that keeps XSeries must package and relocate it itself (shade + relocate); Paper's
+`libraries:` mechanism is not available to UltiTools modules loaded by the framework.
+Do not use a 6.x module build to judge the 7.0 framework: a module must be built against 7.0 and
+contain no XSeries or `XVersionUtils` references for the native-material and teleport-sound UAT
+rows; without such a build, record the row as blocked, not fail.
+
+```java
+ItemStack item = ItemStackBuilder.of(Material.STONE).build();
+player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
+ItemStack enchanted = ItemStackBuilder.of(Material.FISHING_ROD).enchant(Enchantment.LUCK_OF_THE_SEA, 1).build();
+player.sendActionBar(Component.text("Ready"));
+```
+
+Call the sound and enchantment APIs during gameplay, not from static initializers or enum constructors.
+`ItemStackBuilder.of(String)` accepts only current Bukkit material names or namespaced names through
+`Material.matchMaterial`. Unknown names and block-only materials return `null`; historical aliases,
+numeric IDs and old names renamed after 1.20 (for example `GRASS`, `CHAIN` and `SCUTE`) return `null`.
+The native `Material`, `ItemStack` and `Enchantment` entrypoints remain available. GUI glass colours,
+button materials, teleport sound (volume 1, pitch 0) and notification text remain unchanged.
+The unused `Sounds` enum (including `getKey()`) and `Colors.getCode()` are removed;
+`Colors` and `Colors.getGlassPaneMaterial()` remain available.
+
+7.0 不再提供 XSeries 与 `XVersionUtils`；保留 XSeries 的模块须自行打包并重定位
+（shade + relocate），UltiTools 模块不能使用 Paper 的 `libraries:`。推荐使用上面的 Paper
+原生材质、音效、附魔和快捷栏上方文字 API。字符串工厂仅接受当前材质名或命名空间名；
+非物品材质、历史别名、数字 ID 及 1.20 之后改过名的旧名字返回 `null`，不提供旧名称兼容。
+下面 6.x 小节保留历史行为，不是 7.0 的运行库供应承诺。
+
 ## Removed data-store overloads (as of 6.5.0)
 
 The eight data-store members announced for removal in 6.4.0 are now removed:
@@ -254,7 +286,7 @@ explains it; the sections below are the reference and stay authoritative where t
 9. If a field uses `@Scheduled(config = …, periodKey/delayKey = …)` or `@CmdCD(config = …, key = …)`, declare `api-version: 630`, keep a bound `@Scheduled` synchronous, and drop any `@Range` on the bound field, whose range the binding replaces (see [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)).
 10. Check command bodies for the one-tick delay they no longer get: a synchronous body now runs at dispatch, so code inside an `InventoryClickEvent` that opens or closes an inventory or dispatches a command must defer it with `runTask`, and a body that dispatches its own command meets `@UsageLimit` and `@CmdCD` on the same tick (see [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)).
 11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file if its `(String)` default instance could be constructed (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
-12. Keep the framework out of your JAR. In 7.0, use Paper's native material, sound and enchantment APIs; the framework no longer delivers a cross-version lookup library. Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
+12. Keep the framework out of your JAR, and if your module uses XSeries declare it yourself as `provided`/`compileOnly` (`com.github.cryptomorin:XSeries:13.7.1` or your own pin): the framework no longer shades it but still delivers it at runtime through its `libraries:` block, and Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
 13. Check the requirements of the framework version you install: the current 7.0 baseline is Paper 26.3 build 258 with Java 25, with no older-server compatibility promise. The UltiKits modules state only the UltiTools-API version they support; a historical module declaration does not establish 7.0 compatibility (see [Support matrix](#support-matrix)).
 14. If your module uses `DataOperator#transaction(...)` or `@Transactional` on JSON storage, or relies on a failing joined `@Transactional` method or a failing nested `DataOperator#transaction(...)` scope being survivable, review the transaction changes: on `datasource.type: json` transactions are now staged, atomic across a plugin's tables and durable once `commit` returns; a plain JSON write can wait up to 5 seconds for a transaction's table lock; a transaction begun by `DataOperator#transaction(...)` locks each table at its first read, as 6.2.5 ran each callback alone per operator, so a read inside it can wait up to 5 seconds too; a `@Transactional` method that computes a write from a value it read uses `updateIf` or `@Transactional(isolation = Isolation.REPEATABLE_READ)`; and on every backend a failing joined method or nested scope marks the whole transaction rollback-only, so the outermost commit throws `UnexpectedRollbackException` (see [JSON transactions](#json-transactions-630--staged-atomic-and-durable), [A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) and [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)). If you also run the server, read the operator guidance in the JSON transactions section: back up `.ultitools-journal` with the tables, never delete it, and run one server per data folder.
 
@@ -273,27 +305,28 @@ explains it; the sections below are the reference and stay authoritative where t
 9. 字段使用 `@Scheduled(config = …, periodKey/delayKey = …)` 或 `@CmdCD(config = …, key = …)` 时，声明 `api-version: 630`，绑定配置的 `@Scheduled` 保持同步，并删除该字段上的 `@Range`（由绑定自带的范围取代）（见 [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)）。
 10. 检查依赖“延后一刻执行”的命令代码：同步命令体现在于分发时立即执行，因此在 `InventoryClickEvent` 中打开或关闭物品栏、或分发命令的代码要用 `runTask` 推迟，分发自身命令的命令体会在同一刻遇到 `@UsageLimit` 和 `@CmdCD`（见 [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)）。
 11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 在能通过 `(String)` 构造器创建默认实例时，会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
-12. 不要把框架打进自己的 JAR。7.0 使用 Paper 原生材质、声音和附魔 API，框架不再提供跨版本查找库。Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
+12. 不要把框架打进自己的 JAR；模块用到 XSeries 时请自行以 `provided`/`compileOnly` 声明（`com.github.cryptomorin:XSeries:13.7.1` 或你自己固定的版本）：框架不再内嵌它，但仍通过自己的 `libraries:` 在运行时提供，Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
 13. 核对所安装框架版本的要求：当前 7.0 基准是 Paper 26.3 build 258 + Java 25，不承诺兼容旧服务器。UltiKits 官方模块只写明它们支持的 UltiTools-API 版本；历史模块声明不证明兼容 7.0（见 [Support matrix](#support-matrix)）。
 14. 如果模块在 JSON 存储上使用 `DataOperator#transaction(...)` 或 `@Transactional`，或者依赖“失败的加入方 `@Transactional` 方法 / 失败的嵌套 `DataOperator#transaction(...)` 作用域可以被调用方承受”，请检查事务相关的变化：`datasource.type: json` 下的事务现在是暂存的、跨同一插件各表原子的，并且在 `commit` 返回后即持久；普通 JSON 写入可能为等待事务的表锁而停顿最多 5 秒；由 `DataOperator#transaction(...)` 开启的事务在第一次读取某张表时就锁住它（与 6.2.5 中每个回调按操作器逐个运行一致），所以其中的读取也可能停顿最多 5 秒；凭读到的值计算写入的 `@Transactional` 方法应使用 `updateIf` 或 `@Transactional(isolation = Isolation.REPEATABLE_READ)`；在所有后端上，失败的加入方方法或嵌套作用域都会把整个事务标记为仅回滚，最外层提交会抛出 `UnexpectedRollbackException`（见 [JSON transactions](#json-transactions-630--staged-atomic-and-durable)、[A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) 和 [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)）。如果你同时运营服务器，请阅读 JSON 事务一节中的服主须知：把 `.ultitools-journal` 与各表一起备份、永远不要删除它，并且一个数据文件夹只运行一个服务器。
 
-## Native item and sound APIs (as of 7.0)
+## XSeries 14 (as of 6.3.1)
 
-The framework no longer depends on or delivers a cross-version item/sound lookup library.
-The former version utility class and the builder overloads accepting third-party material and
-enchantment wrappers are removed. Recompile modules against 7.0 and use Paper directly:
+The framework-provided XSeries runtime library moves from **13.7.1 to 14.0.0**;
+Paper still downloads it through `plugin.yml` `libraries:` rather than finding it shaded in the framework JAR.
+These removed APIs belong to the bundled XSeries library, not to UltiTools-API's own API.
+Third-party modules using XSeries must check these removed public APIs and recompile:
 
-```java
-ItemStackBuilder.of(Material.STONE)
-    .enchant(Registry.ENCHANTMENT.getOrThrow(NamespacedKey.minecraft("unbreaking")), 1)
-    .build();
-```
+- `com.cryptomorin.xseries.reflection.minecraft.NMSExtras` and its nested types
+  (`Animation`, `DataWatcherItemType`, `EntityPose`, `LivingEntityFlags`, `WorldlessBlockWrapper`)
+  are removed; use the new `reflection.minecraft.capabilities` classes extending `MinecraftCapability`.
+- The public no-argument `com.cryptomorin.xseries.profiles.builder.XSkull()` constructor is removed;
+  use the static factory methods, such as `XSkull.createItem()` or `XSkull.of(...)`.
+- `com.cryptomorin.xseries.reflection.XReflection.getLatestPatchNumberOf(int)` is removed;
+  use `getLatestPatchNumberOf(int majorVersion, int minorVersion)` (for example, `(1, 21)`).
 
-`ItemStackBuilder.of(String)` accepts current Bukkit material names or namespaced names via
-`Material.matchMaterial`; it returns `null` for unknown names. Historical aliases and numeric IDs
-from the removed lookup library are not supported. The existing `Material`, `ItemStack` and
-`Enchantment` overloads remain available. GUI glass colours, button materials, teleport sound
-(volume 1, pitch 0) and notification text remain unchanged.
+See the [XSeries 14.0.0 release notes](https://github.com/CryptoMorin/XSeries/releases/tag/v14.0.0)
+and the published [13.7.1](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/13.7.1/XSeries-13.7.1-sources.jar)
+and [14.0.0 sources](https://repo.maven.apache.org/maven2/com/github/cryptomorin/XSeries/14.0.0/XSeries-14.0.0-sources.jar).
 
 ## UltiCloud protocol 2.1.0 (as of 6.3.1)
 
@@ -1830,7 +1863,7 @@ such spelling: keep binary values out of the keys of a file the framework writes
 - **MAJOR**: reserved for a change of direction at the framework level. It will not be issued
   merely to clean up deprecated API.
 
-Libraries delivered through `plugin.yml` `libraries:` (for example HikariCP) follow their own versioning,
+Libraries delivered through `plugin.yml` `libraries:` (for example XSeries) follow their own versioning,
 not this framework's version-number contract.
 
 ### When a public API becomes eligible for removal
@@ -1939,12 +1972,13 @@ So: the *ordering* of module version numbers is consumed by machines, while the 
 MAJOR/MINOR/PATCH is not — that part is addressed to server owners. On the framework side both are
 machine-consumed, which is why its version number does not have the same freedom.
 
-Libraries the framework delivers at runtime through its `plugin.yml` `libraries:` block (HikariCP,
-ByteBuddy and the others in [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
+Libraries the framework delivers at runtime through its `plugin.yml` `libraries:` block (XSeries,
+HikariCP, ByteBuddy and the others in [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
 are not covered by the framework's version number either. They keep their own versioning, and a
 framework MINOR or PATCH release may move one of them to a new major version; that release's notes
-and its entry in this file name the library's removals. A module that calls such a library directly
-declares it itself and checks those notes when the framework moves it.
+and its entry in this file name the library's removals (for example XSeries 13.7.1 to 14.0.0 in
+6.3.1). A module that calls such a library directly declares it itself and checks those notes when
+the framework moves it.
 
 ## Declaring the dependency
 
@@ -4840,7 +4874,7 @@ The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and Univer
 
 | Delivery route | Version decided by | Examples |
 |---|---|---|
-| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | commons-dbutils, Java-WebSocket, ByteBuddy, JavaMail (`com.sun.mail:javax.mail`), HikariCP |
+| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | commons-dbutils, Java-WebSocket, ByteBuddy, JavaMail (`com.sun.mail:javax.mail`), HikariCP, XSeries |
 | Shipped by the Paper server itself | **The Paper build the server owner installed** | Gson, MySQL Connector/J, protobuf, slf4j, the SQLite driver, native Adventure, log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
 
 As of 6.3.0, Gson, MySQL Connector/J, protobuf and slf4j are no longer listed under `libraries:`. Paper
@@ -4850,6 +4884,13 @@ loaded first, so those entries never took effect. The MySQL driver a server uses
 and the protobuf version pin from issue #220 never took effect. `adventure-platform-bukkit` is no longer
 delivered at all; the framework uses Paper's native Adventure (see the plan 18-30 entry under
 [Same-release exceptions applied in 6.3.0](#same-release-exceptions-applied-in-630)).
+
+**XSeries moved out of the bundled JAR in 6.3.0.** Through 6.2.5 it was shaded in — the sentence
+above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
+delivered through the `libraries:` route in the table instead, the same way HikariCP already
+was. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
+along for the ride: declare it yourself (the version in the framework's `plugin.yml` `libraries:` block,
+`com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1, or your own pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
 category, pinning a version in this repository is an effective fix. For anything in the second, the
