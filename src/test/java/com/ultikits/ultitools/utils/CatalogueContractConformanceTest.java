@@ -75,7 +75,7 @@ class CatalogueContractConformanceTest {
     private static final String MODULE_ROUTE = "/v1/catalogue/modules/" + MODULE;
     private static final String VERSIONS_ROUTE = MODULE_ROUTE + "/versions";
     private static final String VERSION_ROUTE = VERSIONS_ROUTE + "/" + VERSION;
-    private static final int LEVEL = 631;
+    private static final int LEVEL = 701;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final SchemaRegistry REGISTRY = SchemaRegistry.withDefaultDialect(
@@ -354,13 +354,22 @@ class CatalogueContractConformanceTest {
     }
 
     @Test
-    @DisplayName("versionGet licence-required: the install is refused with the licence reason and sends no download")
+    @DisplayName("versionGet licence-required: a legacy level is incompatible, a current level requires a licence; neither downloads")
     void licenceRequiredInstallIsRefused() {
         serve(MODULE_ROUTE, 200, "fixtures/moduleGet/response/valid/anonymous.json");
-        serve(VERSION_ROUTE, 200, "fixtures/versionGet/response/valid/license-required.json");
+        String fixture = "fixtures/versionGet/response/valid/license-required.json";
+        serve(VERSION_ROUTE, 200, fixture);
+        PluginInstallUtils.InstallResult legacy = PluginInstallUtils.installReporting(MODULE, VERSION);
+        assertThat(legacy.isInstalled()).isFalse();
+        assertThat(legacy.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE);
+        assertThat(anyDownloadRequested()).isFalse();
 
+        // Derive a current-level policy response explicitly; never edit the frozen protocol fixture.
+        JsonObject current = ContractFixtures.catalogueBody(fixture);
+        current.getAsJsonObject("data").addProperty("apiLevel", 700);
+        assertThat(schemaAccepts("schemas/versionGet.response.200.schema.json", current)).isTrue();
+        stub.serveVendored(VERSION_ROUTE, 200, current.toString());
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting(MODULE, VERSION);
-
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_LICENCE_REQUIRED);
         assertThat(anyDownloadRequested()).isFalse();
@@ -592,7 +601,7 @@ class CatalogueContractConformanceTest {
         assertServedValid("/v1/catalogue/modules?page=1&pageSize=20", 200, "schemas/modulesList.response.200.schema.json");
         assertServedValid(module, 200, "schemas/moduleGet.response.200.schema.json");
         assertServedValid(module + "/versions", 200, "schemas/versionsList.response.200.schema.json");
-        assertServedValid(module + "/versions?apiLevel=630&minApiLevel=630", 200,
+        assertServedValid(module + "/versions?apiLevel=700&minApiLevel=700", 200,
                 "schemas/versionsList.response.200.schema.json");
         assertServedValid(module + "/versions/" + StubCatalogue.VERSION, 200, "schemas/versionGet.response.200.schema.json");
         assertServedValid(module + "/versions/" + StubCatalogue.LICENSED_VERSION, 200,
@@ -824,7 +833,7 @@ class CatalogueContractConformanceTest {
                 decoded(queries.get("/v1/catalogue/modules")))).isTrue();
         JsonObject versionsQuery = decoded(queries.get(VERSIONS_ROUTE));
         assertThat(versionsQuery.get("apiLevel").getAsInt()).isEqualTo(LEVEL);
-        assertThat(versionsQuery.get("minApiLevel").getAsInt()).isEqualTo(630);
+        assertThat(versionsQuery.get("minApiLevel").getAsInt()).isEqualTo(700);
         assertThat(schemaAccepts("schemas/versionsList.query.schema.json", versionsQuery)).isTrue();
         assertThat(stub.paths()).noneMatch(p -> p.startsWith("/v1/catalogue/categories")
                 || p.startsWith("/v1/catalogue/tags"));
