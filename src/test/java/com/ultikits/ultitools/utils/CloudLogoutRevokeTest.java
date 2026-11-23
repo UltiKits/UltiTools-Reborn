@@ -133,11 +133,12 @@ class CloudLogoutRevokeTest {
         // The order logout guarantees is local: the connection is stopped (session no longer
         // current, not connected) before the revoke is sent. It does not wait for the server-side
         // close handshake -- a revoke that reaches the backend first invalidates the credential and
-        // the backend closes the socket itself, so the end state is the same. The revoke task does
-        // not wait for a tick either: MockBukkit's runTaskAsynchronously hands it to its pool at
-        // once, so the revoke POST and the gateway's onClose (on the gateway's own thread) can be
-        // recorded in either order. The handler therefore records the client's state at the
-        // instant the revoke arrives, and the gateway's close is awaited separately.
+        // the backend closes the socket itself, so the end state is the same. MockBukkit 26.3
+        // starts the revoke task on the next tick; its POST and the gateway's onClose (on the
+        // gateway's own thread) can still be recorded in either order. The handler therefore
+        // records the client's state at the instant the revoke arrives, and the gateway's close
+        // is awaited separately.
+        server.getScheduler().performOneTick();
         assertThat(requestArrived.await(5, TimeUnit.SECONDS)).as("revoke POST arrived").isTrue();
         assertThat(sessionCurrentAtRevoke).as("session still current when the revoke arrived").isFalse();
         assertThat(connectedAtRevoke).as("still connected when the revoke arrived").isFalse();
@@ -177,6 +178,7 @@ class CloudLogoutRevokeTest {
         });
         List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
         CloudAuthManager.logoutReporting(outcomes::add);
+        server.getScheduler().performOneTick();
         awaitOutcome(outcomes);
         assertThat(outcomes).containsExactly(status == 200 || status == 401 ? CloudAuthManager.LogoutOutcome.REVOKED
                 : CloudAuthManager.LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
@@ -197,6 +199,7 @@ class CloudLogoutRevokeTest {
         }
         List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
         CloudAuthManager.logoutReporting(outcomes::add);
+        server.getScheduler().performOneTick();
         awaitOutcome(outcomes);
         assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.DELETED_LOCALLY_REVOKE_FAILED);
         assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid");
@@ -221,6 +224,7 @@ class CloudLogoutRevokeTest {
         CredentialStore.setSimulateWriteFailureForTesting(true);
         try {
             new CloudLoginCommand().logout(sender());
+            server.getScheduler().performOneTick();
             server.getScheduler().waitAsyncTasksFinished();
             awaitWithin(10_000, () -> lines.size() >= 3, "both logout outcome lines");
         } finally {
@@ -239,6 +243,7 @@ class CloudLogoutRevokeTest {
 
         List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
         CloudAuthManager.logoutReporting(outcomes::add);
+        server.getScheduler().performOneTick();
         awaitOutcome(outcomes);
         assertThat(outcomes).as("running logout again retries the delete").containsExactly(
                 CloudAuthManager.LogoutOutcome.REVOKED);
@@ -253,6 +258,7 @@ class CloudLogoutRevokeTest {
         delayAsyncHandOff(workerMayStart);
         List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
         CloudAuthManager.logoutReporting(outcomes::add);
+        server.getScheduler().performOneTick();
         server.getScheduler().waitAsyncTasksFinished();
         assertThat(outcomes).as("the scheduler's wait returned before the held revoke task ran").isEmpty();
         workerMayStart.countDown();

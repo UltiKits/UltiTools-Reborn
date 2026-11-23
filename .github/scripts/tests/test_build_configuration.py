@@ -67,9 +67,7 @@ class BuildConfigurationTests(unittest.TestCase):
         goals = [prefix + "compile"] if artifact == "maven-compiler-plugin" else []
         goals.append(prefix + selected + "@" + execution)
         # Resolve this probe's actual plugin realm online, not just the framework's realm.
-        # Skipping the fixture here preserves missing/changed files for the offline assertion.
-        warm_args = ["-Druntime.api.floor.skip=true"] if artifact == "maven-antrun-plugin" else []
-        warm = subprocess.run(["mvn", "-B", "-ntp", *goals, *args, *warm_args], cwd=self.root, env=env,
+        warm = subprocess.run(["mvn", "-B", "-ntp", *goals, *args], cwd=self.root, env=env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               timeout=660)
         warm_output = warm.stdout.decode("utf-8", "replace")
@@ -79,30 +77,43 @@ class BuildConfigurationTests(unittest.TestCase):
                                 timeout=660)
         return result, warm_output + result.stdout.decode("utf-8", "replace")
 
-    def floor(self, *args):
-        return self.run_mojo("maven-antrun-plugin", "runtime-api-floor-paper-fixture",
-                             "-Dfloor.local=" + str(self.root / "missing.jar"),
-                             "-Dfloor.url=" + (self.root / "unavailable.jar").as_uri(), *args)
+    def test_paper_baseline_is_pinned_and_jsr305_is_explicit(self):
+        dependencies = required(POM, "m:dependencies", NS)
+        paper = required(dependencies, "m:dependency[m:artifactId='paper-api']", NS)
+        self.assertEqual(paper.findtext("m:version", namespaces=NS), "26.3.build.258-stable")
+        self.assertEqual(paper.findtext("m:scope", namespaces=NS), "provided")
+        annotations = required(dependencies, "m:dependency[m:artifactId='jsr305']", NS)
+        self.assertEqual(annotations.findtext("m:version", namespaces=NS), "3.0.2")
+        self.assertEqual(annotations.findtext("m:scope", namespaces=NS), "provided")
+        ignored = POM.findall(".//m:ignoredUsedUndeclaredDependency", NS)
+        self.assertNotIn("com.google.code.findbugs:jsr305", [item.text for item in ignored])
 
-    def test_missing_fixture_explains_failure_and_opt_out(self):
-        result, output = self.floor()
-        self.assertNotEqual(result.returncode, 0, output)
-        self.assertIn("Runtime API floor fixture missing", output)
-        self.assertIn("-Druntime.api.floor.skip=true", output)
+    def test_java25_release_replaces_the_java8_signature_guard(self):
+        self.assertEqual(required(POM, "m:properties/m:java.version", NS).text, "25")
+        plugins = required(POM, "m:build/m:plugins", NS)
+        compiler = required(plugins, "m:plugin[m:artifactId='maven-compiler-plugin']/m:configuration", NS)
+        self.assertEqual(compiler.findtext("m:release", namespaces=NS), "${java.version}")
+        self.assertIsNone(compiler.find("m:source", NS))
+        self.assertIsNone(compiler.find("m:target", NS))
+        self.assertIsNone(plugins.find("m:plugin[m:artifactId='animal-sniffer-maven-plugin']", NS))
 
-    def test_changed_fixture_explains_failure_and_opt_out(self):
-        fixture = self.root / "target/runtime-api-floor/paper-api-1.19.2.jar"
-        fixture.parent.mkdir(parents=True)
-        fixture.write_bytes(b"changed")
-        result, output = self.floor()
-        self.assertNotEqual(result.returncode, 0, output)
-        self.assertIn("Runtime API floor fixture changed", output)
-        self.assertIn("-Druntime.api.floor.skip=true", output)
-
-    def test_offline_opt_out_does_not_resolve_or_create_the_paper_fixture(self):
-        result, output = self.floor("-Druntime.api.floor.skip=true")
-        self.assertEqual(result.returncode, 0, output)
-        self.assertFalse((self.root / "target/runtime-api-floor/paper-api-1.19.2.jar").exists())
+    def test_old_paper_fixtures_are_retired_but_packaged_runtime_guard_remains(self):
+        properties = required(POM, "m:properties", NS)
+        self.assertFalse(any(item.tag.split("}")[-1].startswith("runtime.api.floor.")
+                             for item in properties))
+        executions = POM.findall("m:build/m:plugins/m:plugin/m:executions/m:execution/m:id", NS)
+        self.assertFalse(any((item.text or "").startswith("runtime-api-floor") for item in executions))
+        failsafe = required(POM, "m:build/m:plugins/m:plugin[m:artifactId='maven-failsafe-plugin']", NS)
+        goals = [item.text for item in failsafe.findall("m:executions/m:execution/m:goals/m:goal", NS)]
+        self.assertIn("integration-test", goals)
+        self.assertIn("verify", goals)
+        self.assertEqual(failsafe.findtext("m:configuration/m:includes/m:include", namespaces=NS),
+                         "**/PackagedRuntimeLibraryIT.java")
+        self.assertEqual(failsafe.findtext(
+            "m:configuration/m:systemPropertyVariables/m:runtimeGuardArtifact", namespaces=NS),
+            "${project.build.directory}/${project.build.finalName}.jar")
+        self.assertNotIn("audit_framework_linkage.py",
+                         (ROOT / ".github/workflows/maven-ci.yml").read_text())
 
     def test_helper_compile_does_not_replace_the_product_artifact_even_with_tests_skipped(self):
         source = self.root / "src/test/java/com/ultikits/ultitools/buildtools/deprecation/Helper.java"

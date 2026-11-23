@@ -1345,7 +1345,7 @@ class PluginInstallCommandsTest {
         private void collectRunCommands(Component node, List<String> out) {
             ClickEvent click = node.clickEvent();
             if (click != null && click.action() == ClickEvent.Action.RUN_COMMAND) {
-                out.add(click.value());
+                out.add(((ClickEvent.Payload.Text) click.payload()).value());
             }
             for (Component child : node.children()) {
                 collectRunCommands(child, out);

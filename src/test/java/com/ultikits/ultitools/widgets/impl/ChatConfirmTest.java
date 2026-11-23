@@ -477,8 +477,10 @@ class ChatConfirmTest {
             
             assertThat(clickEvent.action())
                 .isEqualTo(net.kyori.adventure.text.event.ClickEvent.Action.RUN_COMMAND);
-            assertThat(clickEvent.value()).contains("/ultitools_callback");
-            assertThat(clickEvent.value()).contains(callbackId);
+            String command = ((net.kyori.adventure.text.event.ClickEvent.Payload.Text)
+                clickEvent.payload()).value();
+            assertThat(command).contains("/ultitools_callback");
+            assertThat(command).contains(callbackId);
         }
     }
     

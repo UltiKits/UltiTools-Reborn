@@ -189,7 +189,7 @@ class RuntimeLibraryContractTest {
     }
 
     @Test
-    void apiVersionStaysOneNineteen() throws Exception {
+    void apiVersionMatchesPaperTwentySixThreeBaseline() throws Exception {
         Path pluginYml = projectRoot().resolve("target/classes/plugin.yml");
         assertThat(pluginYml).as("the filtered plugin descriptor must exist").isRegularFile();
         Object descriptor;
@@ -198,8 +198,8 @@ class RuntimeLibraryContractTest {
         }
         assertThat(descriptor).isInstanceOf(Map.class);
         assertThat(((Map<?, ?>) descriptor).get("api-version"))
-                .as("the Paper compatibility decision keeps the descriptor at 1.19")
-                .isEqualTo("1.19");
+                .as("the plugin descriptor must declare the Paper 26.3 baseline")
+                .isEqualTo("26.3");
     }
 
     @Test

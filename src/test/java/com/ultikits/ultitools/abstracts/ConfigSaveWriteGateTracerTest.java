@@ -402,15 +402,17 @@ class ConfigSaveWriteGateTracerTest {
     @DisplayName("R2-01: a Location moved by the module and re-worlded by the operator is never merged into the operator's world")
     void reloadNeverMixesALocation() throws Exception {
         org.mockbukkit.mockbukkit.ServerMock server = MockBukkit.getMock();
-        org.bukkit.World world = server.addSimpleWorld("world");
-        server.addSimpleWorld("nether");
-        String text = "spawn:\n  ==: org.bukkit.Location\n  world: world\n  x: 0.5\n  y: 64.0\n  z: 0.5\n"
-                + "  pitch: 0.0\n  yaw: 0.0\n";
+        org.bukkit.World world = server.createWorld(new org.bukkit.WorldCreator("world"));
+        org.bukkit.World nether = server.createWorld(new org.bukkit.WorldCreator("nether"));
+        assertThat(nether.key()).as("the mock worlds have distinct persisted keys").isNotEqualTo(world.key());
+        String text = "spawn:\n  ==: org.bukkit.Location\n  world: world\n  world_key: " + world.key().asString()
+                + "\n  x: 0.5\n  y: 64.0\n  z: 0.5\n  pitch: 0.0\n  yaw: 0.0\n";
         put("spawn.yml", text);
         SpawnPoint config = new SpawnPoint("spawn.yml");
         config.init(plugin);
         config.spawn = new org.bukkit.Location(world, 100, 70, 100);
-        String edited = text.replace("world: world", "world: nether");
+        String edited = text.replace("world: world", "world: nether")
+                .replace("world_key: " + world.key().asString(), "world_key: " + nether.key().asString());
         put("spawn.yml", edited);
 
         countFromHere();

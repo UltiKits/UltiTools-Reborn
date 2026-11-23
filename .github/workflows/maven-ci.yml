@@ -61,14 +61,6 @@ jobs:
           exit 1
         fi
 
-    - name: Install pinned linkage-audit Python dependencies
-      if: steps.changes.outputs.build == 'true'
-      run: bash .github/scripts/setup-linkage-audit-python.sh
-
-    - name: Audit framework linkage against old Paper APIs
-      if: steps.changes.outputs.build == 'true'
-      run: python3 -I .github/scripts/audit_framework_linkage.py
-
     - name: 🧪 Run isolated-tagged tests
       # A fresh Maven/Surefire JVM still isolates scheduler state. Reuse compiled classes, not reports.
       # JaCoCo appends execution data and the test-bound report includes both invocations.
