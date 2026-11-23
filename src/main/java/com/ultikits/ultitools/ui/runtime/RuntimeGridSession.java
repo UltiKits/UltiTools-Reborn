@@ -54,7 +54,7 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
             queue = !updateQueued;
             updateQueued = true;
         }
-        if (queue) { runtime.dispatch(viewer, this::notifyBackend); }
+        if (queue) { dispatch(this::notifyBackend); }
     }
 
     static void validateContainers(Grid grid) {
@@ -166,7 +166,7 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
             if (!isOpenLocked()) { return; }
             action = rendered.item(slot).flatMap(GridItem::action).orElse(null);
         }
-        if (action != null) { runtime.dispatch(viewer, () -> runAction(action, slot, kind)); }
+        if (action != null) { dispatch(() -> runAction(action, slot, kind)); }
     }
 
     private void runAction(GridAction action, GridSlot slot, ClickKind kind) {
@@ -176,5 +176,20 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
         }
     }
 
-    private record Click(Player viewer, GridSlot slot, ClickKind kind, GridSession session) implements GridClick { }
+    private static final class Click implements GridClick {
+        private final Player viewer;
+        private final GridSlot slot;
+        private final ClickKind kind;
+        private final GridSession session;
+        Click(Player viewer, GridSlot slot, ClickKind kind, GridSession session) {
+            this.viewer = viewer;
+            this.slot = slot;
+            this.kind = kind;
+            this.session = session;
+        }
+        @Override public Player viewer() { return viewer; }
+        @Override public GridSlot slot() { return slot; }
+        @Override public ClickKind kind() { return kind; }
+        @Override public GridSession session() { return session; }
+    }
 }

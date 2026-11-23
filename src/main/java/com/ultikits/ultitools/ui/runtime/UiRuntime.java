@@ -79,12 +79,19 @@ public final class UiRuntime implements AutoCloseable {
 
     ViewerLane lane(Player viewer) {
         UUID id = viewer.getUniqueId();
+        boolean online = viewer.isOnline();
         synchronized (lock) {
-            return lanes.computeIfAbsent(id, ignored -> new ViewerLane(scheduler, viewer, pump, logger));
+            ViewerLane current = lanes.get(id);
+            if (current == null) {
+                current = new ViewerLane(scheduler, viewer, pump, logger);
+                if (online && !closed) { lanes.put(id, current); }
+            } else if (!current.belongsTo(viewer) && (!online || current.wasRetired())) {
+                current = new ViewerLane(scheduler, viewer, pump, logger);
+                if (online && !closed) { lanes.put(id, current); }
+            }
+            return current;
         }
     }
-
-    void dispatch(Player viewer, Runnable action) { lane(viewer).execute(action); }
 
     boolean add(RuntimeSession<?> session) {
         synchronized (lock) {
@@ -135,12 +142,17 @@ public final class UiRuntime implements AutoCloseable {
     public void quit(Player player) {
         Objects.requireNonNull(player, "player");
         UUID id = player.getUniqueId();
-        lane(player).retire();
+        ViewerLane retired = lane(player);
+        retired.retire();
         List<RuntimeSession<?>> quitting;
         synchronized (lock) {
+            active.remove(id);
             quitting = sessions.stream().filter(session -> session.viewerId.equals(id)).toList();
         }
         quitting.forEach(session -> session.requestClose(CloseReason.DISCONNECTED));
+        pump.execute(() -> {
+            synchronized (lock) { lanes.remove(id, retired); }
+        });
     }
 
     /** Synchronously closes this owner's sessions before its services are torn down. */
@@ -205,7 +217,7 @@ public final class UiRuntime implements AutoCloseable {
                     .map(RuntimeGridSession.class::cast).filter(grid -> grid.isOpenLocked() && grid.backend != null
                             && RuntimeGridSession.boundContainers(grid.renderedLocked()).contains(container)).toList();
         }
-        watching.forEach(grid -> dispatch(grid.viewer(), grid::redraw));
+        watching.forEach(grid -> grid.dispatch(grid::redraw));
     }
 
     boolean isServerThread() { return Thread.currentThread().equals(serverThread); }
@@ -227,8 +239,17 @@ public final class UiRuntime implements AutoCloseable {
             closed = true;
             names = List.copyOf(owners.keySet());
         }
-        try { names.forEach(this::unload); } finally { pump.close(); }
+        try { names.forEach(this::unload); } finally {
+            pump.close();
+            synchronized (lock) { lanes.clear(); }
+        }
     }
 
-    private record BackendEntry(UiBackend backend, int priority) { }
+    private static final class BackendEntry {
+        private final UiBackend backend;
+        private final int priority;
+        BackendEntry(UiBackend backend, int priority) { this.backend = backend; this.priority = priority; }
+        UiBackend backend() { return backend; }
+        int priority() { return priority; }
+    }
 }

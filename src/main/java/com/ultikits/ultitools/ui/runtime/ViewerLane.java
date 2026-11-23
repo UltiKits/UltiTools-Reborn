@@ -88,6 +88,9 @@ public final class ViewerLane {
         }
     }
 
+    boolean belongsTo(Player player) { return viewer == player; } // NOPMD - entity identity distinguishes player connections
+    boolean wasRetired() { return retired; }
+
     /** Marks this viewer's entity context retired; an outstanding drain observes this before doing work. */
     public void retire() { retired = true; }
     /** Whether the entity context can no longer deliver items. */

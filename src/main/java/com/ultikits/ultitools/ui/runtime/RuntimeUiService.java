@@ -62,7 +62,7 @@ final class RuntimeUiService implements UiService, ContainerHost {
         } else if (!viewer.isOnline()) {
             session.requestClose(CloseReason.DISCONNECTED);
         } else {
-            runtime.dispatch(viewer, () -> session.openTask(options));
+            session.dispatch(() -> session.openTask(options));
         }
         return session;
     }
@@ -96,7 +96,7 @@ final class RuntimeUiService implements UiService, ContainerHost {
         } else if (immediate) {
             delivery.run();
         } else {
-            runtime.dispatch(player, delivery);
+            delivery.lane.execute(delivery);
         }
         return delivery.result.minimalCompletionStage();
     }
@@ -134,10 +134,15 @@ final class RuntimeUiService implements UiService, ContainerHost {
     private final class PendingDelivery implements Runnable {
         private final Player player;
         private final List<ItemStack> items;
+        private final ViewerLane lane;
         private final CompletableFuture<Delivery> result = new CompletableFuture<>();
         private boolean started;
 
-        PendingDelivery(Player player, List<ItemStack> items) { this.player = player; this.items = items; }
+        PendingDelivery(Player player, List<ItemStack> items) {
+            this.player = player;
+            this.items = items;
+            lane = runtime.lane(player);
+        }
         @Override public void run() {
             synchronized (runtime.lock) {
                 if (started) { return; }
@@ -146,7 +151,7 @@ final class RuntimeUiService implements UiService, ContainerHost {
             }
             DeliveryWork work = new DeliveryWork(player, items);
             try {
-                if (player.isOnline() && !runtime.lane(player).isRetired()) { work.give(); }
+                if (player.isOnline() && !lane.isRetired()) { work.give(); }
             } catch (RuntimeException failure) {
                 runtime.warn(owner, "Item delivery failed", failure);
             }

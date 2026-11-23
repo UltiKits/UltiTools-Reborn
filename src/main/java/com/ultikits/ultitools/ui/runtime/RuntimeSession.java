@@ -29,6 +29,7 @@ class RuntimeSession<R> implements UiSession<R> {
     final UiRuntime runtime;
     final Player viewer;
     final UUID viewerId;
+    private final ViewerLane lane;
     private final UiIntent<R> intent;
     private final CompletableFuture<UiResult<R>> completion = new CompletableFuture<>();
     @Nullable UiBackend backend;
@@ -41,6 +42,7 @@ class RuntimeSession<R> implements UiSession<R> {
         runtime = service.runtime;
         this.viewer = viewer;
         viewerId = viewer.getUniqueId();
+        lane = runtime.lane(viewer);
         this.intent = intent;
     }
     @Override public Player viewer() { return viewer; }
@@ -51,8 +53,9 @@ class RuntimeSession<R> implements UiSession<R> {
     @Override public void close() { requestClose(CloseReason.CLOSED_BY_CODE); }
 
     final void requestClose(CloseReason reason) { requestChoose(new UiResult.Closed<>(Objects.requireNonNull(reason, "reason"))); }
+    final void dispatch(Runnable task) { lane.execute(task); }
     final void requestChoose(UiResult<R> result) {
-        if (choose(result)) { runtime.dispatch(viewer, this::closeAndComplete); }
+        if (choose(result)) { dispatch(this::closeAndComplete); }
     }
     final boolean choose(UiResult<R> result) {
         TaskHandle cancel;
