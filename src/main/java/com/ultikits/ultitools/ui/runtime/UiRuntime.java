@@ -158,6 +158,7 @@ public final class UiRuntime implements AutoCloseable {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         try {
             containers.prepareUnload(owner);
+            service.flushDeliveries();
             containers.startUnloadCommits(owner);
             for (RuntimeSession<?> session : closing) {
                 session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
