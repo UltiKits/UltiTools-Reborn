@@ -54,7 +54,8 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
             urls = serverJar == null ? new URL[0] : new URL[] {serverJar};
         }
         ModuleClassLoader loader = ModuleClassLoader.create(urls, getClass().getClassLoader());
-        return new BootstrapResult(transactions, admission, loader, classPathFailure, Collections.emptyMap(), 0);
+        ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, LOGGER);
+        return new BootstrapResult(transactions, admission, loader, classPathFailure, run.failures, run.attempted);
     }
 
     // Package-private fault seam: transactions themselves collect and defer filesystem errors.
