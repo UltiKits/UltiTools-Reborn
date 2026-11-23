@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.manager;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -9,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 
@@ -52,6 +54,8 @@ public class TaskManager {
 
     private final PaperSchedulerEngine engine;
     private final Map<UltiToolsPlugin, Scheduler> moduleSchedulers = new IdentityHashMap<>();
+    /** Weak identity tombstones prevent resurrection without retaining unloaded module class loaders. */
+    private final List<WeakReference<UltiToolsPlugin>> retiredModules = new ArrayList<>();
     private final Map<String, Scheduler> externalSchedulers = new HashMap<>();
     /** Annotation handles retained for diagnostic counts only, never for lifecycle cancellation. */
     private final Map<Scheduler, List<TaskHandle>> scheduledTasks = new IdentityHashMap<>();
@@ -72,9 +76,18 @@ public class TaskManager {
      *
      * @param plugin the owning module instance
      * @return the module's scheduler
+     * @throws RejectedExecutionException if this module instance was already retired
      */
     public Scheduler schedulerFor(UltiToolsPlugin plugin) {
+        if (wasRetired(plugin)) {
+            throw new RejectedExecutionException("Owner unloaded: " + plugin.getPluginName());
+        }
         return moduleSchedulers.computeIfAbsent(plugin, module -> engine.newOwner(module.getPluginName()));
+    }
+
+    private boolean wasRetired(UltiToolsPlugin plugin) {
+        retiredModules.removeIf(reference -> reference.get() == null);
+        return retiredModules.stream().anyMatch(reference -> reference.get() == plugin); // NOPMD - Owners use instance identity.
     }
 
     private void record(Scheduler scheduler, TaskHandle task) {
@@ -239,6 +252,10 @@ public class TaskManager {
      * @param plugin the plugin to cancel tasks for
      */
     public void cancelAll(UltiToolsPlugin plugin) {
+        // Mark the lifetime closed before completing tasks: their continuations can re-enter schedulerFor.
+        if (!wasRetired(plugin)) {
+            retiredModules.add(new WeakReference<>(plugin));
+        }
         Scheduler scheduler = moduleSchedulers.remove(plugin);
         if (scheduler != null) {
             engine.retire(scheduler);
