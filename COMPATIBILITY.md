@@ -14,6 +14,8 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
   and rejects submissions with `RejectedExecutionException`. Perform unload cleanup directly.
 - Literal `@Scheduled(async = true)` periods use wall-clock time (50 ms per configured tick). A lagging
   server no longer stretches those periods. Config-bound async tasks still use a global tick trigger.
+- A negative literal `@Scheduled(delay = ...)` now refuses the module load; 6.x treated it as zero.
+  Use `delay = 0` for no initial wait rather than a negative sentinel.
 
 A failed module load also retires that instance's injected scheduler and cancels pending and repeating
 work submitted during bean construction, `@PostConstruct`, or `registerSelf()`. An already running
