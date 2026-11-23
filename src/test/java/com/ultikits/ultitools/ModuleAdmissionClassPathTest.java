@@ -59,8 +59,12 @@ class ModuleAdmissionClassPathTest {
             logger.setUseParentHandlers(false);
             logger.addHandler(new Handler() {
                 @Override public void publish(LogRecord record) { logs.add(record); }
-                @Override public void flush() { }
-                @Override public void close() { }
+                @Override public void flush() {
+                    // Records are kept in memory; there is nothing to flush.
+                }
+                @Override public void close() {
+                    // Records are kept in memory; there is nothing to close.
+                }
             });
             UltiTools framework = mock(UltiTools.class);
             when(framework.i18n(anyString())).thenAnswer(call -> call.getArgument(0));

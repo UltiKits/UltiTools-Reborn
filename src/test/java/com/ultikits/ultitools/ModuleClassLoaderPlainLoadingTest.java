@@ -145,8 +145,12 @@ class ModuleClassLoaderPlainLoadingTest {
         List<LogRecord> records = new ArrayList<>();
         Handler capture = new Handler() {
             @Override public void publish(LogRecord record) { records.add(record); }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() {
+                // Records are kept in memory; there is nothing to flush.
+            }
+            @Override public void close() {
+                // Records are kept in memory; there is nothing to close.
+            }
         };
         diagnostics.addHandler(capture);
         SimpleContainer container = new SimpleContainer();

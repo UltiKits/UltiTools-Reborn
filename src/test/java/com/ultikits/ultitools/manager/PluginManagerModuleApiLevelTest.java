@@ -141,7 +141,7 @@ class PluginManagerModuleApiLevelTest {
             when(plugin.getMinUltiToolsVersion()).thenReturn(701);
             when(plugin.getPluginName()).thenReturn("Newer701");
             Method compatible = PluginManager.class.getDeclaredMethod("isUltiToolsVersionCompatible", UltiToolsPlugin.class);
-            compatible.setAccessible(true);
+            compatible.setAccessible(true); // NOPMD - test-only reflective call to a private check
             assertThat(compatible.invoke(manager, plugin)).isEqualTo(false);
         }
         assertThat(logs).singleElement().satisfies(record -> assertThat(record.getMessage())
@@ -193,8 +193,12 @@ class PluginManagerModuleApiLevelTest {
         logger.setUseParentHandlers(false);
         logger.addHandler(new Handler() {
             @Override public void publish(LogRecord record) { records.add(record); }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() {
+                // Records are kept in memory; there is nothing to flush.
+            }
+            @Override public void close() {
+                // Records are kept in memory; there is nothing to close.
+            }
         });
         return logger;
     }
