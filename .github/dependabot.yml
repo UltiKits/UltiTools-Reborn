@@ -12,15 +12,14 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
     ignore:
-      # JUnit 6 requires Java 17; tests retain the JUnit 5 API for this Java 8-bytecode project.
+      # JUnit 6 updates are allowed; assess new majors with MockBukkit's requirements.
       - dependency-name: "org.junit.jupiter:*"
-        versions: [">=6"]
+        versions: [">=7"]
       # Real-engine test drivers are bumped by hand together with paper-api.
       - dependency-name: "com.mysql:mysql-connector-j"
       - dependency-name: "org.xerial:sqlite-jdbc"
-      # Adventure 5 is incompatible with the Adventure 4 API supplied by Paper.
+      # Test Adventure must match the pinned Paper's bundled version; upgrade with paper-api by hand.
       - dependency-name: "net.kyori:*"
-        versions: [">=5"]
       # SnakeYAML artifacts are deliberate old-version test fixtures.
       - dependency-name: "org.yaml:snakeyaml"
       # Compile-only APIs provided by Paper.
@@ -31,9 +30,8 @@ updates:
       # Mockito already runs on JDK 25, but a new major needs a reviewed JDK/API baseline.
       - dependency-name: "org.mockito:*"
         versions: [">=6"]
-      # Paper 26.x moves beyond the Paper 1.21 compile-time API baseline.
+      # Paper is the runtime baseline; upgrade it manually with framework versions.
       - dependency-name: "io.papermc.paper:paper-api"
-        versions: [">=1.22"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

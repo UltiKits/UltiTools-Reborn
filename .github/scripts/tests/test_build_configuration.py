@@ -104,6 +104,9 @@ class BuildConfigurationTests(unittest.TestCase):
         executions = POM.findall("m:build/m:plugins/m:plugin/m:executions/m:execution/m:id", NS)
         self.assertFalse(any((item.text or "").startswith("runtime-api-floor") for item in executions))
         failsafe = required(POM, "m:build/m:plugins/m:plugin[m:artifactId='maven-failsafe-plugin']", NS)
+        goals = [item.text for item in failsafe.findall("m:executions/m:execution/m:goals/m:goal", NS)]
+        self.assertIn("integration-test", goals)
+        self.assertIn("verify", goals)
         self.assertEqual(failsafe.findtext("m:configuration/m:includes/m:include", namespaces=NS),
                          "**/PackagedRuntimeLibraryIT.java")
         self.assertEqual(failsafe.findtext(
