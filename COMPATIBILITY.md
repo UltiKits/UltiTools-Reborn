@@ -32,7 +32,8 @@ The scope-based ownership checks, storage paths, caches and transaction wiring a
 - **Bukkit alias matching is symmetric over registered metadata.** Immediately before dispatch and at the synchronous
   nested framework boundary, on the server thread, a blocklist entry matches either the resolved command's name,
   label or aliases, or a command resolved from that entry whose name, label or aliases contains the invoked label.
-  Both sides are case-insensitive and namespace-free. Paper 1.21.11 splits `plugins` and `pl` into separate wrappers,
+  Both sides are case-insensitive and namespace-free. The following alias/label layout was measured on
+  Paper 1.21.11 and has not yet been remeasured on 26.3: Paper splits `plugins` and `pl` into separate wrappers,
   with aliases only on `plugins`: listing `plugins` blocks `pl` and `bukkit:pl`; listing `pl` also blocks `plugins`.
   Listing `version` likewise blocks `ver` and `about`. An unrelated entry blocks none of them. This uses the two
   commands' Bukkit metadata, not a transitive alias graph: listing a split `ver` wrapper with no aliases does not
@@ -42,7 +43,8 @@ The scope-based ownership checks, storage paths, caches and transaction wiring a
   `command_failed` with `The server console did not accept the command.`, not `command_blocked`. Bare `reload` is
   vanilla's datapack reload, still refused by the shipped list. A label the server does not know keeps its admission
   decision; it is not refused merely for being unknown. See the wrapper limitations below.
-- **Dispatch failures still get a result after their acknowledgement.** On Paper 1.21.11, an `Error` thrown by a raw
+- **Dispatch failures still get a result after their acknowledgement.** Measured on Paper 1.21.11,
+  not yet remeasured on 26.3: an `Error` thrown by a raw
   Bukkit `Command` is wrapped in `CommandException` before `Bukkit.dispatchCommand` returns: the panel gets
   `command_failed`, the local WARNING carries the exception stack and the server keeps serving commands. The result
   uses Paper's wrapper message, not necessarily the inner error's message. Only repository unit fixtures can expose
@@ -176,19 +178,26 @@ one latest Paper version; compatibility with older servers is not promised.
 
 The former older-Paper API fixture, its retrieval/skip settings and the Java 8 API-signature
 check have been removed from the build. Packaged-runtime checks remain; they do not certify
-compatibility with an older Paper release. The historical 6.x notes below are not a 7.0 support promise.
+compatibility with an older Paper release. The historical 6.x notes elsewhere in this document are not a 7.0 support promise.
 
-**Editing saved locations.** Paper 26.3 serializes a location's world as `world_key`
-(its namespaced key); reading still accepts the legacy `world` name. If a saved location
-contains both fields, `world_key` takes precedence. When editing its world by hand, update
-`world_key` and any existing `world` together to identify the same world; changing only
-`world` is ignored if `world_key` remains. A newly serialized location need not contain `world`.
+**Editing saved locations.** Paper 26.3 writes a location's world as `world_key`, not `world`.
+The value is a namespaced key of the form `namespace:path`, **not a world name**; reading still
+accepts the legacy `world` name. If both fields exist, `world_key` takes precedence. When editing
+by hand, **copy `world_key` from a location already saved in the target world**, rather than
+constructing it from the world name, and update any existing `world` to the same world's name.
+Changing only `world` is ignored if `world_key` remains. An invalid `world_key`, or one whose world
+is missing or not loaded, does not fall back to `world`: Paper's `Location.deserialize` throws
+`unknown world`; its serialization layer logs the failure and returns null, and the framework's
+Bukkit converter rejects the configuration value with a `ConversionException`.
 
 中文补充：7.0.0-SNAPSHOT 的基准是 **Paper 26.3 build 258 + Java 25**，只对准最新的一个
-Paper 版本，不承诺兼容旧服务器；下文 6.x 的旧服务器说明不适用于 7.0。Paper 26.3 把位置的世界
-保存为 `world_key`（带命名空间的世界键），读取仍兼容旧 `world`（世界名）。两者共存时
-`world_key` 优先。手工修改世界时，`world_key` 与已有的 `world` 必须一起改为同一个世界；
-只改 `world` 会被忽略。新序列化的位置不一定含有 `world`。
+Paper 版本，不承诺兼容旧服务器；本文其他位置的 6.x 旧服务器说明不适用于 7.0。Paper 26.3 把位置的世界
+保存为 `world_key`，不写 `world`。`world_key` 是形如 `命名空间:路径` 的键，**不是世界名**；
+读取仍兼容旧 `world`（世界名）。两者共存时 `world_key` 优先。手工修改世界时，应**从一个已在目标世界
+保存过的位置复制 `world_key` 的值**，不要照世界名自己拼；已有的 `world` 也应改为同一世界的名称。
+`world_key` 存在时，只改 `world` 会被忽略。`world_key` 无效或其世界不存在／未加载时，不会回退到
+`world`：Paper 的 `Location.deserialize` 抛出 `unknown world`，其序列化层记录失败并返回 null，
+框架的 Bukkit 转换器随后以 `ConversionException` 拒绝这个配置值。
 
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
@@ -4748,7 +4757,7 @@ older servers are not promised compatibility.
 | `api-version` in a module's `plugin.yml` | An integer UltiTools API level, not the Paper version; `630` is the historical declaration for a module built for 6.3.0 and does not certify 7.0 compatibility |
 | Target server | Paper 26.3 build 258 (`paper-api:26.3.build.258-stable`); not a minimum-version range |
 | Server Java | Java 25, matching the framework bytecode target |
-| Modules | Each of the fifteen UltiKits modules built for 6.3.0 states only the UltiTools-API version it supports: 6.3.0 or later (`api-version: 630`). The server rows of this table are the framework's own requirements |
+| Modules | The fifteen UltiKits modules' 6.3.0-era declarations (`api-version: 630`) describe the historical 6.x line, not verified compatibility with 7.0. Use a module build verified against the framework under test; this matrix makes no 7.0 module-compatibility promise. The server rows are the framework's own requirements |
 
 **Evidence scope:** the former 6.x minimum-build record used the SnakeYAML 1.32 compatibility
 harness, and its Paper 1.19.2 boot comparison used build 307 rather than build 163. Those are
