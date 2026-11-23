@@ -3819,7 +3819,7 @@ its meaning.
     correct a recursively logging formatter or parameter implementation rather than relying on the
     log stream to stop that recursion.
   - Bukkit `/reload` is unsupported. If an old plugin class loader remains reachable after such a
-    reload, its module-scan logger bridge can remain attached and duplicate diagnostic lines. Use a
+    reload, its audit/scan logger bridges can remain attached and duplicate diagnostic lines. Use a
     full server stop and start after changing plugin JARs. `/ul reload` reloads module configuration;
     it is not Bukkit `/reload` and does not replace plugin JARs.
   - `FrameworkText.format(key, args)` requires a valid source format string and matching arguments.

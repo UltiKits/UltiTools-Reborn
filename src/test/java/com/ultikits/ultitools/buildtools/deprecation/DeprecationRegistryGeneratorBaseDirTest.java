@@ -301,23 +301,23 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .replaceFirst("<version>[^<]+</version>", "<version>6.6.0-SNAPSHOT</version>")
                 .replace("<japicmp.skip>true</japicmp.skip>", "<japicmp.skip>false</japicmp.skip>");
         Files.write(project.resolve("pom.xml"), fixturePom.getBytes(StandardCharsets.UTF_8));
-        Path sourceRoot = Paths.get("src/main/java");
-        // This is a history-preservation fixture, not another whole-tree discovery run (verify
-        // already runs that pipeline). Only ledger owners can affect the prior rows asserted below.
-        // Parsing every unrelated source twice consumed almost the entire 30-second test budget.
-        java.util.Set<Path> ownerSources = new java.util.TreeSet<>();
-        for (com.google.gson.JsonElement row : prior) {
-            String owner = row.getAsJsonObject().get("className").getAsString().split("\\$")[0];
-            Path source = sourceRoot.resolve(owner.replace('.', '/') + ".java");
-            if (Files.isRegularFile(source)) {
-                ownerSources.add(source);
+        // Freeze both the source and compiled declarations: a 7.x API removal must not change
+        // this 6.x history fixture. Keep all seven active rows and all 124 removed rows intact.
+        Path sourceRoot = Paths.get("src/test/resources/buildtools/history-6.x");
+        java.util.List<String> compilerArgs = new java.util.ArrayList<>();
+        Path historicalClasses = Files.createDirectories(project.resolve("historical-classes"));
+        java.util.Collections.addAll(compilerArgs, "-proc:none", "-d", historicalClasses.toString());
+        try (java.util.stream.Stream<Path> sources = Files.walk(sourceRoot)) {
+            for (Path source : sources.filter(p -> p.toString().endsWith(".java"))
+                    .sorted().collect(java.util.stream.Collectors.toList())) {
+                Path copy = project.resolve("src/main/java").resolve(sourceRoot.relativize(source));
+                Files.createDirectories(copy.getParent());
+                Files.copy(source, copy);
+                compilerArgs.add(copy.toString());
             }
         }
-        for (Path source : ownerSources) {
-            Path copy = project.resolve("src/main/java").resolve(sourceRoot.relativize(source));
-            Files.createDirectories(copy.getParent());
-            Files.copy(source, copy);
-        }
+        assertThat(javax.tools.ToolProvider.getSystemJavaCompiler().run(null, null, null,
+                compilerArgs.toArray(new String[0]))).as("compile frozen 6.x declarations").isZero();
         Path matrix = project.resolve("src/main/java/com/ultikits/testfixtures/deprecationscan/DeclarationMatrixSubject.java");
         Files.createDirectories(matrix.getParent());
         Files.copy(Paths.get("src/test/java/com/ultikits/testfixtures/deprecationscan/DeclarationMatrixSubject.java"), matrix);
@@ -349,36 +349,53 @@ class DeprecationRegistryGeneratorBaseDirTest {
         Path reportDir = Files.createDirectories(project.resolve("target/japicmp"));
         Files.write(reportDir.resolve("japicmp.xml"), report.toString().getBytes(StandardCharsets.UTF_8));
 
-        DeprecationRegistryGenerator.run(project);
+        ClassLoader previousLoader = Thread.currentThread().getContextClassLoader();
+        // Only platform classes, frozen history and the existing declaration matrix are visible;
+        // target/classes must not substitute the current product's API for historical bytecode.
+        try (java.net.URLClassLoader historyLoader = new java.net.URLClassLoader(new java.net.URL[] {
+                historicalClasses.toUri().toURL(),
+                getClass().getProtectionDomain().getCodeSource().getLocation()
+        }, ClassLoader.getSystemClassLoader().getParent())) {
+            Thread.currentThread().setContextClassLoader(historyLoader);
+            try {
+                assertThat(new JavadocDeprecationScanner(historyLoader).scan(
+                        project.resolve("src/main/java/com/ultikits/ultitools")))
+                        .as("all seven archived active declarations survive independently of current APIs")
+                        .hasSize(7);
+                DeprecationRegistryGenerator.run(project);
 
-        Path outputJson = compatibility.resolve("deprecations.json");
-        com.google.gson.JsonArray output = com.google.gson.JsonParser.parseString(
-                new String(Files.readAllBytes(outputJson), StandardCharsets.UTF_8)).getAsJsonArray();
-        java.util.Map<String, com.google.gson.JsonObject> byKey = new java.util.LinkedHashMap<>();
-        output.forEach(row -> byKey.put(row.getAsJsonObject().get("key").getAsString(), row.getAsJsonObject()));
-        for (com.google.gson.JsonElement row : prior) {
-            String key = row.getAsJsonObject().get("key").getAsString();
-            assertThat(byKey.get(key)).as("all prior properties, absent/null schema and history for %s", key)
-                    .isEqualTo(row.getAsJsonObject());
+                Path outputJson = compatibility.resolve("deprecations.json");
+                com.google.gson.JsonArray output = com.google.gson.JsonParser.parseString(
+                        new String(Files.readAllBytes(outputJson), StandardCharsets.UTF_8)).getAsJsonArray();
+                java.util.Map<String, com.google.gson.JsonObject> byKey = new java.util.LinkedHashMap<>();
+                output.forEach(row -> byKey.put(row.getAsJsonObject().get("key").getAsString(), row.getAsJsonObject()));
+                for (com.google.gson.JsonElement row : prior) {
+                    String key = row.getAsJsonObject().get("key").getAsString();
+                    assertThat(byKey.get(key)).as("all prior properties, absent/null schema and history for %s", key)
+                            .isEqualTo(row.getAsJsonObject());
+                }
+                java.util.Set<String> priorKeys = new java.util.HashSet<>();
+                prior.forEach(row -> priorKeys.add(row.getAsJsonObject().get("key").getAsString()));
+                java.util.Set<String> additions = new java.util.TreeSet<>(byKey.keySet());
+                additions.removeAll(priorKeys);
+                java.util.Set<String> declaredFixtureKeys = new java.util.TreeSet<>();
+                new JavadocDeprecationScanner(historyLoader).scan(matrix.getParent())
+                        .forEach(entry -> declaredFixtureKeys.add(entry.getKey().toString()));
+                assertThat(additions).as("only documented compiled fixture declarations may be added")
+                        .isEqualTo(declaredFixtureKeys).contains(
+                                "com.ultikits.testfixtures.deprecationscan.DeclarationMatrixSubject#annotationOnly()",
+                                "com.ultikits.testfixtures.deprecationscan.DeclarationMatrixSubject#initializedField");
+                byte[] onceJson = Files.readAllBytes(outputJson);
+                byte[] onceMarkdown = Files.readAllBytes(compatibility.resolve("DEPRECATIONS.md"));
+                DeprecationRegistryGenerator.run(project);
+                assertThat(Files.readAllBytes(outputJson)).isEqualTo(onceJson);
+                assertThat(Files.readAllBytes(compatibility.resolve("DEPRECATIONS.md"))).isEqualTo(onceMarkdown);
+                assertThat(Files.readAllBytes(realJson)).isEqualTo(priorBytes);
+                assertThat(Files.readAllBytes(realMarkdown)).isEqualTo(markdownBefore);
+            } finally {
+                Thread.currentThread().setContextClassLoader(previousLoader);
+            }
         }
-        java.util.Set<String> priorKeys = new java.util.HashSet<>();
-        prior.forEach(row -> priorKeys.add(row.getAsJsonObject().get("key").getAsString()));
-        java.util.Set<String> additions = new java.util.TreeSet<>(byKey.keySet());
-        additions.removeAll(priorKeys);
-        java.util.Set<String> declaredFixtureKeys = new java.util.TreeSet<>();
-        new JavadocDeprecationScanner(getClass().getClassLoader()).scan(matrix.getParent())
-                .forEach(entry -> declaredFixtureKeys.add(entry.getKey().toString()));
-        assertThat(additions).as("only documented compiled fixture declarations may be added")
-                .isEqualTo(declaredFixtureKeys).contains(
-                        "com.ultikits.testfixtures.deprecationscan.DeclarationMatrixSubject#annotationOnly()",
-                        "com.ultikits.testfixtures.deprecationscan.DeclarationMatrixSubject#initializedField");
-        byte[] onceJson = Files.readAllBytes(outputJson);
-        byte[] onceMarkdown = Files.readAllBytes(compatibility.resolve("DEPRECATIONS.md"));
-        DeprecationRegistryGenerator.run(project);
-        assertThat(Files.readAllBytes(outputJson)).isEqualTo(onceJson);
-        assertThat(Files.readAllBytes(compatibility.resolve("DEPRECATIONS.md"))).isEqualTo(onceMarkdown);
-        assertThat(Files.readAllBytes(realJson)).isEqualTo(priorBytes);
-        assertThat(Files.readAllBytes(realMarkdown)).isEqualTo(markdownBefore);
     }
 
     private static String projectVersion(Document doc) {
