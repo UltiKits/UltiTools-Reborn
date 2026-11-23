@@ -91,10 +91,16 @@ compileOnly 'com.ultikits:UltiTools-API:6.3.0'
 > The scope matters. UltiTools-API is a shaded JAR published with a dependency-free POM, and the
 > UltiTools plugin already provides it at runtime. Compile against it, but do not bundle it —
 > with a shade/shadow build, `compile`/`implementation` scope can bundle the framework into your
-> own JAR. XSeries is no longer bundled in 6.3.0; if your module uses it, declare
-> `com.github.cryptomorin:XSeries:13.7.1` separately as `provided`/`compileOnly` for 6.3.0
-> (`com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1). Match the version in your framework's
-> `plugin.yml` `libraries:` block; Paper supplies it at runtime.
+> own JAR. As of 7.0, use Paper's native `Material`, `Sound` and `Enchantment` APIs.
+> The framework no longer supplies XSeries or `XVersionUtils`. A module keeping XSeries must
+> shade and relocate it itself; Paper `libraries:` is not available to UltiTools modules.
+
+```java
+ItemStack item = ItemStackBuilder.of(Material.STONE).build();
+player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
+ItemStack enchanted = ItemStackBuilder.of(Material.FISHING_ROD).enchant(Enchantment.LUCK_OF_THE_SEA, 1).build();
+player.sendActionBar(Component.text("Ready"));
+```
 
 ### Option A: Write an UltiTools Module (Recommended)
 

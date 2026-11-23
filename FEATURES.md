@@ -292,18 +292,16 @@ instrument in this codebase. The last three
 `UltiTools.onEnable()` itself — before the module class loader is built, and after
 `PluginManager#init` returns — and likewise reconcile against no annotation.
 
-## XSeries lookups
+## Native materials and sounds
 
-Framework helpers that resolve an item or a sound by name through XSeries, which reaches the server
-through the `libraries:` block (`com.github.cryptomorin:XSeries:13.7.1` in released 6.3.0;
-`com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1). Both are reached only through
+The framework uses Paper's native materials and sound registry. Both behaviours are reached through
 a shipped module, so each row names the module path that exercises it. No annotation drives either
-helper, so these rows reconcile against no annotation.
+behaviour, so these rows reconcile against no annotation.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.xseries.item-lookup | The bottom-toolbar background item of a `BaseInventoryPage` is the gray stained glass pane, resolved by name through XSeries; when the lookup finds nothing the item is a plain glass pane instead | gui | a shipped module page built on `BaseInventoryPage`, such as the content page UltiRemoteBag opens for `/bag <page>` | n/a | n/a | internal | none | XVersionUtils#getColoredPlaneGlass, BaseInventoryPage#createBackgroundIcon |
-| ultitools.xseries.sound-lookup | After the framework's own `TeleportService` teleports a player, it plays the Enderman teleport sound to that player at volume 1 and pitch 0, the sound resolved by name through XSeries | event | a shipped module teleporting a player through the framework's `TeleportService`, such as UltiSocial's `/friend tp <player>` | n/a | n/a | internal | none | XVersionUtils#getSound, InMemeryTeleportService#teleport |
+| ultitools.gui.toolbar-material | The bottom-toolbar background item of a `BaseInventoryPage` is one gray stained glass pane | gui | a shipped module page built on `BaseInventoryPage`, such as the content page UltiRemoteBag opens for `/bag <page>`; use a module built against UltiTools-API 7.0 with no XSeries or `XVersionUtils` references; without such a build record blocked, not fail | n/a | n/a | internal | none | BaseInventoryPage#createBackgroundIcon |
+| ultitools.teleport.sound | After the framework's own `TeleportService` teleports a player, it plays the Enderman teleport sound to that player at volume 1 and pitch 0 | event | a shipped module teleporting a player through the framework's `TeleportService`, such as UltiSocial's `/friend tp <player>`; use a module built against UltiTools-API 7.0 with no XSeries or `XVersionUtils` references; without such a build record blocked, not fail | n/a | n/a | internal | none | InMemeryTeleportService#teleport |
 
 ## Economy
 

@@ -78,6 +78,26 @@ public class TextButtonTest {
         assertNotNull(handler);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(com.ultikits.ultitools.entities.Colors.class)
+    void everyColourKeepsItsNativeGlassMaterial(com.ultikits.ultitools.entities.Colors color) {
+        TextButtonElement element = new TextButtonElement(TextButton.builder()
+                .color(color.name().toLowerCase(java.util.Locale.ROOT)).text("Button").build());
+        RenderNode node = element.createRenderNode();
+        assertEquals(org.bukkit.Material.valueOf(color.name() + "_STAINED_GLASS_PANE"),
+                node.getIcon().getItem().getType());
+    }
+
+    @Test
+    void invalidColourStillUsesPlainGlassOnCreationAndUpdate() {
+        TextButtonElement element = new TextButtonElement(TextButton.builder()
+                .color("not-a-colour").text("Button").build());
+        RenderNode node = element.createRenderNode();
+        assertEquals(org.bukkit.Material.GLASS_PANE, node.getIcon().getItem().getType());
+        element.updateRenderNode(node);
+        assertEquals(org.bukkit.Material.GLASS_PANE, node.getIcon().getItem().getType());
+    }
+
     @Test
     void testTextButtonWithSlotKeyBuilder() {
         TextButton button = TextButton.builder()
