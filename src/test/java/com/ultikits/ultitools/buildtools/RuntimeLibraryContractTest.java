@@ -152,7 +152,7 @@ class RuntimeLibraryContractTest {
         Set<String> expected = new HashSet<>(Arrays.asList(
                 "commons-dbutils:commons-dbutils", "org.java-websocket:Java-WebSocket",
                 "net.bytebuddy:byte-buddy", "com.sun.mail:javax.mail",
-                "com.zaxxer:HikariCP", "com.github.cryptomorin:XSeries"));
+                "com.zaxxer:HikariCP"));
         List<String> coordinates = libraryCoordinates();
         List<String> actual = coordinates.stream()
                 .map(coordinate -> coordinate.substring(0, coordinate.lastIndexOf(':')))
@@ -203,8 +203,10 @@ class RuntimeLibraryContractTest {
     }
 
     @Test
-    void xseriesIsTheDecidedVersion() throws Exception {
-        assertThat(libraryCoordinates()).contains("com.github.cryptomorin:XSeries:14.0.0");
+    void retiredCrossVersionLibraryIsNotDeclared() throws Exception {
+        assertThat(libraryCoordinates()).noneMatch(coordinate -> coordinate.contains("cryptomorin"));
+        assertThat(new String(Files.readAllBytes(projectRoot().resolve("pom.xml")),
+                StandardCharsets.UTF_8)).doesNotContain("com.github.cryptomorin");
     }
 
     private static List<String> libraryCoordinates() throws Exception {

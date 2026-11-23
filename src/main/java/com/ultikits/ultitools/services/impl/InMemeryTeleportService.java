@@ -9,16 +9,15 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
+import org.bukkit.Sound;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.Sounds;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.services.TeleportService;
-import com.ultikits.ultitools.utils.XVersionUtils;
 
 /**
  * Teleport service implementation.
@@ -141,7 +140,7 @@ public class InMemeryTeleportService implements TeleportService {
         ensurePlayerCacheRegistered();
         inMemoryLocationRecord.put(player.getUniqueId(), player.getLocation());
         player.teleport(location);
-        player.playSound(player.getLocation(), XVersionUtils.getSound(Sounds.ENTITY_ENDERMAN_TELEPORT), 1, 0);
+        player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
     }
 
     @Override
@@ -197,7 +196,7 @@ public class InMemeryTeleportService implements TeleportService {
         if (time == 0) {
             inMemoryLocationRecord.put(player.getUniqueId(), player.getLocation());
             player.teleport(location);
-            player.playSound(player.getLocation(), XVersionUtils.getSound(Sounds.ENTITY_ENDERMAN_TELEPORT), 1, 0);
+            player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
             player.sendTitle(ChatColor.GREEN + UltiTools.getInstance().i18n("传送成功！"), "", 10, 50, 20);
             teleportingPlayers.put(player.getUniqueId(), false);
             return new DelayTeleportResult(true, time);
