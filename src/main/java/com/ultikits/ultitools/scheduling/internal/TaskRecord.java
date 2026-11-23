@@ -9,9 +9,11 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.logging.Level;
+import org.bukkit.plugin.IllegalPluginAccessException;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
@@ -116,10 +118,10 @@ final class TaskRecord implements TaskHandle {
             finish(new CancellationException("Supplier cancelled before execution"));
             return;
         }
+        if (isRepeating() && !scheduleNext()) {
+            return;
+        }
         try {
-            if (isRepeating()) {
-                schedule(period);
-            }
             body.accept(this);
             if (isRepeating()) {
                 state.compareAndSet(TaskState.RUNNING, TaskState.SCHEDULED);
@@ -145,22 +147,37 @@ final class TaskRecord implements TaskHandle {
         }
     }
 
+    private boolean scheduleNext() {
+        try {
+            schedule(period);
+            return !isTerminal();
+        } catch (IllegalPluginAccessException | RejectedExecutionException failure) {
+            finishPending(TaskState.RETIRED, failure);
+        } catch (RuntimeException | Error failure) {
+            submissionFailed(failure);
+        }
+        return false;
+    }
+
     private void retireEntity() {
+        finishPending(TaskState.RETIRED,
+                new TaskRetiredException("Entity removed before the task of " + context.owner.owner() + " could run"));
+    }
+
+    void submissionFailed(Throwable failure) {
+        finishPending(TaskState.FAILED, failure);
+    }
+
+    private void finishPending(TaskState terminal, Throwable failure) {
         while (true) {
             TaskState observed = state.get();
             if (observed != TaskState.SCHEDULED && !(observed == TaskState.RUNNING && isRepeating())) {
                 return;
             }
-            if (state.compareAndSet(observed, TaskState.RETIRED)) {
-                finish(new TaskRetiredException("Entity removed before the task of " + context.owner.owner() + " could run"));
+            if (state.compareAndSet(observed, terminal)) {
+                finish(failure);
                 return;
             }
-        }
-    }
-
-    void submissionFailed(Throwable failure) {
-        if (state.compareAndSet(TaskState.SCHEDULED, TaskState.FAILED)) {
-            finish(failure);
         }
     }
 
