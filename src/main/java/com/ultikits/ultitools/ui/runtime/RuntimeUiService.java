@@ -46,6 +46,7 @@ final class RuntimeUiService implements UiService {
         Objects.requireNonNull(viewer, "viewer");
         Objects.requireNonNull(intent, "intent");
         Objects.requireNonNull(options, "options");
+        if (intent instanceof Grid grid && runtime.isServerThread()) { RuntimeGridSession.validateContainers(grid); }
         RuntimeSession<R> session = newSession(viewer, intent);
         if (runtime.add(session)) {
             session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
@@ -57,8 +58,9 @@ final class RuntimeUiService implements UiService {
         }
         return session;
     }
+    @SuppressWarnings("unchecked") // The sealed Grid intent always has Ack as its answer type.
     private <R> RuntimeSession<R> newSession(Player viewer, UiIntent<R> intent) {
-        if (intent instanceof Grid) { throw new UnsupportedOperationException("Grid sessions not implemented"); }
+        if (intent instanceof Grid grid) { return (RuntimeSession<R>) new RuntimeGridSession(this, viewer, grid); }
         return new RuntimeSession<>(this, viewer, intent);
     }
     @Override public SlotContainer container(ContainerSpec spec) {

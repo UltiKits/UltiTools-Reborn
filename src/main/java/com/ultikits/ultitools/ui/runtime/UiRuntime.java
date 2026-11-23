@@ -3,7 +3,9 @@ package com.ultikits.ultitools.ui.runtime;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.ui.CloseReason;
 import com.ultikits.ultitools.ui.Gesture;
+import com.ultikits.ultitools.ui.Grid;
 import com.ultikits.ultitools.ui.GridSession;
+import com.ultikits.ultitools.ui.SlotContainer;
 import com.ultikits.ultitools.ui.GridSlot;
 import com.ultikits.ultitools.ui.UiBackend;
 import com.ultikits.ultitools.ui.UiResult;
@@ -173,12 +175,36 @@ public final class UiRuntime implements AutoCloseable {
 
     /** Applies a gesture against the backend's rendered snapshot, refusing a terminal session. */
     public boolean applyGesture(GridSession session, ViewerItems side, Gesture gesture) {
-        throw new UnsupportedOperationException("Grid sessions not implemented");
+        RuntimeGridSession grid = ownGrid(session);
+        Objects.requireNonNull(side, "side");
+        Objects.requireNonNull(gesture, "gesture");
+        Grid rendered;
+        synchronized (lock) {
+            if (!grid.isOpenLocked()) { return false; }
+            rendered = grid.renderedLocked();
+        }
+        return containers.engine().apply(rendered, grid.viewer(), side, gesture);
     }
 
     /** Returns defensive copies of the last drawn bound slots. */
-    public Map<GridSlot, ItemStack> picture(GridSession session) {
-        throw new UnsupportedOperationException("Grid sessions not implemented");
+    public Map<GridSlot, ItemStack> picture(GridSession session) { return ownGrid(session).pictureCopy(); }
+
+    private RuntimeGridSession ownGrid(GridSession session) {
+        Objects.requireNonNull(session, "session");
+        if (!(session instanceof RuntimeGridSession grid) || !grid.runtime.equals(this)) {
+            throw new IllegalArgumentException("Session belongs to another UI runtime");
+        }
+        return grid;
+    }
+
+    void redraw(SlotContainer container) {
+        List<RuntimeGridSession> watching;
+        synchronized (lock) {
+            watching = sessions.stream().filter(RuntimeGridSession.class::isInstance)
+                    .map(RuntimeGridSession.class::cast).filter(grid -> grid.isOpenLocked() && grid.backend != null
+                            && RuntimeGridSession.boundContainers(grid.renderedLocked()).contains(container)).toList();
+        }
+        watching.forEach(grid -> dispatch(grid.viewer(), grid::redraw));
     }
 
     boolean isServerThread() { return Thread.currentThread().equals(serverThread); }

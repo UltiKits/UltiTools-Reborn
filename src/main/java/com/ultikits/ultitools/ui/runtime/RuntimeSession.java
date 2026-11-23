@@ -98,6 +98,7 @@ class RuntimeSession<R> implements UiSession<R> {
         if (!runtime.activate(this, selected)) { return; }
         try {
             selected.open(this, callbacks());
+            if (this instanceof RuntimeGridSession grid) { grid.renderPicture(); }
             scheduleTimeout(options);
         } catch (RuntimeException failure) {
             runtime.warn(service.owner(), "Backend open failed", failure);

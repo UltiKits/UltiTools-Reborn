@@ -63,10 +63,11 @@ class ViewerLaneTest {
         ViewerLane lane = new ViewerLane(reversing, viewer, pump, logger);
         List<Integer> seen = new ArrayList<>();
         IntStream.range(0, 1000).forEach(index -> lane.execute(() -> seen.add(index)));
-        assertThat(submitted).hasSize(1);
+        int drainCount = submitted.size();
         assertThat(seen).isEmpty();
         clock.advanceTicks(1);
         assertThat(seen).containsExactlyElementsOf(IntStream.range(0, 1000).boxed().toList());
+        assertThat(drainCount).isOne();
     }
     @Test void retiredTasks_runOnceOnNextGlobalTick() {
         ViewerLane lane = new ViewerLane(scheduler, viewer, pump, logger);
