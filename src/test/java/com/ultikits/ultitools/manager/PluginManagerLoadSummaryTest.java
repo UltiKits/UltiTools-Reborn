@@ -74,6 +74,8 @@ class PluginManagerLoadSummaryTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
+        org.mockito.Mockito.when(UltiTools.getInstance().getDescription()).thenReturn(
+                new org.bukkit.plugin.PluginDescriptionFile("UltiTools", "7.0.0-SNAPSHOT", "unused.Main"));
         capture = new Handler() {
             @Override
             public void publish(LogRecord record) {
@@ -150,21 +152,27 @@ class PluginManagerLoadSummaryTest {
     void refusedJarBesideLoadableModules_isCountedAsFailed() throws Exception {
         moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "700");
         moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule"), "700");
-        moduleJar("ultirecipe-1.0.0.jar", "LegacyModule", legacyModule("LegacyModule"), "620");
+        moduleJar("ultirecipe-1.0.0.jar", "LegacyModule", legacyModule("LegacyModule"), "700");
 
         start();
 
         assertThat(severeNaming("ultirecipe-1.0.0.jar")).as("the existing refusal line names the JAR").isTrue();
+        assertThat(logs).anyMatch(record -> Level.SEVERE.equals(record.getLevel())
+                && record.getMessage().contains("built against an older UltiTools-API version")
+                && record.getMessage().contains("overrides final method"));
         assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 2, Failed 1.");
     }
 
     @Test
     @DisplayName("a modules folder holding only that refused JAR: 'Succeeded loaded 0, Failed 1.' and no 'No UltiTools plugin found.'")
     void onlyARefusedJar_printsTheSummary() throws Exception {
-        moduleJar("ultirecipe-1.0.0.jar", "LegacyModule", legacyModule("LegacyModule"), "620");
+        moduleJar("ultirecipe-1.0.0.jar", "LegacyModule", legacyModule("LegacyModule"), "700");
 
         start();
 
+        assertThat(logs).anyMatch(record -> Level.SEVERE.equals(record.getLevel())
+                && record.getMessage().contains("built against an older UltiTools-API version")
+                && record.getMessage().contains("overrides final method"));
         assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 0, Failed 1.");
         assertThat(lines(NONE_FOUND)).isEmpty();
     }

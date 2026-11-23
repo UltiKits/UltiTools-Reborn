@@ -94,13 +94,17 @@ class ModuleClassLoaderPlainLoadingTest {
         Path module = jar("parallel.jar", entries("fixture/Left.class", bean("fixture/Left", null, false),
                 "fixture/Right.class", bean("fixture/Right", null, false)));
         CyclicBarrier entered = new CyclicBarrier(2);
+        List<Throwable> barrierFailures = Collections.synchronizedList(new ArrayList<>());
+        java.util.concurrent.atomic.AtomicInteger attempts = new java.util.concurrent.atomic.AtomicInteger();
         ClassLoader parent = new ClassLoader(getClass().getClassLoader()) {
             @Override
             protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
                 if (name.equals("fixture.Left") || name.equals("fixture.Right")) {
+                    attempts.incrementAndGet();
                     try {
                         entered.await(10, TimeUnit.SECONDS);
                     } catch (Exception failure) {
+                        barrierFailures.add(failure);
                         throw new ClassNotFoundException(name, failure);
                     }
                     throw new ClassNotFoundException(name);
@@ -113,6 +117,9 @@ class ModuleClassLoaderPlainLoadingTest {
             var left = pool.submit(() -> loader.loadClass("fixture.Left"));
             var right = pool.submit(() -> loader.loadClass("fixture.Right"));
             assertThat(left.get(15, TimeUnit.SECONDS).getPackage()).isSameAs(right.get(15, TimeUnit.SECONDS).getPackage());
+            assertThat(barrierFailures).as("both classes must reach the parent barrier concurrently").isEmpty();
+            assertThat(attempts.get()).isEqualTo(2);
+            assertThat(loader.isRegisteredAsParallelCapable()).isTrue();
         } finally {
             pool.shutdownNow();
         }
