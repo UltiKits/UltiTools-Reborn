@@ -223,6 +223,49 @@ class IntentBuildersTest {
                 .withMessage("initial");
     }
 
+    @Test
+    void valueEquality_comparesEveryAttribute() {
+        assertThat(Notice.builder(TITLE).build().title()).isSameAs(TITLE);
+        assertThat(Confirm.builder(TITLE).build().title()).isSameAs(TITLE);
+        assertThat(Form.builder(TITLE).input(ToggleInput.of("a", LABEL, true)).build().title()).isSameAs(TITLE);
+        different(Notice.builder(TITLE).build(), Notice.builder(LABEL).build(),
+                Notice.builder(TITLE).addBody(LABEL).build(), Notice.builder(TITLE).button(LABEL).build());
+        different(Confirm.builder(TITLE).build(), Confirm.builder(LABEL).build(),
+                Confirm.builder(TITLE).addBody(LABEL).build(), Confirm.builder(TITLE).yes(LABEL).build(),
+                Confirm.builder(TITLE).no(LABEL).build());
+        different(Form.builder(TITLE).input(ToggleInput.of("a", LABEL, true)).build(),
+                Form.builder(LABEL).input(ToggleInput.of("a", LABEL, true)).build(),
+                Form.builder(TITLE).addBody(LABEL).input(ToggleInput.of("a", LABEL, true)).build(),
+                Form.builder(TITLE).input(ToggleInput.of("b", LABEL, true)).build(),
+                Form.builder(TITLE).input(ToggleInput.of("a", LABEL, true)).submit(LABEL).build());
+        different(TextInput.builder("a", LABEL).build(), TextInput.builder("b", LABEL).build(),
+                TextInput.builder("a", TITLE).build(), TextInput.builder("a", LABEL).initial("x").build(),
+                TextInput.builder("a", LABEL).maxLength(1).build(), TextInput.builder("a", LABEL).maxLines(2).build());
+        different(ToggleInput.of("a", LABEL, true), ToggleInput.of("b", LABEL, true),
+                ToggleInput.of("a", TITLE, true), ToggleInput.of("a", LABEL, false));
+        different(Choice.<Integer>builder(TITLE).option(1, LABEL).build(),
+                Choice.<Integer>builder(LABEL).option(1, LABEL).build(),
+                Choice.<Integer>builder(TITLE).addBody(LABEL).option(1, LABEL).build(),
+                Choice.<Integer>builder(TITLE).option(2, LABEL).build());
+        different(ChoiceInput.of("a", LABEL, List.of(ChoiceOption.of(1, LABEL))),
+                ChoiceInput.of("b", LABEL, List.of(ChoiceOption.of(1, LABEL))),
+                ChoiceInput.of("a", TITLE, List.of(ChoiceOption.of(1, LABEL))),
+                ChoiceInput.of("a", LABEL, List.of(ChoiceOption.of(2, LABEL))));
+        different(SliderInput.builder("a", LABEL, 0, 2).build(), SliderInput.builder("b", LABEL, 0, 2).build(),
+                SliderInput.builder("a", TITLE, 0, 2).build(), SliderInput.builder("a", LABEL, 1, 2).build(),
+                SliderInput.builder("a", LABEL, 0, 3).build(), SliderInput.builder("a", LABEL, 0, 2).step(0.5).build(),
+                SliderInput.builder("a", LABEL, 0, 2).initial(1).build());
+        different(ShowOptions.defaults(), ShowOptions.builder().noTimeout().build(),
+                ShowOptions.builder().timeout(Duration.ofSeconds(1)).build());
+    }
+
+    private static void different(Object baseline, Object... alternatives) {
+        for (Object alternative : alternatives) {
+            assertThat(baseline).isNotEqualTo(alternative);
+            assertThat(alternative).isNotEqualTo(baseline);
+        }
+    }
+
     private static void sameValue(Object first, Object second) {
         assertThat(first).isEqualTo(second).isEqualTo(first).isNotEqualTo(null).isNotEqualTo("foreign");
         assertThat(first.hashCode()).isEqualTo(second.hashCode());
