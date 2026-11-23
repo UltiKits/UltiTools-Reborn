@@ -352,14 +352,15 @@ class AgentRestConformanceTest {
     @MethodSource("revokeAnswers")
     @DisplayName("every valid revoke answer counts as revoked; the revoke request has no body")
     void revokeAnswerOutcome(Fixture fixture) throws InterruptedException {
-        MockBukkit.mock();
+        org.mockbukkit.mockbukkit.ServerMock server = MockBukkit.mock();
         reply.set(new Reply(statusOf(fixture), fixture.body().toString(), null));
         CloudTestAccess.storeLinkedCredential("Survival", HandshakeEndToEndTest.SERVER_ID);
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
 
         List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
         CloudAuthManager.logoutReporting(outcomes::add);
-        // The revoke runs on a Bukkit async task; MockBukkit's waitAsyncTasksFinished() can return before it starts.
+        // MockBukkit 26.3 starts async tasks on the next tick; then await the actual outcome.
+        server.getScheduler().performOneTick();
         CloudLogoutRevokeTest.awaitOutcome(outcomes);
 
         assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.REVOKED);

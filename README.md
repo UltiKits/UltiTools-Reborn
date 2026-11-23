@@ -10,7 +10,7 @@
 
 <div align="center"><strong>The Modern Paper Plugin Framework</strong></div>
 
-<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Integrates with Bukkit plugins running on a supported Paper server. Runs on Paper 1.19.2 (build 163 or later) and newer, on the Java version that Paper line requires.</p>
+<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Integrates with Bukkit plugins running on a supported Paper server. The 7.0.0-SNAPSHOT baseline is Paper 26.3 (build 258) on Java 25. Each framework version targets one latest Paper version; older servers are not promised compatibility.</p>
 
 <br>
 
@@ -19,8 +19,8 @@
 <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn?style=flat-square"/>
 <img alt="Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
 <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/UltiKits/UltiTools-Reborn?style=flat-square"/>
-<img alt="Paper Version" src="https://img.shields.io/badge/Paper-1.19.2%20build%20163%2B-blue?style=flat-square"/>
-<img alt="Server Java Version" src="https://img.shields.io/badge/Server%20Java-17%20%2F%2021-orange?style=flat-square"/>
+<img alt="Paper Version" src="https://img.shields.io/badge/Paper-26.3%20build%20258-blue?style=flat-square"/>
+<img alt="Server Java Version" src="https://img.shields.io/badge/Server%20Java-25-orange?style=flat-square"/>
 <img alt="Spigot Rating" src="https://img.shields.io/spiget/rating/85214?label=SpigotMC&amp;style=flat-square"/>
 <img alt="bStats Players" src="https://img.shields.io/bstats/players/8652?style=flat-square"/>
 <img alt="bStats Servers" src="https://img.shields.io/bstats/servers/8652?style=flat-square"/>
@@ -65,11 +65,10 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 
 ### Requirements
 
-- **Server**: Paper 1.19.2 (build 163 or later) or newer. Plain Spigot is not supported.
-- **Server Java**: the version your Paper line requires: Java 17 for Paper 1.19.2 to 1.20.4, Java 21 from Paper 1.20.5.
-- **Building the framework**: JDK 25 (the bytecode targets Java 8).
-- **Modules (as of v6.4.0)**: the 6.4.0-line UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade support the framework's Paper 1.19.2 build 163+ floor. Below Minecraft 1.21 they require UltiTools 6.4.0+; on 1.21+ they retain compatibility with UltiTools 6.3.x. The framework adapts `InventoryView` class/interface calls automatically, but does not supply missing server capabilities. Read [older-server compatibility and module-specific limitations](COMPATIBILITY.md#supporting-servers-below-121-as-of-v640) before upgrading.
-- **Known gap below Paper 1.20.5**: the UltiPanel console mirror is not installed, and one WARNING at start-up says so; the panel's log stream then carries plugin lines only.
+- **Server**: Paper 26.3 (build 258), the baseline for 7.0.0-SNAPSHOT. Each framework version targets one latest Paper version, not a range of older servers. Plain Spigot is not supported.
+- **Server Java**: Java 25.
+- **Building the framework**: JDK 25, compiling with `--release 25` (Java 25 bytecode, class major 69). The framework plugin declares `api-version: '26.3'`.
+- **Modules**: use module builds compatible with the framework under test. Historical 6.x support for older servers does not extend the 7.0 baseline; see [the support matrix](COMPATIBILITY.md#support-matrix) and [the historical 6.4.0 compatibility notes](COMPATIBILITY.md#supporting-servers-below-121-as-of-v640).
 - **UltiTools Plugin**: Install on your server
 
 ### Add the Dependency

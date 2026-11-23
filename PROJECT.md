@@ -19,19 +19,18 @@
 
   | Where | Value | Meaning |
   |---|---|---|
-  | `pom.xml` `<java.version>` | `1.8` | `-source` / `-target` bytecode level |
-  | CI toolchain + `paper-api` | JDK 25 · Paper `1.21.11-R0.1-SNAPSHOT` | build toolchain and compile-time API |
-  | `plugin.yml` `api-version` | `1.19` | Bukkit API level |
+  | `pom.xml` `<java.version>` | `25` | `--release 25` bytecode level (class major 69) |
+  | CI toolchain + `paper-api` | JDK 25 · Paper `26.3.build.258-stable` | build toolchain and compile-time API |
+  | `plugin.yml` `api-version` | `26.3` | Bukkit API level |
 
-  The pom uses `-source`/`-target`, **not** `--release`, and the codebase relies on that gap (for example
-  `@Deprecated(since=…, forRemoval=…)` is a Java 9+ construct). Adding `<release>8</release>` breaks the
-  build. Practically: avoid `var` and records, but do not assume a real JDK 8 compiles this.
+  As of `7.0.0-SNAPSHOT`, the pom uses `<release>${java.version}</release>` with Java 25, not
+  separate `-source`/`-target` settings. Both building and running the framework require Java 25.
 - **Runtime dependency model:** Paper is the only declared server API (`paper-api`, `provided` scope).
   Paper auto-downloads the `libraries:` entries declared in `src/main/resources/plugin.yml`, including
   XSeries (`provided`, not bundled). `obliviate-invs` and `UniversalScheduler` use Maven's default
   `compile` scope and are bundled by maven-shade-plugin.
-  Plain Spigot is not supported. The server floor is Paper 1.19.2 build 163; use Java 17 below Paper
-  1.20.5 and Java 21 from Paper 1.20.5 (see `COMPATIBILITY.md`).
+  Plain Spigot is not supported. The 7.0 baseline is Paper 26.3 build 258 on Java 25. Each framework
+  version targets one latest Paper version; older servers are not promised compatibility (see `COMPATIBILITY.md`).
 - **Downstream:** consumer plugin modules declare `com.ultikits:UltiTools-API` at `provided` scope. Bumping
   the version here affects every consumer that hard-codes it rather than inheriting a property.
 
@@ -61,7 +60,7 @@ All commands run from the repository root.
 | Goal | Command |
 |---|---|
 | Build shaded JAR | `mvn clean package` → `target/UltiTools-API-<version>.jar` |
-| Full verification | `mvn clean verify` — package plus Java 8 API, dependency, japicmp and deprecation-registry checks |
+| Full verification | `mvn clean verify` — package plus packaged-runtime, dependency, japicmp and deprecation-registry checks |
 | Test | `mvn test` |
 | Single test class | `mvn test -Dtest=ClassName` |
 | Include isolated tests | `mvn test -DexcludedGroups=` |
