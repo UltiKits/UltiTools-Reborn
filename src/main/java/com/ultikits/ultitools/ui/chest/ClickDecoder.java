@@ -16,6 +16,7 @@ public final class ClickDecoder {
 
     /** Returns exactly one decision for an input. Unrecognised item actions never move bound items. */
     public static ClickDecision decode(ClickInput input) {
+        if (!known(input.action()) || !known(input.click())) { return CANCEL; }
         return switch (input.kind()) {
             case PLAYER_STORAGE -> storage(input);
             case OUTSIDE -> outside(input.action());
@@ -23,6 +24,22 @@ public final class ClickDecoder {
                     ? CANCEL : new ClickDecision.Report(input.slot(), clickKind(input.click()));
             case BOUND_EDITABLE, BOUND_VIEW -> bound(input);
             default -> CANCEL;
+        };
+    }
+
+    private static boolean known(InventoryAction action) {
+        return switch (action) {
+            case PICKUP_FROM_BUNDLE, PICKUP_ALL_INTO_BUNDLE, PICKUP_SOME_INTO_BUNDLE,
+                    PLACE_FROM_BUNDLE, PLACE_ALL_INTO_BUNDLE, PLACE_SOME_INTO_BUNDLE -> true;
+            default -> ordinary(action);
+        };
+    }
+
+    private static boolean known(ClickType click) {
+        return switch (click) {
+            case LEFT, SHIFT_LEFT, RIGHT, SHIFT_RIGHT, WINDOW_BORDER_LEFT, WINDOW_BORDER_RIGHT,
+                    MIDDLE, NUMBER_KEY, DOUBLE_CLICK, DROP, CONTROL_DROP, CREATIVE, SWAP_OFFHAND, UNKNOWN -> true;
+            default -> false;
         };
     }
 

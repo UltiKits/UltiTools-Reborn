@@ -15,6 +15,7 @@ public final class DragDecoder {
 
     /** Returns exactly one decision for a complete set of drag targets, including one-slot drags. */
     public static ClickDecision decode(DragType type, Map<Integer, SlotKind> targets) {
+        if (type != DragType.EVEN && type != DragType.SINGLE) { return new ClickDecision.Cancel(); }
         if (targets.isEmpty()) { return new ClickDecision.Cancel(); }
         if (targets.values().stream().allMatch(kind -> kind == SlotKind.PLAYER_STORAGE)) {
             return new ClickDecision.Allow();
