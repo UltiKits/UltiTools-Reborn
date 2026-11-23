@@ -92,6 +92,20 @@ class InMemeryTeleportServiceTest {
         }
     }
 
+    @Test
+    void immediateAndDelayedTeleportKeepTheNativeSoundAndTitleParameters() {
+        org.bukkit.entity.Player player = mock(org.bukkit.entity.Player.class);
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        Location location = new Location(server.addSimpleWorld("native-sound"), 1, 64, 1);
+        when(player.getLocation()).thenReturn(location);
+        teleportService.teleport(player, location);
+        InMemeryTeleportService.setTeleportingStatus(player.getUniqueId(), true);
+        InMemeryTeleportService.processDelayTeleportTick(player, location, 0);
+        org.mockito.Mockito.verify(player, org.mockito.Mockito.times(2))
+                .playSound(location, org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
+        org.mockito.Mockito.verify(player).sendTitle(org.bukkit.ChatColor.GREEN + "传送成功！", "", 10, 50, 20);
+    }
+
     @Nested
     @DisplayName("构造函数测试")
     class ConstructorTests {
@@ -209,7 +223,7 @@ class InMemeryTeleportServiceTest {
             // Act
             teleportService.teleport(player, targetLocation);
 
-            // Assert - 验证传送成功（音效现在通过 XVersionUtils 静态方法播放）
+            // Assert - 验证传送成功（使用 Paper 原生声音注册表）
             assertThat(player.getLocation().getBlockX()).isEqualTo(targetLocation.getBlockX());
             assertThat(player.getLocation().getBlockZ()).isEqualTo(targetLocation.getBlockZ());
         }

@@ -17,8 +17,9 @@ import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.services.NotificationService;
-import com.ultikits.ultitools.utils.XVersionUtils;
 import com.ultikits.ultitools.widgets.Toast;
+
+import net.kyori.adventure.text.Component;
 
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -238,7 +239,7 @@ public class InMemoryNotificationService implements NotificationService {
 
     @Override
     public boolean sendActionBarNotification(Player player, String message) {
-        XVersionUtils.sendActionBar(player, message);
+        player.sendActionBar(Component.text(message));
         return true;
     }
 

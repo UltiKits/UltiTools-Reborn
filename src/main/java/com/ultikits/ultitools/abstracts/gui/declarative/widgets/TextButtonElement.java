@@ -2,7 +2,6 @@ package com.ultikits.ultitools.abstracts.gui.declarative.widgets;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectElement;
-import com.ultikits.ultitools.utils.XVersionUtils;
 import com.ultikits.ultitools.entities.Colors;
 import mc.obliviate.inventory.Icon;
 import org.bukkit.Material;
@@ -68,12 +67,8 @@ public class TextButtonElement extends RenderObjectElement {
 
     @NotNull
     private ItemStack createGlassPane(@NotNull String color) {
-        // Use XSeries to obtain a colored glass pane
         try {
-            // Try to obtain the colored glass pane
-            return XVersionUtils.getColoredPlaneGlass(
-                    Colors.valueOf(color.toUpperCase())
-            );
+            return new ItemStack(Colors.valueOf(color.toUpperCase()).getGlassPaneMaterial());
         } catch (Exception e) {
             // Fall back to a plain glass pane
             return new ItemStack(Material.GLASS_PANE);

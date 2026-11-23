@@ -4,9 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
@@ -31,9 +29,7 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.MessageUtils;
-import com.ultikits.ultitools.utils.XVersionUtils;
 
 import mc.obliviate.inventory.Icon;
 import mc.obliviate.inventory.pagination.PaginationManager;
@@ -54,16 +50,9 @@ class BasePaginationPageTest {
     private UltiTools mockUltiTools;
 
     @Mock
-    private ItemStack mockGreenGlass;
-
-    @Mock
-    private ItemStack mockGrayGlass;
-
-    @Mock
     private InventoryOpenEvent mockOpenEvent;
 
     private MockedStatic<UltiTools> ultiToolsMock;
-    private MockedStatic<XVersionUtils> xVersionUtilsMock;
     private MockedStatic<MessageUtils> messageUtilsMock;
 
     @BeforeEach
@@ -73,27 +62,17 @@ class BasePaginationPageTest {
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         
-        xVersionUtilsMock = mockStatic(XVersionUtils.class);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.GREEN)).thenReturn(mockGreenGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.GRAY)).thenReturn(mockGrayGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(any(Colors.class))).thenReturn(mockGrayGlass);
-        
         messageUtilsMock = mockStatic(MessageUtils.class);
         messageUtilsMock.when(() -> MessageUtils.info(anyString())).thenAnswer(i -> "§a" + i.getArgument(0));
         messageUtilsMock.when(() -> MessageUtils.warning(anyString())).thenAnswer(i -> "§c" + i.getArgument(0));
         
         lenient().when(mockUltiTools.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
-        lenient().when(mockGreenGlass.getType()).thenReturn(Material.GREEN_STAINED_GLASS_PANE);
-        lenient().when(mockGrayGlass.getType()).thenReturn(Material.GRAY_STAINED_GLASS_PANE);
     }
 
     @AfterEach
     void tearDown() {
         if (ultiToolsMock != null) {
             ultiToolsMock.close();
-        }
-        if (xVersionUtilsMock != null) {
-            xVersionUtilsMock.close();
         }
         if (messageUtilsMock != null) {
             messageUtilsMock.close();
@@ -149,7 +128,7 @@ class BasePaginationPageTest {
     }
 
     private Icon createTestIcon() {
-        return new Icon(mockGrayGlass);
+        return new Icon(new ItemStack(Material.GRAY_STAINED_GLASS_PANE));
     }
 
     @Nested
@@ -358,10 +337,11 @@ class BasePaginationPageTest {
         void shouldUseGreenColorForButtons() { // NOPMD - uses Mockito verify()
             TestPaginationPage page = new TestPaginationPage(mockPlayer, "test", "Test", 3, new ArrayList<>());
             
-            page.testCreatePreviousButton();
-            page.testCreateNextButton();
+            Icon previous = page.testCreatePreviousButton();
+            Icon next = page.testCreateNextButton();
             
-            xVersionUtilsMock.verify(() -> XVersionUtils.getColoredPlaneGlass(Colors.GREEN), atLeast(2));
+            assertEquals(Material.GREEN_STAINED_GLASS_PANE, previous.getItem().getType());
+            assertEquals(Material.GREEN_STAINED_GLASS_PANE, next.getItem().getType());
         }
     }
 

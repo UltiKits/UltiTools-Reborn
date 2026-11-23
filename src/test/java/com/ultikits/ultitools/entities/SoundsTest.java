@@ -7,6 +7,21 @@ import org.junit.jupiter.api.Test;
 class SoundsTest {
 
     @Test
+    void everySoundKeyResolvesInTheNativeRegistry() {
+        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        org.mockbukkit.mockbukkit.MockBukkit.mock();
+        try {
+            for (Sounds sound : Sounds.values()) {
+                assertNotNull(org.bukkit.Registry.SOUNDS.get(sound.getKey()), sound.name());
+            }
+            org.junit.jupiter.api.Assertions.assertEquals(org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT,
+                    org.bukkit.Registry.SOUNDS.getOrThrow(Sounds.ENTITY_ENDERMAN_TELEPORT.getKey()));
+        } finally {
+            com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        }
+    }
+
+    @Test
     void testEnumValues() {
         assertNotNull(Sounds.BLOCK_NOTE_BLOCK_HAT);
         assertNotNull(Sounds.BLOCK_CHEST_OPEN);

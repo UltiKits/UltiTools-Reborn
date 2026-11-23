@@ -26,8 +26,8 @@
   As of `7.0.0-SNAPSHOT`, the pom uses `<release>${java.version}</release>` with Java 25, not
   separate `-source`/`-target` settings. Both building and running the framework require Java 25.
 - **Runtime dependency model:** Paper is the only declared server API (`paper-api`, `provided` scope).
-  Paper auto-downloads the `libraries:` entries declared in `src/main/resources/plugin.yml`, including
-  XSeries (`provided`, not bundled). `obliviate-invs` and `UniversalScheduler` use Maven's default
+  Paper auto-downloads the `libraries:` entries declared in `src/main/resources/plugin.yml`.
+  Materials, sounds and enchantments use Paper's native APIs. `obliviate-invs` and `UniversalScheduler` use Maven's default
   `compile` scope and are bundled by maven-shade-plugin.
   Plain Spigot is not supported. The 7.0 baseline is Paper 26.3 build 258 on Java 25. Each framework
   version targets one latest Paper version; older servers are not promised compatibility (see `COMPATIBILITY.md`).

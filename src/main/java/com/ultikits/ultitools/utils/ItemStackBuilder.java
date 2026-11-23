@@ -3,7 +3,6 @@ package com.ultikits.ultitools.utils;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import javax.annotation.Nullable;
@@ -11,6 +10,8 @@ import javax.annotation.Nullable;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.Registry;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemFlag;
@@ -18,9 +19,6 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.LeatherArmorMeta;
 import org.bukkit.inventory.meta.SkullMeta;
-
-import com.cryptomorin.xseries.XEnchantment;
-import com.cryptomorin.xseries.XMaterial;
 
 /**
  * A fluent builder for creating ItemStacks with various properties.
@@ -33,19 +31,6 @@ public class ItemStackBuilder {
     
     private final ItemStack itemStack;
     private ItemMeta itemMeta;
-    
-    /**
-     * Creates a new ItemStackBuilder from an XMaterial.
-     *
-     * @param material the XMaterial to use
-     */
-    public ItemStackBuilder(XMaterial material) {
-        this.itemStack = material.parseItem();
-        if (this.itemStack == null) {
-            throw new IllegalArgumentException("Invalid material: " + material);
-        }
-        this.itemMeta = this.itemStack.getItemMeta();
-    }
     
     /**
      * Creates a new ItemStackBuilder from a Material.
@@ -68,26 +53,16 @@ public class ItemStackBuilder {
     }
     
     /**
-     * Creates a new ItemStackBuilder from a material name string.
-     * Uses XMaterial for cross-version compatibility.
+     * Creates a new ItemStackBuilder from a current Bukkit material name or namespaced name.
+     * Historical aliases and numeric material IDs are not supported.
      *
      * @param materialName the material name
      * @return a new ItemStackBuilder, or null if the material is invalid
      */
     @Nullable
     public static ItemStackBuilder of(String materialName) {
-        Optional<XMaterial> material = XMaterial.matchXMaterial(materialName);
-        return material.map(ItemStackBuilder::new).orElse(null);
-    }
-    
-    /**
-     * Creates a new ItemStackBuilder from an XMaterial.
-     *
-     * @param material the XMaterial
-     * @return a new ItemStackBuilder
-     */
-    public static ItemStackBuilder of(XMaterial material) {
-        return new ItemStackBuilder(material);
+        Material material = Material.matchMaterial(materialName);
+        return material == null ? null : new ItemStackBuilder(material);
     }
     
     /**
@@ -196,21 +171,6 @@ public class ItemStackBuilder {
     }
     
     /**
-     * Adds an enchantment using XEnchantment for cross-version compatibility.
-     *
-     * @param enchantment the XEnchantment
-     * @param level       the level
-     * @return this builder
-     */
-    public ItemStackBuilder enchant(XEnchantment enchantment, int level) {
-        Enchantment ench = enchantment.getEnchant();
-        if (ench != null) {
-            enchant(ench, level);
-        }
-        return this;
-    }
-    
-    /**
      * Removes an enchantment from the item.
      *
      * @param enchantment the enchantment to remove
@@ -230,7 +190,7 @@ public class ItemStackBuilder {
      */
     public ItemStackBuilder glow() {
         if (itemMeta != null) {
-            Enchantment glowEnchant = XEnchantment.LUCK_OF_THE_SEA.getEnchant();
+            Enchantment glowEnchant = Registry.ENCHANTMENT.get(NamespacedKey.minecraft("luck_of_the_sea"));
             if (glowEnchant != null) {
                 itemMeta.addEnchant(glowEnchant, 1, true);
             }
