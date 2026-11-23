@@ -4,8 +4,6 @@ import java.util.Objects;
 
 /**
  * Outcome of a shown intent.
- * The set of permitted subtypes may grow in a 7.x minor release. Code outside the framework
- * must not switch over it exhaustively without a {@code default} branch.
  * @param <R> the answer type
  */
 public sealed interface UiResult<R> permits UiResult.Completed, UiResult.Closed {
