@@ -706,7 +706,7 @@ class PluginInstallCommandsEnhancedTest {
     private static void collectRunCommands(Component component, List<String> commands) {
         ClickEvent click = component.clickEvent();
         if (click != null && click.action() == ClickEvent.Action.RUN_COMMAND) {
-            commands.add(click.value());
+            commands.add(((ClickEvent.Payload.Text) click.payload()).value());
         }
         for (Component child : component.children()) {
             collectRunCommands(child, commands);

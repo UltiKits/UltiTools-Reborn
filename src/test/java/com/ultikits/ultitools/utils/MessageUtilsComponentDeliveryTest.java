@@ -131,7 +131,7 @@ class MessageUtilsComponentDeliveryTest {
     private static void collectClicks(Component node, List<String> out) {
         ClickEvent click = node.clickEvent();
         if (click != null && click.action() == ClickEvent.Action.RUN_COMMAND) {
-            out.add(click.value());
+            out.add(((ClickEvent.Payload.Text) click.payload()).value());
         }
         for (Component child : node.children()) {
             collectClicks(child, out);
