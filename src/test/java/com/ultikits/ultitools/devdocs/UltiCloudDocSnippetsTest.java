@@ -60,7 +60,7 @@ class UltiCloudDocSnippetsTest {
             Paths.get("src/test/java/com/ultikits/ultitools/devdocs/UltiCloudDocSnippetsTest.java");
 
     private static final Path COMPATIBILITY = Paths.get("COMPATIBILITY.md");
-    private static final Path LEDGER = Paths.get("compatibility/deprecations.json");
+    private static final Path LEDGER = Paths.get("compatibility/archive/6.x/deprecations.json");
     private static final String COMPATIBILITY_HEADING = "## UltiCloud protocol 2.1.0 (as of 6.3.1)";
 
     private static final String PANEL_EN = "docs/src/guide/advanced/panel-integration.md";
@@ -311,7 +311,7 @@ class UltiCloudDocSnippetsTest {
     @DisplayName("COMPATIBILITY.md: the 6.3.1 UltiCloud section names every 6.3.1 ledger key with its 6.4.0 removal")
     void compatibilityNamesEveryLedgerKey() throws IOException {
         List<String> keys = sinceSixThreeOneKeys();
-        assertThat(keys).as("since-6.3.1 keys in compatibility/deprecations.json").isNotEmpty();
+        assertThat(keys).as("since-6.3.1 keys in compatibility/archive/6.x/deprecations.json").isNotEmpty();
         List<String> section = lines(compatibilitySection());
         List<String> missing = new ArrayList<>();
         List<String> withoutRemoval = new ArrayList<>();
@@ -358,7 +358,7 @@ class UltiCloudDocSnippetsTest {
         return String.join("\n", lines.subList(begin, end));
     }
 
-    /** Every ledger key whose {@code since} is 6.3.1, as {@code mvn verify} generated it. */
+    /** Every frozen 6.x ledger key whose {@code since} is 6.3.1, before the 7.0.0 baseline reset. */
     static List<String> sinceSixThreeOneKeys() throws IOException {
         JsonArray ledger = JsonParser.parseString(read(LEDGER)).getAsJsonArray();
         List<String> keys = new ArrayList<>();
