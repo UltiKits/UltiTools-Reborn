@@ -1,220 +1,140 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.core;
 
-import mc.obliviate.inventory.Icon;
-import org.bukkit.Bukkit;
-import org.bukkit.Material;
-import org.bukkit.inventory.ItemStack;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import com.ultikits.ultitools.item.ItemSpec;
+import com.ultikits.ultitools.ui.BindingMode;
+import com.ultikits.ultitools.ui.GridAction;
+import com.ultikits.ultitools.ui.GridItem;
+import com.ultikits.ultitools.ui.SlotBinding;
+import com.ultikits.ultitools.ui.SlotContainer;
+import net.kyori.adventure.key.Key;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockbukkit.mockbukkit.MockBukkit;
+import org.junit.jupiter.api.Timeout;
 
-import com.ultikits.ultitools.utils.MockBukkitHelper;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
-
-/**
- * RenderNode 测试。
- */
-@ExtendWith(MockBukkitHelper.ServerStateExtension.class)
+@Timeout(30)
 public class RenderNodeTest {
-
-    private static boolean createdServer;
-
-    @BeforeAll
-    static void installServer() {
-        // ItemStack construction resolves the item registry, which needs a real MockBukkit server: with none
-        // the load fails once and the failure is cached for the rest of the JVM.
-        if (Bukkit.getServer() == null && !MockBukkit.isMocked()) {
-            MockBukkit.mock();
-            createdServer = true;
-        }
+    private static GridItem item(String material) { return GridItem.of(ItemSpec.builder(Key.key("minecraft", material)).build()); }
+    private static SlotBinding binding() {
+        SlotContainer container = mock(SlotContainer.class);
+        when(container.size()).thenReturn(9);
+        return new SlotBinding(container, 2, BindingMode.VIEW);
     }
-
-    @AfterAll
-    static void releaseServer() {
-        if (createdServer) {
-            MockBukkitHelper.safeUnmock();
-            createdServer = false;
-        }
-    }
-
-    @Test
-    void testRenderNodeCreation() {
+    @Test void testRenderNodeCreation() {
         SlotKey key = SlotKey.of("test");
         RenderNode node = new RenderNode(key, 10);
-
-        assertEquals(key, node.getKey());
-        assertEquals(10, node.getSlotIndex());
-        assertNull(node.getIcon());
-        assertTrue(node.isLeaf());
+        assertThat(node.getKey()).isEqualTo(key);
+        assertThat(node.getSlotIndex()).isEqualTo(10);
+        assertThat(node.getItem()).isNull();
+        assertThat(node.getBinding()).isNull();
+        assertThat(node.isLeaf()).isTrue();
     }
-
-    @Test
-    void testRenderNodeWithIcon() {
-        ItemStack item = new ItemStack(Material.DIAMOND);
-        Icon icon = new Icon(item);
+    @Test void testRenderNodeWithIcon() {
+        GridItem icon = item("diamond");
         RenderNode node = new RenderNode(null, 5, icon);
-
-        assertEquals(5, node.getSlotIndex());
-        assertEquals(icon, node.getIcon());
+        assertThat(node.getSlotIndex()).isEqualTo(5);
+        assertThat(node.getItem()).isSameAs(icon);
     }
-
-    @Test
-    void testChildManagement() {
+    @Test void testChildManagement() {
         RenderNode parent = new RenderNode(SlotKey.of("parent"), -1);
-        RenderNode child1 = new RenderNode(SlotKey.of("child1"), 1);
-        RenderNode child2 = new RenderNode(SlotKey.of("child2"), 2);
-
-        assertTrue(parent.isLeaf());
-        assertTrue(parent.isContainer() == false);
-
-        parent.addChild(child1);
-        parent.addChild(child2);
-
-        assertFalse(parent.isLeaf());
-        assertTrue(parent.isContainer());
-        assertEquals(2, parent.getChildren().size());
-        assertEquals(parent, child1.getParent());
-        assertEquals(parent, child2.getParent());
+        RenderNode a = new RenderNode(SlotKey.of("a"), 1);
+        RenderNode b = new RenderNode(SlotKey.of("b"), 2);
+        assertThat(parent.isLeaf()).isTrue();
+        assertThat(parent.isContainer()).isFalse();
+        parent.addChild(a); parent.addChild(b);
+        assertThat(parent.isLeaf()).isFalse();
+        assertThat(parent.isContainer()).isTrue();
+        assertThat(parent.getChildren()).containsExactly(a, b);
+        assertThat(a.getParent()).isSameAs(parent);
+        assertThat(b.getParent()).isSameAs(parent);
+        assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> parent.getChildren().clear());
     }
-
-    @Test
-    void testRemoveChild() {
+    @Test void testRemoveChild() {
         RenderNode parent = new RenderNode(null, -1);
         RenderNode child = new RenderNode(null, 1);
-
-        parent.addChild(child);
-        assertEquals(1, parent.getChildren().size());
-
-        parent.removeChild(child);
-        assertEquals(0, parent.getChildren().size());
-        assertNull(child.getParent());
+        parent.addChild(child); parent.removeChild(child);
+        assertThat(parent.getChildren()).isEmpty();
+        assertThat(child.getParent()).isNull();
     }
-
-    @Test
-    void testClearChildren() {
+    @Test void testClearChildren() {
         RenderNode parent = new RenderNode(null, -1);
-        parent.addChild(new RenderNode(null, 1));
-        parent.addChild(new RenderNode(null, 2));
-
-        parent.clearChildren();
-        assertEquals(0, parent.getChildren().size());
+        RenderNode a = new RenderNode(null, 1), b = new RenderNode(null, 2);
+        parent.addChild(a); parent.addChild(b); parent.clearChildren();
+        assertThat(parent.getChildren()).isEmpty();
+        assertThat(a.getParent()).isNull();
+        assertThat(b.getParent()).isNull();
     }
-
-    @Test
-    void testGetAllLeaves() {
-        RenderNode root = new RenderNode(null, -1);
-        RenderNode child1 = new RenderNode(SlotKey.of("c1"), 1);
-        RenderNode child2 = new RenderNode(null, -1);
-        RenderNode grandchild = new RenderNode(SlotKey.of("gc"), 2);
-
-        root.addChild(child1);
-        root.addChild(child2);
-        child2.addChild(grandchild);
-
-        List<RenderNode> leaves = root.getAllLeaves();
-        assertEquals(2, leaves.size());
-        assertTrue(leaves.contains(child1));
-        assertTrue(leaves.contains(grandchild));
+    @Test void testGetAllLeaves() {
+        RenderNode root = new RenderNode(null, -1), branch = new RenderNode(null, -1);
+        RenderNode a = new RenderNode(SlotKey.of("a"), 1), b = new RenderNode(SlotKey.of("b"), 2);
+        root.addChild(a); root.addChild(branch); branch.addChild(b);
+        assertThat(root.getAllLeaves()).containsExactly(a, b);
     }
-
-    @Test
-    void testCalculateSlotCount() {
-        ItemStack item = new ItemStack(Material.STONE);
-        Icon icon = new Icon(item);
-
-        RenderNode leafWithIcon = new RenderNode(null, 1, icon);
-        RenderNode leafWithoutIcon = new RenderNode(null, 2);
-
-        assertEquals(1, leafWithIcon.calculateSlotCount());
-        assertEquals(0, leafWithoutIcon.calculateSlotCount());
+    @Test void testCalculateSlotCount() {
+        RenderNode root = new RenderNode(null, -1), bound = new RenderNode(null, 2);
+        bound.setBinding(binding());
+        root.addChild(new RenderNode(null, 0, item("stone")));
+        root.addChild(new RenderNode(null, 1)); root.addChild(bound);
+        assertThat(root.calculateSlotCount()).isEqualTo(2);
+        assertThat(new RenderNode(null, 1).calculateSlotCount()).isZero();
     }
-
-    @Test
-    void testMetadata() {
+    @Test void testMetadata() {
         RenderNode node = new RenderNode(null, 0);
         node.setMetadata("key", "value");
-
-        assertEquals("value", node.getMetadata("key"));
-
+        assertThat(node.getMetadata("key")).isEqualTo("value");
         node.setMetadata("key", null);
-        assertNull(node.getMetadata("key"));
+        assertThat(node.getMetadata("key")).isNull();
     }
-
-    @Test
-    void testCopy() {
-        SlotKey key = SlotKey.of("original");
-        ItemStack item = new ItemStack(Material.GOLD_INGOT);
-        Icon icon = new Icon(item);
-        RenderNode original = new RenderNode(key, 10, icon);
+    @Test void testCopy() {
+        GridAction action = click -> { /* action identity must survive a node snapshot */ };
+        RenderNode original = new RenderNode(SlotKey.of("original"), 10,
+                GridItem.of(ItemSpec.builder(Key.key("minecraft:gold_ingot")).build(), action));
         original.setMetadata("meta", "value");
-        java.util.function.Consumer<org.bukkit.event.inventory.InventoryClickEvent> handler = event -> { };
-        original.setClickHandler(handler);
-
+        original.addChild(new RenderNode(null, 1));
         RenderNode copy = original.copy();
-
-        // 05-11 plan Task 3: extends the plan's original assertions (key, slotIndex,
-        // icon-not-null, metadata value) with click handler coverage — copy() has a
-        // production caller for the first time as of this plan (GuiRenderer.
-        // collectRenderNodesRecursive), so its full field coverage matters now in a way
-        // it didn't when it was dead code.
-        assertEquals(original.getKey(), copy.getKey());
-        assertEquals(original.getSlotIndex(), copy.getSlotIndex());
-        assertNotNull(copy.getIcon());
-        assertEquals("value", copy.getMetadata("meta"));
-        assertSame(handler, copy.getClickHandler(),
-                "copy() must carry the click handler — GuiRenderer.updateClickHandlers() reads "
-                        + "it off the collected (copied) nodes, not the live ones");
+        assertThat(copy.getKey()).isEqualTo(original.getKey());
+        assertThat(copy.getSlotIndex()).isEqualTo(10);
+        assertThat(copy.getItem().action()).contains(action);
+        assertThat(copy.getMetadata("meta")).isEqualTo("value");
+        assertThat(copy.getChildren()).isEmpty();
+        assertThat(copy.getParent()).isNull();
     }
-
-    @Test
-    void testCopyIsIndependentOfLaterMutationOnTheOriginal() {
-        // This is the exact property GuiRenderer.collectRenderNodesRecursive relies on:
-        // a snapshot taken this frame must not be retroactively altered by next frame's
-        // in-place mutation of the ORIGINAL (live) RenderNode via its setters — see
-        // ItemDisplayElement.updateRenderNode(), which reassigns slotIndex/icon on the
-        // SAME cached RenderNode instance every rebuild.
-        SlotKey key = SlotKey.of("original");
-        RenderNode original = new RenderNode(key, 0, new Icon(new ItemStack(Material.DIAMOND)));
+    @Test void testCopyIsIndependentOfLaterMutationOnTheOriginal() {
+        RenderNode original = new RenderNode(SlotKey.of("original"), 0, item("diamond"));
         original.setMetadata("meta", "before");
-        java.util.function.Consumer<org.bukkit.event.inventory.InventoryClickEvent> handlerBefore = event -> { };
-        original.setClickHandler(handlerBefore);
-
         RenderNode copy = original.copy();
-
-        // Mutate every copyable field on the ORIGINAL after the copy was taken.
-        Icon newIcon = new Icon(new ItemStack(Material.GOLD_INGOT));
-        original.setIcon(newIcon);
-        original.setSlotIndex(5);
-        original.setMetadata("meta", "after");
-        java.util.function.Consumer<org.bukkit.event.inventory.InventoryClickEvent> handlerAfter = event -> { };
-        original.setClickHandler(handlerAfter);
-
-        assertNotSame(newIcon, copy.getIcon(),
-                "the copy's icon must not change when the original's icon reference is reassigned");
-        assertEquals(0, copy.getSlotIndex(),
-                "the copy's slotIndex must not change when the original's is reassigned");
-        assertEquals("before", copy.getMetadata("meta"),
-                "the copy's metadata must not change when the original's is reassigned");
-        assertSame(handlerBefore, copy.getClickHandler(),
-                "the copy's click handler must not change when the original's is reassigned");
+        original.setItem(item("gold_ingot")); original.setSlotIndex(5); original.setMetadata("meta", "after");
+        assertThat(copy.getItem()).isEqualTo(item("diamond"));
+        assertThat(copy.getSlotIndex()).isZero();
+        assertThat(copy.getMetadata("meta")).isEqualTo("before");
+        original.setBinding(binding());
+        RenderNode boundCopy = original.copy();
+        original.setBinding(null);
+        assertThat(boundCopy.getBinding()).isNotNull();
+        assertThat(boundCopy.getItem()).isNull();
     }
-
-    @Test
-    void testEquality() {
+    @Test void itemAndBindingSettersAreMutuallyExclusive() {
+        RenderNode node = new RenderNode(null, 0, item("stone"));
+        SlotBinding binding = binding();
+        node.setBinding(binding);
+        assertThat(node.getItem()).isNull(); assertThat(node.getBinding()).isSameAs(binding);
+        node.setItem(item("diamond"));
+        assertThat(node.getBinding()).isNull(); assertThat(node.getItem()).isEqualTo(item("diamond"));
+        node.setItem(null);
+        assertThat(node.calculateSlotCount()).isZero();
+    }
+    @Test void testEquality() {
         SlotKey key = SlotKey.of("same");
-        RenderNode node1 = new RenderNode(key, 1);
-        RenderNode node2 = new RenderNode(key, 2); // 不同 slot
-        RenderNode node3 = new RenderNode(null, 1); // 无 key，相同 slot
-
-        // 有 key 时，key 相同则相等
-        assertEquals(node1, node2);
-
-        // 无 key 时，slot 相同则相等
-        assertEquals(node1, node3); // key 优先
+        RenderNode a = new RenderNode(key, 1), b = new RenderNode(key, 2), c = new RenderNode(null, 1);
+        assertThat(a).isEqualTo(b).isEqualTo(c).isEqualTo(a).isNotEqualTo(null).isNotEqualTo("node");
+        assertThat(a.hashCode()).isEqualTo(b.hashCode());
+        assertThat(c.hashCode()).isEqualTo(1);
+        assertThat(a).isNotEqualTo(new RenderNode(SlotKey.of("different"), 1));
+        assertThat(c).isNotEqualTo(new RenderNode(null, 2));
+        assertThat(a.toString()).contains("same", "slot=1");
+        assertThat(c.toString()).contains("key=null");
     }
 }
