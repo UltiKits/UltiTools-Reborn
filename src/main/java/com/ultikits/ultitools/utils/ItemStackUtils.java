@@ -1,120 +1,104 @@
 package com.ultikits.ultitools.utils;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
+import java.util.Base64;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.util.io.BukkitObjectInputStream;
-import org.bukkit.util.io.BukkitObjectOutputStream;
-import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Utility class for ItemStack serialization and deserialization.
- * Uses Base64 encoding to convert ItemStack arrays to/from strings for storage.
+ * Uses Base64 encoding of Paper's item bytes for storage.
  *
  * @author wisdomme
  * @version 1.0.0
  * @since 6.2.0
  */
 public final class ItemStackUtils {
-    
     private static final Logger LOGGER = Logger.getLogger(ItemStackUtils.class.getName());
-    
+
     private ItemStackUtils() {
-        // Utility class, prevent instantiation
+        // Utility class, prevent instantiation.
     }
-    
+
     /**
-     * Serializes an array of ItemStack to a Base64-encoded string.
+     * Serializes an array using Paper's item byte format and Base64 encoding.
      *
-     * @param items the ItemStack array to serialize
-     * @return the Base64-encoded string, or null if serialization fails
+     * @param items the array to serialize, including null or empty slots
+     * @return the Base64-encoded string, or null for null input or a serialization failure
      */
-    public static String serializeItems(ItemStack[] items) {
+    public static @Nullable String serializeItems(@Nullable ItemStack @Nullable [] items) {
         if (items == null) {
             return null;
         }
-        
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-             BukkitObjectOutputStream dataOutput = new BukkitObjectOutputStream(outputStream)) {
-            
-            dataOutput.writeInt(items.length);
-            for (ItemStack item : items) {
-                dataOutput.writeObject(item);
-            }
-            dataOutput.flush();
-            
-            return Base64Coder.encodeLines(outputStream.toByteArray());
-        } catch (IOException e) {
+        try {
+            return Base64.getEncoder().encodeToString(ItemStack.serializeItemsAsBytes(items));
+        } catch (RuntimeException e) { // NOPMD - Paper throws unspecified unchecked exceptions for malformed item bytes
             LOGGER.log(Level.SEVERE, "Failed to serialize ItemStack array", e);
             return null;
         }
     }
-    
+
     /**
-     * Deserializes a Base64-encoded string back to an array of ItemStack.
+     * Deserializes a Base64-encoded array of Paper item bytes, accepting MIME line breaks.
+     * Empty items are returned as null slots.
      *
      * @param data the Base64-encoded string
-     * @return the ItemStack array, or null if deserialization fails
+     * @return the item array, or null for absent input or a deserialization failure
      */
-    public static ItemStack[] deserializeItems(String data) {
+    public static @Nullable ItemStack @Nullable [] deserializeItems(@Nullable String data) {
         if (data == null || data.isEmpty()) {
             return null;
         }
-        
-        try (ByteArrayInputStream inputStream = new ByteArrayInputStream(Base64Coder.decodeLines(data));
-             BukkitObjectInputStream dataInput = new BukkitObjectInputStream(inputStream)) {
-            
-            int length = dataInput.readInt();
-            ItemStack[] items = new ItemStack[length];
-            for (int i = 0; i < length; i++) {
-                items[i] = (ItemStack) dataInput.readObject();
+        try {
+            byte[] bytes = Base64.getMimeDecoder().decode(data);
+            ItemStack[] items = ItemStack.deserializeItemsFromBytes(bytes);
+            for (int index = 0; index < items.length; index++) {
+                if (items[index].isEmpty()) {
+                    items[index] = null;
+                }
             }
-            
             return items;
-        } catch (IOException | ClassNotFoundException e) {
+        } catch (RuntimeException e) { // NOPMD - Paper throws unspecified unchecked exceptions for malformed item bytes
             LOGGER.log(Level.SEVERE, "Failed to deserialize ItemStack array", e);
             return null;
         }
     }
-    
+
     /**
      * Serializes a single ItemStack to a Base64-encoded string.
      *
-     * @param item the ItemStack to serialize
-     * @return the Base64-encoded string, or null if serialization fails
+     * @param item the item to serialize
+     * @return the Base64-encoded string, or null for null input or a serialization failure
      */
-    public static String serializeItem(ItemStack item) {
+    public static @Nullable String serializeItem(@Nullable ItemStack item) {
         if (item == null) {
             return null;
         }
-        return serializeItems(new ItemStack[]{item});
+        return serializeItems(new ItemStack[] {item});
     }
-    
+
     /**
      * Deserializes a Base64-encoded string back to a single ItemStack.
      *
      * @param data the Base64-encoded string
-     * @return the ItemStack, or null if deserialization fails or array is empty
+     * @return the first item, or null for a deserialization failure, empty array or empty slot
      */
-    public static ItemStack deserializeItem(String data) {
+    public static @Nullable ItemStack deserializeItem(@Nullable String data) {
         ItemStack[] items = deserializeItems(data);
         if (items != null && items.length > 0) {
             return items[0];
         }
         return null;
     }
-    
+
     /**
-     * Checks if a serialized string is valid.
+     * Checks whether a string can be deserialized as an item array.
      *
      * @param data the Base64-encoded string to check
      * @return true if the string can be deserialized, false otherwise
      */
-    public static boolean isValidSerialized(String data) {
+    public static boolean isValidSerialized(@Nullable String data) {
         if (data == null || data.isEmpty()) {
             return false;
         }

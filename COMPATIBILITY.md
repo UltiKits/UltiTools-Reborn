@@ -38,6 +38,48 @@ both lines uses `Material.<COLOR>_STAINED_GLASS_PANE` directly.
 非物品材质、历史别名、数字 ID 及 1.20 之后改过名的旧名字返回 `null`，不提供旧名称兼容。
 下面 6.x 小节保留历史行为，不是 7.0 的运行库供应承诺。
 
+## Item descriptions and storage (as of 7.0.0)
+
+`ItemSpec` describes an item without creating a stack or choosing a viewer's language.
+Inject `ItemRenderer` with `@Autowired` and call `render(spec, player)` when the viewer is known,
+or `render(spec, locale)` when a locale is already available. Rendering needs a running Paper server.
+Each call returns a new, independent `ItemStack`; the renderer is a framework singleton.
+
+中文补充：`ItemSpec` 只描述物品，不创建物品栈，也不提前固定观看者语言。通过 `@Autowired`
+取得 `ItemRenderer`，在展示时按玩家或明确的 `Locale` 渲染；每次得到独立物品栈，渲染需要运行中的 Paper。
+
+### Item construction migration
+
+Use `ItemSpec` for descriptions that will be rendered for a viewer. Text belongs in the module's
+language catalogue as MiniMessage; fixed Adventure components can be supplied through `Text.literal`.
+Typed attributes cover names, lore, models, glint and tooltip display; other components use `data` or `remove`.
+
+For changes to an existing stack, use Paper's `setData` and `unsetData` directly.
+Pass-through values are applied unchanged, not localized. Patches are applied in insertion order,
+followed by persistent-data markers; a later marker for the same key replaces an earlier one.
+
+中文补充：需要按玩家显示的物品用描述加渲染器；固定组件可用 `Text.literal`，已有物品直接调用
+Paper 的 `setData` / `unsetData`。透传值不翻译，按插入顺序应用，最后写入持久标记，同键后写覆盖。
+
+### Item text styles
+
+Names use `ITEM_NAME`, not the italic custom-name component. The renderer does not restyle names.
+Lore lines are rendered through `Messages` in the same locale as the name.
+Specify any desired colours in the text rather than relying on a framework colour default.
+
+中文补充：名字使用 `ITEM_NAME`，渲染器不追加名字样式；名字和说明行使用同一语言渲染。
+需要指定颜色时请在文本中明确设置，框架不替作者决定颜色。
+
+### Stored item arrays
+
+`ItemStackUtils` keeps its five static entrypoints and returns `null` for absent input or conversion failure.
+New writes use `ItemStack.serializeItemsAsBytes` and `java.util.Base64`, rather than a Bukkit Java object stream.
+Reading uses the MIME Base64 decoder, so line-wrapped strings are accepted.
+Empty decoded stacks become `null` slots, preserving the array's length and empty-slot positions.
+
+中文补充：`ItemStackUtils` 保留五个静态入口及失败返回 `null` 的约定。7.0 以 Paper 物品字节格式
+加 Base64 写入，读取接受换行；空物品恢复成 `null`，不改变数组长度和空槽位置。
+
 ## Removed data-store overloads (as of 6.5.0)
 
 The eight data-store members announced for removal in 6.4.0 are now removed:
