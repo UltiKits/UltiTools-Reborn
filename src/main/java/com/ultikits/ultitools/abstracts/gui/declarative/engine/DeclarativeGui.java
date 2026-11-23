@@ -2,302 +2,128 @@ package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
-import mc.obliviate.inventory.Gui;
-import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.ui.Ack;
+import com.ultikits.ultitools.ui.Grid;
+import com.ultikits.ultitools.ui.GridSession;
+import com.ultikits.ultitools.ui.ShowOptions;
+import com.ultikits.ultitools.ui.UiResult;
+import com.ultikits.ultitools.ui.UiService;
+import java.util.Objects;
 import org.bukkit.entity.Player;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.event.inventory.InventoryCloseEvent;
-import org.bukkit.event.inventory.InventoryOpenEvent;
-import org.bukkit.event.inventory.InventoryType;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * DeclarativeGui is the base class of the declarative GUI framework.
- * <p>
- * It extends obliviate-invs' {@link Gui}, layering declarative UI capability on top. A subclass
- * only needs to implement {@link #build(BuildContext)}, returning a Widget tree.
- * <p>
- * <b>Usage example:</b>
- * <pre>{@code
- * public class ShopPage extends DeclarativeGui {
- *     private final List<ItemStack> items;
- *
- *     public ShopPage(Player player, List<ItemStack> items) {
- *         super(player, "shop", "Shop", 6);
- *         this.items = items;
- *     }
- *
- *     @Override
- *     public Widget build(BuildContext context) {
- *         return Column.builder()
- *             .children(
- *                 // Title row
- *                 Center.builder()
- *                     .child(TextDisplay.title("Item Shop"))
- *                     .build(),
- *
- *                 // Item grid
- *                 GridView.builder()
- *                     .items(items)
- *                     .itemBuilder(item -> ItemButton.builder()
- *                         .item(item)
- *                         .onClick(() -> buyItem(item))
- *                         .build())
- *                     .build(),
- *
- *                 // Pagination controls
- *                 Row.builder()
- *                     .children(
- *                         PrevPageButton.builder().build(),
- *                         PageIndicator.builder().build(),
- *                         NextPageButton.builder().build()
- *                     )
- *                     .build()
- *             )
- *             .build();
- *     }
- *
- *     private void buyItem(ItemStack item) {
- *         // Purchase logic
- *         player.sendMessage("Bought " + item.getType());
- *     }
- * }
- * }</pre>
- *
- * @author UltiTools Team
- * @version 1.0.0
+ * A state-derived screen shown through {@link UiService}. Subclasses only describe widgets;
+ * backend selection, clicks and close reasons belong to the UI service.
  * @since 6.2.0
  */
-public abstract class DeclarativeGui extends Gui {
-
-    @NotNull
+public abstract class DeclarativeGui {
     protected final String id;
+    private final UiService ui;
+    private final Player viewer;
+    private final int rows;
     private final GuiRenderer renderer;
-    private boolean initialized = false;
+    private Grid firstGrid;
+    private GridSession session;
+    private boolean initialized;
 
     /**
-     * Creates a DeclarativeGui.
-     *
-     * @param player the player
-     * @param id     the GUI ID
-     * @param title  the title
-     * @param rows   the row count
+     * @param ui the screen owner's UI service
+     * @param scheduler the framework-owned scheduler (not the module scheduler)
+     * @param viewer the viewer
+     * @param id the build-context identifier
+     * @param title deferred screen title
+     * @param rows fixed row count, 1..6
      */
-    public DeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull String title, int rows) {
-        super(player, id, title, rows);
-        this.id = id;
-        this.renderer = new GuiRenderer(this, player);
+    protected DeclarativeGui(UiService ui, Scheduler scheduler, Player viewer, String id, Text title, int rows) {
+        this.ui = Objects.requireNonNull(ui, "ui");
+        this.viewer = Objects.requireNonNull(viewer, "viewer");
+        this.id = Objects.requireNonNull(id, "id");
+        this.rows = rows;
+        renderer = new GuiRenderer(title, rows, new GuiScheduler(scheduler, viewer), this::acceptGrid);
     }
 
-    /**
-     * Creates a DeclarativeGui.
-     *
-     * @param player        the player
-     * @param id            the GUI ID
-     * @param title         the title
-     * @param inventoryType the inventory type
-     */
-    public DeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull String title, 
-                          @NotNull InventoryType inventoryType) {
-        super(player, id, title, inventoryType);
-        this.id = id;
-        this.renderer = new GuiRenderer(this, player);
-    }
+    /** @param context the root build context @return a widget tree derived from current state */
+    public abstract @NotNull Widget build(@NotNull BuildContext context);
 
     /**
-     * Creates a DeclarativeGui with a Component title.
-     *
-     * @param player the player
-     * @param id     the GUI ID
-     * @param title  the title (Component)
-     * @param rows   the row count
+     * Synchronously builds the first complete frame, then shows it. Later frames update the same session.
+     * Calling this while the page is open returns that session; after its result arrives the page may reopen.
+     * @return the grid session
+     * @throws IllegalStateException if not on the viewer's owning thread, or called re-entrantly during opening
      */
-    public DeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull Component title, int rows) {
-        super(player, id, title, rows);
-        this.id = id;
-        this.renderer = new GuiRenderer(this, player);
-    }
-
-    /**
-     * Creates a DeclarativeGui with a Component title.
-     *
-     * @param player        the player
-     * @param id            the GUI ID
-     * @param title         the title (Component)
-     * @param inventoryType the inventory type
-     */
-    public DeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull Component title, 
-                          @NotNull InventoryType inventoryType) {
-        super(player, id, title, inventoryType);
-        this.id = id;
-        this.renderer = new GuiRenderer(this, player);
-    }
-
-    /**
-     * Builds the Widget tree.
-     * <p>
-     * Subclasses must implement this method, returning the Widget tree describing the UI. This
-     * method is called again every time the state changes.
-     *
-     * @param context the build context, carrying the player, GUI configuration, and similar info
-     * @return the Widget tree
-     */
-    @NotNull
-    public abstract Widget build(@NotNull BuildContext context);
-
-    @Override
-    public final void onOpen(@NotNull InventoryOpenEvent event) {
-        if (!initialized) {
-            // Initialize the renderer. What is passed is a Supplier, not a built Widget --
-            // GuiRenderer calls build(context) again at the start of every frame, so that a
-            // state change actually re-derives the Widget tree (D-09 item 1; GuiRenderer's half
-            // of this change came from plan 05-11's Task 1, and updating the call site here
-            // belongs to Task 2's scope, done early to keep the build compiling).
-            BuildContext context = BuildContext.root(player, getId(), getSize() / 9);
-            renderer.initialize(() -> build(context), context);
-            initialized = true;
+    public final GridSession open() {
+        if (!renderer.getScheduler().isOnMainThread()) {
+            throw new IllegalStateException("open() must be called on the viewer's owning thread");
         }
-
-        // Call the subclass hook
-        onGuiOpen(event);
+        if (initialized) {
+            if (session == null) {
+                throw new IllegalStateException("The declarative screen is already opening");
+            }
+            return session;
+        }
+        initialized = true;
+        BuildContext context = BuildContext.root(viewer, id, rows);
+        try {
+            renderer.initialize(() -> build(context), context);
+            session = ui.show(viewer, Objects.requireNonNull(firstGrid, "The first frame did not finish"), ShowOptions.defaults());
+        } catch (RuntimeException | Error failure) {
+            initialized = false;
+            try {
+                renderer.dispose();
+            } catch (RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+        GridSession opened = session;
+        opened.result().thenAccept(this::finished);
+        return opened;
     }
 
-    @Override
-    public final void onClose(@NotNull InventoryCloseEvent event) {
-        // Call the subclass hook
-        onGuiClose(event);
+    private void acceptGrid(Grid grid) {
+        if (session == null) {
+            firstGrid = grid;
+        } else {
+            session.update(grid);
+        }
+    }
 
-        // Release resources
-        renderer.dispose();
+    private void finished(UiResult<Ack> result) {
         initialized = false;
+        session = null;
+        firstGrid = null;
+        try {
+            renderer.dispose();
+        } finally {
+            onGuiClose(result);
+        }
     }
 
-    /**
-     * This is the framework's own bounds-check site (D-09 item 4), not a post-filter hook. A
-     * subclass overriding this method needs to know that obliviate-invs' {@code InvListener}
-     * calls this method unconditionally, BEFORE it applies any bounds check of its own — so
-     * every click reaches here, including a click in the player's own inventory. The actual
-     * check happens one call down, in {@link GuiRenderer#handleClick}: it rejects (returns
-     * without dispatching) any click whose raw slot falls outside the GUI's own inventory, so
-     * a click on the player's own inventory can never reach a GUI handler here.
-     *
-     * @param event the click event
-     * @return see {@link #onGuiClick(InventoryClickEvent)}
-     */
-    @Override
-    public final boolean onClick(@NotNull InventoryClickEvent event) {
-        // Pass it to the renderer -- the renderer does its own bounds check; see the javadoc
-        // above and GuiRenderer.handleClick.
-        renderer.handleClick(event);
-
-        // Call the subclass hook
-        return onGuiClick(event);
-    }
-
-    /**
-     * Marks that a rebuild is needed.
-     * <p>
-     * Typically called in a subclass to trigger a UI update when data changes.
-     */
+    /** Requests a later frame while this page is mounted. */
     protected void markNeedsBuild() {
         if (initialized) {
             renderer.scheduleBuild();
         }
     }
 
-    /**
-     * Sets state and triggers a rebuild.
-     * <p>
-     * This is the Flutter-style approach to state management. Modify state inside the callback,
-     * and the framework automatically triggers a rebuild.
-     * <p>
-     * <b>Usage example:</b>
-     * <pre>{@code
-     * setState(() -> {
-     *     counter++;          // modify state
-     *     selectedItem = item;
-     * });
-     * }</pre>
-     *
-     * @param action the state-modifying operation
-     */
+    /** @param action modifies state before requesting a later frame */
     protected void setState(@NotNull Runnable action) {
         action.run();
         markNeedsBuild();
     }
 
-    /**
-     * Hook method called when the GUI opens.
-     * <p>
-     * Subclasses may override this to perform extra initialization work.
-     *
-     * @param event the open event
-     */
-    protected void onGuiOpen(@NotNull InventoryOpenEvent event) {
-        // Overridden by subclasses
+    /** @param result the service's final close result; resources have already been disposed */
+    protected void onGuiClose(@NotNull UiResult<Ack> result) {
+        // Optional subclass cleanup after the session ends.
     }
 
-    /**
-     * Hook method called when the GUI closes.
-     * <p>
-     * Subclasses may override this to perform cleanup work.
-     *
-     * @param event the close event
-     */
-    protected void onGuiClose(@NotNull InventoryCloseEvent event) {
-        // Overridden by subclasses
-    }
-
-    /**
-     * Hook method called on a GUI click.
-     * <p>
-     * Note: the click event is handled by the declarative framework first, before this method
-     * is called.
-     * <p>
-     * The return value reads backwards, so read it carefully: returning {@code false}
-     * keeps the event cancelled and the player <b>cannot</b> take the clicked item;
-     * returning {@code true} lets the click through and the item <b>can</b> be taken.
-     * The semantics come from obliviate-invs, whose {@code InvListener} calls
-     * {@code setCancelled(false)} when {@code Gui.onClick} returns true and
-     * {@code setCancelled(true)} when it returns false. The default of {@code false}
-     * matches the library base class and is the safe side.
-     *
-     * @param event the click event
-     * @return {@code false} keeps the event cancelled (default, item cannot be taken);
-     *         {@code true} lets it through
-     */
-    protected boolean onGuiClick(@NotNull InventoryClickEvent event) {
-        // Subclasses override. The default keeps the event cancelled, which is the safe side.
-        return false;
-    }
-
-    /**
-     * Gets the renderer.
-     *
-     * @return the GuiRenderer
-     */
-    @NotNull
-    protected GuiRenderer getRenderer() {
-        return renderer;
-    }
-
-    /**
-     * Checks whether this has been initialized.
-     *
-     * @return true if initialized
-     */
-    public boolean isInitialized() {
-        return initialized;
-    }
-
-    /**
-     * Gets the player.
-     *
-     * @return the player
-     */
-    @NotNull
-    public Player getPlayer() {
-        return player;
-    }
+    /** @return the renderer owning this page's elements */
+    protected @NotNull GuiRenderer getRenderer() { return renderer; }
+    /** @return whether the page is mounted and awaiting its session result */
+    public boolean isInitialized() { return initialized; }
+    /** @return the viewer */
+    public @NotNull Player viewer() { return viewer; }
 }
-

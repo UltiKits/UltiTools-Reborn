@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.ui.UiService;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
@@ -16,8 +19,16 @@ public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>
     @NotNull
     private T state;
 
-    public StatefulDeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull String title, int rows) {
-        super(player, id, title, rows);
+    /**
+     * @param ui the screen owner's UI service
+     * @param scheduler the framework-owned scheduler
+     * @param viewer the viewer
+     * @param id the build-context identifier
+     * @param title deferred screen title
+     * @param rows fixed row count, 1..6
+     */
+    protected StatefulDeclarativeGui(UiService ui, Scheduler scheduler, Player viewer, String id, Text title, int rows) {
+        super(ui, scheduler, viewer, id, title, rows);
         this.state = createState();
         state.gui = this;
     }
@@ -84,11 +95,11 @@ public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>
          * @return the player
          */
         @NotNull
-        protected Player getPlayer() {
+        protected Player viewer() {
             if (gui == null) {
                 throw new IllegalStateException("State not attached to GUI");
             }
-            return gui.getPlayer();
+            return gui.viewer();
         }
     }
 }

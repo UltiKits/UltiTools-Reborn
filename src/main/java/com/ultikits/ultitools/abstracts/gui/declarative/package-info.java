@@ -11,14 +11,14 @@
  * <p>
  * <b>Three rendering seams were fixed in 6.3.0 — {@code UI = f(state)} now holds:</b>
  * {@code GuiRenderer} re-derives the Widget tree from a {@code Supplier<Widget>} on every
- * {@code performBuild()} call, not just once from {@code onOpen}; {@code Element.update()}
+ * {@code performBuild()} call, not just once from {@code open()}; {@code Element.update()}
  * marks itself dirty unconditionally; and {@code State.setState()} — including a call on a
  * nested {@code StatefulWidget} — now reliably reaches a scheduled repaint. The
  * <i>setState triggers a partial rebuild</i> bullet below now holds, and the navigation
  * subsystem that depends on it ({@code Navigator.push} / {@code pop}) is usable. Click
- * dispatch was also tightened: {@code GuiRenderer} bounds-checks {@code event.getRawSlot()}
- * before any handler lookup, so a numerically-colliding slot in the player's own inventory can
- * no longer trigger a GUI handler. {@code GridView} now writes its computed slot onto any
+ * dispatch uses actions carried by immutable {@code GridItem}s; {@code UiService} dispatches
+ * only actions belonging to the displayed grid, without an engine-owned inventory-event map.
+ * {@code GridView} writes its computed slot onto any
  * widget type's render node(s) at render time (previously only {@code ItemDisplay} positioned
  * correctly).
  * <p>
@@ -34,21 +34,21 @@
  * <ul>
  *   <li>Widget tree describes the UI structure</li>
  *   <li>Element tree manages Widget instances and their lifecycle</li>
- *   <li>RenderNode tree performs efficient diff-based updates</li>
+ *   <li>RenderNode tree describes immutable Grid snapshots; the backend diffs slots</li>
  *   <li>Supports both StatelessWidget and StatefulWidget</li>
  *   <li>setState triggers a partial rebuild</li>
  *   <li>All updates run on the main thread automatically</li>
- *   <li>Compatible with obliviate-invs' Gui lifecycle</li>
+ *   <li>UiService owns screen sessions, actions and close results</li>
  * </ul>
  * <p>
  * <h2>Quick Start:</h2>
  * <pre>{@code
  * // 1. Create your GUI page
  * public class ShopPage extends DeclarativeGui {
- *     private final List<ItemStack> items;
+ *     private final List<ItemSpec> items;
  *
- *     public ShopPage(Player player, List<ItemStack> items) {
- *         super(player, "shop", "Item Shop", 6);
+ *     public ShopPage(UiService ui, Scheduler scheduler, Player player, List<ItemSpec> items) {
+ *         super(ui, scheduler, player, "shop", Text.plain("Item Shop"), 6);
  *         this.items = items;
  *     }
  *
@@ -58,12 +58,12 @@
  *             .children(
  *                 // Title
  *                 TextButton.builder()
- *                     .text("§6§lItem Shop")
+ *                     .text(Text.plain("Item Shop"))
  *                     .slot(4)
  *                     .build(),
  *
  *                 // Item grid
- *                 GridView.<ItemStack>builder()
+ *                 GridView.<ItemSpec>builder()
  *                     .startSlot(10)
  *                     .columns(7)
  *                     .items(items, item -> ItemDisplay.builder(item)
@@ -73,22 +73,22 @@
  *
  *                 // Close button
  *                 TextButton.builder()
- *                     .text("§cClose")
+ *                     .text(Text.plain("Close"))
  *                     .color("RED")
  *                     .slot(49)
- *                     .onClick(player::closeInventory)
+ *                     .onClick(click -> click.session().close())
  *                     .build()
  *             )
  *             .build();
  *     }
  *
- *     private void buyItem(ItemStack item) {
+ *     private void buyItem(ItemSpec item) {
  *         // Handle purchase logic
  *     }
  * }
  *
  * // 2. Open the GUI
- * new ShopPage(player, items).open();
+ * new ShopPage(ui, scheduler, player, items).open();
  * }</pre>
  * <p>
  * <h2>StatefulWidget Example:</h2>
@@ -96,15 +96,15 @@
  * public class CounterPage extends DeclarativeGui {
  *     private int count = 0;
  *
- *     public CounterPage(Player player) {
- *         super(player, "counter", "Counter", 3);
+ *     public CounterPage(UiService ui, Scheduler scheduler, Player player) {
+ *         super(ui, scheduler, player, "counter", Text.plain("Counter"), 3);
  *     }
  *
  *     @Override
  *     public Widget build(BuildContext context) {
  *         return Container.builder()
  *             .child(TextButton.builder()
- *                 .text("Count: " + count)
+ *                 .text(Text.plain("Count: " + count))
  *                 .slot(13)
  *                 .onClick(() -> {
  *                     // Mutate state and trigger a rebuild
