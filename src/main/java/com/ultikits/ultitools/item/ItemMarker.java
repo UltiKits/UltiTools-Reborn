@@ -25,10 +25,12 @@ import org.bukkit.persistence.PersistentDataType;
  * @param key persistent-data key
  * @param type value codec
  * @param value value to store
- * @throws IllegalArgumentException for a container value
  */
 public record ItemMarker<P, C>(NamespacedKey key, PersistentDataType<P, C> type, C value) {
-    /** Rejects nulls and container values, and freezes supported aggregate values. */
+    /**
+     * Rejects nulls and container values, and freezes supported aggregate values.
+     * @throws IllegalArgumentException for a container value
+     */
     public ItemMarker {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(type, "type");
