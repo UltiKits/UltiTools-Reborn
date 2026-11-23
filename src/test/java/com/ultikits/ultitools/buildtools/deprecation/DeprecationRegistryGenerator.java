@@ -62,7 +62,12 @@ public final class DeprecationRegistryGenerator {
 
     public static void main(String[] args) {
         try {
-            run(resolveBaseDir(args));
+            Path baseDir = resolveBaseDir(args);
+            if (args != null && args.length > 1) {
+                run(baseDir, parseSkip(args[1]));
+            } else {
+                run(baseDir);
+            }
         } catch (LedgerMergeConflictException e) {
             System.err.println(e.getMessage());
             System.exit(1);
@@ -104,25 +109,45 @@ public final class DeprecationRegistryGenerator {
         // an input to the merge itself, not just to the checks that run after it. Resolved against
         // baseDir (#461) so this agrees with every other path this generator reads or writes.
         Document pomDocument = readPomDocument(baseDir);
-        String currentVersion = stripSnapshotSuffix(readProjectVersion(pomDocument));
+        String skip = readPomProperty(pomDocument, "japicmp.skip");
+        run(baseDir, pomDocument, skip != null && parseSkip(skip));
+    }
+
+    /** The Maven entry point forwards the effective skip value, including command-line overrides. */
+    static void run(Path baseDir, boolean japicmpSkipped) throws IOException, ReflectiveOperationException {
+        run(baseDir, readPomDocument(baseDir), japicmpSkipped);
+    }
+
+    private static boolean parseSkip(String value) {
+        if (!"true".equals(value) && !"false".equals(value)) {
+            throw new IllegalArgumentException("japicmp.skip must be true or false, not '" + value + "'");
+        }
+        return Boolean.parseBoolean(value);
+    }
+
+    private static void run(Path baseDir, Document pomDocument, boolean japicmpSkipped)
+            throws IOException, ReflectiveOperationException {
+        String projectVersion = readProjectVersion(pomDocument);
+        // Validate before version normalization or any registry read/write, even with Surefire skipped.
+        failOnViolations(collectReleaseBoundaryViolations(pomDocument, japicmpSkipped));
+        String currentVersion = stripSnapshotSuffix(projectVersion);
+        boolean baselineReset = ReleaseBoundaryInvariant.isBaselineReset(projectVersion);
 
         Path ledgerJson = baseDir.resolve(LEDGER_JSON);
         Path ledgerMarkdown = baseDir.resolve(LEDGER_MARKDOWN);
-        RegistryLedger prior = loadPriorLedger(ledgerJson);
+        // 7.0.0 starts a new ledger from current declarations, never from archived 6.x removals.
+        RegistryLedger prior = baselineReset ? RegistryLedger.empty() : loadPriorLedger(ledgerJson);
 
         JavadocDeprecationScanner scanner = new JavadocDeprecationScanner(
                 Thread.currentThread().getContextClassLoader());
         List<DeprecationEntry> freshScan = scanner.scan(baseDir.resolve(SRC_ROOT));
 
-        JapicmpReportReader.Report report = readJapicmpReport(baseDir.resolve(JAPICMP_REPORT));
+        // A previous diagnostic run can leave a report behind. A skipped comparison must not read it.
+        JapicmpReportReader.Report report = japicmpSkipped ? JapicmpReportReader.Report.empty()
+                : readJapicmpReport(baseDir.resolve(JAPICMP_REPORT));
         Set<RegistryKey> japicmpRemoved = removedKeys(report);
         japicmpRemoved.addAll(impliedRemovedByPrivateVisibility(prior, freshScan, report));
-
-        // Codex P2, PR #480: pass the report's own emptiness through explicitly so the merge
-        // can tell "japicmp ran and stayed silent on this key" (a real D-22 disagreement) apart
-        // from "japicmp did not run at all" (an infrastructure state the REPORT_MISSING_OR_EMPTY
-        // finding below already exists to explain, not a merge conflict).
-        RegistryLedger merged = RegistryLedger.merge(
+        RegistryLedger merged = baselineReset ? RegistryLedger.of(freshScan) : RegistryLedger.merge(
                 prior, freshScan, japicmpRemoved, currentVersion, report.entries().isEmpty());
 
         Files.createDirectories(ledgerJson.getParent());
@@ -132,15 +157,20 @@ public final class DeprecationRegistryGenerator {
         System.out.println("DeprecationRegistryGenerator: wrote " + merged.size() + " entries to "
                 + ledgerJson + " and " + ledgerMarkdown);
 
+        if (japicmpSkipped) {
+            System.out.println("DeprecationRegistryGenerator: source-only registry for the new 7.0.0 baseline; "
+                    + "6.x history is archived and japicmp is intentionally skipped");
+        }
         List<String> violations = new ArrayList<>();
-        violations.addAll(collectRemovalConsistencyViolations(pomDocument, report, merged));
-        violations.addAll(collectReleaseBoundaryViolations(pomDocument));
+        if (!japicmpSkipped) {
+            violations.addAll(collectRemovalConsistencyViolations(pomDocument, report, merged));
+        }
         violations.addAll(collectRemovalDeadlineViolations(pomDocument, merged, freshScan));
         failOnViolations(violations);
     }
 
     /**
-     * Strips a trailing {@code -SNAPSHOT} (case-insensitive), if present, so a newly-{@code REMOVED}
+     * Strips the exact trailing {@code -SNAPSHOT} of a validated project version, if present, so a newly-{@code REMOVED}
      * entry's {@code removedIn} reads {@code "6.3.0"} rather than {@code "6.3.0-SNAPSHOT"} --
      * matching the convention every pre-existing removed entry's hand-written {@code @removeIn}
      * javadoc tag already used (WR-05, 16-REVIEW-cloud.md).
@@ -152,7 +182,7 @@ public final class DeprecationRegistryGenerator {
         if (version == null) {
             return null;
         }
-        return version.replaceFirst("(?i)-SNAPSHOT$", "");
+        return version.replaceFirst("-SNAPSHOT$", "");
     }
 
     /**
@@ -175,18 +205,20 @@ public final class DeprecationRegistryGenerator {
     }
 
     /**
-     * Runs {@link ReleaseBoundaryInvariant} (Phase 21 D-12) and returns one message per violation -
-     * fires when {@code ${project.version}} carries no {@code -SNAPSHOT} and
-     * {@code japicmp.baseline.version} is not a released version strictly less than the project
-     * version. A populated {@code <excludes>} list is legal at the release boundary; its entries are
-     * held to the removal ledger by {@link #collectRemovalConsistencyViolations}. Dormant on every
-     * {@code -SNAPSHOT} build.
+     * Runs {@link ReleaseBoundaryInvariant} and returns one message per violation. All project
+     * versions must match {@code N.N.N} or {@code N.N.N-SNAPSHOT}. Outside the one-time 7.0.0
+     * reset, a formal release requires a released baseline strictly less than the project version.
+     * Every later build also requires comparison enabled and a released baseline at least 7.0.0,
+     * including SNAPSHOT builds and invocations that skip test execution. A populated
+     * {@code <excludes>} list is legal at the release boundary; its entries are held to the removal
+     * ledger by {@link #collectRemovalConsistencyViolations}.
      */
-    private static List<String> collectReleaseBoundaryViolations(Document pomDocument) {
+    private static List<String> collectReleaseBoundaryViolations(Document pomDocument, boolean japicmpSkipped) {
         String projectVersion = readProjectVersion(pomDocument);
         String baselineVersion = readJapicmpBaselineVersion(pomDocument);
         Set<RegistryKey> excludeKeys = readPomExcludeKeys(pomDocument);
-        List<String> violations = ReleaseBoundaryInvariant.evaluate(projectVersion, baselineVersion, excludeKeys);
+        List<String> violations = ReleaseBoundaryInvariant.evaluate(
+                projectVersion, baselineVersion, excludeKeys, japicmpSkipped);
         List<String> messages = new ArrayList<>();
         for (String violation : violations) {
             messages.add("[ReleaseBoundaryInvariant] " + violation);
@@ -464,16 +496,20 @@ public final class DeprecationRegistryGenerator {
      * second XML reader.
      */
     private static String readJapicmpBaselineVersion(Document doc) {
+        return readPomProperty(doc, "japicmp.baseline.version");
+    }
+
+    private static String readPomProperty(Document doc, String property) {
         NodeList propertiesNodes = doc.getElementsByTagName("properties");
         if (propertiesNodes.getLength() == 0) {
             return null;
         }
         Element properties = (Element) propertiesNodes.item(0);
-        NodeList baselineNodes = properties.getElementsByTagName("japicmp.baseline.version");
-        if (baselineNodes.getLength() == 0) {
+        NodeList propertyNodes = properties.getElementsByTagName(property);
+        if (propertyNodes.getLength() == 0) {
             return null;
         }
-        String text = baselineNodes.item(0).getTextContent();
+        String text = propertyNodes.item(0).getTextContent();
         return text == null ? null : text.trim();
     }
 

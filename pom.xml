@@ -49,16 +49,13 @@
             profile in ~/.m2/settings.xml. Do not hard-code a machine-specific path here.
         -->
         <ultitools.deploy.folder>${project.build.directory}/deploy</ultitools.deploy.folder>
-        <!-- The released UltiTools-API version on Maven Central (v6.5.0 tag) that the japicmp
-             binary-compatibility gate below diffs against: always the LATEST release, so the gate
-             guards everything already shipped. Override with -Djapicmp.baseline.version= to
-             compare against a different released version. Lifecycle rule: a formal release keeps
-             the baseline it was developed against; once that release is downloadable from Maven
-             Central, the next development cycle advances this property to it and retires every
-             <exclude> below whose removal is no longer newer than the new baseline
-             (RemovalConsistencyEvaluator stops requiring those entries). A formal (non-SNAPSHOT)
-             build refuses a baseline that is missing, a SNAPSHOT, or not strictly older than the
-             project version (ReleaseBoundaryInvariant). -->
+        <!-- Disabled only while developing and releasing the new 7.0.0 baseline: 7.0.0 does
+             not compare against 6.x. After 7.0.0 is available from Maven Central, set the baseline
+             below to 7.0.0 and japicmp.skip to false before advancing the project version.
+             ReleaseBoundaryInvariant and the default build tests reject a skipped check or a
+             pre-7.0.0 baseline after that boundary. Keep later baselines on the latest release;
+             retire exclusions once their recorded removals are no newer than that baseline. -->
+        <japicmp.skip>true</japicmp.skip>
         <japicmp.baseline.version>6.5.0</japicmp.baseline.version>
     </properties>
 
@@ -336,21 +333,22 @@
                  legitimate only for a removal registered in the removal ledger
                  (compatibility/deprecations.json, status REMOVED) whose removedIn is newer than the
                  baseline, or for a non-public member admitted by the D-21 allowlist rule. The list
-                 is empty at the start of the 6.6.0 cycle: every removal through 6.5.0 is absent
-                 from both the 6.5.0 baseline and this tree, so none of the former entries can be
-                 re-flagged.
+                 is empty for the 7.0.0 baseline reset: 6.x removal history is archived separately.
+                 This entire gate is intentionally skipped for 7.0.0 development/release; after
+                 7.0.0 is published, re-enable it using the two properties above.
                  japicmp 二进制兼容性门（GATE-01）。会阻断构建：相对已发布的
                  ${japicmp.baseline.version}，com.ultikits.ultitools 中任何公共或受保护成员的二进制
                  不兼容变更都会导致 `mvn verify` 失败，除非该符号已在下方 <excludes> 中精确列出。
                  accessModifier 取 `protected` 而非 `public`，因为 BaseCommandExecutor#handleHelp
                  本身就是 `protected abstract`。排除项只允许用于删除台账中登记、且 removedIn 新于
-                 基线的删除，或符合 D-21 规则的非公开成员。6.6.0 周期开始时该列表为空：截至
-                 6.5.0 的删除在 6.5.0 基线与当前代码中都不存在，旧排除项已不可能再被报出。 -->
+                 基线的删除，或符合 D-21 规则的非公开成员。7.0.0 新基线期间列表为空，6.x 历史
+                 独立归档。7.0.0 开发与发布期间跳过整道检查，发布后通过上方两个属性重新打开。 -->
             <plugin>
                 <groupId>com.github.siom79.japicmp</groupId>
                 <artifactId>japicmp-maven-plugin</artifactId>
                 <version>0.27.0</version>
                 <configuration>
+                    <skip>${japicmp.skip}</skip>
                     <oldVersion>
                         <dependency>
                             <groupId>com.ultikits</groupId>
@@ -417,18 +415,18 @@
             </plugin>
             <!-- Deprecation registry generator (GEN-12, D-08). Regenerates
                  compatibility/deprecations.json and compatibility/DEPRECATIONS.md from the
-                 @Deprecated annotations plus @deprecated/@removeIn javadoc tags in src/main/java,
-                 cross-checked against japicmp's own report (D-22). Declared textually AFTER the
-                 japicmp <plugin> block above - Maven runs same-phase executions in POM
-                 declaration order, and that ordering is the only thing that guarantees
-                 target/japicmp/japicmp.xml exists when the generator reads it.
+                 @Deprecated annotations plus @deprecated/@removeIn javadoc tags in src/main/java.
+                 While establishing 7.0.0 it uses current source only; after re-enabling comparison,
+                 it cross-checks japicmp's report (D-22). Declared textually AFTER the japicmp
+                 <plugin> block above: same-phase declaration order guarantees the current report
+                 exists when comparison is enabled. The generator itself is never skipped by this switch.
                  Build-time only: never a dependency of the published artifact, never shaded.
                  废弃注记表生成器（GEN-12，D-08）。从 src/main/java 中的
                  @Deprecated 注解以及 @deprecated/@removeIn javadoc 标签重新生成
-                 compatibility/deprecations.json 和 compatibility/DEPRECATIONS.md，并与 japicmp
-                 自身的报告交叉校验（D-22）。文本上写在上方 japicmp <plugin> 块之后——
-                 Maven 在同一阶段按 POM 声明顺序执行执行项，而这个顺序是唯一能保证生成器读取
-                 target/japicmp/japicmp.xml 时该文件已经存在的机制。仅用于构建时：
+                 compatibility/deprecations.json 和 compatibility/DEPRECATIONS.md。7.0.0 新基线
+                 期间只从当前源码建账；重新开启比较后，与 japicmp 报告交叉校验（D-22）。
+                 文本上写在 japicmp <plugin> 块之后，同阶段声明顺序保证检查开启时先产生当前报告。
+                 该开关不跳过生成器本身。仅用于构建时：
                  从不作为已发布制作物的依赖，也从不被 shade 。 -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
@@ -449,6 +447,8 @@
                          path against it instead of the JVM's actual cwd. -->
                     <arguments>
                         <argument>${project.basedir}</argument>
+                        <!-- Forward the effective Maven property, including a command-line override. -->
+                        <argument>${japicmp.skip}</argument>
                     </arguments>
                 </configuration>
                 <executions>

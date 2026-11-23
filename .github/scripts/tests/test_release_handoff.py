@@ -15,6 +15,7 @@ No test contacts a network service, creates a real tag or release, or publishes 
 Standard library only.
 """
 
+import csv
 import hashlib
 import json
 import os
@@ -794,6 +795,26 @@ class TracerHandoffTests(HandoffTestCase):
 
 class ReleaseDocumentationTests(unittest.TestCase):
 
+    def test_formal_version_gate_uses_the_shared_version_cases(self):
+        gate = shell_function(RELEASE_SH.read_text(), "check_formal_version")
+        command = ('die() { printf "%s\\n" "$1" >&2; exit 1; }\n' + gate
+                   + 'VERSION="$1"\ncheck_formal_version\nprintf "%s\\n" "$TAG"\n')
+        with (REPO_ROOT / "src/test/resources/buildtools/project-version-cases.csv").open(
+                encoding="utf-8", newline="") as source:
+            for row in csv.DictReader(source):
+                version = row["version"]
+                with self.subTest(version=version):
+                    result = subprocess.run([cast(str, BASH), "-ec", command, "version-gate", version],
+                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, timeout=30)
+                    formal = row["valid"] == "true" and not version.endswith("-SNAPSHOT")
+                    if formal:
+                        self.assertEqual(result.returncode, 0, result.stderr.decode())
+                        self.assertEqual(result.stdout.decode().strip(), "v" + version)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("version", result.stderr.decode().lower())
+
     def test_help_explains_prerelease_does_not_prevent_permanent_central_publication(self):
         result = subprocess.run([cast(str, BASH), str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
@@ -810,6 +831,16 @@ class ReleaseDocumentationTests(unittest.TestCase):
                        "--prerelease              Mark the release as a prerelease."):
             with self.subTest(option=option):
                 self.assertIn(option, output)
+
+    def test_help_explains_the_one_time_baseline_reset_and_reopen_steps(self):
+        result = subprocess.run([cast(str, BASH), str(RELEASE_SH), "--help"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+        output = result.stdout.decode()
+        self.assertEqual(result.returncode, 0, output)
+        for required in ("7.0.0 alone may use japicmp.skip=true", "Every later candidate must enable japicmp",
+                         "japicmp.baseline.version=7.0.0", "japicmp.skip=false", "before advancing the development version"):
+            with self.subTest(required=required):
+                self.assertIn(required, output)
 
     def test_release_documentation_explains_prerelease_and_automatic_notes_limits(self):
         document = (REPO_ROOT / "PROJECT.md").read_text().split("## CI\n", 1)[1].split("## Scope Boundaries", 1)[0]
