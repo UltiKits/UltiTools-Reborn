@@ -112,8 +112,9 @@ public final class UiRuntime implements AutoCloseable {
                 if (entry.backend().supports(session.intent(), session.viewer())) {
                     return entry.backend();
                 }
-            } catch (RuntimeException failure) {
+            } catch (Throwable failure) {
                 warn(session.service.owner(), "Backend supports failed", failure);
+                rethrowFatal(failure);
             }
         }
         return null;
@@ -178,15 +179,18 @@ public final class UiRuntime implements AutoCloseable {
             closing = sessions.stream().filter(session -> session.service.equals(service)).toList();
         }
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        RuntimeCleanup cleanup = new RuntimeCleanup(this, service.owner());
         try {
-            containers.prepareUnload(service.ownerIdentity, deadline);
-            service.flushDeliveries();
-            containers.startUnloadCommits(service.ownerIdentity);
+            cleanup.run("Container prepare unload failed", () -> containers.prepareUnload(service.ownerIdentity, deadline));
+            cleanup.run("Pending delivery flush failed", service::flushDeliveries);
+            cleanup.run("Container unload commit failed", () -> containers.startUnloadCommits(service.ownerIdentity));
             for (RuntimeSession<?> session : closing) {
-                session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
-                session.closeAndComplete();
+                cleanup.run("Session unload failed", () -> {
+                    session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
+                    session.closeAndComplete();
+                });
             }
-            containers.finishUnload(service.ownerIdentity, deadline);
+            cleanup.run("Container finish unload failed", () -> containers.finishUnload(service.ownerIdentity, deadline));
         } finally {
             synchronized (lock) {
                 service.unloaded = true;
@@ -195,6 +199,7 @@ public final class UiRuntime implements AutoCloseable {
                 owners.remove(service);
             }
         }
+        cleanup.finish();
     }
 
     /** Applies a gesture against the backend's rendered snapshot, refusing a terminal session. */
@@ -253,10 +258,15 @@ public final class UiRuntime implements AutoCloseable {
             closed = true;
             services = List.copyOf(owners);
         }
-        try { services.forEach(this::unloadService); } finally {
-            pump.close();
-            synchronized (lock) { lanes.clear(); }
+        RuntimeCleanup cleanup = new RuntimeCleanup(this, "UI runtime");
+        try {
+            services.forEach(service -> cleanup.run("Owner unload failed", () -> unloadService(service)));
+        } finally {
+            try { cleanup.run("Global pump close failed", pump::close); } finally {
+                synchronized (lock) { lanes.clear(); }
+            }
         }
+        cleanup.finish();
     }
 
     private static final class BackendEntry {

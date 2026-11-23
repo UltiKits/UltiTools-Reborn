@@ -104,7 +104,9 @@ final class RuntimeUiService implements UiService, ContainerHost {
     void flushDeliveries() {
         List<PendingDelivery> pending;
         synchronized (runtime.lock) { pending = List.copyOf(pendingDeliveries); }
-        pending.forEach(PendingDelivery::run);
+        RuntimeCleanup cleanup = new RuntimeCleanup(runtime, owner());
+        pending.forEach(delivery -> cleanup.run("Pending delivery failed", delivery));
+        cleanup.finish();
     }
 
     @Override public CompletionStage<Delivery> returnTo(UUID contributor, List<ItemStack> items) {
@@ -152,10 +154,12 @@ final class RuntimeUiService implements UiService, ContainerHost {
             DeliveryWork work = new DeliveryWork(player, items);
             try {
                 if (player.isOnline() && !lane.isRetired()) { work.give(); }
-            } catch (RuntimeException failure) {
+            } catch (Throwable failure) {
                 runtime.warn(owner(), "Item delivery failed", failure);
+                UiRuntime.rethrowFatal(failure);
+            } finally {
+                result.complete(work.answer());
             }
-            result.complete(work.answer());
         }
     }
 

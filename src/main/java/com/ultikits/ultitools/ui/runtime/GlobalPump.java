@@ -42,7 +42,6 @@ public final class GlobalPump implements AutoCloseable {
     }
 
     @Override public void close() {
-        handle.cancel();
-        tasks.clear();
+        try { handle.cancel(); } finally { tasks.clear(); }
     }
 }

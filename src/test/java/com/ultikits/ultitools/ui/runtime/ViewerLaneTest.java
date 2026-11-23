@@ -120,6 +120,23 @@ class ViewerLaneTest {
         assertThat(seen).containsExactly(true);
         assertThat(lane.isRetired()).isFalse();
     }
+    @Test void submissionError_retriesWithoutRetiringViewer() {
+        TaskContext context = mock(TaskContext.class);
+        AtomicInteger attempts = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (attempts.getAndIncrement() == 0) { throw new AssertionError("submission linkage"); }
+            return scheduler.entity(viewer).run(invocation.getArgument(0));
+        }).when(context).run(any(Runnable.class));
+        Scheduler unreliable = mock(Scheduler.class);
+        when(unreliable.entity(viewer)).thenReturn(context);
+        ViewerLane lane = new ViewerLane(unreliable, viewer, pump, logger);
+        List<Boolean> seen = new ArrayList<>();
+        lane.execute(() -> seen.add(RecordingScheduler.inEntityTask(viewer)));
+        clock.advanceTicks(3);
+        assertThat(attempts).hasValue(2);
+        assertThat(seen).containsExactly(true);
+        assertThat(lane.isRetired()).isFalse();
+    }
     @Test void vmError_releasesDrainAndResubmitsPendingWork() {
         ViewerLane lane = new ViewerLane(scheduler, viewer, pump, logger);
         List<Boolean> seen = new ArrayList<>();

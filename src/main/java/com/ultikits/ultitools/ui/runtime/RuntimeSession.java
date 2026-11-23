@@ -70,7 +70,7 @@ class RuntimeSession<R> implements UiSession<R> {
             cancel = timeout;
             timeout = null;
         }
-        if (cancel != null) { cancel.cancel(); }
+        if (cancel != null) { cancelTimeout(cancel); }
         return true;
     }
 
@@ -108,20 +108,21 @@ class RuntimeSession<R> implements UiSession<R> {
      */
     final void openTask(ShowOptions options) {
         if (!isOpen()) { return; }
-        if (!viewer.isOnline()) { requestClose(CloseReason.DISCONNECTED); return; }
-        UiBackend selected = runtime.select(this);
-        if (!isOpen()) { return; }
-        if (selected == null) { requestClose(CloseReason.UNSUPPORTED); return; }
-        takeBindings();
-        runtime.replacePrevious(this);
-        if (!runtime.activate(this, selected)) { return; }
         try {
+            if (!viewer.isOnline()) { requestClose(CloseReason.DISCONNECTED); return; }
+            UiBackend selected = runtime.select(this);
+            if (!isOpen()) { return; }
+            if (selected == null) { requestClose(CloseReason.UNSUPPORTED); return; }
+            takeBindings();
+            runtime.replacePrevious(this);
+            if (!runtime.activate(this, selected)) { return; }
             selected.open(this, callbacks());
             if (this instanceof RuntimeGridSession grid) { grid.renderPicture(); }
             scheduleTimeout(options);
-        } catch (RuntimeException failure) {
+        } catch (Throwable failure) {
             runtime.warn(service.owner(), "Backend open failed", failure);
             requestClose(CloseReason.UNSUPPORTED);
+            UiRuntime.rethrowFatal(failure);
         }
     }
 
@@ -139,7 +140,14 @@ class RuntimeSession<R> implements UiSession<R> {
             cancel = !isOpenLocked();
             if (!cancel) { timeout = handle; }
         }
-        if (cancel) { handle.cancel(); }
+        if (cancel) { cancelTimeout(handle); }
+    }
+
+    private void cancelTimeout(TaskHandle handle) {
+        try { handle.cancel(); } catch (Throwable failure) {
+            // Cancellation is best-effort; the chosen outcome must still be delivered.
+            runtime.warn(service.owner(), "UI timeout cancellation failed", failure);
+        }
     }
 
     private UiBackend.BackendCallbacks<R> callbacks() {
