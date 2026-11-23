@@ -199,6 +199,58 @@ Paper 版本，不承诺兼容旧服务器；本文其他位置的 6.x 旧服务
 `world`：Paper 的 `Location.deserialize` 抛出 `unknown world`，其序列化层记录失败并返回 null，
 框架的 Bukkit 转换器随后以 `ConversionException` 拒绝这个配置值。
 
+## Module API floor 700 and plain module loading (as of 7.0.0)
+
+7.0 removes load-time bytecode adaptation, server-API probing, and both startup and offline
+linkage audits. The shared module loader remains a parent-first `URLClassLoader`; compile modules
+against the target Paper and UltiTools-API versions rather than relying on bytecode rewriting.
+Observed container skips still name the module, bean and missing symbol; those diagnostics are not
+an audit or a promise to recover an unavailable capability.
+
+Every module must declare an **integer `api-version` of at least `700`** in its own root
+`plugin.yml`. Missing, empty and non-integer values (including `'26.3'`, `1.21` and `abc`) are refused
+before main-class resolution, with one translated SEVERE line showing the actual value (or
+`<missing>` / `<缺失>`). Quoted integers such as `'700'` are accepted. A declaration below `700`
+gets a separate refusal naming the level and minimum. Both messages use the running framework
+version, not a hard-coded release name. A module declaring more than the installed framework's
+level still follows the existing newer-framework refusal. Unreadable or missing `plugin.yml`,
+or a missing `main:`, keeps the existing no-readable-plugin.yml/no-main refusal.
+
+Class-path collection and module discovery reuse one per-start metadata/admission snapshot, read
+after recorded updates are applied. An API-refused module JAR is **not on the shared class path**,
+so it supplies neither its main class nor helper classes to another module. Each refusal is counted
+once in `Failed`, while unrelated modules continue loading. If `m-6.3.0.jar` (630) and
+`m-7.0.0.jar` (700) declare the same main class, the older copy is refused once and the new copy's
+classes come from the new JAR, even though its file name sorts later. The duplicate warning names
+the actual accepted supplier; the JAR index still records both declarations for file management.
+Among admitted copies, ordinary file-name ordering is unchanged.
+
+`/upm install` and `/upm update` use the same integer parser and minimum predicate, with
+`MIN_INSTALLABLE_API_LEVEL = 700`; downloads above the framework's level are refused too.
+Catalogue version requests carry `apiLevel` and `minApiLevel=700`. An earlier API-refused copy is
+not treated as a class-path blocker for a staged update. Installation does not automatically delete
+older copies or redo the update transaction protocol.
+
+**Operator action:** obtain a module rebuilt against the current UltiTools-API, declaring `700` or
+higher, stop the server, replace the obsolete JAR and restart. Merely editing `api-version` does
+not repair removed API references. If old and new copies coexist temporarily, the old copy remains
+on disk and is refused; keep only the intended current build. The historical 6.3.0 and 6.4.0 sections
+below describe those versions, not 7.0 support promises.
+
+**Known limitation — pending 6.x updates during a framework upgrade.** If a 6.x module update is
+still waiting for its confirming start when the framework is upgraded to 7.0, the API refusal can
+be accompanied by the existing update rollback to the previous 6.x JAR. The restored copy is also
+below the new floor. **Before upgrading the framework, let every pending module update complete
+one startup on the old framework.** Then replace the module builds and upgrade. No defensive
+transaction rewrite is added for this unusual upgrade sequence.
+
+中文补充：7.0 删除加载期适配及启动／离线链接审计。模块必须在自身 `plugin.yml` 声明至少 `700`
+的整数 `api-version`；缺失、空值、`'26.3'`、`1.21`、`abc` 一律拒载，带引号的 `'700'` 有效。
+被拒 JAR 不进入共享类路径，每个只报一次且计入失败数，其他模块继续加载。同主类的新旧副本并存时，
+旧副本被拒、新副本提供类定义；索引保留两份文件身份，不自动删除旧 JAR。请获取重新构建的模块并停服替换，
+不要只改 API 声明。已知限制：升级框架前，先在旧框架下让所有挂起的模块更新完成一次启动确认，避免拒载之外
+再看到一次旧事务回滚。
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
@@ -2689,12 +2741,13 @@ This section governs the third kind.
   the names it was given or their JARs declare, and their JARs), not only on the name typed.
   `PluginInstallUtils.uninstallPlugin(String)` does this too; the command reads the cancelled
   versions through `uninstallPluginReporting(String, List)` (`@ApiStatus.Internal`).
-- `/upm` installs only modules built for this UltiTools-API's API level. On 7.0 the
-  catalogue versions requests carry `apiLevel` (this framework's API level, `700` for 7.0.0)
-  and `minApiLevel=700`; compatible versions are selected before download. `/upm install <plugin>`,
+- `/upm` installs only modules built for this UltiTools-API's API level (maintainer
+  rulings of 2026-10-11). Every UltiCloud request `/upm` makes now carries `apiLevel` (this
+  framework's API level, 630 for 6.3.0) and `minApiLevel=630`, and the catalogue answers `latest`,
+  `versions` and the downloads with compatible versions only. `/upm install <plugin>`,
   `/upm install <plugin> <version>` and `/upm update` additionally check what they download: the
   JAR is written as `<id>-<version>.jar.part`, a name the module loader never reads, its
-  `plugin.yml` is read again, and a module whose `api-version` is absent, not an integer, below 700
+  `plugin.yml` is read again, and a module whose `api-version` is absent, not an integer, below 630
   or above the framework's level is refused with nothing written to the modules folder (an update's
   staging is discarded and nothing is recorded); the reply names the declared level, the framework's
   level and the accepted range. When the catalogue answers that no version is compatible (HTTP 409),
@@ -2703,27 +2756,26 @@ This section governs the third kind.
   mentions one that needs a newer UltiTools-API. `PluginInstallUtils.installLatestPlugin(String)`,
   `installPlugin(String, String)` and `updatePlugin(String)` keep their signatures and return
   `false` for such a module; `PluginInstallUtils.installReporting(String, String)`
-  (`@ApiStatus.Internal`) returns the reason. **Consequence for operators:** a 6.x module
-  (for example `api-version: 630`) is refused by `/upm` and, when manually installed, refused before
-  its main class loads. Obtain a build rebuilt for UltiTools-API 7.0 with `api-version: 700`;
-  changing the declaration alone is not a migration. Manual loading retains the old behavior when
-  `api-version` is absent or not an integer. `/upm list` still lists every catalogue module;
-  Install on one with no compatible version
+  (`@ApiStatus.Internal`) returns the reason. **Consequence for operators:** a module built for
+  UltiTools-API 6.2.x (`api-version: 620`) is refused by `/upm`. Every first-party module built for 6.2.x overrides
+  `UltiToolsPlugin.unregisterSelf()`, which 6.3.0 made final, so those builds could not load anyway. A JAR an
+  operator places in the modules folder by hand is still judged by the module loader's unchanged
+  rule. `/upm list` still lists every catalogue module; Install on one with no compatible version
   replies with the reason.
 
-  中文补充：7.0 的 `/upm` 只安装 API 级别在 `700` 到当前框架级别之间的模块。目录版本请求带上
-  `apiLevel`（7.0.0 为 `700`）和 `minApiLevel=700`，先筛选兼容版本再下载。`/upm install`、
+  中文补充：自 6.3.0 起，`/upm` 只安装为本 UltiTools-API 的 API 级别构建的模块（维护者
+  2026-10-11 的裁定）。`/upm` 发往 UltiCloud 的每个请求都带上 `apiLevel`（本框架的 API 级别，6.3.0 为
+  630）和 `minApiLevel=630`，云端的 `latest`、`versions` 和下载只返回兼容的版本。`/upm install`、
   `/upm install <插件> <版本>` 和 `/upm update` 还会检查下载到的文件：先写成模块加载器永远不读的
-  `<id>-<version>.jar.part`，重新读取其中的 `plugin.yml`，`api-version` 缺失、不是整数、低于 `700`
+  `<id>-<version>.jar.part`，重新读取其中的 `plugin.yml`，`api-version` 缺失、不是整数、低于 630
   或高于框架级别的模块一律拒绝，模块目录不写入任何东西（更新的暂存会被丢弃，不写记录）；回复写明模块声明的级别、
   框架的级别和接受的范围。云端回答没有兼容版本（HTTP 409）时不下载任何东西，回复说明原因；
   `/upm versions` 没有兼容版本时打印一行说明范围；更新检查只提示本框架能安装的版本，从不提示需要更新框架的版本。
   `PluginInstallUtils.installLatestPlugin(String)`、`installPlugin(String, String)` 和
   `updatePlugin(String)` 签名不变，对这类模块返回 `false`；`PluginInstallUtils.installReporting(String, String)`
-  （`@ApiStatus.Internal`）返回原因。**对服主的影响：**6.x 模块（例如 `api-version: 630`）被 `/upm`
-  拒绝；手工放入模块目录时，也会在加载主类前拒绝。请获取针对 UltiTools-API 7.0 重新构建并声明
-  `api-version: 700` 的模块，仅改声明不能完成迁移。手工加载对缺失或非整数声明的原有行为保持不变。
-  `/upm list` 仍列出云端的全部模块；对没有兼容版本的模块点“安装”会回复原因。
+  （`@ApiStatus.Internal`）返回原因。**对服主的影响：**为 UltiTools-API 6.2.x 构建的模块（`api-version: 620`）
+  会被 `/upm` 拒绝。官方模块的 6.2.x 构建都覆盖了 6.3.0 改为 final 的 `UltiToolsPlugin.unregisterSelf()`，本来也无法加载。
+  服主手动放进模块目录的 JAR 仍按模块加载器原有的规则判断。`/upm list` 仍列出云端的全部模块；对没有兼容版本的模块点“安装”会回复原因。
 - `PluginInstallUtils.uninstallPlugin(String)` also deletes a JAR whose `plugin.yml` `main:` names
   the loaded module's main class, whatever `name:` it declares (#516). The module loader identifies
   a module JAR by that entry alone (since #548), and its start-up scan now records, per main class,
@@ -4610,7 +4662,7 @@ independent numbers and should not be treated as one:
 | Number | Determines | Who checks it |
 |---|---|---|
 | The `UltiTools-API` version in `pom.xml` | Which version's descriptors your bytecode records | Nobody. It is `provided`, does not enter the JAR, and the framework cannot see it at runtime |
-| `api-version` in `plugin.yml` | The declared runtime floor | On 7.0, `PluginManager.loadPluginMainClass` refuses a declared integer below `700` before loading the main class; `isUltiToolsVersionCompatible` still refuses a higher level than the installed framework. `/upm` installs only integer levels from `700` through the framework's level and rejects missing declarations. Manual loading retains the existing behavior for missing/non-integer declarations. Of the two numbers, this is the only one checked |
+| `api-version` in `plugin.yml` | The declared runtime floor | On 7.0, `PluginManager.loadPluginMainClass` refuses a declared integer below `700` before loading the main class; `isUltiToolsVersionCompatible` still refuses a higher level than the installed framework. `/upm` installs only integer levels from `700` through the framework's level and rejects missing declarations. Manual loading also rejects missing, empty and non-integer declarations before main-class resolution and excludes their JARs from the shared class path. Of the two numbers, this is the only one checked |
 
 So "the pin is the floor" is wrong: raising the pin does not raise the floor. An artifact compiled
 against a new framework while still declaring an old `api-version` is **let through** by an old
@@ -4754,7 +4806,7 @@ older servers are not promised compatibility.
 | Build JDK | 25 |
 | Bytecode target | Java 25 (`--release 25`, class major 69) |
 | `api-version` in `plugin.yml` | `26.3` (Bukkit API level, not a module's integer UltiTools API level) |
-| `api-version` in a module's `plugin.yml` | An integer UltiTools API level, not the Paper version; 7.0 requires at least `700`. A declared integer below `700` is refused before loading the main class. Missing or non-integer declarations retain the existing manual-loading behavior; `/upm` rejects both |
+| `api-version` in a module's `plugin.yml` | An integer UltiTools API level, not the Paper version; 7.0 requires at least `700`. A declaration below `700`, missing, empty or non-integer is refused before main-class resolution and excluded from the shared class path; `/upm` uses the same minimum rule |
 | Target server | Paper 26.3 build 258 (`paper-api:26.3.build.258-stable`); not a minimum-version range |
 | Server Java | Java 25, matching the framework bytecode target |
 | Modules | 6.x modules declaring levels such as `630` are refused. Rebuild against UltiTools-API 7.0 and declare `api-version: 700`; changing only the declaration does not repair old bytecode. The server rows are the framework's own requirements |
@@ -4764,6 +4816,8 @@ harness, and its Paper 1.19.2 boot comparison used build 307 rather than build 1
 historical measurements, not verification or a support promise for 7.0 on older servers.
 
 ### Module loading on 7.0
+
+See [Module API floor 700 and plain module loading](#module-api-floor-700-and-plain-module-loading-as-of-700) for admission, duplicate copies and the pending-update upgrade limitation.
 
 The shared module loader uses ordinary parent-first `URLClassLoader` behavior. Module bytecode is
 not adapted to a different server API, and neither startup nor an offline launcher audits unresolved
@@ -4791,6 +4845,28 @@ upgrade message on an older framework rather than run without adaptation.
 On Minecraft 1.21+ they retain compatibility with UltiTools 6.3.x. This is a conditional runtime
 requirement, not an instruction to raise every module's `api-version` unconditionally.
 
+**Binary shape, not missing capabilities.** At module-class load time the framework uses one generic
+invoke-kind alignment rule against the running server's API, not a per-type compatibility list.
+In particular, `InventoryView` is an abstract class on Paper 1.19.2–1.20.6 and an interface from
+1.21: the loader aligns virtual/interface calls and method-handle references without changing the
+receiver, member name or descriptor. No operator switch is needed or provided. A missing method
+remains missing; an incompatible superclass/interface declaration or affected special invocation is
+refused rather than partially rewritten. This adaptation applies to framework-loaded module classes,
+not to standalone Bukkit plugins loaded by Paper. See [the invoke-kind change](https://github.com/UltiKits/UltiTools-Reborn/pull/809).
+
+**Warnings do not mean recovery.** At startup the linkage audit emits **one WARNING per unresolved
+reference in the module's own component-scanned packages** when no rewrite rule covers that reference.
+Unresolved references in bundled third-party classes are grouped into **one INFO summary line per
+top-level library package**. The audit continues loading the module; it does not reject the
+module merely because the audit found a reference. If the container actually skips a bean because it
+references an absent server class, a separate warning names the module, bean, missing class and all
+lost event handlers, including inherited handlers. Those handlers remain unregistered. The framework
+neither substitutes missing capabilities nor renames events, and it does not isolate individual
+handlers inside one class. See [the audit and skipped-bean diagnostics](https://github.com/UltiKits/UltiTools-Reborn/pull/810).
+A module whose main class itself fails to link is refused before its scan roots are known, so
+start-up prints only the refusal and no audit for that module; run the offline
+`com.ultikits.ultitools.LinkageAudit` launcher on its JAR to list the references.
+
 **Module-author pattern for optional events.** Keep required handlers in a class whose signatures do
 not refer to optional server types. Put optional handlers in separate classes outside **every**
 `@UltiToolsModule.scanBasePackages` **string prefix** for compatibility with older frameworks
@@ -4805,9 +4881,12 @@ unload. One absent parameter type can prevent reflection of the entire class, so
 protect required handlers left in that same class. UltiLogin's [equipment-swap isolation](https://github.com/UltiKits/UltiLogin/pull/84)
 and [older-event selection](https://github.com/UltiKits/UltiLogin/pull/85) demonstrate this layout.
 
-**Relocate shaded libraries outside the scan roots.** Keep bundled libraries outside every
-`scanBasePackages` root (for example `com.example.libs.gson`, not `com.example.mod.libs.gson` under
-`com.example.mod`), so component scanning does not load their classes.
+**Relocate shaded libraries outside the scan roots.** The audit tells a module's own code from
+bundled libraries by the module's scan roots. A library shaded and relocated *inside* a scan root
+(for example `com.example.mod.libs.gson` under the root `com.example.mod`) is therefore treated as
+own code: each of its unresolved references gets its own WARNING instead of one INFO summary for the
+library. Relocate shaded libraries outside every `scanBasePackages` root (for example
+`com.example.libs.gson`), which also keeps the component scan from loading their classes.
 
 The modules, not the framework, choose and document these remaining differences:
 
