@@ -11,6 +11,7 @@ import java.io.InputStreamReader;
 import java.io.Reader;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -133,7 +134,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private final CommandManager commandManager = new CommandManager();
     @Getter
     private DependenceManagers dependenceManagers;
-    private ModuleClassLoader ultiToolsClassLoader;
+    private URLClassLoader ultiToolsClassLoader;
     private final BootstrapResult bootstrap;
     /**
      * The module update and removal transactions of this start (#505): applied before the module
@@ -551,7 +552,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     private void registerModuleDependencyLoaders() {
-        ultiToolsClassLoader.addDeclaredDependencies(moduleJarAdmission, name -> {
+        bootstrap.classLoader().addDeclaredDependencies(moduleJarAdmission, name -> {
             Plugin dependency = Bukkit.getPluginManager().getPlugin(name);
             return dependency == null || dependency.equals(this) ? null : dependency.getClass().getClassLoader();
         });
