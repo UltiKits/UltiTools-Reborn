@@ -101,8 +101,12 @@ class InMemeryTeleportServiceTest {
         teleportService.teleport(player, location);
         InMemeryTeleportService.setTeleportingStatus(player.getUniqueId(), true);
         InMemeryTeleportService.processDelayTeleportTick(player, location, 0);
-        org.mockito.Mockito.verify(player, org.mockito.Mockito.times(2))
-                .playSound(location, org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
+        org.mockito.ArgumentCaptor<org.bukkit.Sound> sounds =
+                org.mockito.ArgumentCaptor.forClass(org.bukkit.Sound.class);
+        org.mockito.Mockito.verify(player, org.mockito.Mockito.times(2)).playSound(
+                org.mockito.ArgumentMatchers.eq(location), sounds.capture(),
+                org.mockito.ArgumentMatchers.eq(1f), org.mockito.ArgumentMatchers.eq(0f));
+        assertThat(sounds.getAllValues()).containsOnly(org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT);
         org.mockito.Mockito.verify(player).sendTitle(org.bukkit.ChatColor.GREEN + "传送成功！", "", 10, 50, 20);
     }
 

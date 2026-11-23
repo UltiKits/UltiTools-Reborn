@@ -206,7 +206,7 @@ class RuntimeLibraryContractTest {
     void retiredCrossVersionLibraryIsNotDeclared() throws Exception {
         assertThat(libraryCoordinates()).noneMatch(coordinate -> coordinate.contains("cryptomorin"));
         assertThat(new String(Files.readAllBytes(projectRoot().resolve("pom.xml")),
-                java.nio.charset.StandardCharsets.UTF_8)).doesNotContain("com.github.cryptomorin");
+                StandardCharsets.UTF_8)).doesNotContain("com.github.cryptomorin");
     }
 
     private static List<String> libraryCoordinates() throws Exception {
