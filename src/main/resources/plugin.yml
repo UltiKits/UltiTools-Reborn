@@ -18,4 +18,3 @@ libraries:
   - net.bytebuddy:byte-buddy:1.18.17
   - com.sun.mail:javax.mail:1.6.2
   - com.zaxxer:HikariCP:7.1.0
-  - com.github.cryptomorin:XSeries:14.0.0

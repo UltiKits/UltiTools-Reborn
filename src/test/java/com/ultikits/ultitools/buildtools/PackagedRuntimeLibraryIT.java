@@ -39,6 +39,36 @@ class PackagedRuntimeLibraryIT {
     }
 
     @Test
+    void finalArtifactHasNoRetiredCrossVersionLibraryEntriesOrLinkage() throws Exception {
+        Path jar = Paths.get(System.getProperty("runtimeGuardArtifact"));
+        try (java.util.jar.JarFile archive = new java.util.jar.JarFile(jar.toFile())) {
+            java.util.Enumeration<JarEntry> entries = archive.entries();
+            int inspectedClasses = 0;
+            boolean descriptorFound = false;
+            while (entries.hasMoreElements()) {
+                JarEntry entry = entries.nextElement();
+                assertThat(entry.getName()).doesNotContain("cryptomorin", "XVersionUtils");
+                if (entry.getName().endsWith(".class") || entry.getName().equals("plugin.yml")
+                        || entry.getName().endsWith("/pom.xml")) {
+                    try (java.io.InputStream input = archive.getInputStream(entry)) {
+                        String contents = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.ISO_8859_1);
+                        assertThat(contents).as(entry.getName())
+                                .doesNotContain("cryptomorin", "XSeries", "XVersionUtils");
+                    }
+                    if (entry.getName().endsWith(".class")) {
+                        inspectedClasses++;
+                    }
+                    descriptorFound |= entry.getName().equals("plugin.yml");
+                }
+            }
+            assertThat(inspectedClasses).isGreaterThan(0);
+            assertThat(descriptorFound).isTrue();
+            System.out.println("Post-shade cross-version guard: classes=" + inspectedClasses
+                    + ", descriptor=true, forbidden entries/references=0");
+        }
+    }
+
+    @Test
     void packagedDependencyInjectionIsDetectedByTheSameScanner() throws Exception {
         Path jar = temporary.resolve("dependency-control.jar");
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar))) {

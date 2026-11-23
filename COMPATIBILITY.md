@@ -5,6 +5,38 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Native item and sound APIs (as of 7.0.0)
+
+UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads
+accepting `XMaterial` or `XEnchantment`. Rebuild modules against 7.0 and prefer Paper's native APIs.
+A module that keeps XSeries must package and relocate it itself (shade + relocate); Paper's
+`libraries:` mechanism is not available to UltiTools modules loaded by the framework.
+Do not use a 6.x module build to judge the 7.0 framework: a module must be built against 7.0 and
+contain no XSeries or `XVersionUtils` references for the native-material and teleport-sound UAT
+rows; without such a build, record the row as blocked, not fail.
+
+```java
+ItemStack item = ItemStackBuilder.of(Material.STONE).build();
+player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
+ItemStack enchanted = ItemStackBuilder.of(Material.FISHING_ROD).enchant(Enchantment.LUCK_OF_THE_SEA, 1).build();
+player.sendActionBar(Component.text("Ready"));
+```
+
+Call the sound and enchantment APIs during gameplay, not from static initializers or enum constructors.
+`ItemStackBuilder.of(String)` accepts only current Bukkit material names or namespaced names through
+`Material.matchMaterial`. Unknown names and block-only materials return `null`; historical aliases,
+numeric IDs and old names renamed after 1.20 (for example `GRASS`, `CHAIN` and `SCUTE`) return `null`.
+The native `Material`, `ItemStack` and `Enchantment` entrypoints remain available. GUI glass colours,
+button materials, teleport sound (volume 1, pitch 0) and notification text remain unchanged.
+The unused `Sounds` enum (including `getKey()`) and `Colors.getCode()` are removed;
+`Colors` and `Colors.getGlassPaneMaterial()` remain available.
+
+7.0 不再提供 XSeries 与 `XVersionUtils`；保留 XSeries 的模块须自行打包并重定位
+（shade + relocate），UltiTools 模块不能使用 Paper 的 `libraries:`。推荐使用上面的 Paper
+原生材质、音效、附魔和快捷栏上方文字 API。字符串工厂仅接受当前材质名或命名空间名；
+非物品材质、历史别名、数字 ID 及 1.20 之后改过名的旧名字返回 `null`，不提供旧名称兼容。
+下面 6.x 小节保留历史行为，不是 7.0 的运行库供应承诺。
+
 ## Removed data-store overloads (as of 6.5.0)
 
 The eight data-store members announced for removal in 6.4.0 are now removed:

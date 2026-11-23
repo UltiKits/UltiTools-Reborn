@@ -5,8 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
 
 import java.util.function.Consumer;
@@ -17,7 +15,6 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.InventoryType;
-import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,7 +27,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Colors;
-import com.ultikits.ultitools.utils.XVersionUtils;
 
 import mc.obliviate.inventory.Icon;
 import net.kyori.adventure.text.Component;
@@ -49,23 +45,7 @@ class BaseInventoryPageTest {
     @Mock
     private UltiTools mockUltiTools;
 
-    @Mock
-    private ItemStack mockGlass;
-
-    @Mock
-    private ItemStack mockGreenGlass;
-    
-    @Mock
-    private ItemStack mockRedGlass;
-    
-    @Mock
-    private ItemStack mockBlueGlass;
-    
-    @Mock
-    private ItemStack mockYellowGlass;
-
     private MockedStatic<UltiTools> ultiToolsMock;
-    private MockedStatic<XVersionUtils> xVersionUtilsMock;
 
     @BeforeEach
     void setUp() {
@@ -74,32 +54,12 @@ class BaseInventoryPageTest {
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         
-        xVersionUtilsMock = mockStatic(XVersionUtils.class);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(any(Colors.class)))
-                .thenReturn(mockGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.GREEN))
-                .thenReturn(mockGreenGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.RED))
-                .thenReturn(mockRedGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.BLUE))
-                .thenReturn(mockBlueGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.YELLOW))
-                .thenReturn(mockYellowGlass);
-        
-        lenient().when(mockGlass.getType()).thenReturn(Material.GRAY_STAINED_GLASS_PANE);
-        lenient().when(mockGreenGlass.getType()).thenReturn(Material.GREEN_STAINED_GLASS_PANE);
-        lenient().when(mockRedGlass.getType()).thenReturn(Material.RED_STAINED_GLASS_PANE);
-        lenient().when(mockBlueGlass.getType()).thenReturn(Material.BLUE_STAINED_GLASS_PANE);
-        lenient().when(mockYellowGlass.getType()).thenReturn(Material.YELLOW_STAINED_GLASS_PANE);
     }
 
     @AfterEach
     void tearDown() {
         if (ultiToolsMock != null) {
             ultiToolsMock.close();
-        }
-        if (xVersionUtilsMock != null) {
-            xVersionUtilsMock.close();
         }
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
@@ -508,7 +468,7 @@ class BaseInventoryPageTest {
             Icon icon = page.testCreateBackgroundIcon();
             
             assertNotNull(icon);
-            xVersionUtilsMock.verify(() -> XVersionUtils.getColoredPlaneGlass(Colors.GRAY));
+            assertEquals(Material.GRAY_STAINED_GLASS_PANE, icon.getItem().getType());
         }
 
         @Test
@@ -539,7 +499,7 @@ class BaseInventoryPageTest {
             Icon icon = page.testCreateActionButton(Colors.RED, "Red Button", null);
             
             assertNotNull(icon);
-            xVersionUtilsMock.verify(() -> XVersionUtils.getColoredPlaneGlass(Colors.RED));
+            assertEquals(Material.RED_STAINED_GLASS_PANE, icon.getItem().getType());
         }
 
         @Test
@@ -875,8 +835,8 @@ class BaseInventoryPageTest {
             TestInventoryPage page = new TestInventoryPage(mockPlayer, "test", "Test", 3);
             Icon icon = page.testCreateBackgroundIcon();
             assertNotNull(icon);
-            // Verify XVersionUtils was called with GRAY
-            xVersionUtilsMock.verify(() -> XVersionUtils.getColoredPlaneGlass(Colors.GRAY));
+            // Verify the native gray toolbar material
+            assertEquals(Material.GRAY_STAINED_GLASS_PANE, icon.getItem().getType());
         }
         
         @Test

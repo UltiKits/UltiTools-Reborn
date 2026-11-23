@@ -386,6 +386,16 @@ class InMemoryNotificationServiceTest {
         }
     }
 
+    @Test
+    void actionBarUsesNativeAudienceAndPreservesLiteralText() {
+        Player player = mock(Player.class);
+        for (String message : new String[]{"Action Bar Message", "§aGreen &b literal", ""}) {
+            assertThat(notificationService.sendActionBarNotification(player, message)).isTrue();
+            org.mockito.Mockito.verify(player).sendActionBar(net.kyori.adventure.text.Component.text(message));
+        }
+        org.mockito.Mockito.verify(player, org.mockito.Mockito.never()).spigot();
+    }
+
     @Nested
     @DisplayName("sendActionBarNotification 测试")
     class SendActionBarNotificationTests {
@@ -400,7 +410,7 @@ class InMemoryNotificationServiceTest {
             // Act
             boolean result = notificationService.sendActionBarNotification(player, message);
 
-            // Assert - 验证方法执行成功（ActionBar 现在通过 XVersionUtils 静态方法发送）
+            // Assert - 验证方法执行成功（使用 Paper 原生 Adventure audience）
             assertThat(result).isTrue();
         }
 

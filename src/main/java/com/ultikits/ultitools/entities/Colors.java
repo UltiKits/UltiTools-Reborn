@@ -1,31 +1,33 @@
 package com.ultikits.ultitools.entities;
 
+import org.bukkit.Material;
+
 public enum Colors {
-    WHITE((short) 0),
-    ORANGE((short) 1),
-    MAGENTA((short) 2),
-    LIGHT_BLUE((short) 3),
-    YELLOW((short) 4),
-    LIME((short) 5),
-    PINK((short) 6),
-    GRAY((short) 7),
-    LIGHT_GRAY((short) 8),
-    CYAN((short) 9),
-    PURPLE((short) 10),
-    BLUE((short) 11),
-    BROWN((short) 12),
-    GREEN((short) 13),
-    RED((short) 14),
-    BLACK((short) 15);
+    WHITE(Material.WHITE_STAINED_GLASS_PANE),
+    ORANGE(Material.ORANGE_STAINED_GLASS_PANE),
+    MAGENTA(Material.MAGENTA_STAINED_GLASS_PANE),
+    LIGHT_BLUE(Material.LIGHT_BLUE_STAINED_GLASS_PANE),
+    YELLOW(Material.YELLOW_STAINED_GLASS_PANE),
+    LIME(Material.LIME_STAINED_GLASS_PANE),
+    PINK(Material.PINK_STAINED_GLASS_PANE),
+    GRAY(Material.GRAY_STAINED_GLASS_PANE),
+    LIGHT_GRAY(Material.LIGHT_GRAY_STAINED_GLASS_PANE),
+    CYAN(Material.CYAN_STAINED_GLASS_PANE),
+    PURPLE(Material.PURPLE_STAINED_GLASS_PANE),
+    BLUE(Material.BLUE_STAINED_GLASS_PANE),
+    BROWN(Material.BROWN_STAINED_GLASS_PANE),
+    GREEN(Material.GREEN_STAINED_GLASS_PANE),
+    RED(Material.RED_STAINED_GLASS_PANE),
+    BLACK(Material.BLACK_STAINED_GLASS_PANE);
 
-    short code;
+    private final Material glassPaneMaterial;
 
-    Colors(short code) {
-
-        this.code = code;
+    Colors(Material glassPaneMaterial) {
+        this.glassPaneMaterial = glassPaneMaterial;
     }
 
-    public short getCode() {
-        return code;
+    /** Returns the native glass pane material for this colour. */
+    public Material getGlassPaneMaterial() {
+        return glassPaneMaterial;
     }
 }
