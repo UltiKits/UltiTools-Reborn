@@ -8,7 +8,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.Collections;
-import java.util.Map;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.Test;

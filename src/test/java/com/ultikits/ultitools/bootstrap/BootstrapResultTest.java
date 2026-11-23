@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.net.URL;
+import java.lang.reflect.Method;
+import java.util.Collections;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -39,6 +41,32 @@ class BootstrapResultTest {
                     .containsExactly(temporary.resolve("a.jar"), temporary.resolve("z.jar"));
             assertThatThrownBy(() -> result.bootstrapFailures().clear()).isInstanceOf(UnsupportedOperationException.class);
         }
+    }
+
+    @Test
+    void admission_retainsNormalizedIdentitiesAndAnImmutableFilenameOrderedSnapshot() throws Exception {
+        Path z = BootstrapFixtures.jar(temporary.resolve("z.jar"), BootstrapFixtures.descriptor("Z", null),
+                Collections.emptyMap());
+        Path a = BootstrapFixtures.jar(temporary.resolve("a.jar"), BootstrapFixtures.descriptor("A", null),
+                Collections.emptyMap());
+        ModuleJarAdmission admission = new ModuleJarAdmission();
+        admission.inspect(z.toFile());
+        admission.inspect(a.toFile());
+        Map<Path, ModuleJarAdmission.Entry> snapshot = admission.entries();
+        IOException failure = new IOException("fixture");
+        admission.markBootstrapFailed(temporary.resolve("unused/../a.jar"), failure);
+        assertThat(snapshot.keySet()).containsExactly(a, z);
+        assertThat(admission.inspect(a.toFile()).getBootstrapFailure()).isSameAs(failure);
+        assertThat(snapshot.get(a)).isSameAs(admission.inspect(a.toFile()));
+        assertThatThrownBy(snapshot::clear).isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void moduleContext_exposesOnlyTheThreeAgreedMembers() throws Exception {
+        assertThat(ModuleBootstrapContext.class.getDeclaredMethods()).extracting(Method::getName)
+                .containsExactlyInAnyOrder("moduleName", "moduleJar", "logger");
+        assertThat(ModuleBootstrap.class.getDeclaredMethod("bootstrap", ModuleBootstrapContext.class).getExceptionTypes())
+                .containsExactly(Exception.class);
     }
 
     @Test

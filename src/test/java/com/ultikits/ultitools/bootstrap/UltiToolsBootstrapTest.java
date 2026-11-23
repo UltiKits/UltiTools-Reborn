@@ -9,7 +9,6 @@ import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -61,6 +60,51 @@ class UltiToolsBootstrapTest {
                     .doesNotContain(modules.resolve("legacy.jar").toUri().toURL());
             assertThat(result.admission().inspect(current.toFile()).isApiAllowed()).isTrue();
             assertThat(result.classPathFailure()).isNull();
+        }
+    }
+
+    @Test
+    void bootstrap_runsHooksAndHandsFailureIdentityAndEnglishLogsToEnable() throws Exception {
+        Path data = dataFolder();
+        Path modules = ModuleFileTransactions.modulesFolder(data.toFile()).toPath();
+        Path failed = BootstrapFixtures.jar(modules.resolve("bad.jar"), BootstrapFixtures.descriptor("Bad", "fixture.Bad"),
+                Collections.singletonMap("fixture.Bad", BootstrapFixtures.hook("fixture.Bad", "java/lang/NoClassDefFoundError")));
+        BootstrapFixtures.jar(modules.resolve("good.jar"), BootstrapFixtures.descriptor("Good", "fixture.Good"),
+                Collections.singletonMap("fixture.Good", BootstrapFixtures.hook("fixture.Good", null)));
+        BootstrapFixtures.jar(modules.resolve("legacy.jar"), BootstrapFixtures.descriptor("Legacy", null).replace("700", "630"),
+                Collections.emptyMap());
+        List<LogRecord> logs = new ArrayList<>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord record) { logs.add(record); }
+            @Override public void flush() { /* No buffered output. */ }
+            @Override public void close() { /* No owned resource. */ }
+        };
+        Logger logger = Logger.getLogger("UltiTools");
+        logger.addHandler(capture);
+        try {
+            UltiToolsBootstrap bootstrap = new UltiToolsBootstrap();
+            bootstrap.bootstrap(context(data));
+            BootstrapResult result = bootstrap.result();
+            assertThat(result).isNotNull();
+            try (ModuleClassLoader loader = result.classLoader()) {
+                assertThat(result.bootstrapsRun()).isEqualTo(2);
+                assertThat(result.bootstrapFailures()).containsOnlyKeys(failed);
+                assertThat(result.admission().inspect(failed.toFile()).getBootstrapFailure())
+                        .isSameAs(result.bootstrapFailures().get(failed));
+                assertThat(loader.getURLs()).contains(failed.toUri().toURL());
+                assertThat(logs).anySatisfy(record -> assertThat(record.getMessage()).isEqualTo(
+                        "[UltiTools] Bootstrap: processed pending module changes; 2 module JAR(s) on the module class path; "
+                                + "2 module bootstrap(s) ran, 1 failed."));
+                assertThat(logs.stream().filter(record -> record.getMessage().startsWith("[UltiTools] Module 'bad.jar'")))
+                        .singleElement().satisfies(record -> {
+                            assertThat(record.getMessage()).isEqualTo("[UltiTools] Module 'bad.jar' failed in its bootstrap phase "
+                                    + "(fixture.Bad): java.lang.NoClassDefFoundError: fixture failure -- the module is not loaded "
+                                    + "at this start. Fix or remove the module and restart the server.");
+                            assertThat(record.getThrown()).isInstanceOf(NoClassDefFoundError.class);
+                        });
+            }
+        } finally {
+            logger.removeHandler(capture);
         }
     }
 

@@ -3,7 +3,6 @@ package com.ultikits.ultitools.bootstrap;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
-import java.util.Collections;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
