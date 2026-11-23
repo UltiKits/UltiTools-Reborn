@@ -29,7 +29,11 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 
+import com.ultikits.testfixtures.missingdependency.HasMethodReferencingMissingType;
+import com.ultikits.testfixtures.missingdependency.MissingDependencyType;
+
 import net.bytebuddy.ByteBuddy;
+import net.bytebuddy.dynamic.DynamicType;
 import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -140,6 +144,50 @@ class ProxyFactoryLookupTest {
         assertEquals(ErrorCode.BEAN_CREATION_FAILED, failure.getErrorCode());
         assertTrue(failure.getMessage().contains(ArrayList.class.getName()));
         assertEquals(IllegalAccessException.class, failure.getCause().getClass());
+        assertTrue(failure.getMessage().contains("open"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("java.util"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("java.base"), failure.getMessage());
+    }
+
+    @Test
+    void shouldWrapLinkageErrorOnlyWhenDefiningTheProxy() {
+        ContainerException failure = assertThrows(ContainerException.class,
+                () -> new ProxyFactory(Collections.emptyList())
+                        .createProxyClass(AopEligibilityTest.SealedClass.class, Collections.emptySet()));
+        assertEquals(ErrorCode.BEAN_CREATION_FAILED, failure.getErrorCode());
+        assertTrue(failure.getMessage().contains(AopEligibilityTest.SealedClass.class.getName()),
+                failure.getMessage());
+        assertTrue(failure.getMessage().contains("Failed to define"), failure.getMessage());
+        assertEquals(IncompatibleClassChangeError.class, failure.getCause().getClass());
+        assertTrue(failure.getCause().getMessage().contains("permitted subclass"),
+                failure.getCause().getMessage());
+    }
+
+    @Test
+    void shouldNotWrapMissingSignatureTypeDuringMake() throws Exception {
+        String missing = MissingDependencyType.class.getName();
+        try (URLClassLoader loader = new URLClassLoader(new URL[]{testClasses()},
+                ClassLoader.getPlatformClassLoader()) {
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                if (name.equals(missing)) {
+                    throw new ClassNotFoundException(name);
+                }
+                return super.loadClass(name, resolve);
+            }
+        }) {
+            Class<?> target = loader.loadClass(HasMethodReferencingMissingType.class.getName());
+            assertSame(loader, target.getClassLoader());
+            DynamicType.Builder<?> builder = new ByteBuddy().subclass(target);
+            NoClassDefFoundError fromMake = assertThrows(NoClassDefFoundError.class, builder::make);
+            assertEquals(missing, fromMake.getMessage().replace('/', '.'));
+
+            NoClassDefFoundError failure = assertThrows(NoClassDefFoundError.class,
+                    () -> new ProxyFactory(Collections.emptyList())
+                            .createProxyClass(target, Collections.emptySet()));
+            assertEquals(missing, failure.getMessage().replace('/', '.'));
+            assertEquals(ClassNotFoundException.class, failure.getCause().getClass());
+        }
     }
 
     @ParameterizedTest
@@ -193,15 +241,35 @@ class ProxyFactoryLookupTest {
             assertTrue(child.waitFor(30, TimeUnit.SECONDS), "独立 JVM 应在期限内完成代理定义");
             String output = Files.readString(stdout, StandardCharsets.UTF_8);
             String errors = Files.readString(stderr, StandardCharsets.UTF_8);
-            assertEquals(0, child.exitValue(), output + errors);
-            assertTrue(output.contains("proxy-loader=target-loader; package-private=intercepted:pkg-original"),
-                    output + errors);
-            assertFalse(errors.contains("sun.misc.Unsafe"), errors);
+            assertProbeResult(unsafeAccess, child.exitValue(), output, errors);
         } finally {
             if (child.isAlive()) {
                 child.destroyForcibly();
             }
         }
+    }
+
+    @Test
+    void shouldSkipProbeOnlyWhenTheUnsafeOptionIsUnrecognized() {
+        assertThrows(org.opentest4j.TestAbortedException.class, () -> assertProbeResult(
+                "deny", 1, "", "Unrecognized option: --sun-misc-unsafe-memory-access=deny\n"
+                        + "Error: Could not create the Java Virtual Machine.\n"));
+        assertThrows(org.opentest4j.AssertionFailedError.class, () -> assertProbeResult(
+                "deny", 1, "", "UnsupportedOperationException: Cannot define class using reflection"));
+        assertThrows(org.opentest4j.AssertionFailedError.class, () -> assertProbeResult(
+                "warn", 0, "proxy-loader=target-loader; package-private=intercepted:pkg-original",
+                "WARNING: sun.misc.Unsafe::objectFieldOffset has been called"));
+    }
+
+    private static void assertProbeResult(String unsafeAccess, int exitCode, String output, String errors) {
+        String option = "--sun-misc-unsafe-memory-access=" + unsafeAccess;
+        org.junit.jupiter.api.Assumptions.assumeFalse(exitCode != 0
+                        && errors.lines().anyMatch(line -> line.equals("Unrecognized option: " + option)),
+                () -> "This JVM no longer recognises " + option + "; Unsafe probe not executed: " + errors);
+        assertEquals(0, exitCode, output + errors);
+        assertTrue(output.contains("proxy-loader=target-loader; package-private=intercepted:pkg-original"),
+                output + errors);
+        assertFalse(errors.contains("sun.misc.Unsafe"), errors);
     }
 
     private static URL testClasses() {

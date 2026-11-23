@@ -40,10 +40,12 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * copy, every reflective consumer in the framework (command registration, EventBus handler
  * scanning, Bukkit's own {@code @EventHandler} scan) would silently stop seeing them.
  * <p>
- * <b>Cross-class-loader dispatch:</b> the generated class is injected into the <em>target's own</em>
- * class loader (see {@code ProxyFactoryIsolationTest}, e.g. a plugin module's URLClassLoader, which
- * is unrelated to this framework's own loader on a live Paper server). That means the intercepted
- * methods' bytecode can only reference types resolvable from the target's loader - so dispatch goes
+ * <b>Cross-class-loader dispatch:</b> the generated class is defined through a private lookup on
+ * the target class ({@link MethodHandles#privateLookupIn} and {@link MethodHandles.Lookup#defineClass}),
+ * in the <em>target's own</em> class loader and runtime package (see {@code ProxyFactoryIsolationTest},
+ * e.g. a plugin module's URLClassLoader, unrelated to the framework's loader on a live Paper server).
+ * The intercepted methods' bytecode can only reference types resolvable from the target's loader,
+ * so dispatch goes
  * through {@link InvocationHandler}, part of {@code java.base} and therefore resolvable from any
  * loader, rather than {@link net.bytebuddy.implementation.MethodDelegation}'s {@code @SuperCall}
  * binding, which would bake a hard reference to this framework-defined class into the proxy and
@@ -52,13 +54,15 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * same-signature "trampoline" method per intercepted method, invoked reflectively by name from the
  * dispatcher - see {@link #trampolineName(Method)}.
  * <p>
- * <b>Limitations</b> (surfaced as a {@link RuntimeException} naming the target class rather than a
- * bare ByteBuddy exception or a silent skip; a startup-time eligibility pre-check is planned as
- * {@link AopEligibility}):
+ * <b>Limitations</b> (the resolver checks class and method eligibility through
+ * {@link AopEligibility}; proxy generation and definition failures are reported as a
+ * {@link ContainerException} naming the target class):
  * <ul>
- *   <li>Cannot subclass final classes</li>
+ *   <li>Cannot subclass final or sealed classes</li>
  *   <li>Cannot override final, private or static methods</li>
  *   <li>The target class must have a constructor reachable by the container</li>
+ *   <li>The target package must be open to the framework for a private lookup. Unnamed modules
+ *       open all their packages; a named module must open the target package to the framework.</li>
  * </ul>
  *
  * @author wisdomme
@@ -154,6 +158,8 @@ public class ProxyFactory {
             }
         }
 
+        DynamicType.Unloaded<T> unloaded;
+        ClassLoadingStrategy<ClassLoader> loadingStrategy;
         try {
             // @ProxyOf must name the *original* target, not an intermediate proxy: unwrap(targetClass)
             // returns targetClass unchanged when it is not itself a proxy, and returns the original
@@ -195,24 +201,41 @@ public class ProxyFactory {
                         .intercept(MethodCall.invoke(method).onSuper().withAllArguments());
             }
 
-            return builder
+            unloaded = builder
                     .method(ElementMatchers.anyOf(methodsToIntercept.toArray(new Method[0])))
                     .intercept(InvocationHandlerAdapter.of(new InterceptorDispatcher(interceptors)))
                     // Overriding methods do not inherit annotations; copy them for the same reason.
                     .attribute(MethodAttributeAppender.ForInstrumentedMethod.INCLUDING_RECEIVER)
-                    .make()
-                    .load(targetClass.getClassLoader(), ClassLoadingStrategy.UsingLookup.of(
-                            MethodHandles.privateLookupIn(targetClass, MethodHandles.lookup())))
-                    .getLoaded();
-        } catch (IllegalAccessException | RuntimeException e) {
-            // GATE-05 group two (08-21): routed to the typed container hierarchy -- the
-            // generated proxy class IS the bean in this framework's design, so a failure to
-            // build it is a bean-creation failure.
+                    .make();
+            loadingStrategy = ClassLoadingStrategy.UsingLookup.of(
+                    MethodHandles.privateLookupIn(targetClass, MethodHandles.lookup()));
+        } catch (IllegalAccessException e) {
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    "Failed to obtain a private lookup for " + targetClass.getName()
+                            + ". The target package '" + targetClass.getPackageName() + "' in module '"
+                            + targetClass.getModule().getName() + "' must be open to the framework. "
+                            + "Open that package to the framework module before enabling AOP.", e);
+        } catch (RuntimeException e) {
+            // The generated proxy class is the bean, so generation failure is bean-creation failure.
+            // A LinkageError from make(), however, still identifies a genuinely missing symbol.
             throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
                     "Failed to create a proxy for " + targetClass.getName() +
-                    ". Common causes: the class is final, has no constructor reachable by the " +
+                    ". Common causes: the class is final or sealed, has no constructor reachable by the " +
                     "container, or one of the intercepted methods cannot be overridden.", e);
         }
+
+        DynamicType.Loaded<T> loaded;
+        try {
+            loaded = unloaded.load(targetClass.getClassLoader(), loadingStrategy);
+        } catch (LinkageError | RuntimeException e) {
+            // Only class definition errors belong here: do not misclassify make()'s missing types.
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    "Failed to define the proxy class for " + targetClass.getName()
+                            + " in package " + targetClass.getPackageName()
+                            + ". Common causes: the class is sealed, or a class with the generated "
+                            + "name already exists. Use a non-sealed bean and avoid fixed proxy names.", e);
+        }
+        return loaded.getLoaded();
     }
 
     /**
