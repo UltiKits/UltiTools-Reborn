@@ -553,7 +553,7 @@ class UltiCloudStubSelfTest {
                 .json().getAsJsonObject("data");
         assertThat(version.getAsJsonObject("download").get("url").getAsString()).isEqualTo(expectedUrl);
         JsonObject listed = RawHttp.get(stub.httpPort(), "/v1/catalogue/modules/" + StubCatalogue.MODULE
-                + "/versions?apiLevel=631&minApiLevel=630", null).json().getAsJsonObject("data")
+                + "/versions?apiLevel=701&minApiLevel=700", null).json().getAsJsonObject("data")
                 .getAsJsonArray("items").get(0).getAsJsonObject();
         assertThat(listed.getAsJsonObject("download").get("url").getAsString()).isEqualTo(expectedUrl);
 

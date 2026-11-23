@@ -8,22 +8,17 @@ import org.jetbrains.annotations.ApiStatus;
 import com.ultikits.ultitools.UltiTools;
 
 /**
- * Which module API levels {@code /upm} installs from a catalogue.
+ * The shared minimum module API level for loading and catalogue installation.
  *
- * <p>A module declares the UltiTools API level it is built for as the integer {@code api-version}
- * of its {@code plugin.yml}. {@code /upm} installs, installs by version and stages updates only of
- * modules at {@link #MIN_INSTALLABLE_API_LEVEL} up to this framework's own level, and sends both
- * numbers to the catalogue on every request so that the catalogue offers nothing else.
+ * <p>A module declares its UltiTools API level as the integer {@code api-version} in
+ * {@code plugin.yml}. UltiTools-API 7.0 is a new baseline: a declared integer below
+ * {@link #MIN_INSTALLABLE_API_LEVEL} is refused before the module's main class loads.
+ * Missing or non-integer declarations are refused too, including on manual loading.
  *
- * <p><b>Why the floor exists.</b> UltiTools-API 6.3.0 made {@code UltiToolsPlugin.unregisterSelf()}
- * final, and every module built before 6.3.0 overrides it, so such a module fails to link
- * ({@code IncompatibleClassChangeError}) at the next start. A catalogue that serves a pre-6.3.0
- * build -- one that does not filter by level, or a version recorded wrongly -- would otherwise be
- * downloaded, reported installed and then refused at restart.
- *
- * <p><b>The module loader's admission rule is separate</b> and unchanged: a JAR an operator places
- * in the modules folder by hand is still judged by {@code PluginManager}'s own rule. This class is an
- * install policy of {@code /upm}, which only fetches from a catalogue.
+ * <p>{@code /upm} requires an integer declaration and installs or stages updates only from this
+ * floor through the framework's own level. Its catalogue version requests send both bounds.
+ * Rebuilding against 7.0 is required; changing an old module's declaration alone does not repair
+ * bytecode that references removed APIs.
  *
  * <p>The upper bound reuses {@code PluginManager.requiresNewerFramework(int, int)}, the single
  * definition of "the module needs a newer framework", so that comparison still exists once.
@@ -34,11 +29,11 @@ import com.ultikits.ultitools.UltiTools;
 public final class ModuleApiLevels {
 
     /**
-     * The lowest module {@code api-version} {@code /upm} installs: the first level built against
-     * the 6.3.0 module contract. Sent to the catalogue as {@code minApiLevel}, and used by the check
-     * of every downloaded JAR, so the catalogue never holds a second copy of this policy.
+     * The lowest declared module {@code api-version} loaded or installed on the 7.0 baseline.
+     * Sent to the catalogue as {@code minApiLevel} and checked before loading a module main class
+     * and before accepting a downloaded JAR.
      */
-    public static final int MIN_INSTALLABLE_API_LEVEL = 630;
+    public static final int MIN_INSTALLABLE_API_LEVEL = 700;
 
     private static final Logger LOGGER = Logger.getLogger(ModuleApiLevels.class.getName());
 
@@ -47,7 +42,7 @@ public final class ModuleApiLevels {
 
     /**
      * This framework's own API level, as {@code UltiTools.getPluginVersion()} reads it from the
-     * bundled {@code env.yml} (630 for 6.3.0 and its snapshots).
+     * bundled {@code env.yml} (700 for 7.0.0 and its snapshots).
      *
      * <p>When that cannot be read, or reads below {@link #MIN_INSTALLABLE_API_LEVEL} -- impossible
      * for a build that contains this class, so a misreading -- the floor is used instead and a
@@ -83,7 +78,22 @@ public final class ModuleApiLevels {
      * @return {@code true} when {@code floor <= moduleLevel <= frameworkLevel}
      */
     public static boolean isInstallable(int moduleLevel, int floor, int frameworkLevel) {
-        return moduleLevel >= floor && !PluginManager.requiresNewerFramework(moduleLevel, frameworkLevel);
+        return meetsFloor(moduleLevel, floor) && !PluginManager.requiresNewerFramework(moduleLevel, frameworkLevel);
+    }
+
+    /**
+     * The minimum admission shared by manual loading, installation and staged updates.
+     * The loader keeps its existing post-instantiation upper-bound check.
+     *
+     * @param moduleLevel the parsed declaration, or {@code null} when invalid or absent
+     * @return whether the module declares an integer at or above the minimum
+     */
+    public static boolean isLoadable(Integer moduleLevel) {
+        return meetsFloor(moduleLevel, MIN_INSTALLABLE_API_LEVEL);
+    }
+
+    private static boolean meetsFloor(Integer moduleLevel, int floor) {
+        return moduleLevel != null && moduleLevel >= floor;
     }
 
     /**

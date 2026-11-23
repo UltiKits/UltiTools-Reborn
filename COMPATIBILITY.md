@@ -232,6 +232,58 @@ Paper 版本，不承诺兼容旧服务器；本文其他位置的 6.x 旧服务
 `world`：Paper 的 `Location.deserialize` 抛出 `unknown world`，其序列化层记录失败并返回 null，
 框架的 Bukkit 转换器随后以 `ConversionException` 拒绝这个配置值。
 
+## Module API floor 700 and plain module loading (as of 7.0.0)
+
+7.0 removes load-time bytecode adaptation, server-API probing, and both startup and offline
+linkage audits. The shared module loader remains a parent-first `URLClassLoader`; compile modules
+against the target Paper and UltiTools-API versions rather than relying on bytecode rewriting.
+Observed container skips still name the module, bean and missing symbol; those diagnostics are not
+an audit or a promise to recover an unavailable capability.
+
+Every module must declare an **integer `api-version` of at least `700`** in its own root
+`plugin.yml`. Missing, empty and non-integer values (including `'26.3'`, `1.21` and `abc`) are refused
+before main-class resolution, with one translated SEVERE line showing the actual value (or
+`<missing>` / `<缺失>`). Quoted integers such as `'700'` are accepted. A declaration below `700`
+gets a separate refusal naming the level and minimum. Both messages use the running framework
+version, not a hard-coded release name. A module declaring more than the installed framework's
+level still follows the existing newer-framework refusal. Unreadable or missing `plugin.yml`,
+or a missing `main:`, keeps the existing no-readable-plugin.yml/no-main refusal.
+
+Class-path collection and module discovery reuse one per-start metadata/admission snapshot, read
+after recorded updates are applied. An API-refused module JAR is **not on the shared class path**,
+so it supplies neither its main class nor helper classes to another module. Each refusal is counted
+once in `Failed`, while unrelated modules continue loading. If `m-6.3.0.jar` (630) and
+`m-7.0.0.jar` (700) declare the same main class, the older copy is refused once and the new copy's
+classes come from the new JAR, even though its file name sorts later. The duplicate warning names
+the actual accepted supplier; the JAR index still records both declarations for file management.
+Among admitted copies, ordinary file-name ordering is unchanged.
+
+`/upm install` and `/upm update` use the same integer parser and minimum predicate, with
+`MIN_INSTALLABLE_API_LEVEL = 700`; downloads above the framework's level are refused too.
+Catalogue version requests carry `apiLevel` and `minApiLevel=700`. An earlier API-refused copy is
+not treated as a class-path blocker for a staged update. Installation does not automatically delete
+older copies or redo the update transaction protocol.
+
+**Operator action:** obtain a module rebuilt against the current UltiTools-API, declaring `700` or
+higher, stop the server, replace the obsolete JAR and restart. Merely editing `api-version` does
+not repair removed API references. If old and new copies coexist temporarily, the old copy remains
+on disk and is refused; keep only the intended current build. The historical 6.3.0 and 6.4.0 sections
+below describe those versions, not 7.0 support promises.
+
+**Known limitation — pending 6.x updates during a framework upgrade.** If a 6.x module update is
+still waiting for its confirming start when the framework is upgraded to 7.0, the API refusal can
+be accompanied by the existing update rollback to the previous 6.x JAR. The restored copy is also
+below the new floor. **Before upgrading the framework, let every pending module update complete
+one startup on the old framework.** Then replace the module builds and upgrade. No defensive
+transaction rewrite is added for this unusual upgrade sequence.
+
+中文补充：7.0 删除加载期适配及启动／离线链接审计。模块必须在自身 `plugin.yml` 声明至少 `700`
+的整数 `api-version`；缺失、空值、`'26.3'`、`1.21`、`abc` 一律拒载，带引号的 `'700'` 有效。
+被拒 JAR 不进入共享类路径，每个只报一次且计入失败数，其他模块继续加载。同主类的新旧副本并存时，
+旧副本被拒、新副本提供类定义；索引保留两份文件身份，不自动删除旧 JAR。请获取重新构建的模块并停服替换，
+不要只改 API 声明。已知限制：升级框架前，先在旧框架下让所有挂起的模块更新完成一次启动确认，避免拒载之外
+再看到一次旧事务回滚。
+
 ## Class-name filter audit and no-op SecurityPolicy methods removed (as of 7.0.0)
 
 The observe-only class-name filter audit and its startup summaries are removed. The deprecated
@@ -4700,7 +4752,7 @@ independent numbers and should not be treated as one:
 | Number | Determines | Who checks it |
 |---|---|---|
 | The `UltiTools-API` version in `pom.xml` | Which version's descriptors your bytecode records | Nobody. It is `provided`, does not enter the JAR, and the framework cannot see it at runtime |
-| `api-version` in `plugin.yml` | The declared runtime floor | `PluginManager.isUltiToolsVersionCompatible` refuses a module that declares a higher API level than the installed framework. 6.3.0 also reads it to refuse a config binding below `630`, to word a load failure, and in `/upm`, which installs only modules at `630` up to the framework's level. Of the two numbers, this is the only one that is checked |
+| `api-version` in `plugin.yml` | The declared runtime floor | On 7.0, `PluginManager.loadPluginMainClass` refuses a declared integer below `700` before loading the main class; `isUltiToolsVersionCompatible` still refuses a higher level than the installed framework. `/upm` installs only integer levels from `700` through the framework's level and rejects missing declarations. Manual loading also rejects missing, empty and non-integer declarations before main-class resolution and excludes their JARs from the shared class path. Of the two numbers, this is the only one checked |
 
 So "the pin is the floor" is wrong: raising the pin does not raise the floor. An artifact compiled
 against a new framework while still declaring an old `api-version` is **let through** by an old
@@ -4844,14 +4896,32 @@ older servers are not promised compatibility.
 | Build JDK | 25 |
 | Bytecode target | Java 25 (`--release 25`, class major 69) |
 | `api-version` in `plugin.yml` | `26.3` (Bukkit API level, not a module's integer UltiTools API level) |
-| `api-version` in a module's `plugin.yml` | An integer UltiTools API level, not the Paper version; `630` is the historical declaration for a module built for 6.3.0 and does not certify 7.0 compatibility |
+| `api-version` in a module's `plugin.yml` | An integer UltiTools API level, not the Paper version; 7.0 requires at least `700`. A declaration below `700`, missing, empty or non-integer is refused before main-class resolution and excluded from the shared class path; `/upm` uses the same minimum rule |
 | Target server | Paper 26.3 build 258 (`paper-api:26.3.build.258-stable`); not a minimum-version range |
 | Server Java | Java 25, matching the framework bytecode target |
-| Modules | The fifteen UltiKits modules' 6.3.0-era declarations (`api-version: 630`) describe the historical 6.x line, not verified compatibility with 7.0. Use a module build verified against the framework under test; this matrix makes no 7.0 module-compatibility promise. The server rows are the framework's own requirements |
+| Modules | 6.x modules declaring levels such as `630` are refused. Rebuild against UltiTools-API 7.0 and declare `api-version: 700`; changing only the declaration does not repair old bytecode. The server rows are the framework's own requirements |
 
 **Evidence scope:** the former 6.x minimum-build record used the SnakeYAML 1.32 compatibility
 harness, and its Paper 1.19.2 boot comparison used build 307 rather than build 163. Those are
 historical measurements, not verification or a support promise for 7.0 on older servers.
+
+### Module loading on 7.0
+
+See [Module API floor 700 and plain module loading](#module-api-floor-700-and-plain-module-loading-as-of-700) for admission, duplicate copies and the pending-update upgrade limitation.
+
+The shared module loader uses ordinary parent-first `URLClassLoader` behavior. Module bytecode is
+not adapted to a different server API, and neither startup nor an offline launcher audits unresolved
+references. Compile against the target Paper and UltiTools-API versions. A missing class or method
+produces the JVM's normal `NoClassDefFoundError` or `NoSuchMethodError` when resolution reaches it;
+merely increasing `api-version` does not repair a module compiled against removed APIs.
+
+**Observed bean failures still have diagnostics.** If the container actually skips a bean because it
+references an absent server class, a warning names the module, bean, missing class and all lost event
+handlers, including inherited handlers. Those handlers remain unregistered; unrelated beans continue
+loading. Missing-method failures observed during bean creation likewise retain their module/class
+summary and exact linkage failure. This does not predict failures in code paths that have not run.
+The framework neither substitutes missing capabilities nor renames events, and it does not isolate
+individual handlers inside one class.
 
 ### Supporting servers below 1.21 (as of v6.4.0)
 

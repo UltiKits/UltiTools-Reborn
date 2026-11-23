@@ -233,9 +233,9 @@ jobs:
       if: steps.changes.outputs.tooling == 'true'
       run: mvn -B -ntp process-resources dependency:resolve-plugins
 
-    - name: Install pinned linkage-audit Python dependencies
+    - name: Install pinned build-tooling Python dependencies
       if: steps.changes.outputs.tooling == 'true'
-      run: bash .github/scripts/setup-linkage-audit-python.sh
+      run: bash .github/scripts/setup-build-tooling-python.sh
 
     - name: Release tooling regression suites
       if: steps.changes.outputs.tooling == 'true'

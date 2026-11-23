@@ -232,7 +232,7 @@ class ModuleScanQuietStartTest {
         File jar = new File(tempDir, name);
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
             output.putNextEntry(new JarEntry("plugin.yml"));
-            output.write(("main: " + CleanPlugin.class.getName() + "\n").getBytes(StandardCharsets.UTF_8));
+            output.write(("main: " + CleanPlugin.class.getName() + "\napi-version: 700\n").getBytes(StandardCharsets.UTF_8));
             output.closeEntry();
             for (Class<?> type : classes) {
                 String resource = type.getName().replace('.', '/') + ".class";

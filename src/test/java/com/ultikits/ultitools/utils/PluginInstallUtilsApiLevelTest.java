@@ -37,7 +37,7 @@ import com.ultikits.ultitools.stub.StubCatalogue;
  * {@code /upm install} against the v2 catalogue (plan 22-18): only the versions route carries the
  * API-level filter, the download is written to a name the module loader never reads and is checked
  * byte for byte before it is installed, its {@code plugin.yml} is read again, and a module outside
- * {@code 630..<framework level>} -- or a version the catalogue does not offer for download -- is
+ * {@code 700..<framework level>} -- or a version the catalogue does not offer for download -- is
  * refused with a reason and nothing left in the modules folder.
  */
 @DisplayName("/upm install over /v1/catalogue: levels, integrity and the licence-required outcome")
@@ -80,7 +80,7 @@ class PluginInstallUtilsApiLevelTest {
         when(instance.getDataFolder()).thenReturn(dataFolder);
         ultiTools = mockStatic(UltiTools.class);
         ultiTools.when(UltiTools::getInstance).thenReturn(instance);
-        frameworkAt(630);
+        frameworkAt(700);
 
         catalogue = StubCatalogue.start();
         PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
@@ -173,7 +173,7 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("a JAR declaring api-version 630 installs; only the versions request carries apiLevel and minApiLevel")
+    @DisplayName("a JAR declaring api-version 700 installs; only the versions request carries apiLevel and minApiLevel")
     void compatibleModule_installsAndOnlyTheVersionsRequestCarriesTheLevel() {
         assertThat(PluginInstallUtils.installLatestPlugin("demo")).isTrue();
 
@@ -182,7 +182,7 @@ class PluginInstallUtilsApiLevelTest {
         assertThat(versions).isNotEmpty();
         for (StubCatalogue.Request request : versions) {
             assertThat(queryOf(request)).as(request.toString())
-                    .containsEntry("apiLevel", "630")
+                    .containsEntry("apiLevel", "700")
                     .containsEntry("minApiLevel", String.valueOf(ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
         }
         for (StubCatalogue.Request request : catalogue.requests()) {
@@ -195,7 +195,7 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("a JAR declaring api-version 620 is refused after download: nothing in the modules folder, no .part, the reason naming 620 and 630..630")
+    @DisplayName("a JAR declaring api-version 620 is refused after download: nothing in the modules folder, no .part, the reason naming 620 and 700..700")
     void olderModule_isRefusedAndNothingIsLeft() throws IOException {
         catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "620"));
 
@@ -203,7 +203,7 @@ class PluginInstallUtilsApiLevelTest {
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "620", 630, 630, 630);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "620", 700, 700, 700);
         assertThat(downloadedAnything()).isTrue();
         assertThat(modulesFolderNames()).isEmpty();
         assertThat(PluginInstallUtils.installLatestPlugin("demo")).isFalse();
@@ -213,28 +213,28 @@ class PluginInstallUtilsApiLevelTest {
     @Test
     @DisplayName("a JAR declaring an api-version above the framework's level is refused the same way")
     void newerModule_isRefused() {
-        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "640"));
+        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "710"));
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "640", 630, 630, 630);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "710", 700, 700, 700);
         assertThat(modulesFolderNames()).isEmpty();
     }
 
     @Test
-    @DisplayName("the upper bound is the framework's own level: on a framework at 640 a 640 module installs and the versions request carries apiLevel=640")
+    @DisplayName("the upper bound is the framework's own level: on a framework at 710 a 710 module installs and the versions request carries apiLevel=710")
     void frameworkLevelIsTheUpperBound() {
-        frameworkAt(640);
-        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "640"));
+        frameworkAt(710);
+        catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "710"));
 
         assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
 
         assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar");
         for (StubCatalogue.Request request : versionRequests()) {
             assertThat(queryOf(request)).as(request.toString())
-                    .containsEntry("apiLevel", "640")
+                    .containsEntry("apiLevel", "710")
                     .containsEntry("minApiLevel", String.valueOf(ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
         }
     }
@@ -248,7 +248,7 @@ class PluginInstallUtilsApiLevelTest {
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", 630, 630, 630);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", 700, 700, 700);
         assertThat(modulesFolderNames()).isEmpty();
     }
 
@@ -261,7 +261,7 @@ class PluginInstallUtilsApiLevelTest {
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "1.19", 630, 630, 630);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "1.19", 700, 700, 700);
         assertThat(modulesFolderNames()).isEmpty();
     }
 
@@ -274,7 +274,7 @@ class PluginInstallUtilsApiLevelTest {
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION);
-        assertThat(result.getReasonArgs()).containsExactly("demo", 630, 630, 630);
+        assertThat(result.getReasonArgs()).containsExactly("demo", 700, 700, 700);
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
     }
@@ -312,17 +312,17 @@ class PluginInstallUtilsApiLevelTest {
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "2.0.0", 630, 630, 630);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "2.0.0", 700, 700, 700);
         assertThat(PluginInstallUtils.installPlugin("demo", "2.0.0")).isFalse();
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
     }
 
     @Test
-    @DisplayName("on a 6.4.0 framework (level 640) the stub's 2.0.0 is still above the level: the UAT stub rows stay"
+    @DisplayName("on a 7.1.0 framework (level 710) the stub's 2.0.0 is still above the level: the UAT stub rows stay"
             + " 'cannot be installed' as the framework's own level rises")
-    void stubLicensedVersion_staysAboveA640Framework() {
-        frameworkAt(640);
+    void stubLicensedVersion_staysAboveA710Framework() {
+        frameworkAt(710);
 
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
                 StubCatalogue.LICENSED_VERSION);
@@ -358,7 +358,7 @@ class PluginInstallUtilsApiLevelTest {
 
         assertThat(result.isInstalled()).isFalse();
         assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "620", 630, 630, 630);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "620", 700, 700, 700);
         assertThat(downloadedAnything()).isTrue();
         assertThat(modulesFolderNames()).isEmpty();
     }
@@ -374,8 +374,8 @@ class PluginInstallUtilsApiLevelTest {
         assertThat(versionRequests()).isNotEmpty();
         for (StubCatalogue.Request request : versionRequests()) {
             assertThat(queryOf(request)).as(request.toString())
-                    .containsEntry("apiLevel", "630")
-                    .containsEntry("minApiLevel", "630");
+                    .containsEntry("apiLevel", "700")
+                    .containsEntry("minApiLevel", "700");
         }
     }
 }

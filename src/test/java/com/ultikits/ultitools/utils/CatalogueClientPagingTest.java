@@ -66,7 +66,7 @@ class CatalogueClientPagingTest {
     private static final String MODULE = "demo";
     private static final String MODULE_ROUTE = "/v1/catalogue/modules/" + MODULE;
     private static final String VERSIONS_ROUTE = MODULE_ROUTE + "/versions";
-    private static final int LEVEL = 631;
+    private static final int LEVEL = 701;
     private static final int JSON_LIMIT = 4_194_304;
 
     @TempDir
@@ -98,7 +98,7 @@ class CatalogueClientPagingTest {
         ultiTools = mockStatic(UltiTools.class);
         ultiTools.when(UltiTools::getInstance).thenReturn(instance);
         ultiTools.when(UltiTools::getPluginVersion).thenReturn(LEVEL);
-        jar = StubCatalogue.moduleJar("Demo", "1.0.11", MODULE, "630");
+        jar = StubCatalogue.moduleJar("Demo", "1.0.11", MODULE, "700");
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", this::answer);
         server.start();
@@ -535,7 +535,7 @@ class CatalogueClientPagingTest {
                     "fixtures/versionGet/response/valid/public-download.json").getAsJsonObject("data");
             entry.addProperty("version", "1.0." + i);
             entry.addProperty("isLatest", false);
-            entry.addProperty("apiLevel", 630);
+            entry.addProperty("apiLevel", 700);
             entry.addProperty("sha256", CatalogueHttp.sha256Hex(jar));
             entry.addProperty("sizeBytes", jar.length);
             entry.getAsJsonObject("download").addProperty("url", downloadUrl("1.0." + i));
@@ -553,7 +553,7 @@ class CatalogueClientPagingTest {
 
     private void assertQueries(int count) {
         List<String> expected = IntStream.rangeClosed(1, count).mapToObj(page ->
-                "apiLevel=" + LEVEL + "&minApiLevel=630&page=" + page + "&pageSize=5").collect(Collectors.toList());
+                "apiLevel=" + LEVEL + "&minApiLevel=700&page=" + page + "&pageSize=5").collect(Collectors.toList());
         assertThat(queries).containsExactlyElementsOf(expected);
     }
 

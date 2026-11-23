@@ -67,12 +67,12 @@ public final class ModuleUpdateFixtures {
      * @throws IOException when it cannot be written
      */
     public static File moduleJar(File file, String name, String version, String identifyString) throws IOException {
-        return moduleJar(file, name, version, identifyString, "630");
+        return moduleJar(file, name, version, identifyString, "700");
     }
 
     /**
      * {@link #moduleJar(File, String, String, String)} with a chosen {@code api-version}. The
-     * four-argument form declares {@code 630}, the level a module built for 6.3.0 declares, which
+     * four-argument form declares {@code 700}, the level a module built for 7.0 declares, which
      * is what {@code /upm} stages (plan 18-40).
      *
      * @param file           where to write it
