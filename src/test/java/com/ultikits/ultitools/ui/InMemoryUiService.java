@@ -35,6 +35,7 @@ class InMemoryUiService implements UiService {
     private final String owner;
     private boolean unloaded;
     private boolean unloading;
+    private long unloadDeadline;
     private final List<PendingDelivery> pendingDeliveries = new ArrayList<>();
 
     InMemoryUiService(Registry registry, String owner) {
@@ -361,22 +362,30 @@ class InMemoryUiService implements UiService {
             quitting.forEach(session -> session.requestClose(CloseReason.DISCONNECTED));
         }
         @Override public void unload(String owner) {
+            checkThread();
+            long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
             List<MemorySession<?>> closing;
+            InMemoryUiService service;
             synchronized (this) {
-                InMemoryUiService service = (InMemoryUiService) service(owner);
+                service = (InMemoryUiService) service(owner);
                 service.unloaded = true;
                 service.unloading = true;
+                service.unloadDeadline = deadline;
                 closing = sessions.stream().filter(session -> session.service.owner().equals(owner)).toList();
             }
+            List<InMemorySlotContainer> owned = List.copyOf(containers).stream()
+                    .filter(container -> container.owner().equals(owner)).toList();
+            owned.forEach(InMemorySlotContainer::prepareUnload);
+            service.flushDeliveries();
+            owned.forEach(InMemorySlotContainer::startUnloadCommit);
             for (MemorySession<?> session : List.copyOf(closing)) {
                 session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
                 session.closeAndComplete();
             }
-            List.copyOf(containers).stream().filter(container -> container.owner().equals(owner)).forEach(InMemorySlotContainer::unload);
-            owners.get(owner).flushDeliveries();
+            owned.forEach(container -> container.unload(deadline));
             synchronized (this) {
-                owners.get(owner).unloaded = true;
-                owners.get(owner).unloading = false;
+                service.unloaded = true;
+                service.unloading = false;
             }
         }
         @Override public RecordingScheduler scheduler() { return scheduler; }
@@ -445,7 +454,7 @@ class InMemoryUiService implements UiService {
                     boundContainers(grid.rendered).forEach(container -> {
                         container.detach(this);
                         if (service.unloading && container.owner().equals(service.owner())) {
-                            container.unload();
+                            container.unload(service.unloadDeadline);
                         }
                     });
                 }

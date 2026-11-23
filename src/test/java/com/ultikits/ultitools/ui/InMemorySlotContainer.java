@@ -14,6 +14,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.logging.Level;
@@ -38,10 +41,12 @@ final class InMemorySlotContainer implements SlotContainer {
     private List<ItemStack> baseline;
     private ContainerState state = ContainerState.EDITABLE;
     private CompletionStage<CommitOutcome> inFlight;
-    private CompletableFuture<CommitOutcome> commitFuture;
+    private PendingCommit pendingCommit;
+    private CompletionStage<CommitOutcome> unloadCommit;
     private CompletionStage<EndOutcome> ending;
     private long sequence;
     private long answeredSequence;
+    private long appliedAnswerSequence;
 
     InMemorySlotContainer(String owner, ContainerSpec spec, RecordingScheduler scheduler,
             BiFunction<UUID, List<ItemStack>, CompletionStage<Delivery>> returns,
@@ -185,18 +190,23 @@ final class InMemorySlotContainer implements SlotContainer {
         ContainerState previous = state;
         state = ContainerState.COMMITTING;
         ContainerSnapshot snapshot = new ContainerSnapshot(contents, baseline, ++sequence);
-        commitFuture = new CompletableFuture<>();
-        inFlight = commitFuture.minimalCompletionStage();
-        CompletableFuture<CommitOutcome> expected = commitFuture;
-        scheduler.global().runLater(spec.commitTimeout(), () -> finishCommit(expected, snapshot, previous,
-                StoreAnswer.unknown(null), true));
+        CompletableFuture<CommitOutcome> expected = new CompletableFuture<>();
+        inFlight = expected.minimalCompletionStage();
+        PendingCommit pending = new PendingCommit(expected, snapshot, previous, new CompletableFuture<>(),
+                System.nanoTime() + spec.commitTimeout().toNanos());
+        pendingCommit = pending;
+        scheduler.global().runLater(spec.commitTimeout(), () -> finishCommit(pending, StoreAnswer.unknown(null), true));
         try {
-            store.write(snapshot).whenComplete((answer, failure) -> onThread(() -> finishCommit(expected,
-                    snapshot, previous, failure == null && answer != null ? answer : StoreAnswer.unknown(failure), false)));
+            store.write(snapshot).whenComplete((answer, failure) -> recordAnswer(pending, answer, failure));
         } catch (Exception thrown) {
-            finishCommit(expected, snapshot, previous, StoreAnswer.unknown(thrown), false);
+            recordAnswer(pending, null, thrown);
         }
         return inFlight;
+    }
+    private void recordAnswer(PendingCommit pending, StoreAnswer answer, Throwable failure) {
+        StoreAnswer resolved = failure == null && answer != null ? answer : StoreAnswer.unknown(failure);
+        pending.answer().complete(resolved);
+        onThread(() -> finishCommit(pending, resolved, false));
     }
     private void onThread(Runnable action) {
         if (Thread.currentThread() == thread) { // NOPMD - marshal only a foreign completing thread
@@ -205,28 +215,34 @@ final class InMemorySlotContainer implements SlotContainer {
             scheduler.global().run(action);
         }
     }
-    private void finishCommit(CompletableFuture<CommitOutcome> expected, ContainerSnapshot snapshot,
-            ContainerState previous, StoreAnswer answer, boolean timeout) {
+    private void finishCommit(PendingCommit pending, StoreAnswer answer, boolean timeout) {
         checkThread();
-        if (snapshot.sequence() <= answeredSequence) {
-            if (!timeout) {
+        long answered = pending.snapshot().sequence();
+        if (answered <= answeredSequence) {
+            if (!timeout && answered > appliedAnswerSequence) {
                 warn("Late store answer ignored for owner {0}", null);
             }
             return;
         }
         StoreAnswer normalized = normalizeAnswer(answer);
-        answeredSequence = snapshot.sequence();
+        answeredSequence = answered;
+        if (!timeout) {
+            appliedAnswerSequence = answered;
+        }
         if (normalized instanceof StoreAnswer.Written) {
-            baseline = new ArrayList<>(snapshot.contents());
+            baseline = new ArrayList<>(pending.snapshot().contents());
             ledger.clear();
             taken.clear();
-            state = previous;
-            expected.complete(CommitOutcome.WRITTEN);
+            state = pending.previous();
+            pending.result().complete(CommitOutcome.WRITTEN);
         } else if (normalized instanceof StoreAnswer.Refused refused) {
-            finishRefused(expected, refused, previous);
+            finishRefused(pending.result(), refused, pending.previous());
         } else {
+            if (answer instanceof StoreAnswer.Unknown unknown) {
+                warn("Store answer unknown for owner {0}", unknown.cause());
+            }
             state = ContainerState.FAILED;
-            expected.complete(CommitOutcome.UNKNOWN);
+            pending.result().complete(CommitOutcome.UNKNOWN);
         }
     }
     private StoreAnswer normalizeAnswer(StoreAnswer answer) {
@@ -281,7 +297,8 @@ final class InMemorySlotContainer implements SlotContainer {
         return ending;
     }
     private void endAfterCommit(CompletableFuture<EndOutcome> result) {
-        commit().thenAccept(outcome -> {
+        CompletionStage<CommitOutcome> selected = unloadCommit == null ? commit() : unloadCommit;
+        selected.thenAccept(outcome -> {
             EndOutcome end = switch (outcome) {
                 case WRITTEN -> EndOutcome.COMMITTED;
                 case UNCHANGED -> EndOutcome.UNCHANGED;
@@ -292,19 +309,42 @@ final class InMemorySlotContainer implements SlotContainer {
             result.complete(end);
         });
     }
-    void unload() {
+    void prepareUnload() {
         checkThread();
-        end();
-        if (state == ContainerState.COMMITTING && commitFuture != null && !commitFuture.isDone()) {
-            if (answeredSequence < sequence) {
-                answeredSequence = sequence;
-                state = ContainerState.FAILED;
-                commitFuture.complete(CommitOutcome.UNKNOWN);
-            } else {
-                clearAndEnd();
-            }
+        if (state == ContainerState.COMMITTING) {
+            unloadCommit = inFlight;
         }
     }
+    void startUnloadCommit() {
+        checkThread();
+        if (unloadCommit == null && (state == ContainerState.EDITABLE || state == ContainerState.READ_ONLY)
+                && spec.disposition().orElse(null) == Disposition.COMMIT) {
+            unloadCommit = commit();
+        }
+    }
+    void unload(long unloadDeadline) {
+        checkThread();
+        end();
+        PendingCommit pending = pendingCommit;
+        if (state == ContainerState.COMMITTING && pending != null && !pending.result().isDone()
+                && pending.snapshot().sequence() > answeredSequence) {
+            awaitAnswer(pending, unloadDeadline);
+        }
+    }
+    private void awaitAnswer(PendingCommit pending, long unloadDeadline) {
+        long remaining = Math.max(0, Math.min(pending.deadline(), unloadDeadline) - System.nanoTime());
+        try {
+            StoreAnswer answer = pending.answer().get(remaining, TimeUnit.NANOSECONDS);
+            finishCommit(pending, answer, false);
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            finishCommit(pending, StoreAnswer.unknown(failure), true);
+        } catch (ExecutionException | TimeoutException failure) {
+            finishCommit(pending, StoreAnswer.unknown(failure), true);
+        }
+    }
+    private record PendingCommit(CompletableFuture<CommitOutcome> result, ContainerSnapshot snapshot,
+            ContainerState previous, CompletableFuture<StoreAnswer> answer, long deadline) { }
     private void clearAndEnd() {
         contents = UiTestItems.empty(spec.size());
         ledger.clear();

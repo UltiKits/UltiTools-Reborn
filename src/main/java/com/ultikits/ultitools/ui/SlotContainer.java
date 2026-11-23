@@ -41,6 +41,14 @@ import org.jetbrains.annotations.ApiStatus;
  * In-memory contents are not crash-journalled; modules
  * needing crash safety must persist them.
  *
+ * <p>Owner unload (a module reload or the server stopping) ends every container of the owner before the unload
+ * returns, on the unloading thread. It first runs the owner's pending deliveries, then starts the write of every
+ * COMMIT container whose contents differ from its baseline, and only then waits: each in-flight write is awaited
+ * for at most its commit timeout or 10 seconds after the unload began, whichever comes first, and its real answer
+ * is applied on the unloading thread (Written: committed; Refused: put-ins returned at once; otherwise the items
+ * stay with the store). RETURN_TO_CONTRIBUTORS deliveries made during the unload run at once (see
+ * {@link UiService#deliver}).
+ *
  * <p>Known limitations. A transfer policy that calls this container's mutators is not supported (see
  * {@link TransferPolicy}). Amounts in {@code baseline}, {@code initial}, {@link #load} and a Refused answer's
  * contents are taken as given, even above an item's max stack size; they are the module's data. Under

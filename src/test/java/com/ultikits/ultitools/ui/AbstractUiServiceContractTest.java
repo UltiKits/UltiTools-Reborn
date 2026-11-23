@@ -24,6 +24,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.logging.Level;
 import org.bukkit.entity.Item;
 import org.bukkit.inventory.ItemStack;
 import java.util.concurrent.CompletableFuture;
@@ -843,7 +845,8 @@ public abstract class AbstractUiServiceContractTest {
         SlotContainer unviewed = service.container(editableStorage(1).endWhenUnviewed(false).build());
         SlotContainer other = fixture.service("OtherModule").container(editableStorage(1).build());
         CompletableFuture<StoreAnswer> write = new CompletableFuture<>();
-        SlotContainer committing = service.container(editableStorage(1).disposition(Disposition.COMMIT).store(snapshot -> write)
+        SlotContainer committing = service.container(editableStorage(1).disposition(Disposition.COMMIT)
+                .commitTimeout(Duration.ofMillis(300)).store(snapshot -> write)
                 .initial(viewer.getUniqueId(), List.of(UiTestItems.stone(8))).build());
         CompletionStage<CommitOutcome> pending = committing.commit();
         GridSession session = service.show(viewer, bound(own));
@@ -859,25 +862,95 @@ public abstract class AbstractUiServiceContractTest {
         settle();
         assertThat(committing.state()).isEqualTo(ContainerState.ENDED);
     }
-    @Test
-    void ownerUnload_startingCommitDisposition_keepsUnknownWriteWithStore() {
-        AtomicInteger writes = new AtomicInteger();
-        CompletableFuture<StoreAnswer> answer = new CompletableFuture<>();
+    private SlotContainer unloadCommitContainer(ContainerStore store, Duration timeout) {
         SlotContainer container = service.container(editableStorage(1).disposition(Disposition.COMMIT)
-                .initial(viewer.getUniqueId(), List.of(UiTestItems.stone(8)))
-                .store(snapshot -> { writes.incrementAndGet(); return answer; }).build());
+                .endWhenUnviewed(false).commitTimeout(timeout).store(store).build());
+        InMemoryViewerItems side = new InMemoryViewerItems(36);
+        side.cursor(UiTestItems.stone(8));
+        assertThat(fixture.engine().apply(bound(container), viewer, side, new Gesture.Place(GridSlot.ofIndex(0), false))).isTrue();
+        return container;
+    }
+    private static CompletionStage<StoreAnswer> delayedAnswer(StoreAnswer answer) {
+        return CompletableFuture.supplyAsync(() -> answer, CompletableFuture.delayedExecutor(50, TimeUnit.MILLISECONDS));
+    }
+    @Test
+    void ownerUnload_commitRefusedOnForeignThread_returnsPutInsBeforeUnloadReturns() {
+        SlotContainer container = unloadCommitContainer(snapshot -> delayedAnswer(StoreAnswer.refused(List.of(ItemStack.empty()))),
+                Duration.ofSeconds(5));
         fixture.unload(service.owner());
-        assertThat(container.state()).isEqualTo(ContainerState.ENDED);
-        assertThat(writes).hasValue(1);
+        assertThat(viewer.getInventory().getItem(0)).isEqualTo(UiTestItems.stone(8));
+        assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.REFUSED_RETURNED);
+        assertThat(fixture.warnings()).isEmpty();
+    }
+    @Test
+    void ownerUnload_commitWrittenOnForeignThread_endsCommitted() {
+        backend(Grid.class);
+        SlotContainer container = unloadCommitContainer(snapshot -> delayedAnswer(StoreAnswer.written()), Duration.ofSeconds(5));
+        GridSession session = service.show(viewer, bound(container));
+        settle();
+        AtomicReference<EndOutcome> atCompletion = new AtomicReference<>();
+        session.result().thenAccept(ignored -> atCompletion.set(EditableContractSupport.completed(container.end())));
+        fixture.unload(service.owner());
+        assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.COMMITTED);
+        assertThat(atCompletion).hasValue(EndOutcome.COMMITTED);
+        assertThat(fixture.warnings()).isEmpty();
+        settle();
+        assertThat(fixture.warnings()).isEmpty();
+    }
+    @Test
+    void ownerUnload_inFlightCommitBeforeUnload_waitsForItsAnswer() {
+        SlotContainer container = unloadCommitContainer(snapshot -> delayedAnswer(StoreAnswer.refused(List.of(ItemStack.empty()))),
+                Duration.ofSeconds(5));
+        CompletionStage<CommitOutcome> pending = container.commit();
+        fixture.unload(service.owner());
+        assertThat(viewer.getInventory().getItem(0)).isEqualTo(UiTestItems.stone(8));
+        assertThat(EditableContractSupport.completed(pending)).isEqualTo(CommitOutcome.REFUSED);
+        assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.REFUSED_RETURNED);
+    }
+    @Test
+    void ownerUnload_storeSilentPastWait_keepsItemsWithStoreAndLogs() {
+        CompletableFuture<StoreAnswer> answer = new CompletableFuture<>();
+        SlotContainer container = unloadCommitContainer(snapshot -> answer, Duration.ofMillis(300));
+        AtomicInteger completions = new AtomicInteger();
+        long started = System.nanoTime();
+        fixture.unload(service.owner());
+        long elapsed = System.nanoTime() - started;
+        assertThat(elapsed).isGreaterThanOrEqualTo(TimeUnit.MILLISECONDS.toNanos(250)).isLessThan(TimeUnit.SECONDS.toNanos(5));
+        container.end().thenAccept(ignored -> completions.incrementAndGet());
         assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.UNKNOWN_KEPT_BY_STORE);
-        answer.complete(StoreAnswer.refused(List.of(ItemStack.empty()))); settle();
-        assertThat(container.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(fixture.warnings()).hasSize(1).allSatisfy(record -> {
+            assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(text(record)).contains(service.owner());
+        });
+        answer.complete(StoreAnswer.refused(List.of(ItemStack.empty())));
+        settle();
         assertThat(viewer.getInventory().getStorageContents()).allSatisfy(item -> assertThat(item == null || item.isEmpty()).isTrue());
+        assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.UNKNOWN_KEPT_BY_STORE);
+        assertThat(completions).hasValue(1);
+    }
+    @Test
+    void ownerUnload_startsEveryWriteBeforeWaiting() {
+        CountDownLatch secondStarted = new CountDownLatch(1);
+        SlotContainer first = unloadCommitContainer(snapshot -> CompletableFuture.supplyAsync(() -> {
+            try {
+                return secondStarted.await(2, TimeUnit.SECONDS) ? StoreAnswer.written() : StoreAnswer.unknown(null);
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                return StoreAnswer.unknown(failure);
+            }
+        }, CompletableFuture.delayedExecutor(50, TimeUnit.MILLISECONDS)), Duration.ofSeconds(3));
+        SlotContainer second = unloadCommitContainer(snapshot -> {
+            secondStarted.countDown();
+            return CompletableFuture.completedFuture(StoreAnswer.written());
+        }, Duration.ofSeconds(3));
+        fixture.unload(service.owner());
+        assertThat(EditableContractSupport.completed(first.end())).isEqualTo(EndOutcome.COMMITTED);
+        assertThat(EditableContractSupport.completed(second.end())).isEqualTo(EndOutcome.COMMITTED);
     }
     @Test
     void ownerUnload_afterRefusalBeforeRefundDelivery_endsSynchronously() {
         backend(Grid.class);
-        SlotContainer container = service.container(editableStorage(1).endWhenUnviewed(false)
+        SlotContainer container = service.container(editableStorage(1).disposition(Disposition.COMMIT).endWhenUnviewed(false)
                 .initial(viewer.getUniqueId(), List.of(UiTestItems.stone(8)))
                 .store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.refused(List.of(ItemStack.empty())))).build());
         GridSession session = service.show(viewer, bound(container)); settle();
