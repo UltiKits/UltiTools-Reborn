@@ -364,7 +364,10 @@ def check_lifecycle(log, mode, root, started=None, observation=None):
             'Wrong dedicated compiler output')
     require(generator[0].get('config.mainClass') ==
             'com.ultikits.ultitools.buildtools.deprecation.DeprecationRegistryGenerator', 'Wrong generator main class')
-    require(generator[0].get('arguments') in (str(root), '${project.basedir}'), 'Wrong generator basedir argument')
+    arguments = generator[0].get('arguments', '').split('\n')
+    require(len(arguments) == 2, 'Wrong generator argument count')
+    require(arguments[0] in (str(root), '${project.basedir}'), 'Wrong generator basedir argument')
+    require(arguments[1] in ('${japicmp.skip}', 'true', 'false'), 'Wrong generator japicmp.skip argument')
     require((root / 'target/buildtools-classes' / HELPER).is_file(), 'Missing dedicated helper output')
     for package in (HELPER_PACKAGE, OBSERVER_PACKAGE):
         require(not (root / 'target/classes' / package).exists(), 'Build helper leaked into product classes')
@@ -620,7 +623,7 @@ def self_test():
         for group, artifact, version, goal, execution in (
                 mojos['compiler'], mojos['surefire'], mojos['japicmp'], mojos['generator']):
             mojo = dict(common, groupId=group, artifactId=artifact, version=version, goal=goal, executionId=execution,
-                        arguments=str(product), **{'config.outputDirectory': str(product / 'target/buildtools-classes'),
+                        arguments=str(product) + '\n${japicmp.skip}', **{'config.outputDirectory': str(product / 'target/buildtools-classes'),
                         'config.mainClass': 'com.ultikits.ultitools.buildtools.deprecation.DeprecationRegistryGenerator'})
             events.extend([dict(mojo, type='MojoStarted'), dict(mojo, type='MojoSucceeded')])
         for name in ('deprecations.json', 'DEPRECATIONS.md'):
@@ -681,7 +684,17 @@ def self_test():
         mutation('japicmp version differs from POM', lambda rows: [row.update(version='0.0.0') for row in rows[7:9]],
                  'japicmp-maven-plugin')
         mutation('wrong compiler output', lambda rows: rows[3].update(**{'config.outputDirectory': str(fixture)}), 'compiler output')
-        mutation('wrong generator argument', lambda rows: rows[9].update(arguments=str(fixture)), 'basedir argument')
+        for arguments in ('${project.basedir}\ntrue', str(product) + '\nfalse'):
+            rows = copy.deepcopy(events)
+            rows[9].update(arguments=arguments)
+            save(rows)
+            check_lifecycle(noise, 'skip-compilation', product, observation=observation)
+            positives += 1
+        save(events)
+        mutation('wrong generator argument', lambda rows: rows[9].update(arguments=str(fixture) + '\ntrue'), 'basedir argument')
+        mutation('missing generator skip argument', lambda rows: rows[9].update(arguments=str(product)), 'argument count')
+        mutation('extra generator argument', lambda rows: rows[9].update(arguments=str(product) + '\ntrue\nextra'), 'argument count')
+        mutation('wrong generator skip argument', lambda rows: rows[9].update(arguments=str(product) + '\nTRUE'), 'japicmp.skip argument')
         mutation('wrong output attribution', lambda rows: rows[10].update(**{'deprecations.json.path': str(fixture)}), 'registry path')
         mutation('stale native output', lambda rows: rows[10].update(**{'deprecations.json.mtime': '1'}), 'Stale native')
         mutation('wrong output bytes', lambda rows: rows[10].update(**{'deprecations.json.sha256': 'old'}), 'Registry differs')
