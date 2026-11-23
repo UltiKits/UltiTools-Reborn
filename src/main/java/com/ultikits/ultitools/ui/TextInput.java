@@ -76,7 +76,16 @@ public final class TextInput implements FormInput<String> {
             return this;
         }
 
-        /** Builds an immutable input. */
-        public TextInput build() { return new TextInput(this); }
+        /**
+         * Builds an immutable input.
+         * @throws IllegalArgumentException if initial is longer than maxLength (String#length) or has more
+         * than maxLines - 1 line feeds
+         */
+        public TextInput build() {
+            if (initial.length() > maxLength || initial.chars().filter(c -> c == '\n').count() > maxLines - 1) {
+                throw new IllegalArgumentException("initial exceeds the text length or line limit");
+            }
+            return new TextInput(this);
+        }
     }
 }

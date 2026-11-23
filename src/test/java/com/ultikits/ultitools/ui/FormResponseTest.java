@@ -65,6 +65,45 @@ class FormResponseTest {
     }
 
     @Test
+    void of_sliderBeyondHalfStepOutsideRange_isRejected() {
+        SliderInput slider = SliderInput.builder("count", LABEL, 1, 64).build();
+        Form form = Form.builder(LABEL).input(slider).build();
+        for (double value : new double[] {-1000.0, 0.4, 64.6, Double.NaN, Double.POSITIVE_INFINITY}) {
+            assertThatThrownBy(() -> FormResponse.of(form, Map.of(slider, value)))
+                    .as("reject slider answer %s", value).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    void of_sliderValue_isSnappedToStepGrid() {
+        SliderInput slider = SliderInput.builder("count", LABEL, 0, 10).step(0.5).build();
+        Form form = Form.builder(LABEL).input(slider).build();
+        assertThat(FormResponse.of(form, Map.of(slider, 3.26)).get(slider)).isEqualTo(3.5);
+        assertThat(FormResponse.of(form, Map.of(slider, 0.6)).get(slider)).isEqualTo(0.5);
+        assertThat(FormResponse.of(form, Map.of(slider, -0.2)).get(slider)).isEqualTo(0.0);
+    }
+
+    @Test
+    void of_sliderNearMax_returnsMaxExactly() {
+        SliderInput slider = SliderInput.builder("count", LABEL, 0, 0.3).step(0.1).build();
+        Form form = Form.builder(LABEL).input(slider).build();
+        assertThat(FormResponse.of(form, Map.of(slider, 0.30000001192092896)).get(slider)).isEqualTo(0.3);
+    }
+
+    @Test
+    void of_textTooLongOrTooManyLines_isRejected() {
+        TextInput shortText = TextInput.builder("short", LABEL).maxLength(4).build();
+        Form shortForm = Form.builder(LABEL).input(shortText).build();
+        assertThatThrownBy(() -> FormResponse.of(shortForm, Map.of(shortText, "12345")))
+                .isInstanceOf(IllegalArgumentException.class);
+        TextInput lines = TextInput.builder("lines", LABEL).maxLines(2).build();
+        Form linesForm = Form.builder(LABEL).input(lines).build();
+        assertThatThrownBy(() -> FormResponse.of(linesForm, Map.of(lines, "a\nb\nc")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(FormResponse.of(linesForm, Map.of(lines, "a\nb")).get(lines)).isEqualTo("a\nb");
+    }
+
+    @Test
     void of_requiresExactlyAllHandlesAndNonNullValues() {
         TextInput input = TextInput.builder("name", LABEL).build();
         Form form = Form.builder(LABEL).input(input).build();

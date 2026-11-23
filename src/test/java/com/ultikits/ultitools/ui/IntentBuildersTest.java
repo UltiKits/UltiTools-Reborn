@@ -177,6 +177,23 @@ class IntentBuildersTest {
     }
 
     @Test
+    void textInput_initialBeyondLimits_isRejected() {
+        assertThatThrownBy(() -> TextInput.builder("name", LABEL).initial("x".repeat(40)).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TextInput.builder("name", LABEL).initial("a\nb").maxLines(1).build())
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void slider_unalignedRangeOrInitial_isRejected() {
+        assertThatThrownBy(() -> SliderInput.builder("count", LABEL, 0, 10).step(3).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SliderInput.builder("count", LABEL, 0, 10).step(0.5).initial(0.7).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(SliderInput.builder("count", LABEL, 0, 0.3).step(0.1).build().max()).isEqualTo(0.3);
+    }
+
+    @Test
     void options_validateTimeoutAndCopyBuilderState() {
         ShowOptions defaults = ShowOptions.defaults();
         assertThat(defaults.timeout()).isEmpty();

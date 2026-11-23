@@ -4,7 +4,11 @@ import com.ultikits.ultitools.text.Text;
 import java.util.Objects;
 import org.jetbrains.annotations.Nullable;
 
-/** A number from a range. Value: the chosen number, a multiple of {@code step} from {@code min}. */
+/**
+ * A number from a range. Value: min + k * step for an integer k >= 0, at most max; max - min must be a whole
+ * number of steps. A value read through FormResponse#get is exactly min + k * step as computed in double
+ * arithmetic, or exactly max for the largest k.
+ */
 public final class SliderInput implements FormInput<Double> {
     private final String key;
     private final Text label;
@@ -49,6 +53,12 @@ public final class SliderInput implements FormInput<Double> {
     @Override public String toString() { return "SliderInput[key=" + key + ", label=" + label + ", min=" + min
             + ", max=" + max + ", step=" + step + ", initial=" + initial + ']'; }
 
+    static long steps(double from, double to, double step) {
+        double q = (to - from) / step;
+        double n = Math.rint(q);
+        return Math.abs(q - n) > 1e-9 * Math.max(1, Math.abs(n)) ? -1 : (long) n;
+    }
+
     /** A reusable, non-thread-safe builder. */
     public static final class Builder {
         private final String key;
@@ -68,7 +78,7 @@ public final class SliderInput implements FormInput<Double> {
 
         /** @throws IllegalArgumentException if not positive and finite */
         public Builder step(double step) {
-            if (!Double.isFinite(step) || !(step > 0)) {
+            if (!Double.isFinite(step) || step <= 0) {
                 throw new IllegalArgumentException("step must be positive and finite");
             }
             this.step = step;
@@ -77,17 +87,23 @@ public final class SliderInput implements FormInput<Double> {
 
         /** @throws IllegalArgumentException if outside [min, max] or not finite */
         public Builder initial(double initial) {
-            if (!Double.isFinite(initial) || !(initial >= min && initial <= max)) {
+            if (!Double.isFinite(initial) || initial < min || initial > max) {
                 throw new IllegalArgumentException("initial must be within [min, max]");
             }
             this.initial = initial;
             return this;
         }
 
-        /** @throws IllegalArgumentException if {@code min >= max} or a bound is not finite */
+        /**
+         * @throws IllegalArgumentException if a bound is not finite, min >= max, (max - min) is not a whole
+         * number of steps, or initial is not min plus a whole number of steps
+         */
         public SliderInput build() {
-            if (!Double.isFinite(min) || !Double.isFinite(max) || !(min < max)) {
+            if (!Double.isFinite(min) || !Double.isFinite(max) || min >= max) {
                 throw new IllegalArgumentException("min and max must be finite with min < max");
+            }
+            if (steps(min, max, step) < 1 || steps(min, initial, step) < 0) {
+                throw new IllegalArgumentException("The range and initial value must align with the step");
             }
             return new SliderInput(this);
         }
