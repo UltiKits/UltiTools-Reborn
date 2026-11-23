@@ -167,12 +167,28 @@ are refused. Previously the cache entry was silently removed without saving. Imp
 bean is not added to cache tracking. Save failures still log a warning and remove the entry;
 this change adds no persistence or retry guarantee.
 
-## Offline runtime API floor checks (as of 6.5.0)
+## Paper and Java baseline (as of 7.0.0-SNAPSHOT)
 
-The build verifies the pinned Paper API 1.19.2 fixture against its SHA-256. For offline builds
-without that fixture, `-Druntime.api.floor.skip=true` skips its retrieval and the three fixture-dependent
-unit tests; it does not certify API-floor compatibility. CI keeps the check enabled by default.
-The fixture is test-only and is never bundled in the published JAR.
+The baseline is **Paper 26.3 build 258 with Java 25**. The build pins
+`paper-api:26.3.build.258-stable`, compiles with `--release 25` (class major 69), and the
+framework's `plugin.yml` declares `api-version: '26.3'`. Each framework version targets
+one latest Paper version; compatibility with older servers is not promised.
+
+The former older-Paper API fixture, its retrieval/skip settings and the Java 8 API-signature
+check have been removed from the build. Packaged-runtime checks remain; they do not certify
+compatibility with an older Paper release. The historical 6.x notes below are not a 7.0 support promise.
+
+**Editing saved locations.** Paper 26.3 serializes a location's world as `world_key`
+(its namespaced key); reading still accepts the legacy `world` name. If a saved location
+contains both fields, `world_key` takes precedence. When editing its world by hand, update
+`world_key` and any existing `world` together to identify the same world; changing only
+`world` is ignored if `world_key` remains. A newly serialized location need not contain `world`.
+
+中文补充：7.0.0-SNAPSHOT 的基准是 **Paper 26.3 build 258 + Java 25**，只对准最新的一个
+Paper 版本，不承诺兼容旧服务器；下文 6.x 的旧服务器说明不适用于 7.0。Paper 26.3 把位置的世界
+保存为 `world_key`（带命名空间的世界键），读取仍兼容旧 `world`（世界名）。两者共存时
+`world_key` 优先。手工修改世界时，`world_key` 与已有的 `world` 必须一起改为同一个世界；
+只改 `world` 会被忽略。新序列化的位置不一定含有 `world`。
 
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
@@ -230,7 +246,7 @@ explains it; the sections below are the reference and stay authoritative where t
 10. Check command bodies for the one-tick delay they no longer get: a synchronous body now runs at dispatch, so code inside an `InventoryClickEvent` that opens or closes an inventory or dispatches a command must defer it with `runTask`, and a body that dispatches its own command meets `@UsageLimit` and `@CmdCD` on the same tick (see [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)).
 11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file if its `(String)` default instance could be constructed (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
 12. Keep the framework out of your JAR, and if your module uses XSeries declare it yourself as `provided`/`compileOnly` (`com.github.cryptomorin:XSeries:13.7.1` or your own pin): the framework no longer shades it but still delivers it at runtime through its `libraries:` block, and Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
-13. Know the framework's own server requirements: Paper 1.19.2 build 163 or newer, Java 17 below Paper 1.20.5 and Java 21 from it; the UltiKits modules state only the UltiTools-API version they support (6.3.0 or later for `api-version: 630`) (see [Support matrix](#support-matrix)).
+13. Check the requirements of the framework version you install: the current 7.0 baseline is Paper 26.3 build 258 with Java 25, with no older-server compatibility promise. The UltiKits modules state only the UltiTools-API version they support; a historical module declaration does not establish 7.0 compatibility (see [Support matrix](#support-matrix)).
 14. If your module uses `DataOperator#transaction(...)` or `@Transactional` on JSON storage, or relies on a failing joined `@Transactional` method or a failing nested `DataOperator#transaction(...)` scope being survivable, review the transaction changes: on `datasource.type: json` transactions are now staged, atomic across a plugin's tables and durable once `commit` returns; a plain JSON write can wait up to 5 seconds for a transaction's table lock; a transaction begun by `DataOperator#transaction(...)` locks each table at its first read, as 6.2.5 ran each callback alone per operator, so a read inside it can wait up to 5 seconds too; a `@Transactional` method that computes a write from a value it read uses `updateIf` or `@Transactional(isolation = Isolation.REPEATABLE_READ)`; and on every backend a failing joined method or nested scope marks the whole transaction rollback-only, so the outermost commit throws `UnexpectedRollbackException` (see [JSON transactions](#json-transactions-630--staged-atomic-and-durable), [A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) and [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)). If you also run the server, read the operator guidance in the JSON transactions section: back up `.ultitools-journal` with the tables, never delete it, and run one server per data folder.
 
 ### 中文补充：模块从 6.2.5 升级到 6.3.0 的检查清单
@@ -249,7 +265,7 @@ explains it; the sections below are the reference and stay authoritative where t
 10. 检查依赖“延后一刻执行”的命令代码：同步命令体现在于分发时立即执行，因此在 `InventoryClickEvent` 中打开或关闭物品栏、或分发命令的代码要用 `runTask` 推迟，分发自身命令的命令体会在同一刻遇到 `@UsageLimit` 和 `@CmdCD`（见 [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)）。
 11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 在能通过 `(String)` 构造器创建默认实例时，会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
 12. 不要把框架打进自己的 JAR；模块用到 XSeries 时请自行以 `provided`/`compileOnly` 声明（`com.github.cryptomorin:XSeries:13.7.1` 或你自己固定的版本）：框架不再内嵌它，但仍通过自己的 `libraries:` 在运行时提供，Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
-13. 了解框架本身的服务器要求：Paper 1.19.2 build 163 或更新，Paper 1.20.5 以下用 Java 17，1.20.5 起用 Java 21；UltiKits 官方模块只写明它们支持的 UltiTools-API 版本（`api-version: 630` 即 6.3.0 或更高）（见 [Support matrix](#support-matrix)）。
+13. 核对所安装框架版本的要求：当前 7.0 基准是 Paper 26.3 build 258 + Java 25，不承诺兼容旧服务器。UltiKits 官方模块只写明它们支持的 UltiTools-API 版本；历史模块声明不证明兼容 7.0（见 [Support matrix](#support-matrix)）。
 14. 如果模块在 JSON 存储上使用 `DataOperator#transaction(...)` 或 `@Transactional`，或者依赖“失败的加入方 `@Transactional` 方法 / 失败的嵌套 `DataOperator#transaction(...)` 作用域可以被调用方承受”，请检查事务相关的变化：`datasource.type: json` 下的事务现在是暂存的、跨同一插件各表原子的，并且在 `commit` 返回后即持久；普通 JSON 写入可能为等待事务的表锁而停顿最多 5 秒；由 `DataOperator#transaction(...)` 开启的事务在第一次读取某张表时就锁住它（与 6.2.5 中每个回调按操作器逐个运行一致），所以其中的读取也可能停顿最多 5 秒；凭读到的值计算写入的 `@Transactional` 方法应使用 `updateIf` 或 `@Transactional(isolation = Isolation.REPEATABLE_READ)`；在所有后端上，失败的加入方方法或嵌套作用域都会把整个事务标记为仅回滚，最外层提交会抛出 `UnexpectedRollbackException`（见 [JSON transactions](#json-transactions-630--staged-atomic-and-durable)、[A failing joined `@Transactional` method](#a-failing-joined-transactional-method-rolls-back-the-whole-transaction-630--changed-without-a-migration-period) 和 [A failed nested `DataOperator#transaction(...)`](#a-failed-nested-dataoperatortransaction-marks-the-whole-transaction-rollback-only-630)）。如果你同时运营服务器，请阅读 JSON 事务一节中的服主须知：把 `.ultitools-journal` 与各表一起备份、永远不要删除它，并且一个数据文件夹只运行一个服务器。
 
 ## XSeries 14 (as of 6.3.1)
@@ -4720,23 +4736,28 @@ descriptor change can no longer pass CI unnoticed.
 
 ## Support matrix
 
+Current baseline: **7.0.0-SNAPSHOT**. Each framework version targets one latest Paper version;
+older servers are not promised compatibility.
+
 | Item | Value |
 |---|---|
 | Server | Paper (plain Spigot is not supported — the code uses Adventure `Component` throughout) |
 | Build JDK | 25 |
-| Bytecode target | Java 8 (`-source`/`-target`, not `--release`) |
-| `api-version` in `plugin.yml` | `1.19` (Bukkit API level, unrelated to the two rows above) |
-| `api-version` in a module's `plugin.yml` | `630` for a module built for 6.3.0 (UltiTools API level, unrelated to Bukkit's field of the same name); all fifteen UltiKits modules declare `630` |
-| Minimum server | Paper 1.19.2 build 163, the first build bundling SnakeYAML 1.32 (as of 6.3.0). On Paper 1.19.0, 1.19.1 and 1.19.2 builds before 163 the framework fails to enable with a `NoSuchMethodError` on `LoaderOptions.setProcessComments`; Paper 1.18.2 and older refuse `api-version: '1.19'` ("Unsupported API version") and do not load it |
-| Server Java | The version the chosen Paper line requires: Java 17 for Paper 1.19.2 to 1.20.4, Java 21 from Paper 1.20.5. This is independent of the build JDK and the bytecode target above |
+| Bytecode target | Java 25 (`--release 25`, class major 69) |
+| `api-version` in `plugin.yml` | `26.3` (Bukkit API level, not a module's integer UltiTools API level) |
+| `api-version` in a module's `plugin.yml` | An integer UltiTools API level, not the Paper version; `630` is the historical declaration for a module built for 6.3.0 and does not certify 7.0 compatibility |
+| Target server | Paper 26.3 build 258 (`paper-api:26.3.build.258-stable`); not a minimum-version range |
+| Server Java | Java 25, matching the framework bytecode target |
 | Modules | Each of the fifteen UltiKits modules built for 6.3.0 states only the UltiTools-API version it supports: 6.3.0 or later (`api-version: 630`). The server rows of this table are the framework's own requirements |
-| Known gap on Paper 1.19.2 to 1.20.4 | The panel's console mirror is not installed, and one WARNING at start-up says the panel will not mirror the server console; the log stream carries plugin lines only. Those builds relocate CraftBukkit's log forwarder (`ForwardLogHandler`), so the mirror cannot find it. This is measured, existing behaviour, documented here and not changed |
 
-**Evidence scope (optional note):** the original minimum-build record is backed by the
-SnakeYAML 1.32 compatibility harness; the cited Paper 1.19.2 boot comparison used build 307,
-not build 163. This distinguishes those measurements without changing the supported floor.
+**Evidence scope:** the former 6.x minimum-build record used the SnakeYAML 1.32 compatibility
+harness, and its Paper 1.19.2 boot comparison used build 307 rather than build 163. Those are
+historical measurements, not verification or a support promise for 7.0 on older servers.
 
 ### Supporting servers below 1.21 (as of v6.4.0)
+
+**Historical 6.x guidance only.** This section records the older-server work in the 6.4.0 line;
+it does not extend the Paper 26.3 / Java 25 baseline of 7.0.
 
 The 6.4.0-line UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade target the same
 **Paper 1.19.2 build 163+** floor as the framework. Below Minecraft 1.21 these modules require
@@ -4816,7 +4837,7 @@ The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and Univer
 | Shipped by the Paper server itself | **The Paper build the server owner installed** | Gson, MySQL Connector/J, protobuf, slf4j, the SQLite driver, native Adventure, log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
 
 As of 6.3.0, Gson, MySQL Connector/J, protobuf and slf4j are no longer listed under `libraries:`. Paper
-bundles all four on every build measured across the supported range (Paper 1.19.2 builds 163 and 307,
+bundled all four on every build measured across the then-supported 6.x range (Paper 1.19.2 builds 163 and 307,
 and the latest build of thirteen Paper versions from 1.19.4 to 1.21.11), and Paper's own copy always
 loaded first, so those entries never took effect. The MySQL driver a server uses is therefore the one its Paper build ships,
 and the protobuf version pin from issue #220 never took effect. `adventure-platform-bukkit` is no longer
