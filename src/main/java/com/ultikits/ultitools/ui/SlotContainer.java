@@ -70,6 +70,7 @@ public interface SlotContainer {
     /**
      * Writes the contents through the spec's {@link ContainerStore}: see the commit rules above.
      * Returns the in-flight stage if a commit is already running. Completes on this container's thread.
+     * Moving an item from one index of the container to another counts as a take-out and a put-in, so it is written.
      * @throws IllegalStateException if the spec has no store, or the container is {@code FAILED} or {@code ENDED}
      */
     CompletionStage<CommitOutcome> commit();

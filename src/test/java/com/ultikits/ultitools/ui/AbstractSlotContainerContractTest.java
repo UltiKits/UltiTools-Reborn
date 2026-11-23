@@ -11,7 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.logging.SimpleFormatter;
+import java.util.logging.Level;
 import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -136,7 +136,41 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
         assertThat(container.get(0)).isEqualTo(stone(8));
         assertThat(container.state()).isEqualTo(ContainerState.FAILED);
         assertThat(undelivered).isEmpty();
-        assertThat(fixture.warnings()).anySatisfy(record -> assertThat(new SimpleFormatter().formatMessage(record)).contains(service.owner(), "Late"));
+        assertThat(fixture.warnings()).anySatisfy(record -> {
+            assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(text(record)).contains(service.owner());
+        });
+    }
+    @Test void commit_refusedWithWrongSize_countsAsUnknown() {
+        SlotContainer container = service.container(committed(2)
+                .store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.refused(List.of(stone(1))))).build());
+        InMemoryViewerItems side = side(); side.cursor(stone(8));
+        assertThat(apply(container, side, new Gesture.Place(SLOT, false))).isTrue();
+        CompletionStage<CommitOutcome> result = container.commit();
+        settle();
+        assertThat(completed(result)).isEqualTo(CommitOutcome.UNKNOWN);
+        assertThat(container.state()).isEqualTo(ContainerState.FAILED);
+        assertThat(viewer.getInventory().getStorageContents()).allSatisfy(item -> assertThat(item == null || item.isEmpty()).isTrue());
+        assertThat(fixture.warnings()).hasSize(1).allSatisfy(record -> {
+            assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(text(record)).contains(service.owner());
+        });
+    }
+    @Test void commit_layoutOnlyChange_writes() {
+        List<ContainerSnapshot> snapshots = new ArrayList<>();
+        SlotContainer container = service.container(committed(2).baseline(List.of(stone(5), ItemStack.empty())).store(snapshot -> {
+            snapshots.add(snapshot);
+            return CompletableFuture.completedFuture(StoreAnswer.written());
+        }).build());
+        InMemoryViewerItems side = side();
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 2, container, 0, BindingMode.EDITABLE).build();
+        assertThat(engine.apply(grid, viewer, side, new Gesture.Pickup(SLOT, false))).isTrue();
+        assertThat(engine.apply(grid, viewer, side, new Gesture.Place(GridSlot.ofIndex(1), false))).isTrue();
+        assertThat(container.changes().putIn()).containsExactly(stone(5));
+        assertThat(container.changes().takenOut()).containsExactly(stone(5));
+        assertThat(completed(container.commit())).isEqualTo(CommitOutcome.WRITTEN);
+        assertThat(snapshots).singleElement().satisfies(snapshot ->
+                assertThat(snapshot.contents()).containsExactly(ItemStack.empty(), stone(5)));
     }
     @Test void commit_noChanges_unchangedWithoutStoreCall() {
         AtomicInteger calls = new AtomicInteger();

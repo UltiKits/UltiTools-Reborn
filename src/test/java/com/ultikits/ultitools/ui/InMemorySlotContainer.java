@@ -161,14 +161,15 @@ final class InMemorySlotContainer implements SlotContainer {
         }
     }
     private int withdrawPass(UUID player, ItemStack item, int remaining, boolean own) {
+        int left = remaining;
         for (Contribution entry : ledger) {
             if (entry.player.equals(player) == own && entry.item.isSimilar(item)) {
-                int removed = Math.min(remaining, count(entry.item));
+                int removed = Math.min(left, count(entry.item));
                 entry.item = amount(entry.item, count(entry.item) - removed);
-                remaining -= removed;
+                left -= removed;
             }
         }
-        return remaining;
+        return left;
     }
 
     @Override public CompletionStage<CommitOutcome> commit() {
@@ -213,19 +214,27 @@ final class InMemorySlotContainer implements SlotContainer {
             }
             return;
         }
+        StoreAnswer normalized = normalizeAnswer(answer);
         answeredSequence = snapshot.sequence();
-        if (answer instanceof StoreAnswer.Written) {
+        if (normalized instanceof StoreAnswer.Written) {
             baseline = new ArrayList<>(snapshot.contents());
             ledger.clear();
             taken.clear();
             state = previous;
             expected.complete(CommitOutcome.WRITTEN);
-        } else if (answer instanceof StoreAnswer.Refused refused) {
+        } else if (normalized instanceof StoreAnswer.Refused refused) {
             finishRefused(expected, refused, previous);
         } else {
             state = ContainerState.FAILED;
             expected.complete(CommitOutcome.UNKNOWN);
         }
+    }
+    private StoreAnswer normalizeAnswer(StoreAnswer answer) {
+        if (answer instanceof StoreAnswer.Refused refused && refused.current().size() != size()) {
+            warn("Refused answer of wrong size counted as Unknown for owner {0}", null);
+            return StoreAnswer.unknown(null);
+        }
+        return answer;
     }
     private void finishRefused(CompletableFuture<CommitOutcome> expected, StoreAnswer.Refused answer, ContainerState previous) {
         List<ItemStack> current = checkedContents(answer.current());

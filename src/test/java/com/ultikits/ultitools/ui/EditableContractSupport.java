@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
+import java.util.logging.LogRecord;
+import java.util.logging.SimpleFormatter;
 import org.bukkit.Material;
 import net.kyori.adventure.text.Component;
 import org.bukkit.inventory.ItemStack;
@@ -54,6 +56,9 @@ abstract class EditableContractSupport {
                     undeliveredBatches.add(player);
                     undelivered.computeIfAbsent(player, ignored -> new ArrayList<>()).addAll(items);
                 });
+    }
+    protected ContainerSpec.Builder committed(int size) {
+        return storage(size).disposition(Disposition.COMMIT);
     }
     protected Grid grid(SlotContainer container) { return grid(container, BindingMode.EDITABLE); }
     protected Grid grid(SlotContainer container, BindingMode mode) {
@@ -100,6 +105,7 @@ abstract class EditableContractSupport {
         }
         return counts;
     }
+    protected static String text(LogRecord record) { return new SimpleFormatter().formatMessage(record); }
     protected static <T> T completed(CompletionStage<T> stage) {
         assertThat(stage.toCompletableFuture()).as("contract operation must settle").isDone();
         return stage.toCompletableFuture().getNow(null);

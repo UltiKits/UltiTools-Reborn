@@ -8,7 +8,7 @@ import org.jetbrains.annotations.Nullable;
 public sealed interface StoreAnswer permits StoreAnswer.Written, StoreAnswer.Refused, StoreAnswer.Unknown {
     /** Stored. */
     record Written() implements StoreAnswer { }
-    /** Not stored, and nothing of it will be; {@code current} is what the store holds now (container size). */
+    /** Not stored, and nothing of it will be; {@code current} is what the store holds now. A {@code current} whose length is not the container's size counts as {@link Unknown}: nothing is refunded and the store stays responsible. */
     record Refused(List<ItemStack> current) implements StoreAnswer {
         /** Copies the current contents. */
         public Refused { current = ContainerSpec.copyItems(current, "current"); }
