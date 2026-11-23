@@ -10,7 +10,10 @@ import java.util.logging.LogRecord;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.ApiStatus;
 
-/** What the service gives a container runtime. Internal. */
+/**
+ * Host for exactly one module copy, paired with the UiOwner passed to ContainerRuntime#create.
+ * Never look up another host by module name: same-name module copies may coexist. Internal.
+ */
 @ApiStatus.Internal
 public interface ContainerHost {
     /** Returns items to a contributor through UiService#deliver semantics (offline: all undelivered). */

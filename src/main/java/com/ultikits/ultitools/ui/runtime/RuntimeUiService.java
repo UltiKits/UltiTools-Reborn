@@ -31,18 +31,18 @@ import org.jetbrains.annotations.Nullable;
 @ApiStatus.Internal
 final class RuntimeUiService implements UiService, ContainerHost {
     final UiRuntime runtime;
-    private final String owner;
+    final UiOwner ownerIdentity;
     boolean unloaded;
     boolean unloading;
     @Nullable Thread unloadingThread;
     private final List<PendingDelivery> pendingDeliveries = new ArrayList<>();
 
-    RuntimeUiService(UiRuntime runtime, String owner, boolean unloaded) {
+    RuntimeUiService(UiRuntime runtime, UiOwner owner, boolean unloaded) {
         this.runtime = runtime;
-        this.owner = owner;
+        ownerIdentity = owner;
         this.unloaded = unloaded;
     }
-    @Override public String owner() { return owner; }
+    @Override public String owner() { return ownerIdentity.name(); }
     @Override public <R> UiSession<R> show(Player viewer, UiIntent<R> intent) {
         return show(viewer, intent, ShowOptions.defaults());
     }
@@ -75,9 +75,9 @@ final class RuntimeUiService implements UiService, ContainerHost {
         Objects.requireNonNull(spec, "spec");
         runtime.checkThread();
         synchronized (runtime.lock) {
-            if (unloaded || unloading) { throw new IllegalStateException("Owner unloaded: " + owner); }
+            if (unloaded || unloading) { throw new IllegalStateException("Owner unloaded: " + owner()); }
         }
-        return runtime.containers.create(owner, spec, this);
+        return runtime.containers.create(ownerIdentity, spec, this);
     }
 
     @Override public CompletionStage<Delivery> deliver(Player player, List<ItemStack> items) {
@@ -153,7 +153,7 @@ final class RuntimeUiService implements UiService, ContainerHost {
             try {
                 if (player.isOnline() && !lane.isRetired()) { work.give(); }
             } catch (RuntimeException failure) {
-                runtime.warn(owner, "Item delivery failed", failure);
+                runtime.warn(owner(), "Item delivery failed", failure);
             }
             result.complete(work.answer());
         }

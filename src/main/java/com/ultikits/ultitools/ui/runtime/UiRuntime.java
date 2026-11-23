@@ -15,7 +15,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +38,7 @@ public final class UiRuntime implements AutoCloseable {
     private final Logger logger;
     private final Thread serverThread;
     private final GlobalPump pump;
-    private final Map<String, RuntimeUiService> owners = new LinkedHashMap<>();
+    private final Set<RuntimeUiService> owners = new LinkedHashSet<>();
     private final List<BackendEntry> backends = new ArrayList<>();
     private final Set<RuntimeSession<?>> sessions = new LinkedHashSet<>();
     private final Map<UUID, RuntimeSession<?>> active = new HashMap<>();
@@ -55,11 +54,16 @@ public final class UiRuntime implements AutoCloseable {
         pump = new GlobalPump(scheduler, logger);
     }
 
-    /** Gets the shared owner-scoped service, including its unloaded state. */
+    /**
+     * Issues a fresh service for one module copy. Call once per copy and retain it for injection and unloading;
+     * names are diagnostic only. A closed runtime issues an already-unloaded service.
+     */
     public UiService service(String owner) {
         Objects.requireNonNull(owner, "owner");
         synchronized (lock) {
-            return owners.computeIfAbsent(owner, name -> new RuntimeUiService(this, name, closed));
+            RuntimeUiService service = new RuntimeUiService(this, new UiOwner(owner), closed);
+            if (!closed) { owners.add(service); }
+            return service;
         }
     }
 
@@ -155,11 +159,17 @@ public final class UiRuntime implements AutoCloseable {
         });
     }
 
-    /** Synchronously closes this owner's sessions before its services are torn down. */
-    public void unload(String owner) {
+    /** Synchronously unloads exactly the module copy that received this service, never a same-name replacement. */
+    public void unload(UiService owner) {
         Objects.requireNonNull(owner, "owner");
         checkThread();
-        RuntimeUiService service = (RuntimeUiService) service(owner);
+        if (!(owner instanceof RuntimeUiService service) || !service.runtime.equals(this)) {
+            throw new IllegalArgumentException("Service belongs to another UI runtime");
+        }
+        unloadService(service);
+    }
+
+    private void unloadService(RuntimeUiService service) {
         List<RuntimeSession<?>> closing;
         synchronized (lock) {
             if (service.unloaded || service.unloading) { return; }
@@ -169,19 +179,20 @@ public final class UiRuntime implements AutoCloseable {
         }
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         try {
-            containers.prepareUnload(owner);
+            containers.prepareUnload(service.ownerIdentity, deadline);
             service.flushDeliveries();
-            containers.startUnloadCommits(owner);
+            containers.startUnloadCommits(service.ownerIdentity);
             for (RuntimeSession<?> session : closing) {
                 session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
                 session.closeAndComplete();
             }
-            containers.finishUnload(owner, deadline);
+            containers.finishUnload(service.ownerIdentity, deadline);
         } finally {
             synchronized (lock) {
                 service.unloaded = true;
                 service.unloading = false;
                 service.unloadingThread = null;
+                owners.remove(service);
             }
         }
     }
@@ -233,13 +244,13 @@ public final class UiRuntime implements AutoCloseable {
 
     @Override public void close() {
         checkThread();
-        List<String> names;
+        List<RuntimeUiService> services;
         synchronized (lock) {
             if (closed) { return; }
             closed = true;
-            names = List.copyOf(owners.keySet());
+            services = List.copyOf(owners);
         }
-        try { names.forEach(this::unload); } finally {
+        try { services.forEach(this::unloadService); } finally {
             pump.close();
             synchronized (lock) { lanes.clear(); }
         }
