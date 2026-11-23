@@ -1059,7 +1059,7 @@ public abstract class AbstractUiServiceContractTest {
     }
     @Test
     void endWhileViewed_showsEmptyAndRefusesMoreInput() {
-        ProbeBackend backend = backend(Grid.class);
+        backend(Grid.class);
         SlotContainer container = service.container(ContainerSpec.template(1).baseline(List.of(UiTestItems.stone(8))).build());
         GridSession session = service.show(viewer, bound(container)); settle();
         assertThat(fixture.shown(session, GridSlot.ofIndex(0))).isEqualTo(UiTestItems.stone(8));

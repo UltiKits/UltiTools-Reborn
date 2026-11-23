@@ -27,7 +27,7 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>Commit answers: Written moves the baseline and clears the ledger; Refused loads the store's current
  * contents and returns net put-ins; Unknown, an exceptional stage or timeout leaves the container FAILED
  * permanently, refunds nothing and transfers responsibility to the store. A concurrent commit returns the
- * in-flight stage, and unchanged contents do not call the store. Answers after the timeout are ignored and
+ * in-flight stage, and a container with no put-ins or take-outs does not call the store. Answers after the timeout are ignored and
  * logged. The result is completed on the container's thread.
  *
  * <p>End runs once, on explicit end(), the last completed viewer close when endWhenUnviewed is true, or
@@ -43,7 +43,7 @@ import org.jetbrains.annotations.ApiStatus;
  *
  * <p>Owner unload (a module reload or the server stopping) ends every container of the owner before the unload
  * returns, on the unloading thread. It first runs the owner's pending deliveries, then starts the write of every
- * COMMIT container whose contents differ from its baseline, and only then waits: each in-flight write is awaited
+ * COMMIT container that has put-ins or take-outs, and only then waits: each in-flight write is awaited
  * for at most its commit timeout or 10 seconds after the unload began, whichever comes first, and its real answer
  * is applied on the unloading thread (Written: committed; Refused: put-ins returned at once; otherwise the items
  * stay with the store). RETURN_TO_CONTRIBUTORS deliveries made during the unload run at once (see
