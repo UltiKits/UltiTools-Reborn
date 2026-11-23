@@ -71,9 +71,9 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 - Literal `@Scheduled(async = true)` periods use wall-clock time (50 ms per configured tick). A lagging
   server no longer stretches those periods. Config-bound async tasks still use a global tick trigger.
 
-**Known limitation:** do not schedule from bean constructors or `@PostConstruct`. If module loading
-fails before the module enters the loaded-module list, those tasks are not retired. Start tasks from
-a point after the module has enabled successfully instead.
+A failed module load also retires that instance's injected scheduler and cancels pending and repeating
+work submitted during bean construction, `@PostConstruct`, or `registerSelf()`. An already running
+one-shot task may finish. This guarantee applies to the module-owned scheduler, not direct Bukkit tasks.
 
 ## Getting Started
 
