@@ -461,6 +461,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
         List<File[]> restored = OfficialLanguageFiles.syncFrameworkFiles(getDataFolder(), shipped,
                 getClass().getClassLoader(), getLogger());
         String configured = getConfig().getString("language");
+        if (configured != null && "auto".equalsIgnoreCase(configured.trim())) {
+            configured = new com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver(
+                    () -> getConfig().getString("language"),
+                    () -> getConfig().getString("fallback-language"), getLogger()).fallback().getLanguage();
+        }
         String official = Localized.officialLanguageOf(configured, shipped);
         String baseCode = official != null ? official : "en";
         Language bundled = readBundledLanguage(baseCode);
