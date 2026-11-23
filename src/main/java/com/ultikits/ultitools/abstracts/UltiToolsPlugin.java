@@ -18,6 +18,11 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.security.CodeSource;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
+import com.ultikits.ultitools.text.internal.LocaleNames;
+import com.ultikits.ultitools.text.internal.TextEngine;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -222,6 +227,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private static final Type ARITY_MAP_TYPE = new TypeToken<Map<String, String>>() { }.getType();
 
     private Language language;
+    private TextEngine textEngine;
+    private TextEngine.Prepared preparedMessages;
     /** The language catalogues the module's jar ships, read once on first use (see {@link #shippedCatalogueTexts}). */
     private volatile List<Language> shippedCatalogues;
     /**
@@ -299,6 +306,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         identifyString = pluginConfig.getString("identify-string", null);
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
+        if (UltiTools.getInstance().getDependenceManagers() != null) {
+            textEngine = UltiTools.getInstance().getDependenceManagers().getContext().getBean(TextEngine.class);
+            if (textEngine != null) {
+                CodeSource source = getClass().getProtectionDomain().getCodeSource();
+                preparedMessages = textEngine.prepare(MessageKey.namespaceFor(pluginName), pluginName,
+                        source == null ? null : source.getLocation(),
+                        new File(resourceFolderPath, "messages").toPath(), java.util.Locale.ENGLISH);
+            }
+        }
         prepareConfigConverters();
         // #540: extract the bundled resources first, then resolve the language. Resolving first
         // picked whatever catalogue was on disk before extraction -- a stale lang/<code>.yml when
@@ -362,6 +378,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         saveResources(true);
         migrateBundledLanguageFiles();
         language = createLanguageFromPath(resourceFolderPath);
+        if (textEngine != null && preparedMessages != null) {
+            textEngine.publish(preparedMessages, this);
+        }
     }
 
     /**
@@ -1999,6 +2018,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @ApiStatus.Internal
     public void setContext(SimpleContainer context) {
         this.context = context;
+        if (textEngine != null) {
+            context.registerSingleton(Messages.class.getName(),
+                    textEngine.messagesFor(MessageKey.namespaceFor(pluginName)));
+        }
     }
 
     /**
@@ -2398,7 +2421,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @since 6.3.0
      */
     public final String getConfiguredLanguage() {
-        return UltiTools.getInstance().getConfig().getString("language");
+        UltiTools framework = UltiTools.getInstance();
+        String configured = framework.getConfig().getString("language");
+        if (LocaleNames.isAutomatic(configured)) {
+            return new ConfiguredLocaleResolver(() -> framework.getConfig().getString("language"),
+                    () -> framework.getConfig().getString("fallback-language"), framework.getLogger())
+                    .fallback().getLanguage();
+        }
+        return configured;
     }
 
     /**
@@ -2487,6 +2517,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         Throwable failure = runUnregisterStep(null, this::onUnregister);
         failure = runUnregisterStep(failure, () -> getCommandManager().unregisterAll(this));
         failure = runUnregisterStep(failure, () -> getListenerManager().unregisterAll(this));
+        failure = runUnregisterStep(failure, () -> {
+            if (textEngine != null) {
+                textEngine.withdraw(MessageKey.namespaceFor(pluginName), this);
+            }
+        });
         if (failure instanceof RuntimeException) {
             throw (RuntimeException) failure;
         } else if (failure instanceof Error) {
@@ -2696,6 +2731,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // module. It records the change instead, so the operator is told a full /ul reload
         // applies it (#502).
         language = createLanguageFromPath(resourceFolderPath);
+        if (textEngine != null) {
+            textEngine.reloadOverrides(MessageKey.namespaceFor(pluginName));
+        }
         // #594: the configs were read above with the old catalogue; now that the language is rebuilt, the framework's
         // own comment lines follow it - comment lines only, through the config write gate, before the module's hook.
         getConfigManager().refreshFrameworkComments(this);
