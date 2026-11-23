@@ -284,13 +284,17 @@ class DeprecationRegistryGeneratorBaseDirTest {
 
     @Test
     void nonemptyRealLedgerPreservesEveryPriorPropertyAndAddsDeclarations(@TempDir Path project) throws Exception {
-        Path realJson = Paths.get("compatibility/deprecations.json");
-        Path realMarkdown = Paths.get("compatibility/DEPRECATIONS.md");
+        Path realJson = Paths.get("compatibility/archive/6.x/deprecations.json");
+        Path realMarkdown = Paths.get("compatibility/archive/6.x/DEPRECATIONS.md");
         byte[] priorBytes = Files.readAllBytes(realJson);
         byte[] markdownBefore = Files.readAllBytes(realMarkdown);
         com.google.gson.JsonArray prior = com.google.gson.JsonParser.parseString(
                 new String(priorBytes, StandardCharsets.UTF_8)).getAsJsonArray();
         assertThat(prior).as("a nonempty real ledger, not an empty replacement baseline").isNotEmpty();
+        long removedRows = java.util.stream.StreamSupport.stream(prior.spliterator(), false)
+                .filter(row -> "REMOVED".equals(row.getAsJsonObject().get("status").getAsString())).count();
+        assertThat(removedRows).as("the frozen 6.x ledger must exercise all REMOVED history rows")
+                .isEqualTo(124);
         // Pin this cumulative-history fixture below its synthetic @removeIn 7.0.0 deadline and
         // outside the reset. Its semantics must not change with the product's current version.
         String fixturePom = new String(Files.readAllBytes(Paths.get("pom.xml")), StandardCharsets.UTF_8)
