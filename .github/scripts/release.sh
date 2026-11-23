@@ -39,6 +39,12 @@
 #   --dry-run                 Alone: run every check and the build, create nothing. With
 #                             --publish-approved: run every re-check, create nothing.
 #                             Dry-run output is not acceptance evidence.
+#   Compatibility baseline reset: 7.0.0 alone may use japicmp.skip=true and does not compare
+#   against 6.x. Every later candidate must enable japicmp with a released baseline >=7.0.0;
+#   the normal clean verify enforces this through tests and the registry generator.
+#   After 7.0.0 is downloadable from Maven Central, set japicmp.baseline.version=7.0.0 and
+#   japicmp.skip=false in pom.xml before advancing the development version, then clean verify.
+#
 #   --prerelease              Mark the release as a prerelease.
 #   --notes <text>            Release notes.
 #   --notes-file <path>       Read release notes from a file.

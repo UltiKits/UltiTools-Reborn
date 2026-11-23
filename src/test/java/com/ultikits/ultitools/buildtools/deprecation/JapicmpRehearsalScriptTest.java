@@ -37,6 +37,8 @@ class JapicmpRehearsalScriptTest {
                 .isEqualTo(before);
         assertThat(result.output).contains("GREEN leg exit code: 0", "RED leg exit code: 1");
         assertThat(f.read("calls")).contains("install", "verify");
+        assertThat(f.read("calls").split("\\R")).filteredOn(call -> call.contains("verify"))
+                .hasSize(2).allSatisfy(call -> assertThat(call).contains("-Djapicmp.skip=false"));
     }
 
     @Test

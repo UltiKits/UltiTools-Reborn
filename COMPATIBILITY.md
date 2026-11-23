@@ -517,7 +517,7 @@ As of 6.4.0 every entry below is removed; see
 [Removal list for 6.4.0](#removal-list-for-640) for the migration. The table records their 6.3.1 behaviour.
 
 Every entry below is `@Deprecated(since = "6.3.1", forRemoval = true)` with a `@deprecated` paragraph and
-`@removeIn 6.4.0`, and appears in `compatibility/DEPRECATIONS.md`. Behaviour codes: **R** refuses explicitly
+`@removeIn 6.4.0`, and appears in `compatibility/archive/6.x/DEPRECATIONS.md`. Behaviour codes: **R** refuses explicitly
 (a failure result, or one INFO line per run); **F** forwards to the 6.3.1 equivalent; **E** an entry point that
 only stores a v1 client nothing connects, with one INFO line per run; **S** a kept v1 sender, handler or
 listener of an `@ApiStatus.Internal` manager, unchanged since 6.3.0, which the framework never reaches;
@@ -1419,7 +1419,7 @@ found too. Read or mutate declared fields and call `save()` instead of mutating 
 The two official callers, UltiEssentials and UltiRemoteBag (`RemovedConfigKeys`), were migrated to
 `isPresentInFile` in their 6.3.0-compatible builds; third-party usage is unknown.
 An unrecompiled caller invoking the removed accessor sees `NoSuchMethodError`. See the removal
-record in `compatibility/records/6.3.0.md`; all other public/protected entity signatures are retained.
+record in `compatibility/archive/6.x/records/6.3.0.md`; all other public/protected entity signatures are retained.
 
 ### Registration batches
 
@@ -1680,7 +1680,7 @@ Bukkit's own alias restrictions remain: integral Vector coordinates deserialize 
 fractional coordinates deserialize normally. Leaving `parser` at `DefaultConfigParser.class` selects the new registry,
 not that legacy class. Third-party subclasses retain their old executable behavior, not the new
 built-in collection semantics. The six announcements are indexed in
-[`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
+[`compatibility/archive/6.x/DEPRECATIONS.md`](compatibility/archive/6.x/DEPRECATIONS.md).
 
 For a custom type, remove `parser = ...` from the field and place a public top-level converter
 with a public no-argument constructor in the module's `@UltiToolsModule.scanBasePackages`.
@@ -1843,6 +1843,43 @@ such spelling: keep binary values out of the keys of a file the framework writes
 
 ## What the version number means
 
+### New public API baseline: 7.0.0
+
+**7.0.0 establishes a new baseline and does not compare against 6.x.** The japicmp check is
+intentionally disabled (`japicmp.skip=true`) only for `7.0.0-SNAPSHOT` and the `7.0.0` release.
+After 7.0.0 is downloadable from Maven Central, set `japicmp.baseline.version=7.0.0` and
+`japicmp.skip=false` in `pom.xml` before advancing the development version; run `mvn -B clean verify`.
+Default build tests and the registry generator reject later versions with comparison disabled or a
+baseline older than 7.0.0. Subsequent releases compare against the previous released baseline.
+
+The five compatibility rules continue unchanged in 7.x, with **“published” starting at 7.0.0**:
+
+1. Do not change a published public API signature.
+2. Add parameters through overloads, retaining the old signature.
+3. Deprecate cautiously.
+4. Mark deprecations with `@Deprecated(since = "…", forRemoval = true)`.
+5. Remove an API only on that annotation's authority and after at least one MINOR release has
+   passed since the warning first shipped (no earlier than 7.0.0 for this baseline).
+
+The 6.x registry and removal records are frozen in [`compatibility/archive/6.x/`](compatibility/archive/6.x/).
+They are read-only history, not input to the active generator. During the baseline reset the active
+`compatibility/deprecations.json` / `DEPRECATIONS.md` are derived only from current source declarations.
+The remaining 6.x deprecation annotations keep their original metadata; their presence does not
+implicitly authorize deleting those APIs in 7.0. The historical 6.x examples and exceptions below
+explain that release line, not an exception to these five 7.x rules.
+
+中文补充：**7.0.0 是新的公开 API 基线，不与 6.x 比较。** 仅 `7.0.0-SNAPSHOT` 与 `7.0.0` 发布允许
+`japicmp.skip=true`。7.0.0 可从 Maven Central 下载后，在推进开发版本之前把 `pom.xml` 中的
+`japicmp.baseline.version` 改为 `7.0.0`、`japicmp.skip` 改为 `false`，然后运行 `mvn -B clean verify`。
+默认构建测试与废弃登记生成器会拒绝后续版本继续关闭检查或使用低于 7.0.0 的基线；后续正式发布比较此前已发布的基线。
+
+7.x 原样沿用五条规则，但“已发布”从 7.0.0 起算：（1）不改已发布公开 API 的签名；（2）新增参数走重载并保留旧签名；
+（3）谨慎废弃；（4）废弃须标 `@Deprecated(since = "…", forRemoval = true)`；（5）移除只凭该标注，
+并且自警告实际随发布送达起至少跨过一个 MINOR（本基线不早于 7.0.0 起算）。6.x 的台账与移除记录只读归档在
+`compatibility/archive/6.x/`，生成器不消费归档；新基线期间生效 JSON 与 Markdown 仅由当前源码声明生成。
+仍存的 6.x 废弃标注保留原有元数据，不代表已授权在 7.0 删除对应 API。下文 6.x 的历史例子与例外只解释旧版本线，
+不构成这五条 7.x 规则的例外。
+
 **This project's version numbers are a product-stage signal, not a strict semver contract.**
 
 - **PATCH** (for example 6.2.4 → 6.2.5): small updates and urgent fixes. No public API is removed.
@@ -1866,7 +1903,7 @@ can be backfilled; the starting point cannot. The registry (`compatibility/DEPRE
 not record the first release that carried the annotation; that release is the one the clock counts from.
 
 These two conditions are the complete basis for removal. Downstream usage counts are no longer part
-of it. The usage figures recorded for each removal (in `compatibility/records/6.3.0.md`) are
+of it. The usage figures recorded for each removal (in `compatibility/archive/6.x/records/6.3.0.md`) are
 informational: they tell you which removals carried real migration cost, but "zero references"
 only proves that nobody in the repositories we can see uses it, not that no third party outside
 the organization does.
@@ -1908,7 +1945,7 @@ evidence for it. For 6.3.0, every removal that relies on it is in
 ["Same-release exceptions applied in 6.3.0"](#same-release-exceptions-applied-in-630) below — read
 that section through rather than reading a number off it, because it carries a list of removals and
 then two further entries after that list — and each is recorded in full, with the measurement behind it,
-in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md). No total is stated here: a
+in [`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md). No total is stated here: a
 count kept away from the list it counts has nothing holding it honest, which is how the count that
 used to sit in this paragraph went stale.
 
@@ -1920,7 +1957,7 @@ occurrence under
 [Binary incompatibilities the removal list cannot cover](#binary-incompatibilities-the-removal-list-cannot-cover)),
 and `GuiRenderer.initialize`'s first parameter changing from `Widget` to `Supplier<Widget>`. Their
 cited clause and evidence are recorded in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
+[`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md).
 
 ### Two deliberate deviations from semver
 
@@ -1995,7 +2032,7 @@ your module JAR, where it conflicts at runtime with the UltiTools already instal
 
 6.4.0 removes the public API that 6.3.0 and 6.3.1 announced for removal in 6.4.0. Every entry below carried
 `@Deprecated(forRemoval = true)` and `@removeIn 6.4.0` in a released version, so a module still using one was
-warned by name at compile time. The generated registry (`compatibility/DEPRECATIONS.md`) marks each one
+warned by name at compile time. The archived registry (`compatibility/archive/6.x/DEPRECATIONS.md`) marks each one
 `REMOVED` in 6.4.0. A module compiled against 6.3.x that calls a removed member fails with
 `NoSuchMethodError` or `NoClassDefFoundError` on 6.4.0; recompile against 6.4.0 and apply the migration.
 
@@ -2040,25 +2077,26 @@ removed. Migrate to `DataStore#getOperator(DataScope, Class)` (modules call
 
 ## Removal list for 6.3.0
 
-The removal list is generated at `mvn verify` from the `@Deprecated(forRemoval = true)`
-annotations in the source, cross-checked against the japicmp binary-compatibility report so a
-disagreement between the two fails the build (`DeprecationRegistryGenerator` produces
-`compatibility/DEPRECATIONS.md`; see `compatibility/deprecations.json` for the machine-readable
-form). As of v6.3.0, the mandatory generator is compiled into `target/buildtools-classes`
-independently of test compilation. Both `mvn verify -DskipTests` and
-`mvn verify -Dmaven.test.skip=true` still run it after japicmp: `skipTests` skips only test
-execution, while `maven.test.skip` also skips test compilation. Neither skips registry generation;
-existing registry identities and removal history remain cumulative.
+The 6.x removal list is frozen in [`compatibility/archive/6.x/DEPRECATIONS.md`](compatibility/archive/6.x/DEPRECATIONS.md)
+(machine-readable: `compatibility/archive/6.x/deprecations.json`), outside the active generator's inputs.
+The active registry is generated at `mvn verify` from current source deprecation annotations;
+when japicmp is enabled, disagreements with its binary-compatibility report fail the build.
+During the 7.0.0 baseline reset it is source-only; after comparison is re-enabled, history accumulates
+within the new baseline. `DeprecationRegistryGenerator` remains mandatory and is compiled into
+`target/buildtools-classes` independently of test compilation. Both `mvn verify -DskipTests` and
+`mvn verify -Dmaven.test.skip=true` still generate `compatibility/DEPRECATIONS.md` and
+`compatibility/deprecations.json`: neither flag skips registry generation or the post-7.0.0 re-enable guard.
 
 This document no longer carries the table itself — three artifacts now split the job:
 
 - **This document** — policy: what removal means, when an API becomes eligible, the same-release
   exception, and permanent lessons.
-- [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md) — the generated, cumulative
-  registry: every deprecated/announced/removed member, its `since`, its recorded replacement, and its
-  status. Removed entries retain historical replacement text; a replacement named there may itself
-  have been removed later. Use the per-change record below for the current migration target.
-- [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md) — the 6.3.0 cycle's
+- [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md) — the active generated registry,
+  starting from current declarations at 7.0.0. The frozen 6.x registry is
+  [`compatibility/archive/6.x/DEPRECATIONS.md`](compatibility/archive/6.x/DEPRECATIONS.md).
+  Historical replacements may themselves have been removed later; use the per-change record below
+  for the current migration target.
+- [`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md) — the 6.3.0 cycle's
   behavioural record: what each removal actually deletes, its replacement, and — per this
   document's own downstream-diagnostic design — exactly what an un-recompiled downstream JAR
   sees.
@@ -2067,7 +2105,7 @@ Packages and types marked `@ApiStatus.Internal` are not part of the removal list
 japicmp's exclusion list carries an entry for them — japicmp reads bytecode, not `@ApiStatus`,
 so an internal-only removal still needs an exclusion entry to keep the binary-compatibility gate
 green, but it was never public API and its removal is not a compatibility event. See
-`compatibility/records/6.3.0.md`'s WIRE-17 entry for a worked example; `manager.ServerPropertiesManager.SetAllResult`'s
+`compatibility/archive/6.x/records/6.3.0.md`'s WIRE-17 entry for a worked example; `manager.ServerPropertiesManager.SetAllResult`'s
 public constructor widening from five `List<String>` parameters to six (Gate-2, 6.3.0) is the same
 pattern — a same-release, internal-only signature change recorded there for japicmp traceability
 only, not because it is itself a compatibility event.
@@ -2134,10 +2172,10 @@ terms of its one-time 6.3.0 carve-out, instead of waiting a full MINOR:
   imports of the imperative `abstracts.gui` pages in the same search. Their package carries
   `@ApiStatus.Experimental` and neither pair was ever `@Deprecated(forRemoval = true)`, which is why
   the generated removal list does not carry them. See
-  [their records entry](compatibility/records/6.3.0.md#recorded-instance-two-declarative-gui-builder-method-pairs-are-removed-rather-than-given-a-guessed-implementation-d-09-630).
+  [their records entry](compatibility/archive/6.x/records/6.3.0.md#recorded-instance-two-declarative-gui-builder-method-pairs-are-removed-rather-than-given-a-guessed-implementation-d-09-630).
 
 Full reasoning and evidence for every entry above live in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
+[`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md).
 
 **One further exception, added by plan 16-09 (D-17, root-cause group "cloud session," part 2 of 3
 for issue #298) after the list above:** `utils.CloudAuthManager`'s fine-grained public statics —
@@ -2162,7 +2200,7 @@ absent from that consumer's compiled bytecode, not merely absent from its source
 command-facing entry points `CloudAuthManager.login(...)`/`.logout()`/`.status()` are the
 replacement surface; the class is now `@ApiStatus.Internal`. Full reasoning, the complete member
 list with its own javap output against the 6.2.5 baseline, and the downstream-author paragraph are
-in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md)'s own entry for this removal.
+in [`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md)'s own entry for this removal.
 
 **One further exception, added by plan 18-30 (maintainer decision 2026-10-09, issue #652):**
 `manager.DependenceManagers#getAdventure()`, `#initAdventure(UltiTools)` and `#closeAdventure()`
@@ -2190,7 +2228,7 @@ no native Adventure support; the framework is now Paper-only and upstream
 An un-recompiled class merely containing an invocation of a removed method can still load;
 executing that call site raises `NoSuchMethodError`. Full published signatures, evidence and the
 migration boundary are in the new audience-provider entry in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
+[`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md).
 
 中文补充：计划 18-30 按维护者 2026-10-09 的决定删除三个方法及 audience-provider 库，并以
 6.3.0 一次性豁免下第 2 条的零调用方先例记录，不扩大后续版本的豁免条件。18 个仓库均为零引用，
@@ -2227,14 +2265,14 @@ something.
 The command-removal survey found real downstream users of `abstracts.AbstractCommandExecutor`
 (15 files across 6 repositories, measured). It has been removed, ahead of those repositories' own
 publication. Other 6.3.0 removals also affect downstream users; see
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md) for each removal's impact,
+[`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md) for each removal's impact,
 reasoning and the maintainer's decision to proceed.
 
 To migrate to `abstracts.command.BaseCommandExecutor`:
 
 1. Change the superclass: `extends AbstractCommandExecutor` → `extends BaseCommandExecutor`.
 2. Implement the new abstract method `protected void handleHelp(CommandSender sender)`.
-3. Keep the command annotations, but review the [6.3.0 `@CmdTarget` composition rule](compatibility/records/6.3.0.md#recorded-instance-cmdtarget-classmethod-composition-is-now-override-with-fail-on-widening-630). In particular, a method-level `@CmdTarget` overrides the class value only by matching or narrowing it; widening or lateral overrides refuse the command class, rather than using the old executor's intersection rule.
+3. Keep the command annotations, but review the [6.3.0 `@CmdTarget` composition rule](compatibility/archive/6.x/records/6.3.0.md#recorded-instance-cmdtarget-classmethod-composition-is-now-override-with-fail-on-widening-630). In particular, a method-level `@CmdTarget` overrides the class value only by matching or narrowing it; widening or lateral overrides refuse the command class, rather than using the old executor's intersection rule.
 4. The package-scanning overload `CommandManager.registerAll(UltiToolsPlugin, String)`, which cast each scanned
    class to `AbstractCommandExecutor`, was removed in 6.3.0. Commands resolve through the IoC container
    (`registerAll(UltiToolsPlugin)`), which accepts `BaseCommandExecutor`; nothing beyond steps 1-3 is needed unless
@@ -3954,7 +3992,7 @@ one `@Table`, one folder of `<id>.json` files.
   one plugin were never rolled back together. A failing nested `transaction(...)` restored only the copy taken
   when that inner scope began: the outer scope's earlier writes stayed and the outer scope completed normally.
 - `@Transactional` had no effect on any backend (see the `@Transactional` record in
-  [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md)).
+  [`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md)).
 - Plain writes reached the disk at the next background flush (every `datasource.flushRate` seconds, 10 by
   default). The flush rewrote every cached entity file in place, one after another, with no temporary file and no
   force, so a crash during a flush could leave files partly written or only some of them updated.
@@ -4174,7 +4212,7 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - JSON 的 `DataOperator#transaction(...)` 持有该操作器的锁运行回调，失败时恢复回调之前对这一个操作器所做的副本。回调的写入直接进入
   实时数据，其他线程在回调期间就能读到，同一插件的两张表也不会一起回滚。嵌套的 `transaction(...)` 失败时只恢复内层开始时的副本：
   外层之前的写入保留，外层照常完成。
-- `@Transactional` 在任何后端都不起作用（见 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md) 中的
+- `@Transactional` 在任何后端都不起作用（见 [`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md) 中的
   `@Transactional` 记录）。
 - 普通写入在下一次后台刷新时落盘（每 `datasource.flushRate` 秒，默认 10 秒）。刷新原地逐个重写每个缓存的实体文件，没有临时文件，
   也不强制刷盘，所以刷新期间崩溃可能留下写了一半的文件，或只更新了其中一部分。
@@ -4316,7 +4354,7 @@ In detail:
   transaction that began it.
 
 **Before.** `@Transactional` was not wired in 6.2.5 at all (see the `Propagation.NESTED` record in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md)). The 6.3.0 snapshots published
+[`compatibility/archive/6.x/records/6.3.0.md`](compatibility/archive/6.x/records/6.3.0.md)). The 6.3.0 snapshots published
 earlier in this cycle ran a joined method without a scope of its own, so a failure the caller caught
 left the transaction committable and the outer method committed the failed method's writes. Only a
 module compiled against such a snapshot that catches a joined method's exception and expects its
@@ -4489,7 +4527,7 @@ Overloads that do not mention the entity type (`update(String, Object, Object)`,
 the time this section was written, so this case could not go on the removal list yet — that has
 since changed: `AbstractDataEntity` was deleted in 6.3.0 by plan 07-13 (GEN-04), and the descriptor
 history recorded above (6.2.0 → 6.2.1) remains accurate for servers running those earlier versions.
-See [the 6.3.0 removal record](compatibility/records/6.3.0.md#recorded-instance-abstractdataentity-is-gone-basedataentity-now-owns-its-id-field-directly-gen-04-630)
+See [the 6.3.0 removal record](compatibility/archive/6.x/records/6.3.0.md#recorded-instance-abstractdataentity-is-gone-basedataentity-now-owns-its-id-field-directly-gen-04-630)
 for what an un-recompiled JAR referencing `AbstractDataEntity` now sees.
 
 **Descriptor changes are inherently bidirectional**, and both instances are. When a symbol has the
@@ -4606,7 +4644,7 @@ most a `super` call or a now-dead `lang` key to drop alongside it:
 Two member-level japicmp excludes cover this occurrence: `UltiToolsPlugin#unregisterSelf()` and
 `UltiToolsPlugin#reloadSelf()`, both member-level (the class itself is unchanged and still present),
 appended to the end of `pom.xml`'s existing `<excludes>` list. See
-[the 6.3.0 removal record](compatibility/records/6.3.0.md) for the full evidence and the
+[the 6.3.0 removal record](compatibility/archive/6.x/records/6.3.0.md) for the full evidence and the
 downstream-author paragraph in that file's own format.
 
 ### What this means for you

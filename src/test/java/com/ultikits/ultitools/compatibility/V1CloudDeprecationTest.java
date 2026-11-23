@@ -25,12 +25,12 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
- * The 6.3.1 deprecations of the protocol v1 cloud surface, read from the generated ledger
- * {@code compatibility/deprecations.json} (plan 22-25, D-29, S-04, S-68).
+ * The 6.3.1 deprecations of the protocol v1 cloud surface, read from the frozen 6.x ledger
+ * {@code compatibility/archive/6.x/deprecations.json} (plan 22-25, D-29, S-04, S-68).
  * <p>
- * The ledger is what {@code DeprecationRegistryGenerator} writes during {@code mvn verify} from the
- * {@code @Deprecated} annotations and the {@code @removeIn} javadoc tags, so this test proves the
- * generated artefact rather than the source text.
+ * The ledger was generated from the {@code @Deprecated} annotations and {@code @removeIn} javadoc
+ * tags during 6.x, then archived unchanged when 7.0.0 established a new baseline. This test proves
+ * that historical artefact rather than requiring old removals in the current source-derived ledger.
  * <p>
  * {@link #EXPECTED} is the confirmed inventory: the kept-but-unreachable v1 entry points 22-24
  * pinned, every public member of the classes only the v1 cloud used, the v1 senders and handlers
@@ -39,7 +39,7 @@ import com.google.gson.JsonParser;
  * earlier milestones are told apart by their {@code since}. Each member's 6.3.1 behaviour is pinned
  * in its own package's tests (see the 22-25 summary for the table).
  */
-@DisplayName("v1 cloud deprecations in the generated ledger (6.3.1)")
+@DisplayName("v1 cloud deprecations in the archived 6.x ledger (6.3.1)")
 class V1CloudDeprecationTest {
 
     private static final String SINCE = "6.3.1";
@@ -126,7 +126,7 @@ class V1CloudDeprecationTest {
 
     @BeforeAll
     static void readLedger() throws IOException {
-        Path file = Paths.get(System.getProperty("basedir", "."), "compatibility", "deprecations.json");
+        Path file = Paths.get(System.getProperty("basedir", "."), "compatibility", "archive", "6.x", "deprecations.json");
         ledger = new LinkedHashMap<>();
         try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             JsonArray entries = JsonParser.parseReader(reader).getAsJsonArray();
@@ -161,7 +161,7 @@ class V1CloudDeprecationTest {
             }
         }
         assertThat(EXPECTED).as("no duplicate in the expected list").doesNotHaveDuplicates();
-        assertThat(actual).as("6.3.1 keys in compatibility/deprecations.json")
+        assertThat(actual).as("6.3.1 keys in compatibility/archive/6.x/deprecations.json")
             .containsExactlyInAnyOrderElementsOf(EXPECTED);
     }
 
