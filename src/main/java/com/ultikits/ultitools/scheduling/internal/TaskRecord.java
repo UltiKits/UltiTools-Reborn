@@ -211,7 +211,7 @@ final class TaskRecord implements TaskHandle {
                 // Backend cleanup must not prevent completion or cancellation of the other tasks.
                 // The lifecycle CAS still prevents this delivery from entering a cancelled body.
                 context.owner.engine.logger.log(Level.FINE,
-                        "Could not cancel Paper delivery for " + context.owner.owner(), failure);
+                        "[UltiTools-API] Task already cancelled: " + context.owner.owner(), failure);
             }
         }
     }

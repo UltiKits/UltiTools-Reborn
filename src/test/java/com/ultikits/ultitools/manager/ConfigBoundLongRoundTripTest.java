@@ -28,7 +28,6 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -167,13 +166,7 @@ class ConfigBoundLongRoundTripTest {
     }
 
     private int liveTasks() {
-        int live = 0;
-        for (BukkitTask task : Bukkit.getScheduler().getPendingTasks()) {
-            if (!task.isCancelled() && task.getOwner() == host) {
-                live++;
-            }
-        }
-        return live;
+        return TaskManagerTestAccess.activeHandles(taskManager).size();
     }
 
     private void advanceTo(int tick) {

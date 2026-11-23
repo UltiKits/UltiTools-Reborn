@@ -8,6 +8,7 @@ import java.util.function.Consumer;
 import org.bukkit.World;
 import org.bukkit.entity.Entity;
 import org.jetbrains.annotations.Nullable;
+import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 /** Supplements MockBukkit with Paper's null-on-already-retired behaviour only. */
 final class RetiringBackend implements PaperBackend {
@@ -20,6 +21,11 @@ final class RetiringBackend implements PaperBackend {
 
     void retire(Entity entity) {
         retiredEntities.add(entity.getUniqueId());
+        if (entity instanceof PlayerMock) {
+            ((PlayerMock) entity).disconnect();
+        } else {
+            entity.remove();
+        }
     }
 
     @Override
