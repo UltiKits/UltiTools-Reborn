@@ -13,8 +13,16 @@ public interface TaskHandle {
     boolean isRepeating();
 
     /**
-     * Cancels future runs without interrupting an execution in progress. Idempotent.
-     * @return true only for the call that moved the task to {@link TaskState#CANCELLED}
+     * Prevents every run that has not started. Never interrupts a run in progress. Idempotent.
+     *
+     * <p>A one-shot task that is already {@link TaskState#RUNNING} cannot be cancelled: this returns
+     * {@code false} and the task still ends {@link TaskState#COMPLETED} or {@link TaskState#FAILED}
+     * (as Paper's {@code ScheduledTask#cancel()} reports {@code RUNNING}). For a repeating task whose run
+     * is in progress this returns {@code true}, the state becomes {@link TaskState#CANCELLED} at once and
+     * {@link #completion()} completes with a {@code CancellationException}; the current run finishes, and
+     * an exception it throws is logged with the owner's name like any other repeating failure.
+     *
+     * @return {@code true} only for the call that moved the task to {@link TaskState#CANCELLED}
      */
     boolean cancel();
 

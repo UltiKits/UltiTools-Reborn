@@ -8,7 +8,14 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.ExecutionException;
+import java.util.logging.SimpleFormatter;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -26,7 +33,10 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
-/** Deterministic task-lifecycle assertions reusable by the real scheduler implementation. */
+/**
+ * Task-lifecycle assertions reusable by virtual-clock, MockBukkit-backed and real-time schedulers.
+ * The tick thread is the thread that calls {@link #createFixture()}.
+ */
 public abstract class AbstractSchedulerContractTest {
     private Fixture fixture;
     private Scheduler scheduler;
@@ -35,7 +45,8 @@ public abstract class AbstractSchedulerContractTest {
     /**
      * Creates an isolated scheduling environment. A production subclass supplies real Scheduler
      * instances and adapts the backend's test clock, entity removal, owner unload and captured logger
-     * through Fixture. Clock advances must finish due executions before returning, without sleeps.
+     * through Fixture. A virtual clock advances directly, MockBukkit performs ticks and waits for async
+     * tasks, and a real-time fixture waits for elapsed time and async quiescence.
      * Multiple owners must share the same environment, so unload-isolation assertions are meaningful.
      */
     protected abstract Fixture createFixture();
@@ -43,12 +54,32 @@ public abstract class AbstractSchedulerContractTest {
     /** Backend/lifecycle controls for tests; none of these methods extend the public Scheduler API. */
     public interface Fixture extends AutoCloseable {
         Scheduler scheduler(String owner);
+
+        /**
+         * Performs exactly {@code ticks} server ticks. Must be called on the tick thread (the thread that
+         * called {@code createFixture()}; on MockBukkit the server main thread). Returns when every
+         * tick-context task due in those ticks has finished. Says nothing about async tasks.
+         */
         void advanceTicks(long ticks);
-        void advanceTime(Duration elapsed);
+
+        /**
+         * Lets at least {@code atLeast} pass on the async clock, then returns only when the async side is
+         * settled: every async task due by then has finished and none is running, and their effects
+         * happen-before the return. A virtual-clock double advances its clock; a MockBukkit-backed fixture
+         * performs {@code Ticks.ceil(atLeast) + 1} ticks and then calls
+         * {@code BukkitSchedulerMock#waitAsyncTasksFinished()}; a real-time fixture sleeps at least
+         * {@code atLeast} and then waits for the async pool to be idle. It may also advance tick contexts,
+         * so a test must not assert tick-context progress across this call. Must be called on the tick thread.
+         */
+        void elapseAsync(Duration atLeast);
+
         void retire(Entity entity);
         void unload(String owner);
+        /** Thread-safe snapshot of WARNING-or-higher records logged so far. */
         List<LogRecord> warnings();
-        @Override default void close() { }
+        @Override default void close() {
+            // Stateless fixtures have no resources to release.
+        }
     }
 
     @BeforeEach
@@ -117,7 +148,7 @@ public abstract class AbstractSchedulerContractTest {
 
     @Test
     void runRepeating_subTickPeriodOnTickContext_isRejected() {
-        assertThatThrownBy(() -> scheduler.global().runRepeating(Duration.ZERO, Duration.ofMillis(49), ignored -> { }))
+        assertThatThrownBy(() -> scheduler.global().runRepeating(Duration.ZERO, Duration.ofMillis(49), ignored -> { /* Only argument validation is under test. */ }))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -127,13 +158,13 @@ public abstract class AbstractSchedulerContractTest {
         TaskHandle handle = scheduler.async().runRepeating(Duration.ofMillis(49), Duration.ofMillis(49),
                 ignored -> runs.incrementAndGet());
         assertThat(handle.isRepeating()).isTrue();
-        fixture.advanceTime(Duration.ofMillis(48));
-        assertThat(runs).hasValue(0);
-        fixture.advanceTime(Duration.ofMillis(1));
-        assertThat(runs).hasValue(1);
-        fixture.advanceTime(Duration.ofMillis(49));
-        assertThat(runs).hasValue(2);
+        fixture.elapseAsync(Duration.ofMillis(200));
+        assertThat(runs.get()).isGreaterThanOrEqualTo(1);
         assertThat(handle.cancel()).isTrue();
+        fixture.elapseAsync(Duration.ZERO);
+        int settled = runs.get();
+        fixture.elapseAsync(Duration.ofMillis(200));
+        assertThat(runs).hasValue(settled);
     }
 
     @Test
@@ -150,7 +181,7 @@ public abstract class AbstractSchedulerContractTest {
 
     @Test
     void cancel_isIdempotent() {
-        TaskHandle handle = scheduler.global().run(() -> { });
+        TaskHandle handle = scheduler.global().run(() -> { /* Only submission and lifecycle are under test. */ });
         assertThat(handle.cancel()).isTrue();
         assertThat(handle.cancel()).isFalse();
         fixture.advanceTicks(1);
@@ -185,7 +216,7 @@ public abstract class AbstractSchedulerContractTest {
         fixture.advanceTicks(1);
         assertThat(runs).hasValue(2);
         assertThat(fixture.warnings()).anySatisfy(record -> {
-            assertThat(record.getMessage()).contains(scheduler.owner());
+            assertThat(text(record)).contains(scheduler.owner());
             assertThat(record.getThrown()).isSameAs(thrown);
         });
         assertThat(handle.cancel()).isTrue();
@@ -212,7 +243,7 @@ public abstract class AbstractSchedulerContractTest {
         PlayerMock entity = server.addPlayer();
         TaskContext context = scheduler.entity(entity);
         fixture.retire(entity);
-        assertThatThrownBy(() -> context.execute(() -> { })).isInstanceOf(RejectedExecutionException.class);
+        assertThatThrownBy(() -> context.execute(() -> { /* Only submission and lifecycle are under test. */ })).isInstanceOf(RejectedExecutionException.class);
     }
 
     @Test
@@ -237,7 +268,7 @@ public abstract class AbstractSchedulerContractTest {
         TaskHandle pending = scheduler.global().runLater(Ticks.of(5), ownRuns::incrementAndGet);
         TaskHandle repeating = scheduler.global().runRepeating(Duration.ZERO, Ticks.TICK,
                 ignored -> ownRuns.incrementAndGet());
-        TaskHandle async = scheduler.async().runLater(Duration.ofSeconds(1), ownRuns::incrementAndGet);
+        TaskHandle async = scheduler.async().runLater(Duration.ofHours(1), ownRuns::incrementAndGet);
         TaskHandle region = scheduler.region(server.addSimpleWorld("owner-world"), 0, 0)
                 .runLater(Ticks.of(5), ownRuns::incrementAndGet);
         TaskHandle entity = scheduler.entity(server.addPlayer()).runLater(Ticks.of(5), ownRuns::incrementAndGet);
@@ -264,15 +295,15 @@ public abstract class AbstractSchedulerContractTest {
                 scheduler.region(server.addSimpleWorld("world"), 0, 0), scheduler.entity(server.addPlayer()));
         fixture.unload(scheduler.owner());
         for (TaskContext context : contexts) {
-            assertThatThrownBy(() -> context.run(() -> { })).isInstanceOf(RejectedExecutionException.class);
-            assertThatThrownBy(() -> context.runLater(Duration.ZERO, () -> { }))
+            assertThatThrownBy(() -> context.run(() -> { /* Only submission and lifecycle are under test. */ })).isInstanceOf(RejectedExecutionException.class);
+            assertThatThrownBy(() -> context.runLater(Duration.ZERO, () -> { /* Only submission and lifecycle are under test. */ }))
                     .isInstanceOf(RejectedExecutionException.class);
-            assertThatThrownBy(() -> context.runRepeating(Duration.ZERO, Ticks.TICK, ignored -> { }))
+            assertThatThrownBy(() -> context.runRepeating(Duration.ZERO, Ticks.TICK, ignored -> { /* Only argument validation is under test. */ }))
                     .isInstanceOf(RejectedExecutionException.class);
             assertThatThrownBy(() -> context.supply(() -> 1)).isInstanceOf(RejectedExecutionException.class);
-            assertThatThrownBy(() -> context.execute(() -> { })).isInstanceOf(RejectedExecutionException.class);
+            assertThatThrownBy(() -> context.execute(() -> { /* Only submission and lifecycle are under test. */ })).isInstanceOf(RejectedExecutionException.class);
         }
-        assertThatThrownBy(() -> scheduler.global().run(() -> { })).isInstanceOf(RejectedExecutionException.class);
+        assertThatThrownBy(() -> scheduler.global().run(() -> { /* Only submission and lifecycle are under test. */ })).isInstanceOf(RejectedExecutionException.class);
     }
 
     @Test
@@ -333,12 +364,10 @@ public abstract class AbstractSchedulerContractTest {
                 scheduler.region(server.addSimpleWorld("affinity-world"), 1, -1), scheduler.entity(server.addPlayer()));
         for (TaskContext context : contexts) {
             AtomicBoolean owns = new AtomicBoolean();
-            assertThat(context.isCurrentThread()).isFalse();
             TaskHandle handle = context.run(() -> owns.set(context.isCurrentThread()));
             fixture.advanceTicks(1);
             assertThat(owns).isTrue();
             assertThat(handle.state()).isEqualTo(TaskState.COMPLETED);
-            assertThat(context.isCurrentThread()).isFalse();
         }
     }
 
@@ -346,12 +375,12 @@ public abstract class AbstractSchedulerContractTest {
     void isCurrentThread_asyncTask_doesNotOwnTickContexts() {
         TaskContext async = scheduler.async();
         TaskContext global = scheduler.global();
-        List<Boolean> ownership = new ArrayList<>();
+        List<Boolean> ownership = new CopyOnWriteArrayList<>();
         TaskHandle handle = async.run(() -> {
             ownership.add(async.isCurrentThread());
             ownership.add(global.isCurrentThread());
         });
-        fixture.advanceTime(Duration.ofMillis(1));
+        fixture.elapseAsync(Duration.ofMillis(1));
         assertThat(ownership).containsExactly(false, false);
         assertThat(handle.state()).isEqualTo(TaskState.COMPLETED);
     }
@@ -362,7 +391,8 @@ public abstract class AbstractSchedulerContractTest {
         AtomicInteger runs = new AtomicInteger();
         TaskHandle handle = scheduler.global().runRepeating(Duration.ZERO, Ticks.TICK, own -> {
             runs.incrementAndGet();
-            own.cancel();
+            assertThat(own.cancel()).isTrue();
+            assertThat(own.state()).isEqualTo(TaskState.CANCELLED);
             finished.set(true);
         });
         fixture.advanceTicks(3);
@@ -375,13 +405,13 @@ public abstract class AbstractSchedulerContractTest {
     @Test
     void invalidDelaysPeriodsAndWorld_areRejected() {
         for (TaskContext context : List.of(scheduler.global(), scheduler.async())) {
-            assertThatThrownBy(() -> context.runLater(Duration.ofNanos(-1), () -> { }))
+            assertThatThrownBy(() -> context.runLater(Duration.ofNanos(-1), () -> { /* Only submission and lifecycle are under test. */ }))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> context.runRepeating(Duration.ofNanos(-1), Ticks.TICK, ignored -> { }))
+            assertThatThrownBy(() -> context.runRepeating(Duration.ofNanos(-1), Ticks.TICK, ignored -> { /* Only argument validation is under test. */ }))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> context.runRepeating(Duration.ZERO, Duration.ZERO, ignored -> { }))
+            assertThatThrownBy(() -> context.runRepeating(Duration.ZERO, Duration.ZERO, ignored -> { /* Only argument validation is under test. */ }))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> context.runRepeating(Duration.ZERO, Duration.ofNanos(-1), ignored -> { }))
+            assertThatThrownBy(() -> context.runRepeating(Duration.ZERO, Duration.ofNanos(-1), ignored -> { /* Only argument validation is under test. */ }))
                     .isInstanceOf(IllegalArgumentException.class);
         }
         assertThatThrownBy(() -> scheduler.region(new Location(null, 0, 0, 0)))
@@ -403,24 +433,47 @@ public abstract class AbstractSchedulerContractTest {
 
     @Test
     void completion_nonAsyncContinuation_runsOnCompletingThread() {
-        TaskContext context = scheduler.global();
-        TaskHandle handle = context.run(() -> { });
-        AtomicBoolean owned = new AtomicBoolean();
-        CompletionStage<Void> dependent = handle.completion().thenRun(() -> owned.set(context.isCurrentThread()));
-        fixture.advanceTicks(1);
-        assertThat(dependent.toCompletableFuture()).isCompletedWithValue(null);
-        assertThat(owned).isTrue();
+        for (TaskContext context : List.of(scheduler.global(), scheduler.async())) {
+            AtomicReference<Thread> bodyThread = new AtomicReference<>();
+            AtomicReference<Thread> callbackThread = new AtomicReference<>();
+            AtomicBoolean callbackOwnsGlobal = new AtomicBoolean();
+            CountDownLatch registered = new CountDownLatch(1);
+            TaskHandle handle = context.run(() -> {
+                try {
+                    if (!registered.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Continuation registration timed out");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(interrupted);
+                }
+                bodyThread.set(Thread.currentThread());
+            });
+            CompletionStage<Void> dependent = handle.completion().thenRun(() -> {
+                callbackThread.set(Thread.currentThread());
+                callbackOwnsGlobal.set(scheduler.global().isCurrentThread());
+            });
+            registered.countDown();
+            if (context == scheduler.async()) {
+                fixture.elapseAsync(Duration.ZERO);
+                assertThat(callbackOwnsGlobal).isFalse();
+            } else {
+                fixture.advanceTicks(1);
+            }
+            assertThat(dependent.toCompletableFuture()).isCompletedWithValue(null);
+            assertThat(bodyThread.get()).isNotNull().isSameAs(callbackThread.get());
+        }
     }
 
     @Test
     void nullArguments_areRejectedByName() {
         TaskContext context = scheduler.global();
         assertThatNullPointerException().isThrownBy(() -> context.run(null)).withMessage("task");
-        assertThatNullPointerException().isThrownBy(() -> context.runLater(null, () -> { })).withMessage("delay");
+        assertThatNullPointerException().isThrownBy(() -> context.runLater(null, () -> { /* Only submission and lifecycle are under test. */ })).withMessage("delay");
         assertThatNullPointerException().isThrownBy(() -> context.runLater(Duration.ZERO, null)).withMessage("task");
-        assertThatNullPointerException().isThrownBy(() -> context.runRepeating(null, Ticks.TICK, ignored -> { }))
+        assertThatNullPointerException().isThrownBy(() -> context.runRepeating(null, Ticks.TICK, ignored -> { /* Only argument validation is under test. */ }))
                 .withMessage("initialDelay");
-        assertThatNullPointerException().isThrownBy(() -> context.runRepeating(Duration.ZERO, null, ignored -> { }))
+        assertThatNullPointerException().isThrownBy(() -> context.runRepeating(Duration.ZERO, null, ignored -> { /* Only argument validation is under test. */ }))
                 .withMessage("period");
         assertThatNullPointerException().isThrownBy(() -> context.runRepeating(Duration.ZERO, Ticks.TICK, null))
                 .withMessage("task");
@@ -429,6 +482,164 @@ public abstract class AbstractSchedulerContractTest {
         assertThatNullPointerException().isThrownBy(() -> scheduler.region((Location) null)).withMessage("location");
         assertThatNullPointerException().isThrownBy(() -> scheduler.region(null, 0, 0)).withMessage("world");
         assertThatNullPointerException().isThrownBy(() -> scheduler.entity(null)).withMessage("entity");
+    }
+
+    @Test
+    void isCurrentThread_onTickThreadOutsideTask_isTrue() {
+        assertThat(scheduler.global().isCurrentThread()).isTrue();
+        assertThat(scheduler.region(server.addSimpleWorld("outside-world"), 1, -1).isCurrentThread()).isTrue();
+        assertThat(scheduler.entity(server.addPlayer()).isCurrentThread()).isTrue();
+        assertThat(scheduler.async().isCurrentThread()).isFalse();
+    }
+
+    @Test
+    void isCurrentThread_onFreshThread_isFalse() throws Exception {
+        List<TaskContext> contexts = List.of(scheduler.global(), scheduler.async(),
+                scheduler.region(server.addSimpleWorld("fresh-world"), 1, -1), scheduler.entity(server.addPlayer()));
+        assertThat(onFreshThread(() -> contexts.stream().map(TaskContext::isCurrentThread).toList()))
+                .containsExactly(false, false, false, false);
+    }
+
+    @Test
+    void async_run_runsOffTickThreadNotInline() {
+        Thread tickThread = Thread.currentThread();
+        List<Thread> threads = new CopyOnWriteArrayList<>();
+        List<Boolean> ownership = new CopyOnWriteArrayList<>();
+        TaskHandle handle = scheduler.async().run(() -> {
+            threads.add(Thread.currentThread());
+            ownership.add(scheduler.global().isCurrentThread());
+        });
+        fixture.elapseAsync(Duration.ZERO);
+        assertThat(threads).hasSize(1);
+        assertThat(threads.getFirst()).isNotSameAs(tickThread);
+        assertThat(ownership).containsExactly(false);
+        assertThat(handle.state()).isEqualTo(TaskState.COMPLETED);
+    }
+
+    @Test
+    void async_runLater_eventuallyRunsOnce() {
+        AtomicInteger runs = new AtomicInteger();
+        TaskHandle handle = scheduler.async().runLater(Duration.ofMillis(49), runs::incrementAndGet);
+        fixture.elapseAsync(Duration.ofMillis(49));
+        assertThat(runs).hasValue(1);
+        assertThat(handle.state()).isEqualTo(TaskState.COMPLETED);
+    }
+
+    @Test
+    void cancel_whileOneShotRunning_returnsFalseAndEndsCompleted() {
+        AtomicReference<TaskHandle> self = new AtomicReference<>();
+        AtomicBoolean cancelled = new AtomicBoolean(true);
+        TaskHandle handle = scheduler.global().run(() -> cancelled.set(self.get().cancel()));
+        self.set(handle);
+        fixture.advanceTicks(1);
+        assertThat(cancelled).isFalse();
+        assertThat(handle.state()).isEqualTo(TaskState.COMPLETED);
+        assertThat(handle.completion().toCompletableFuture()).isCompletedWithValue(null);
+    }
+
+    @Test
+    void cancel_whileOneShotRunning_thenThrows_endsFailedWithThatException() {
+        AtomicReference<TaskHandle> self = new AtomicReference<>();
+        AtomicBoolean cancelled = new AtomicBoolean(true);
+        IllegalStateException thrown = new IllegalStateException("failure after cancellation attempt");
+        TaskHandle handle = scheduler.global().run(() -> {
+            cancelled.set(self.get().cancel());
+            throw thrown;
+        });
+        self.set(handle);
+        fixture.advanceTicks(1);
+        assertThat(cancelled).isFalse();
+        assertThat(handle.state()).isEqualTo(TaskState.FAILED);
+        assertThat(failure(handle.completion())).isSameAs(thrown);
+    }
+
+    @Test
+    void repeating_cancelledThenThrows_logsOnceAndStaysCancelled() {
+        IllegalStateException thrown = new IllegalStateException("cancelled repeating failure");
+        TaskHandle handle = scheduler.global().runRepeating(Duration.ZERO, Ticks.TICK, own -> {
+            assertThat(own.cancel()).isTrue();
+            throw thrown;
+        });
+        fixture.advanceTicks(3);
+        assertThat(handle.state()).isEqualTo(TaskState.CANCELLED);
+        assertThat(failure(handle.completion())).isInstanceOf(CancellationException.class);
+        assertThat(fixture.warnings()).singleElement().satisfies(record -> {
+            assertThat(text(record)).contains(scheduler.owner());
+            assertThat(record.getThrown()).isSameAs(thrown);
+        });
+    }
+
+    @Test
+    void ownerUnload_whileOneShotRunning_letsRunFinish() {
+        AtomicBoolean finished = new AtomicBoolean();
+        TaskHandle handle = scheduler.global().run(() -> {
+            fixture.unload(scheduler.owner());
+            assertThatThrownBy(() -> scheduler.global().run(() -> { /* No work should be accepted. */ }))
+                    .isInstanceOf(RejectedExecutionException.class);
+            finished.set(true);
+        });
+        fixture.advanceTicks(1);
+        assertThat(finished).isTrue();
+        assertThat(handle.state()).isEqualTo(TaskState.COMPLETED);
+        assertThat(handle.completion().toCompletableFuture()).isCompletedWithValue(null);
+    }
+
+    @Test
+    void supply_cancelledAfterStart_bodyThrows_logsOnceAndStaysCancelled() {
+        AtomicReference<CompletableFuture<Integer>> self = new AtomicReference<>();
+        IllegalStateException thrown = new IllegalStateException("cancelled supplier failure");
+        CompletableFuture<Integer> future = scheduler.global().supply(() -> {
+            assertThat(self.get().cancel(false)).isTrue();
+            throw thrown;
+        });
+        self.set(future);
+        fixture.advanceTicks(1);
+        assertThat(future).isCancelled();
+        assertThat(fixture.warnings()).singleElement().satisfies(record -> {
+            assertThat(text(record)).contains(scheduler.owner());
+            assertThat(record.getThrown()).isSameAs(thrown);
+        });
+    }
+
+    @Test
+    void entity_alreadyRemoved_submissionsReturnRetired() {
+        PlayerMock entity = server.addPlayer();
+        fixture.retire(entity);
+        TaskContext context = scheduler.entity(entity);
+        AtomicInteger runs = new AtomicInteger();
+        for (TaskHandle handle : List.of(context.run(runs::incrementAndGet),
+                context.runLater(Ticks.TICK, runs::incrementAndGet),
+                context.runRepeating(Duration.ZERO, Ticks.TICK, ignored -> runs.incrementAndGet()))) {
+            assertThat(handle.state()).isEqualTo(TaskState.RETIRED);
+            assertThat(failure(handle.completion())).isInstanceOf(TaskRetiredException.class);
+        }
+        assertThat(failure(context.supply(runs::incrementAndGet))).isInstanceOf(TaskRetiredException.class);
+        fixture.advanceTicks(3);
+        assertThat(runs).hasValue(0);
+    }
+
+    private static <T> T onFreshThread(Callable<T> action) throws Exception {
+        FutureTask<T> result = new FutureTask<>(action);
+        Thread thread = new Thread(result, "scheduler-contract-fresh");
+        thread.setDaemon(true);
+        thread.start();
+        thread.join(10_000);
+        assertThat(thread.isAlive()).as("fresh thread finished within ten seconds").isFalse();
+        try {
+            return result.get();
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof Error error) {
+                throw error;
+            }
+            if (failed.getCause() instanceof Exception exception) {
+                throw exception;
+            }
+            throw new AssertionError(failed.getCause());
+        }
+    }
+
+    private static String text(LogRecord record) {
+        return new SimpleFormatter().formatMessage(record);
     }
 
     private static Throwable failure(CompletionStage<?> stage) {

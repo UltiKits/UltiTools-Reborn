@@ -12,6 +12,10 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -38,14 +42,7 @@ public final class ManualScheduler implements Scheduler {
     }
 
     @Override public String owner() { return owner; }
-
-    @Override
-    public TaskContext global() {
-        synchronized (engine) {
-            requireLoaded();
-            return global;
-        }
-    }
+    @Override public TaskContext global() { return global; }
 
     @Override
     public TaskContext region(Location location) {
@@ -60,28 +57,15 @@ public final class ManualScheduler implements Scheduler {
     @Override
     public TaskContext region(World world, int chunkX, int chunkZ) {
         Objects.requireNonNull(world, "world");
-        synchronized (engine) {
-            requireLoaded();
-            return new Context(false, null);
-        }
+        return new Context(false, null);
     }
 
     @Override
     public TaskContext entity(Entity entity) {
-        Objects.requireNonNull(entity, "entity");
-        synchronized (engine) {
-            requireLoaded();
-            return new Context(false, entity);
-        }
+        return new Context(false, Objects.requireNonNull(entity, "entity"));
     }
 
-    @Override
-    public TaskContext async() {
-        synchronized (engine) {
-            requireLoaded();
-            return async;
-        }
-    }
+    @Override public TaskContext async() { return async; }
 
     private void requireLoaded() {
         if (unloaded) {
@@ -94,8 +78,13 @@ public final class ManualScheduler implements Scheduler {
         private final Map<String, ManualScheduler> owners = new HashMap<>();
         private final List<ManualTask> tasks = new ArrayList<>();
         private final Set<Entity> retired = new HashSet<>();
-        private final List<LogRecord> warnings = new ArrayList<>();
-        private final ThreadLocal<Context> executing = new ThreadLocal<>();
+        private final List<LogRecord> warnings = new CopyOnWriteArrayList<>();
+        private final Thread tickThread = Thread.currentThread();
+        private final ExecutorService asyncExecutor = Executors.newSingleThreadExecutor(action -> {
+            Thread thread = new Thread(action, "manual-async");
+            thread.setDaemon(true);
+            return thread;
+        });
         private long now;
         private long sequence;
 
@@ -104,13 +93,13 @@ public final class ManualScheduler implements Scheduler {
             return owners.computeIfAbsent(owner, name -> new ManualScheduler(this, name));
         }
 
-        @Override
-        public void advanceTicks(long ticks) {
-            advanceTime(Ticks.of(ticks));
-        }
+        @Override public void advanceTicks(long ticks) { advance(Ticks.of(ticks)); }
+        @Override public void elapseAsync(Duration atLeast) { advance(atLeast); }
 
-        @Override
-        public void advanceTime(Duration elapsed) {
+        private void advance(Duration elapsed) {
+            if (Thread.currentThread() != tickThread) {
+                throw new IllegalStateException("Clock advances must run on the tick thread");
+            }
             if (elapsed.isNegative()) {
                 throw new IllegalArgumentException("elapsed must not be negative");
             }
@@ -118,61 +107,76 @@ public final class ManualScheduler implements Scheduler {
             synchronized (this) {
                 target = Math.addExact(now, elapsed.toNanos());
             }
-            while (true) {
-                ManualTask next;
-                synchronized (this) {
-                    next = tasks.stream().filter(task -> task.state == TaskState.SCHEDULED && task.due <= target)
-                            .min(Comparator.comparingLong((ManualTask task) -> task.due)
-                                    .thenComparingLong(task -> task.sequence)).orElse(null);
-                    if (next == null) {
-                        now = target;
-                        return;
-                    }
-                    now = next.due;
-                    if (next.context.entity != null && retired.contains(next.context.entity)) {
-                        next.retire();
-                        continue;
-                    }
-                    next.state = TaskState.RUNNING;
-                }
-                Context previous = executing.get();
-                executing.set(next.context);
-                try {
-                    Throwable failure = null;
-                    try {
-                        next.action.accept(next);
-                    } catch (Throwable thrown) {
-                        failure = thrown;
-                    }
+            try {
+                while (true) {
+                    ManualTask next;
                     synchronized (this) {
-                        if (next.period > 0 && failure != null) {
-                            LogRecord record = new LogRecord(Level.WARNING,
-                                    "Repeating task failed for owner " + next.context.ownerName());
-                            record.setThrown(failure);
-                            warnings.add(record);
+                        next = tasks.stream().filter(task -> task.state == TaskState.SCHEDULED && task.due <= target)
+                                .min(Comparator.comparingLong((ManualTask task) -> task.due)
+                                        .thenComparingLong(task -> task.sequence)).orElse(null);
+                        if (next == null) {
+                            now = target;
+                            return;
                         }
-                        if (next.state != TaskState.RUNNING) {
+                        now = next.due;
+                        if (next.context.entity != null && retired.contains(next.context.entity)) {
+                            next.retire();
                             continue;
                         }
-                        if (next.period > 0) {
-                            next.due = Math.addExact(now, next.period);
-                            next.state = TaskState.SCHEDULED;
-                        } else if (failure == null) {
-                            next.state = TaskState.COMPLETED;
-                            next.completion.complete(null);
-                        } else {
-                            next.state = TaskState.FAILED;
-                            next.completion.completeExceptionally(failure);
-                        }
+                        next.state = TaskState.RUNNING;
                     }
-                } finally {
-                    if (previous == null) {
-                        executing.remove();
+                    if (next.context.asynchronous) {
+                        try {
+                            asyncExecutor.submit(() -> executeTask(next)).get();
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException("Interrupted while settling async tasks", interrupted);
+                        } catch (ExecutionException failed) {
+                            throw new AssertionError("Async test executor failed", failed.getCause());
+                        }
                     } else {
-                        executing.set(previous);
+                        executeTask(next);
                     }
                 }
+            } finally {
+                synchronized (this) {
+                    tasks.removeIf(task -> task.state != TaskState.SCHEDULED && task.state != TaskState.RUNNING);
+                }
             }
+        }
+
+        private void executeTask(ManualTask task) {
+            Throwable failure = null;
+            try {
+                task.action.accept(task);
+            } catch (Throwable thrown) {
+                failure = thrown;
+            }
+            synchronized (this) {
+                if (task.period > 0 && failure != null) {
+                    warn("Repeating task failed for owner {0}", task.context.ownerName(), failure);
+                }
+                if (task.state != TaskState.RUNNING) {
+                    return;
+                }
+                if (task.period > 0) {
+                    task.due = Math.addExact(now, task.period);
+                    task.state = TaskState.SCHEDULED;
+                } else if (failure == null) {
+                    task.state = TaskState.COMPLETED;
+                    task.completion.complete(null);
+                } else {
+                    task.state = TaskState.FAILED;
+                    task.completion.completeExceptionally(failure);
+                }
+            }
+        }
+
+        private void warn(String pattern, String owner, Throwable thrown) {
+            LogRecord record = new LogRecord(Level.WARNING, pattern);
+            record.setParameters(new Object[] {owner});
+            record.setThrown(thrown);
+            warnings.add(record);
         }
 
         @Override
@@ -198,12 +202,15 @@ public final class ManualScheduler implements Scheduler {
             }
         }
 
-        @Override public synchronized List<LogRecord> warnings() { return List.copyOf(warnings); }
+        @Override public List<LogRecord> warnings() { return List.copyOf(warnings); }
 
         @Override
-        public synchronized void close() {
-            List.copyOf(owners.keySet()).forEach(this::unload);
-            executing.remove();
+        public void close() {
+            synchronized (this) {
+                List.copyOf(owners.keySet()).forEach(this::unload);
+                tasks.clear();
+            }
+            asyncExecutor.shutdown();
         }
     }
 
@@ -248,7 +255,7 @@ public final class ManualScheduler implements Scheduler {
             }
             synchronized (engine) {
                 requireLoaded();
-                long delayNanos = asynchronous ? Math.max(1, delay.toNanos())
+                long delayNanos = asynchronous ? delay.toNanos()
                         : Math.multiplyExact(Math.max(1, Ticks.ceil(delay)), TICK_NANOS);
                 long periodNanos = period.isZero() ? 0 : asynchronous ? period.toNanos()
                         : Math.multiplyExact(Ticks.ceil(period), TICK_NANOS);
@@ -268,7 +275,14 @@ public final class ManualScheduler implements Scheduler {
             CompletableFuture<T> result = new CompletableFuture<>();
             ManualTask handle = submit(Duration.ZERO, Duration.ZERO, ignored -> {
                 if (!result.isCancelled()) {
-                    result.complete(task.get());
+                    try {
+                        result.complete(task.get());
+                    } catch (Throwable thrown) {
+                        if (result.isCancelled()) {
+                            engine.warn("Cancelled supplier failed for owner {0}", owner, thrown);
+                        }
+                        throw thrown;
+                    }
                 }
             });
             handle.completion.whenComplete((ignored, failure) -> {
@@ -286,8 +300,7 @@ public final class ManualScheduler implements Scheduler {
 
         @Override
         public boolean isCurrentThread() {
-            Context current = engine.executing.get();
-            return !asynchronous && current != null && !current.asynchronous;
+            return !asynchronous && Thread.currentThread() == engine.tickThread;
         }
 
         @Override
@@ -329,7 +342,8 @@ public final class ManualScheduler implements Scheduler {
         @Override
         public boolean cancel() {
             synchronized (engine) {
-                if (state != TaskState.SCHEDULED && state != TaskState.RUNNING) {
+                if ((state != TaskState.SCHEDULED && state != TaskState.RUNNING)
+                        || (state == TaskState.RUNNING && !isRepeating())) {
                     return false;
                 }
                 state = TaskState.CANCELLED;
@@ -340,7 +354,7 @@ public final class ManualScheduler implements Scheduler {
 
         private void retire() {
             synchronized (engine) {
-                if (state == TaskState.SCHEDULED || state == TaskState.RUNNING) {
+                if (state == TaskState.SCHEDULED || (state == TaskState.RUNNING && isRepeating())) {
                     state = TaskState.RETIRED;
                     completion.completeExceptionally(new TaskRetiredException("Entity removed for " + context.ownerName()));
                 }
