@@ -103,6 +103,40 @@ class CatalogueLoaderTest {
     }
 
     @Test
+    void references_refreshOwnedCopiesWithoutTouchingOperatorBytes() throws Exception {
+        String bundled = "# shipped\r\ngreeting: '你好'\r\n";
+        file("en.yml", bundled);
+        CatalogueLoader loader = new CatalogueLoader();
+        var shipped = loader.load("sample", Locale.ENGLISH, root.toUri().toURL());
+        Path operator = Files.createDirectories(root.resolve("reference-operator"));
+        String override = "greeting: Operator\n";
+        Files.writeString(operator.resolve("en.yml"), override);
+        Path reference = Files.createDirectories(operator.resolve("reference"));
+        Files.writeString(reference.resolve("fr.yml"), "stale: removed\n");
+        Files.writeString(reference.resolve("en.yml"), "edited: ineffective\n");
+        assertThat(loader.writeReferences(shipped, operator)).isEmpty();
+        String copy = Files.readString(reference.resolve("en.yml"));
+        assertThat(copy).startsWith(CatalogueLoader.REFERENCE_HEADER).endsWith(bundled);
+        assertThat(copy).contains("edits here have no effect", "修改此处无效", "同名覆盖文件");
+        assertThat(Files.readAllBytes(reference.resolve("en.yml")))
+                .isEqualTo((CatalogueLoader.REFERENCE_HEADER + bundled).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(reference.resolve("fr.yml")).doesNotExist();
+        assertThat(Files.readString(operator.resolve("en.yml"))).isEqualTo(override);
+        assertThat(loader.withOverrides(shipped, operator).catalogue().lookup("greeting", List.of(Locale.ENGLISH)))
+                .contains("Operator");
+    }
+
+    @Test
+    void referenceWriteFailure_isANonfatalDiagnostic() throws Exception {
+        Path blocked = root.resolve("not-a-directory");
+        Files.writeString(blocked, "owned by another file\n");
+        CatalogueLoader loader = new CatalogueLoader();
+        var shipped = loader.load("sample", Locale.ENGLISH, null);
+        assertThat(loader.writeReferences(shipped, blocked)).singleElement().asString().contains("reference");
+        assertThat(Files.readString(blocked)).isEqualTo("owned by another file\n");
+    }
+
+    @Test
     void catalogueSnapshots_areImmutableAndOverridesAreLanguageSpecific() {
         var builder = new Catalogue.Builder("sample", Locale.ENGLISH).put(Locale.ENGLISH, "hello", "old");
         Catalogue snapshot = builder.build();

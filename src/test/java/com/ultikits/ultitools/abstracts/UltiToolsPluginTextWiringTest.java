@@ -103,6 +103,7 @@ class UltiToolsPluginTextWiringTest {
         setUpModuleEnvironment();
         UltiToolsPlugin module = module("Sample", "greeting: Hello\n");
         module.commitLanguageProvenance();
+        assertThat(temporary.resolve("pluginConfig/Sample/messages/reference/en.yml")).exists();
         SimpleContainer child = new SimpleContainer();
         child.setParent(root);
         module.setContext(child);

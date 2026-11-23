@@ -110,6 +110,7 @@ public final class TextEngine implements AutoCloseable {
         published.put(namespace, new Published(Objects.requireNonNull(owner, "owner"), prepared.pluginName(),
                 prepared.loaded().catalogue(), prepared));
         prepared.loaded().diagnostics().forEach(logger::warning);
+        loader.writeReferences(prepared.loaded(), prepared.overrideDirectory()).forEach(logger::warning);
     }
 
     /** Atomically publishes a prebuilt immutable catalogue, used by framework-internal fixtures. */
