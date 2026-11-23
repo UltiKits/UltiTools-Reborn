@@ -65,6 +65,30 @@ class AopProxyResolverTest {
         public String work() { return "nope"; }
     }
 
+    public static sealed class SealedManaged permits NonSealedManaged {
+        @Transactional
+        public String work() { return "sealed"; }
+    }
+
+    public static non-sealed class NonSealedManaged extends SealedManaged { }
+
+    @ExceptionCatch
+    public static sealed class SealedWithClassLevel permits ClassLevelSealedChild {
+        public void work() {
+            // Fixture method: only its class-level annotation matters.
+        }
+    }
+
+    public static final class ClassLevelSealedChild extends SealedWithClassLevel { }
+
+    public static sealed class SealedWithUnreachableAnnotation permits UnreachableSealedChild {
+        @ExceptionCatch
+        private void helper() { }
+        public void touch() { helper(); }
+    }
+
+    public static final class UnreachableSealedChild extends SealedWithUnreachableAnnotation { }
+
     @Final
     public static class AnnotatedFinalManaged {
         @Transactional
@@ -265,6 +289,42 @@ class AopProxyResolverTest {
             assertTrue(thrown.getMessage().contains(FinalManaged.class.getName()),
                     thrown.getMessage());
             assertTrue(thrown.getMessage().contains("@Final"), thrown.getMessage());
+        }
+
+        @Test
+        @DisplayName("Should reject sealed method-level and class-level requests before generation")
+        void shouldRejectSealedClassWithActionableMessage() {
+            for (Class<?> target : new Class<?>[]{SealedManaged.class, SealedWithClassLevel.class}) {
+                AopProxyResolver selected = target == SealedManaged.class ? resolver : exceptionCatchResolver();
+                ContainerException failure = assertThrows(ContainerException.class,
+                        () -> selected.resolve(target));
+                assertEquals(com.ultikits.ultitools.exceptions.ErrorCode.BEAN_CREATION_FAILED,
+                        failure.getErrorCode());
+                assertTrue(failure.getMessage().contains("SEALED_CLASS"), failure.getMessage());
+                assertTrue(failure.getMessage().contains(target.getName()), failure.getMessage());
+                assertTrue(failure.getMessage().contains("Remove the 'sealed' keyword"), failure.getMessage());
+                assertTrue(failure.getMessage().contains("non-sealed bean"), failure.getMessage());
+                assertEquals(null, failure.getCause(), "eligibility must refuse before ByteBuddy runs");
+            }
+        }
+
+        @Test
+        @DisplayName("Should proxy a non-sealed permitted subclass")
+        void shouldProxyNonSealedSubclass() throws Exception {
+            Class<?> resolved = resolver.resolve(NonSealedManaged.class);
+            assertTrue(ProxyFactory.isProxyClass(resolved));
+            assertEquals("sealed", resolved.getMethod("work").invoke(resolved.getDeclaredConstructor().newInstance()));
+            assertEquals(Collections.singletonList("work"), log);
+        }
+
+        @Test
+        @DisplayName("Should warn, not fail, when sealed annotations cannot reach any method")
+        void shouldWarnForSealedClassWhenNothingWouldBeProxied() {
+            List<String> warnings = warningsWhile(() -> assertSame(SealedWithUnreachableAnnotation.class,
+                    exceptionCatchResolver().resolve(SealedWithUnreachableAnnotation.class)));
+            assertTrue(warnings.stream().anyMatch(message -> message.contains("class is sealed")
+                    && message.contains(SealedWithUnreachableAnnotation.class.getName())
+                    && message.contains("none of its annotated methods")), warnings.toString());
         }
 
         @Test

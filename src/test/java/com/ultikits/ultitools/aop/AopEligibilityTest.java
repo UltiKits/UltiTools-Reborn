@@ -32,6 +32,20 @@ class AopEligibilityTest {
         public void ok() { }
     }
 
+    public static sealed class SealedClass permits NonSealedChild {
+        @Transactional
+        public void ok() { }
+    }
+
+    public static non-sealed class NonSealedChild extends SealedClass { }
+
+    @ExceptionCatch
+    public static sealed class ClassLevelOnSealedClass permits SealedClassLevelChild {
+        public void plain() { }
+    }
+
+    public static final class SealedClassLevelChild extends ClassLevelOnSealedClass { }
+
     @Final
     public static class AnnotatedFinalClass {
         @Transactional
@@ -161,6 +175,41 @@ class AopEligibilityTest {
                     "remedy must point at @Final");
             assertTrue(problems.get(0).getRemedy().contains("@Data"),
                     "Lombok @Value cannot be detected at runtime, so the hint is unconditional");
+        }
+
+        @Test
+        @DisplayName("Should reject a sealed class with a class-level remedy, like final")
+        void shouldRejectSealedClass() {
+            List<AopEligibility.Problem> problems = AopEligibility.check(
+                    SealedClass.class, AopEligibility.findAopAnnotatedMethods(SealedClass.class));
+            assertEquals(1, problems.size(), problems.toString());
+            AopEligibility.Problem problem = problems.get(0);
+            assertEquals("SEALED_CLASS", problem.getKind().name());
+            assertEquals(SealedClass.class.getName(), problem.getLocation());
+            assertTrue(problem.getRemedy().contains("Remove the 'sealed' keyword"), problem.toString());
+            assertTrue(problem.getRemedy().contains("non-sealed bean"), problem.toString());
+        }
+
+        @Test
+        @DisplayName("Should reject sealed before the empty-method short circuit or method rules")
+        void shouldShortCircuitOnSealedClass() throws Exception {
+            for (Set<Method> methods : java.util.Arrays.asList(Collections.<Method>emptySet(),
+                    Collections.singleton(HasStaticMethod.class.getDeclaredMethod("staticMethod")))) {
+                List<AopEligibility.Problem> problems = AopEligibility.check(
+                        ClassLevelOnSealedClass.class, methods);
+                assertEquals(1, problems.size(), problems.toString());
+                assertEquals("SEALED_CLASS", problems.get(0).getKind().name());
+                assertEquals(ClassLevelOnSealedClass.class.getName(), problems.get(0).getLocation());
+            }
+            assertEquals("SEALED_CLASS", AopEligibility.check(SealedClass.class, null)
+                    .get(0).getKind().name());
+        }
+
+        @Test
+        @DisplayName("Should accept a non-sealed permitted subclass")
+        void shouldAcceptNonSealedChild() {
+            assertTrue(AopEligibility.check(NonSealedChild.class,
+                    AopEligibility.findAopAnnotatedMethods(NonSealedChild.class)).isEmpty());
         }
 
         @Test
