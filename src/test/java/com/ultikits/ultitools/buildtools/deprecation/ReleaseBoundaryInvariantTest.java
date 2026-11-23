@@ -137,6 +137,63 @@ class ReleaseBoundaryInvariantTest {
                 .anySatisfy(v -> assertThat(v).contains("6.2.5-SNAPSHOT").contains("released"));
     }
 
+    @Test
+    void onlyTheNewBaselineDevelopmentAndReleaseAllowSkipping() {
+        for (String version : Arrays.asList("7.0.0-SNAPSHOT", "7.0.0")) {
+            assertThat(ReleaseBoundaryInvariant.evaluate(version, "6.5.0",
+                    Collections.emptySet(), true)).as(version).isEmpty();
+        }
+        for (String version : Arrays.asList("7.0.1-SNAPSHOT", "7.0.1", "7.1.0-SNAPSHOT", "8.0.0-SNAPSHOT")) {
+            assertThat(ReleaseBoundaryInvariant.evaluate(version, "7.0.0",
+                    Collections.emptySet(), true)).as(version)
+                    .anySatisfy(message -> assertThat(message).contains("japicmp.skip=false"));
+            assertThat(ReleaseBoundaryInvariant.evaluate(version, "7.0.0",
+                    Collections.emptySet(), false)).as(version).isEmpty();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "version {0}: valid={1}, reset={2}")
+    @org.junit.jupiter.params.provider.CsvFileSource(resources = "/buildtools/project-version-cases.csv", numLinesToSkip = 1)
+    void sharedVersionCasesRejectUnsupportedShapesAndBoundSkipping(
+            String version, boolean valid, boolean reset) {
+        assertThat(ReleaseBoundaryInvariant.isBaselineReset(version)).as(version).isEqualTo(reset);
+        for (boolean skip : new boolean[] {false, true}) {
+            List<String> violations = ReleaseBoundaryInvariant.evaluate(version, "7.0.0",
+                    Collections.emptySet(), skip);
+            if (!valid) {
+                assertThat(violations).as("invalid project version %s, skip=%s", version, skip)
+                        .anySatisfy(message -> assertThat(message).contains("must match N.N.N or N.N.N-SNAPSHOT"));
+            } else if (skip && !reset) {
+                assertThat(violations).as(version)
+                        .anySatisfy(message -> assertThat(message).contains("japicmp.skip=false"));
+            } else {
+                assertThat(violations).as(version).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void numericVersionSegmentsOrderTenAfterNine() {
+        assertThat(ReleaseBoundaryInvariant.evaluate("7.10.0", "7.9.0", Collections.emptySet(), false)).isEmpty();
+        assertThat(ReleaseBoundaryInvariant.evaluate("7.9.0", "7.10.0", Collections.emptySet(), false))
+                .anySatisfy(message -> assertThat(message).contains("strictly less"));
+    }
+
+    @Test
+    void laterDevelopmentAndReleasesRejectOldMissingOrUnreleasedBaselines() {
+        for (String version : Arrays.asList("7.0.1-SNAPSHOT", "7.0.1", "7.1.0-SNAPSHOT")) {
+            for (String baseline : Arrays.asList(null, "", "6.5.0", "7.0.0-SNAPSHOT")) {
+                assertThat(ReleaseBoundaryInvariant.evaluate(version, baseline,
+                        Collections.emptySet(), false)).as("%s against %s", version, baseline)
+                        .anySatisfy(message -> assertThat(message).contains("at least 7.0.0"));
+            }
+        }
+        assertThat(ReleaseBoundaryInvariant.evaluate("7.2.0-SNAPSHOT", "7.1.0",
+                Collections.emptySet(), false)).isEmpty();
+        assertThat(ReleaseBoundaryInvariant.evaluate("7.1.0", "7.1.0",
+                Collections.emptySet(), false)).anySatisfy(message -> assertThat(message).contains("strictly less"));
+    }
+
     /**
      * The formal-release gate is the three checks {@link DeprecationRegistryGenerator} and
      * {@code OverBroadExclusionInvariantTest} run together. With the empty-list rule gone, an

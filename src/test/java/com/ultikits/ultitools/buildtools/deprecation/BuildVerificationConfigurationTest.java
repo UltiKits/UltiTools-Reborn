@@ -221,6 +221,27 @@ class BuildVerificationConfigurationTest {
                 .isEqualTo("verify");
     }
 
+    @Test
+    void japicmpConfigurationCannotRemainDisabledAfterBaselineReset() throws Exception {
+        Document pom = pom();
+        String plugin = "/project/build/plugins/plugin[artifactId='japicmp-maven-plugin']";
+        assertThat(value(pom, plugin + "/configuration/skip")).isEqualTo("${japicmp.skip}");
+        String skip = value(pom, "/project/properties/japicmp.skip");
+        assertThat(skip).isIn("true", "false");
+        assertThat(ReleaseBoundaryInvariant.evaluate(value(pom, "/project/version"),
+                value(pom, "/project/properties/japicmp.baseline.version"),
+                DeprecationRegistryGenerator.readPomExcludeKeys(pom), Boolean.parseBoolean(skip)))
+                .as("Only 7.0.0-SNAPSHOT/7.0.0 may establish the new baseline without comparison")
+                .isEmpty();
+        assertThat(value(pom, plugin + "/executions/execution/phase")).isEqualTo("verify");
+        assertThat(value(pom, plugin + "/configuration/parameter/breakBuildOnBinaryIncompatibleModifications"))
+                .isEqualTo("true");
+        assertThat(value(pom, plugin + "/configuration/parameter/ignoreMissingOldVersion"))
+                .isEqualTo("false");
+        assertThat(value(pom, EXEC + "/configuration/arguments/argument[2]"))
+                .isEqualTo("${japicmp.skip}");
+    }
+
     // Publication consumes the retained, accepted files and never builds (plan 21-06). The registry
     // generator and japicmp still run on every candidate: release.sh --prepare's `clean verify`
     // (releaseHelperVerifiesWithTests) is the build those files come from.

@@ -1,0 +1,14 @@
+version,valid,baselineReset
+7.0.0-SNAPSHOT,true,true
+7.0.0,true,true
+7.0.0-RC1,false,false
+7.0.0-rc.1,false,false
+7.0-SNAPSHOT,false,false
+7.0.0-SNAPSHOT-2,false,false
+7.0.1-SNAPSHOT,true,false
+7.1.0,true,false
+7.10.0,true,false
+abc,false,false
+abc-SNAPSHOT,false,false
+7.0.0-snapshot,false,false
+7.0.0.1,false,false
