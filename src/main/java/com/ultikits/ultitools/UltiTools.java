@@ -28,6 +28,7 @@ import java.util.stream.Collectors;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.ApiStatus;
@@ -401,6 +402,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         initPanelResponderRegistry();
         // Plan 22-21 (S-60): the player-link API exists before the modules that set its handler load.
         cloudFeatures = CloudFeatures.start(this);
+        registerModuleDependencyLoaders();
         initPluginModules();
         migrateCapabilitiesConfig();
         initWebSocketManagers();
@@ -546,6 +548,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private void initPanelResponderRegistry() {
         // Constructed unconditionally — not gated by any Capability (WIRE-16).
         panelResponderRegistry = new PanelResponderRegistry();
+    }
+
+    private void registerModuleDependencyLoaders() {
+        ultiToolsClassLoader.addDeclaredDependencies(moduleJarAdmission, name -> {
+            Plugin dependency = Bukkit.getPluginManager().getPlugin(name);
+            return dependency == null || dependency.equals(this) ? null : dependency.getClass().getClassLoader();
+        });
     }
 
     private void initPluginModules() {

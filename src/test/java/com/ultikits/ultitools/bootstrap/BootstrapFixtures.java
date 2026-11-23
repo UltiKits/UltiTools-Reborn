@@ -55,6 +55,22 @@ public final class BootstrapFixtures {
         return writer;
     }
 
+    public static byte[] dependencyProbe(String name) {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(Opcodes.V25, Opcodes.ACC_PUBLIC, name.replace('.', '/'), null,
+                "com/ultikits/ultitools/abstracts/UltiToolsPlugin", null);
+        MethodVisitor method = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
+                "dependency", "()Ljava/lang/Class;", null, new String[] {"java/lang/ClassNotFoundException"});
+        method.visitCode();
+        method.visitLdcInsn("fixture.dep.Api");
+        method.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;", false);
+        method.visitInsn(Opcodes.ARETURN);
+        method.visitMaxs(1, 0);
+        method.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
     public static byte[] hook(String name, String failureType) {
         String owner = name.replace('.', '/');
         String context = "Lcom/ultikits/ultitools/bootstrap/ModuleBootstrapContext;";
