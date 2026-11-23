@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.ui;
 
+import java.util.List;
+import java.util.concurrent.CompletionStage;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -34,4 +37,14 @@ public interface UiService {
     GridSession show(Player viewer, Grid grid);
     /** Shows a grid with explicit options. */
     GridSession show(Player viewer, Grid grid, ShowOptions options);
+
+    /** A new container owned by this module. Call on the server thread (the container's thread). */
+    SlotContainer container(ContainerSpec spec);
+
+    /**
+     * Gives {@code items} to {@code player} on their entity thread: into their inventory, the rest dropped at their
+     * feet. If the player is offline when it runs, nothing is given and every item is in {@link Delivery#undelivered()}.
+     * May be called from any thread. Opening a grid never reads or writes the viewer's cursor.
+     */
+    CompletionStage<Delivery> deliver(Player player, List<ItemStack> items);
 }
