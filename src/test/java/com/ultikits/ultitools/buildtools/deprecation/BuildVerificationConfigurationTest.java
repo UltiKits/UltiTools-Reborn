@@ -185,8 +185,9 @@ class BuildVerificationConfigurationTest {
         Document pom = pom();
         String execution = COMPILER + "/executions/execution[id='compile-deprecation-buildtools']";
         assertThat(value(pom, COMPILER + "/version")).isEqualTo("3.16.0");
-        assertThat(value(pom, COMPILER + "/configuration/source")).isEqualTo("${java.version}");
-        assertThat(value(pom, COMPILER + "/configuration/target")).isEqualTo("${java.version}");
+        assertThat(value(pom, COMPILER + "/configuration/release")).isEqualTo("${java.version}");
+        assertThat(value(pom, COMPILER + "/configuration/source")).isEmpty();
+        assertThat(value(pom, COMPILER + "/configuration/target")).isEmpty();
         assertThat(value(pom, COMPILER + "/configuration/annotationProcessorPaths/path/artifactId"))
                 .isEqualTo("lombok");
         assertThat(value(pom, COMPILER + "/configuration/proc")).isEmpty();
@@ -202,8 +203,8 @@ class BuildVerificationConfigurationTest {
         assertThat(value(pom, config + "/outputDirectory"))
                 .isEqualTo("${project.build.directory}/buildtools-classes");
         assertThat(value(pom, config + "/proc")).isEqualTo("none");
-        assertThat(value(pom, "/project/properties/java.version")).isEqualTo("1.8");
-        assertThat(value(pom, "count(//release)")).isEqualTo("0");
+        assertThat(value(pom, "/project/properties/java.version")).isEqualTo("25");
+        assertThat(value(pom, "count(//release)")).isEqualTo("1");
     }
 
     @Test
