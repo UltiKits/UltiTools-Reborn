@@ -63,7 +63,8 @@ public final class ModuleMessages implements Messages {
         }
         Text.Translated translated = (Text.Translated) text;
         String fallback = PlainTextComponentSerializer.plainText().serialize(render(text, resolver.fallback()));
-        return Component.translatable(translated.key().translationKey()).fallback(fallback);
+        return Component.translatable(translated.key().translationKey(),
+                Component.virtual(Void.class, new SharedTextCarrier(translated, fallback))).fallback(fallback);
     }
 
     @Override

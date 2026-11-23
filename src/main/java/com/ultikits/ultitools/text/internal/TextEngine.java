@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Logger;
+import net.kyori.adventure.translation.GlobalTranslator;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
@@ -16,12 +17,17 @@ public final class TextEngine implements AutoCloseable {
     private final ConcurrentMap<String, Published> published = new ConcurrentHashMap<>();
     private final LocaleResolver resolver;
     private final MessageRenderer renderer;
+    private final UltiToolsTranslator translator;
 
     /** Creates an engine over the current locale configuration. */
     public TextEngine(LocaleResolver resolver, Logger logger) {
         this.resolver = Objects.requireNonNull(resolver, "resolver");
         this.renderer = new MessageRenderer(this::catalogue, resolver, Objects.requireNonNull(logger, "logger"));
+        this.translator = new UltiToolsTranslator(this, renderer);
+        GlobalTranslator.translator().addSource(translator);
     }
+
+    UltiToolsTranslator translator() { return translator; }
 
     /** Returns a namespace-bound view; lookups always use the latest published snapshot. */
     public Messages messagesFor(String namespace) {
@@ -41,6 +47,7 @@ public final class TextEngine implements AutoCloseable {
     @Override
     @PreDestroy
     public void close() {
+        GlobalTranslator.translator().removeSource(translator);
         published.clear();
     }
 
