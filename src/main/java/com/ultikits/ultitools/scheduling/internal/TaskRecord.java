@@ -146,8 +146,15 @@ final class TaskRecord implements TaskHandle {
     }
 
     private void retireEntity() {
-        if (state.compareAndSet(TaskState.SCHEDULED, TaskState.RETIRED)) {
-            finish(new TaskRetiredException("Entity removed before the task of " + context.owner.owner() + " could run"));
+        while (true) {
+            TaskState observed = state.get();
+            if (observed != TaskState.SCHEDULED && !(observed == TaskState.RUNNING && isRepeating())) {
+                return;
+            }
+            if (state.compareAndSet(observed, TaskState.RETIRED)) {
+                finish(new TaskRetiredException("Entity removed before the task of " + context.owner.owner() + " could run"));
+                return;
+            }
         }
     }
 
