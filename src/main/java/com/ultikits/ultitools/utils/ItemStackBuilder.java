@@ -52,15 +52,16 @@ public class ItemStackBuilder {
     
     /**
      * Creates a new ItemStackBuilder from a current Bukkit material name or namespaced name.
-     * Historical aliases and numeric material IDs are not supported.
+     * Historical aliases, numeric material IDs and old names renamed after 1.20 return null.
+     * Only names supported by the current server version are accepted; no legacy lookup is performed.
      *
      * @param materialName the material name
-     * @return a new ItemStackBuilder, or null if the material is invalid
+     * @return a new ItemStackBuilder, or null if the name is unknown or the material is not an item
      */
     @Nullable
     public static ItemStackBuilder of(String materialName) {
         Material material = Material.matchMaterial(materialName);
-        return material == null ? null : new ItemStackBuilder(material);
+        return material == null || !material.isItem() ? null : new ItemStackBuilder(material);
     }
     
     /**

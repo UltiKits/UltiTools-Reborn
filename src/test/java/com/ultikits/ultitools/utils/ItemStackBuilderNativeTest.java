@@ -3,8 +3,6 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.bukkit.Material;
-import org.bukkit.NamespacedKey;
-import org.bukkit.Registry;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
@@ -34,6 +32,20 @@ class ItemStackBuilderNativeTest {
     }
 
     @Test
+    void blockOnlyMaterialNamesReturnNull() {
+        assertThat(Material.WATER.isItem()).isFalse();
+        assertThat(ItemStackBuilder.of("water")).isNull();
+        assertThat(ItemStackBuilder.of("minecraft:potatoes")).isNull();
+    }
+
+    @Test
+    void legacyAliasesAndNumericIdsReturnNull() {
+        for (String name : new String[] {"WOOL:14", "GRASS", "CHAIN", "SCUTE", "1", "light-blue-wool"}) {
+            assertThat(ItemStackBuilder.of(name)).as(name).isNull();
+        }
+    }
+
+    @Test
     void nativeMaterialAndClonedItemEntrypointsRemainUsable() {
         ItemStack original = new ItemStack(Material.DIAMOND_SWORD);
         ItemStack built = ItemStackBuilder.of(original).amount(2).build();
@@ -44,8 +56,8 @@ class ItemStackBuilderNativeTest {
     }
 
     @Test
-    void registryResolvedEnchantmentsCanBeAddedAndRemoved() {
-        Enchantment enchantment = Registry.ENCHANTMENT.getOrThrow(NamespacedKey.minecraft("unbreaking"));
+    void nativeEnchantmentsCanBeAddedAndRemoved() {
+        Enchantment enchantment = Enchantment.UNBREAKING;
         ItemStack item = ItemStackBuilder.of(Material.DIAMOND_SWORD).enchant(enchantment, 3).build();
         assertThat(item.getEnchantmentLevel(enchantment)).isEqualTo(3);
         assertThat(ItemStackBuilder.of(item).removeEnchant(enchantment).build().getEnchantments()).isEmpty();
@@ -53,7 +65,7 @@ class ItemStackBuilderNativeTest {
 
     @Test
     void glowRetainsItsOriginalEnchantmentAndHiddenFlag() {
-        Enchantment glow = Registry.ENCHANTMENT.getOrThrow(NamespacedKey.minecraft("luck_of_the_sea"));
+        Enchantment glow = Enchantment.LUCK_OF_THE_SEA;
         ItemStack item = ItemStackBuilder.of(Material.PAPER).glow().build();
         assertThat(item.getEnchantmentLevel(glow)).isEqualTo(1);
         assertThat(item.getItemMeta().hasItemFlag(ItemFlag.HIDE_ENCHANTS)).isTrue();
