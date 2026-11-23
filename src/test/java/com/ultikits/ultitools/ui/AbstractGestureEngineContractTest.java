@@ -390,6 +390,31 @@ public abstract class AbstractGestureEngineContractTest extends EditableContract
         assertThat(side.cursor().isEmpty()).isTrue();
         assertThat(inventory(side)).allSatisfy(item -> assertThat(item.isEmpty()).isTrue());
     }
+    @Test void template_quickMoveIn_storesOneDistributedCopy() {
+        SlotContainer container = service.container(ContainerSpec.template(3)
+                .baseline(List.of(stone(62), ItemStack.empty(), ItemStack.empty())).build());
+        InMemoryViewerItems side = side(); side.slot(10, stone(64));
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 3, container, 0, BindingMode.EDITABLE).build();
+        assertThat(engine.apply(grid, viewer, side, new Gesture.QuickMoveIn(10))).isTrue();
+        assertThat(container.contents()).containsExactly(stone(64), stone(62), ItemStack.empty());
+        assertThat(side.slot(10)).isEqualTo(stone(64));
+    }
+    @Test void template_spread_storesEvenSplitCopies() {
+        SlotContainer container = service.container(ContainerSpec.template(2).build());
+        InMemoryViewerItems side = side(); side.cursor(stone(10));
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 2, container, 0, BindingMode.EDITABLE).build();
+        assertThat(engine.apply(grid, viewer, side, new Gesture.Spread(grid.bindings().keySet(), false))).isTrue();
+        assertThat(container.contents()).containsExactly(stone(5), stone(5));
+        assertThat(side.cursor()).isEqualTo(stone(10));
+    }
+    @Test void template_quickMoveOut_clearsIndexAndGivesNothing() {
+        SlotContainer container = service.container(ContainerSpec.template(1).baseline(List.of(stone(5))).build());
+        InMemoryViewerItems side = side();
+        List<ItemStack> before = playerItems(side);
+        assertThat(apply(container, side, new Gesture.QuickMoveOut(SLOT))).isTrue();
+        assertThat(container.get(0).isEmpty()).isTrue();
+        assertThat(playerItems(side)).isEqualTo(before);
+    }
     @Test void onChange_runsOnceAfterEachTransfer() {
         List<ContainerChange> changes = new ArrayList<>();
         AtomicReference<SlotContainer> reference = new AtomicReference<>();

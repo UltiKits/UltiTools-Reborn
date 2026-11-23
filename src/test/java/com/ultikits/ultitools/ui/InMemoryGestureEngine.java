@@ -84,7 +84,7 @@ final class InMemoryGestureEngine implements GestureEngine {
         }
         put(plan, binding, plan.side.cursor(), gesture.one() ? 1 : count(plan.side.cursor()), true, -1);
     }
-    private void put(Plan plan, SlotBinding binding, ItemStack source, int requested, boolean cursor, int slot) {
+    private int put(Plan plan, SlotBinding binding, ItemStack source, int requested, boolean cursor, int slot) {
         ItemStack target = plan.item(binding);
         int moved = allowed(plan, binding, TransferKind.PUT_IN, source,
                 Math.min(requested, Math.min(count(source), room(target, source))));
@@ -97,6 +97,7 @@ final class InMemoryGestureEngine implements GestureEngine {
                 plan.side.slot(slot, rest);
             }
         }
+        return moved;
     }
     private void swapCursor(Grid grid, Plan plan, Gesture.SwapWithCursor gesture) {
         SlotBinding binding = editable(grid, gesture.slot());
@@ -165,16 +166,19 @@ final class InMemoryGestureEngine implements GestureEngine {
                 .sorted(Map.Entry.comparingByKey(Comparator.comparingInt(GridSlot::index)))
                 .map(entry -> editable(grid, entry.getKey())).filter(Objects::nonNull)
                 .sorted(Comparator.comparingInt(SlotBinding::index)).toList();
-        quickInPass(plan, targets, source, gesture.playerSlot(), false);
-        quickInPass(plan, targets, source, gesture.playerSlot(), true);
+        int remaining = quickInPass(plan, targets, source, gesture.playerSlot(), false, count(source));
+        quickInPass(plan, targets, source, gesture.playerSlot(), true, remaining);
     }
-    private void quickInPass(Plan plan, List<SlotBinding> targets, ItemStack original, int sourceSlot, boolean empty) {
+    private int quickInPass(Plan plan, List<SlotBinding> targets, ItemStack original, int sourceSlot, boolean empty, int remaining) {
+        int left = remaining;
         for (SlotBinding binding : targets) {
+            if (left == 0) { break; }
             if (plan.item(binding).isEmpty() == empty) {
-                ItemStack source = binding.container().kind() == ContainerKind.TEMPLATE ? original : plan.side.slot(sourceSlot);
-                put(plan, binding, source, count(source), false, sourceSlot);
+                ItemStack source = binding.container().kind() == ContainerKind.TEMPLATE ? amount(original, left) : plan.side.slot(sourceSlot);
+                left -= put(plan, binding, source, count(source), false, sourceSlot);
             }
         }
+        return left;
     }
     private void spread(Grid grid, Plan plan, Gesture.Spread gesture) {
         if (gesture.slots().isEmpty()) {
