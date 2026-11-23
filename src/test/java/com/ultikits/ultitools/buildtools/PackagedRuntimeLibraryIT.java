@@ -42,13 +42,16 @@ class PackagedRuntimeLibraryIT {
     void finalArtifactHasNoRetiredCrossVersionLibraryEntriesOrLinkage() throws Exception {
         Path jar = Paths.get(System.getProperty("runtimeGuardArtifact"));
         try (java.util.jar.JarFile archive = new java.util.jar.JarFile(jar.toFile())) {
+            assertThat(archive.getJarEntry("paper-plugin.yml")).isNotNull();
+            assertThat(archive.getJarEntry("ultitools-libraries.txt")).isNotNull();
+            assertThat(archive.getJarEntry("plugin.yml")).isNull();
             java.util.Enumeration<JarEntry> entries = archive.entries();
             int inspectedClasses = 0;
             boolean descriptorFound = false;
             while (entries.hasMoreElements()) {
                 JarEntry entry = entries.nextElement();
                 assertThat(entry.getName()).doesNotContain("cryptomorin", "XVersionUtils");
-                if (entry.getName().endsWith(".class") || entry.getName().equals("plugin.yml")
+                if (entry.getName().endsWith(".class") || entry.getName().equals("paper-plugin.yml")
                         || entry.getName().endsWith("/pom.xml")) {
                     try (java.io.InputStream input = archive.getInputStream(entry)) {
                         String contents = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.ISO_8859_1);
@@ -58,7 +61,7 @@ class PackagedRuntimeLibraryIT {
                     if (entry.getName().endsWith(".class")) {
                         inspectedClasses++;
                     }
-                    descriptorFound |= entry.getName().equals("plugin.yml");
+                    descriptorFound |= entry.getName().equals("paper-plugin.yml");
                 }
             }
             assertThat(inspectedClasses).isGreaterThan(0);

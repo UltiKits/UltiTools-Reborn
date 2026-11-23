@@ -27,7 +27,7 @@ import java.util.Comparator;
  * from file I/O and real reflection, so this is unit-testable with synthetic classes.
  * {@code SoftDependencySignatureInvariantTest} is the sole caller, deriving the real inputs:
  * every class under {@code target/classes}' {@code com.ultikits.ultitools} tree, the package
- * prefixes read from {@code plugin.yml}'s {@code softdepend:} list, and the allowlist named in
+ * prefixes read from {@code paper-plugin.yml}'s {@code dependencies.server} keys, and the allowlist named in
  * D-08.
  * <p>
  * Detection reads each member's {@link Member#toString()}-family text form ({@code toGenericString()}

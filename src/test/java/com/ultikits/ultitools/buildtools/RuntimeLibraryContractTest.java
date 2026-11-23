@@ -177,7 +177,7 @@ class RuntimeLibraryContractTest {
 
     @Test
     void apiVersionMatchesPaperTwentySixThreeBaseline() throws Exception {
-        Path pluginYml = projectRoot().resolve("target/classes/plugin.yml");
+        Path pluginYml = projectRoot().resolve("target/classes/paper-plugin.yml");
         assertThat(pluginYml).as("the filtered plugin descriptor must exist").isRegularFile();
         Object descriptor;
         try (InputStream input = Files.newInputStream(pluginYml)) {
@@ -187,6 +187,44 @@ class RuntimeLibraryContractTest {
         assertThat(((Map<?, ?>) descriptor).get("api-version"))
                 .as("the plugin descriptor must declare the Paper 26.3 baseline")
                 .isEqualTo("26.3");
+    }
+
+    @Test
+    void paperPluginYmlNamesBootstrapperAndLoader() throws Exception {
+        Object descriptor;
+        try (InputStream input = Files.newInputStream(projectRoot().resolve("target/classes/paper-plugin.yml"))) {
+            descriptor = new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
+        }
+        assertThat(descriptor).isInstanceOf(Map.class);
+        Map<?, ?> values = (Map<?, ?>) descriptor;
+        assertThat(values.get("bootstrapper")).isEqualTo("com.ultikits.ultitools.bootstrap.UltiToolsBootstrap");
+        assertThat(values.get("loader")).isEqualTo("com.ultikits.ultitools.bootstrap.UltiToolsLoader");
+        assertThat(values.get("name")).isEqualTo("UltiTools");
+        try (InputStream input = Files.newInputStream(projectRoot().resolve("target/classes/env.yml"))) {
+            Map<?, ?> environment = new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
+            assertThat(values.get("version")).isEqualTo(environment.get("version"));
+        }
+        assertThat(values.get("main")).isEqualTo("com.ultikits.ultitools.UltiTools");
+        assertThat(values.get("prefix")).isEqualTo("UltiTools");
+        assertThat(values.get("load")).isEqualTo("POSTWORLD");
+        assertThat(values.get("authors")).isEqualTo(Collections.singletonList("wisdomme"));
+        assertThat(values.containsKey("libraries")).isFalse();
+        assertThat(values.containsKey("softdepend")).isFalse();
+        assertThat(values.containsKey("website")).isFalse();
+        assertThat(values.containsKey("description")).isFalse();
+        Map<?, ?> server = (Map<?, ?>) ((Map<?, ?>) values.get("dependencies")).get("server");
+        assertThat(server.keySet()).isEqualTo(new HashSet<>(Arrays.asList("Vault", "PlaceholderAPI")));
+        for (Object dependency : server.values()) {
+            assertThat(((Map<?, ?>) dependency).get("required")).isEqualTo(false);
+            assertThat(((Map<?, ?>) dependency).get("join-classpath")).isEqualTo(true);
+            assertThat(((Map<?, ?>) dependency).get("load")).isEqualTo("BEFORE");
+        }
+    }
+
+    @Test
+    void pluginYmlIsAbsent() {
+        assertThat(projectRoot().resolve("src/main/resources/plugin.yml")).doesNotExist();
+        assertThat(projectRoot().resolve("target/classes/plugin.yml")).doesNotExist();
     }
 
     @Test
