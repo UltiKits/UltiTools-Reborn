@@ -617,11 +617,15 @@ public final class ModuleFileTransactions {
      * it is not the old JAR, it passes the check the start-up applies before putting a JAR on the
      * module class path ({@link SecurityPolicy#isValidModuleJar}, as {@code UltiTools#collectModuleJarUrls}
      * and {@code PluginManager#loadPluginMainClass} do; a JAR failing it is never loaded -- Codex round
-     * 17), and its {@code plugin.yml} declares the class.
+     * 17), its API declaration meets the shared minimum, and its {@code plugin.yml} declares the class.
      */
     private static boolean loadsAhead(File jar, String oldPath, String mainClass) {
-        return !oldPath.equals(canonicalPath(jar)) && SecurityPolicy.isValidModuleJar(jar)
-                && mainClass.equals(PluginYmlReader.readFromJarFile(jar).getMain());
+        if (oldPath.equals(canonicalPath(jar)) || !SecurityPolicy.isValidModuleJar(jar)) {
+            return false;
+        }
+        PluginYmlReader.PluginYmlInfo metadata = PluginYmlReader.readFromJarFile(jar);
+        return mainClass.equals(metadata.getMain())
+                && ModuleApiLevels.isLoadable(ModuleApiLevels.parse(metadata.getApiVersion()));
     }
 
     /**

@@ -56,7 +56,7 @@ class InstallRefusalCatalogueTest {
         when(instance.getDataFolder()).thenReturn(dataFolder);
         ultiTools = mockStatic(UltiTools.class);
         ultiTools.when(UltiTools::getInstance).thenReturn(instance);
-        ultiTools.when(UltiTools::getPluginVersion).thenReturn(630);
+        ultiTools.when(UltiTools::getPluginVersion).thenReturn(700);
         catalogue = StubCatalogue.start();
         PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
         Logger logger = Logger.getLogger(PluginInstallUtils.class.getName());

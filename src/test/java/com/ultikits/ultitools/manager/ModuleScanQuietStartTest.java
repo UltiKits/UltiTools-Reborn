@@ -5,11 +5,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -23,35 +24,33 @@ import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.bukkit.Bukkit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
+import com.ultikits.ultitools.utils.TestHelper;
 
 /**
- * #557: a clean start prints no class-load audit line, a module the removed class-name filters would
- * have refused something from is reported exactly once, and no record carries an internal requirement
- * code.
- * <p>
- * Each module jar goes through the same two steps the framework runs at start-up: {@code init()} reads
- * its main class ({@code loadPluginMainClass}), then registration scans it for entities
- * ({@code scanEntitiesInJar}). Before the fix both steps emitted a summary for the same jar, so every
- * module was reported twice, at INFO through a private handler that printed WARN on a real server.
+ * Module-scan regression guards retained from the former mixed audit/scan fixture (#557).
+ * Each module goes through main-class loading and the real entity-scan loop. A missing
+ * superclass supplies observable FINE and SEVERE records without the removed audit.
  */
-@DisplayName("A clean start is quiet; a non-clean audit is reported once (#557)")
+@DisplayName("Module scans are quiet on a clean start and never print internal codes (#557)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-class ClassloadAuditQuietStartTest {
+class ModuleScanQuietStartTest {
 
-    private static final String AUDIT_LOGGER = "com.ultikits.ultitools.utils.ClassloadFilterAudit";
     private static final Pattern INTERNAL_CODE = Pattern.compile("[A-Z]{2,}-[0-9]+");
 
     @TempDir
@@ -60,10 +59,11 @@ class ClassloadAuditQuietStartTest {
     private PluginManager pluginManager;
     private final List<LogRecord> captured = Collections.synchronizedList(new ArrayList<>());
     private Handler captureHandler;
-    private Logger auditLogger;
     private Logger diagnosticsLogger;
+    private Level originalDiagnosticsLevel;
+    private Logger bukkitLogger;
+    private Level originalBukkitLevel;
 
-    /** A module main class that no removed filter layer would have refused. */
     static class CleanPlugin extends UltiToolsPlugin {
         @Override
         public boolean registerSelf() {
@@ -71,12 +71,18 @@ class ClassloadAuditQuietStartTest {
         }
     }
 
+    public static class MissingParent {
+    }
+
+    public static class BrokenScannedClass extends MissingParent {
+    }
+
     @BeforeEach
-    void setUp() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+    void setUp() throws ClassNotFoundException {
+        MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
+        TestHelper.mockUltiToolsInstance();
         pluginManager = new PluginManager();
 
         captured.clear();
@@ -97,19 +103,27 @@ class ClassloadAuditQuietStartTest {
             }
         };
         captureHandler.setLevel(Level.ALL);
-        auditLogger = Logger.getLogger(AUDIT_LOGGER);
-        auditLogger.setLevel(Level.ALL);
-        auditLogger.addHandler(captureHandler);
+        // Initialize before attaching: production may install its bridge in the static initializer.
+        // The class name is a compile-time class literal, not external input.
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
+        Class.forName(ModuleScanDiagnostics.class.getName());
         diagnosticsLogger = Logger.getLogger(ModuleScanDiagnostics.class.getName());
+        originalDiagnosticsLevel = diagnosticsLogger.getLevel();
         diagnosticsLogger.setLevel(Level.ALL);
         diagnosticsLogger.addHandler(captureHandler);
+        bukkitLogger = Bukkit.getLogger();
+        originalBukkitLevel = bukkitLogger.getLevel();
+        bukkitLogger.setLevel(Level.ALL);
+        bukkitLogger.addHandler(captureHandler);
     }
 
     @AfterEach
     void tearDown() {
-        auditLogger.removeHandler(captureHandler);
         diagnosticsLogger.removeHandler(captureHandler);
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        diagnosticsLogger.setLevel(originalDiagnosticsLevel);
+        bukkitLogger.removeHandler(captureHandler);
+        bukkitLogger.setLevel(originalBukkitLevel);
+        MockBukkitHelper.safeUnmock();
     }
 
     @Test
@@ -122,56 +136,73 @@ class ClassloadAuditQuietStartTest {
     }
 
     @Test
-    @DisplayName("a module holding classes the removed filters would have refused gets exactly one INFO record, naming it and the count")
-    void aNonCleanModuleIsReportedOnceAtInfo() throws Exception {
-        startUp(createModuleJar("flagged-one.jar", CleanPlugin.class, Gson.class, JsonObject.class));
-
-        List<LogRecord> info = atInfoOrAbove();
-        assertThat(info).hasSize(1);
-        assertThat(info.get(0).getLevel()).isEqualTo(Level.INFO);
-        assertThat(info.get(0).getMessage()).contains("flagged-one.jar").contains("2 class");
-    }
-
-    @Test
-    @DisplayName("each module jar is audited at most once per start, at any level")
-    void eachModuleJarIsAuditedAtMostOnce() throws Exception {
-        startUp(createModuleJar("clean-once.jar", CleanPlugin.class));
-        startUp(createModuleJar("flagged-once.jar", CleanPlugin.class, Gson.class));
-
-        for (String jar : new String[] {"clean-once.jar", "flagged-once.jar"}) {
-            long summaries = snapshot().stream()
-                    .filter(r -> r.getMessage() != null && r.getMessage().contains(jar)
-                            && r.getMessage().toLowerCase(java.util.Locale.ROOT).contains("audit"))
-                    .count();
-            assertThat(summaries).as("audit summaries for %s", jar).isLessThanOrEqualTo(1);
-        }
-    }
-
-    @Test
     @DisplayName("no record text carries an internal requirement code")
     void noRecordCarriesAnInternalCode() throws Exception {
         startUp(createModuleJar("clean-code.jar", CleanPlugin.class));
-        startUp(createModuleJar("flagged-code.jar", CleanPlugin.class, Gson.class));
+        File brokenJar = createModuleJar("broken-code.jar", CleanPlugin.class, BrokenScannedClass.class);
+        Field field = UltiTools.class.getDeclaredField("ultiToolsClassLoader");
+        field.setAccessible(true);
+        Object originalLoader = field.get(UltiTools.getInstance());
+        // Define the scanned class from this JAR, but make its superclass genuinely unavailable.
+        try (URLClassLoader loader = new URLClassLoader(new URL[]{brokenJar.toURI().toURL()},
+                getClass().getClassLoader()) {
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                synchronized (getClassLoadingLock(name)) {
+                    if (name.equals(MissingParent.class.getName())) {
+                        throw new ClassNotFoundException(name);
+                    }
+                    if (!name.equals(BrokenScannedClass.class.getName())) {
+                        return super.loadClass(name, resolve);
+                    }
+                    Class<?> loaded = findLoadedClass(name);
+                    if (loaded == null) {
+                        loaded = findClass(name);
+                    }
+                    if (resolve) {
+                        resolveClass(loaded);
+                    }
+                    return loaded;
+                }
+            }
+        }) {
+            field.set(UltiTools.getInstance(), loader);
+            startUp(brokenJar);
+        } finally {
+            field.set(UltiTools.getInstance(), originalLoader);
+        }
 
-        List<String> offending = snapshot().stream()
+        List<LogRecord> records = snapshot();
+        assertThat(records).as("control: the capture saw real scan diagnostics")
+                .anyMatch(r -> r.getLevel().equals(Level.FINE) && r.getThrown() instanceof NoClassDefFoundError)
+                .anyMatch(r -> r.getLevel().equals(Level.SEVERE) && r.getMessage().contains("broken-code.jar"));
+        List<String> offending = records.stream()
                 .map(LogRecord::getMessage)
                 .filter(m -> m != null && INTERNAL_CODE.matcher(m).find())
                 .collect(Collectors.toList());
-        assertThat(snapshot()).as("control: the capture saw records").isNotEmpty();
         assertThat(offending).isEmpty();
     }
 
-    @Test
-    @DisplayName("neither diagnostic class builds its own console handler or writes to System.err")
-    void noPrivateConsoleOutput() throws IOException {
-        Path utils = Paths.get("src/main/java/com/ultikits/ultitools/utils");
-        for (String file : new String[] {"ClassloadFilterAudit.java", "ModuleScanDiagnostics.java"}) {
-            String source = new String(Files.readAllBytes(utils.resolve(file)), StandardCharsets.UTF_8);
-            assertThat(source.length()).as("control: %s was read", file).isGreaterThan(1000);
-            assertThat(source).as("%s must not attach its own console handler", file).doesNotContain("ConsoleHandler");
-            assertThat(source).as("%s must not write to System.err", file).doesNotContain("System.err");
-            assertThat(source).as("%s forwards to the plugin logger", file).contains("new PluginLoggerBridge(");
+    @ParameterizedTest
+    @ValueSource(strings = {"module-info.class", "com/example/package-info.class"})
+    void metadataEntriesCurrentlyProduceOneWarning(String entry) throws Exception {
+        File jar = new File(tempDir, "metadata.jar");
+        try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+            output.putNextEntry(new JarEntry("plugin.yml"));
+            output.write(("main: " + CleanPlugin.class.getName() + "\napi-version: 700\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+            // Bytes are irrelevant: name validation rejects the entry before calling the loader.
+            output.putNextEntry(new JarEntry(entry));
+            output.closeEntry();
         }
+        startUp(jar);
+
+        assertThat(atInfoOrAbove()).hasSize(1);
+        assertThat(atInfoOrAbove().get(0).getLevel()).isEqualTo(Level.WARNING);
+        assertThat(atInfoOrAbove().get(0).getMessage()).contains("Security violation during entity scan")
+                .contains(entry.replace('/', '.').replace(".class", ""))
+                .contains("Invalid class name format");
     }
 
     private List<LogRecord> snapshot() {
@@ -202,7 +233,7 @@ class ClassloadAuditQuietStartTest {
         File jar = new File(tempDir, name);
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
             output.putNextEntry(new JarEntry("plugin.yml"));
-            output.write(("main: " + CleanPlugin.class.getName() + "\n").getBytes(StandardCharsets.UTF_8));
+            output.write(("main: " + CleanPlugin.class.getName() + "\napi-version: 700\n").getBytes(StandardCharsets.UTF_8));
             output.closeEntry();
             for (Class<?> type : classes) {
                 String resource = type.getName().replace('.', '/') + ".class";

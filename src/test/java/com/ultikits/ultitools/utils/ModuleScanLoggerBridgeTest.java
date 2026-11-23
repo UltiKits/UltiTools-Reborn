@@ -35,24 +35,23 @@ import org.mockito.MockedStatic;
 import com.ultikits.ultitools.UltiTools;
 
 /**
- * #557: the class-load audit and the module-scan diagnostics reach the operator through the framework's
+ * #557: the module-scan diagnostics reach the operator through the framework's
  * own plugin logger, at their true level, instead of a private handler that wrote to {@code System.err}
  * (which Paper prints as WARN, behind a second, JUL-formatted header line).
  * <p>
  * The plugin logger here is a test logger with a capturing handler, so what arrives there is exactly what
  * the server console would receive.
  */
-@DisplayName("Audit and scan diagnostics reach the plugin logger at their true level (#557)")
-class AuditReachesPluginLoggerTest {
+@DisplayName("Scan diagnostics reach the plugin logger at their true level (#557)")
+class ModuleScanLoggerBridgeTest {
 
     /** A named logger, as Paper's plugin logger is named after the plugin; an anonymous one has no name. */
-    private static final String PLUGIN_LOGGER_NAME = "UltiTools-AuditReachesPluginLoggerTest";
+    private static final String PLUGIN_LOGGER_NAME = "UltiTools-ModuleScanLoggerBridgeTest";
 
     private MockedStatic<UltiTools> ultiToolsMock;
     private final List<LogRecord> atPluginLogger = Collections.synchronizedList(new ArrayList<>());
     private Logger pluginLogger;
     private URLClassLoader isolated;
-    private Class<?> audit;
     private Class<?> diagnostics;
     private final List<LoggerState> originalLoggers = new ArrayList<>();
 
@@ -85,14 +84,12 @@ class AuditReachesPluginLoggerTest {
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(ultiTools);
 
         String prefix = "com.ultikits.ultitools.utils.";
-        originalLoggers.add(new LoggerState(Logger.getLogger(prefix + "ClassloadFilterAudit")));
         originalLoggers.add(new LoggerState(Logger.getLogger(prefix + "ModuleScanDiagnostics")));
         isolated = new DiagnosticLoader(new URL[]{UltiTools.class.getProtectionDomain().getCodeSource().getLocation()},
                 getClass().getClassLoader());
         // Fresh production static initializers install the bridges. The fixture never installs a handler.
-        audit = Class.forName(prefix + "ClassloadFilterAudit", true, isolated);
         diagnostics = Class.forName(prefix + "ModuleScanDiagnostics", true, isolated);
-        for (Class<?> type : new Class<?>[]{audit, diagnostics}) {
+        for (Class<?> type : new Class<?>[]{diagnostics}) {
             Logger logger = Logger.getLogger(type.getName());
             assertThat(logger.getUseParentHandlers()).isFalse();
             assertThat(logger.getHandlers()).hasSize(1);
@@ -108,8 +105,7 @@ class AuditReachesPluginLoggerTest {
 
         @Override
         protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-            if (!name.startsWith("com.ultikits.ultitools.utils.ClassloadFilterAudit")
-                    && !name.startsWith("com.ultikits.ultitools.utils.ModuleScanDiagnostics")
+            if (!name.startsWith("com.ultikits.ultitools.utils.ModuleScanDiagnostics")
                     && !name.equals("com.ultikits.ultitools.utils.PluginLoggerBridge")) {
                 return super.loadClass(name, resolve);
             }
@@ -181,17 +177,9 @@ class AuditReachesPluginLoggerTest {
         }
     }
 
-    private void recordAudit(String module, String className) {
-        invoke(audit, "record", new Class<?>[]{String.class, String.class}, module, className);
-    }
-
     private void recordSkipped(String module, String className, Throwable cause) {
         invoke(diagnostics, "recordSkippedClass", new Class<?>[]{String.class, String.class, Throwable.class},
                 module, className, cause);
-    }
-
-    private void auditSummary(String module) {
-        invoke(audit, "emitSummary", new Class<?>[]{String.class}, module);
     }
 
     private void scanSummary(String module) {
@@ -204,28 +192,6 @@ class AuditReachesPluginLoggerTest {
                     .filter(r -> r.getLevel().intValue() >= Level.INFO.intValue())
                     .collect(Collectors.toList());
         }
-    }
-
-    @Test
-    @DisplayName("a non-clean audit arrives at the plugin logger as one INFO line naming the module and the count")
-    void nonCleanAuditIsOneInfoLineAtThePluginLogger() {
-        recordAudit("plain-words-module", "com.example.thirdparty.Foo");
-        recordAudit("plain-words-module", "com.example.thirdparty.Bar");
-        auditSummary("plain-words-module");
-
-        List<LogRecord> info = infoOrAbove();
-        assertThat(info).hasSize(1);
-        assertThat(info.get(0).getLevel()).isEqualTo(Level.INFO);
-        assertThat(info.get(0).getMessage()).contains("plain-words-module").contains("2 class");
-    }
-
-    @Test
-    @DisplayName("a clean audit prints nothing at INFO or above at the plugin logger")
-    void cleanAuditIsSilentAtInfo() {
-        recordAudit("quiet-module", "com.ultikits.ultitools.UltiTools");
-        auditSummary("quiet-module");
-
-        assertThat(infoOrAbove()).isEmpty();
     }
 
     @Test
@@ -249,48 +215,36 @@ class AuditReachesPluginLoggerTest {
     void forwardedLineCarriesThePluginLoggerName() {
         // Logger#log(LogRecord) does not stamp a logger name; Paper's console takes the bracketed prefix
         // from it, so a copy without one is printed as "[null] Module ...".
-        recordAudit("named-module", "com.example.thirdparty.Foo");
-        auditSummary("named-module");
         recordSkipped("named-module", "com.example.Gone",
                 new NoClassDefFoundError("com/example/Missing"));
         scanSummary("named-module");
 
         List<LogRecord> info = infoOrAbove();
-        assertThat(info).hasSize(2);
+        assertThat(info).hasSize(1);
         assertThat(info).extracting(LogRecord::getLoggerName).containsOnly(PLUGIN_LOGGER_NAME);
     }
 
     @Test
-    void defaultInfoLoggerFiltersPerClassDetailsButKeepsBothSummaries() {
-        recordAudit("default-info", "com.example.Foo");
+    void defaultInfoLoggerFiltersPerClassDetailsButKeepsSummary() {
         recordSkipped("default-info", "com.example.Gone", new NoClassDefFoundError("missing"));
-        assertThat(atPluginLogger).as("neither per-class FINE record reaches the default INFO logger").isEmpty();
-        auditSummary("default-info");
+        assertThat(atPluginLogger).as("the per-class FINE record does not reach the default INFO logger").isEmpty();
         scanSummary("default-info");
-        assertThat(atPluginLogger).extracting(LogRecord::getLevel).containsExactly(Level.INFO, Level.SEVERE);
+        assertThat(atPluginLogger).extracting(LogRecord::getLevel).containsExactly(Level.SEVERE);
     }
 
     @Test
-    void auditBridgeItselfRejectsFineEvenWhenPluginLoggingIsVerbose() {
-        pluginLogger.setLevel(Level.ALL);
-        recordAudit("verbose-audit", "com.example.Foo");
-        assertThat(atPluginLogger).as("the audit bridge, not the plugin threshold, rejects FINE").isEmpty();
+    void verbosePluginLoggerReceivesPerClassScanDetail() {
+        pluginLogger.setLevel(Level.FINE);
         recordSkipped("verbose-scan", "com.example.Gone", new NoClassDefFoundError("missing"));
         assertThat(atPluginLogger).extracting(LogRecord::getLevel).containsExactly(Level.FINE);
-        auditSummary("verbose-audit");
         scanSummary("verbose-scan");
-        assertThat(atPluginLogger).extracting(LogRecord::getLevel)
-                .containsExactly(Level.FINE, Level.INFO, Level.SEVERE);
+        assertThat(atPluginLogger).extracting(LogRecord::getLevel).containsExactly(Level.FINE, Level.SEVERE);
     }
 
     @Test
     @DisplayName("a handler of the plugin logger that throws does not break the scan that emits the line")
     void throwingPluginLoggerHandlerDoesNotBreakTheCaller() {
         addThrowingPluginLoggerHandler();
-        recordAudit("broken-handler-module", "com.example.thirdparty.Foo");
-
-        assertThatCode(() -> auditSummary("broken-handler-module"))
-                .doesNotThrowAnyException();
         recordSkipped("broken-handler-module", "com.example.Gone",
                 new NoClassDefFoundError("com/example/Missing"));
         assertThatCode(() -> scanSummary("broken-handler-module"))
@@ -320,7 +274,7 @@ class AuditReachesPluginLoggerTest {
     void stderrFallbackCannotReenterTheBridgeAndGuardIsReleasedAfterwards() {
         addThrowingPluginLoggerHandler();
         PluginLoggerBridge bridge = new PluginLoggerBridge(Level.ALL);
-        // A second bridge checks that the guard covers both diagnostics loggers on this thread.
+        // A second bridge checks that the guard covers multiple bridge instances on this thread.
         PluginLoggerBridge reenteredBridge = new PluginLoggerBridge(Level.ALL);
         PrintStream originalStderr = System.err;
         PrintStream reLoggingStderr = mock(PrintStream.class);

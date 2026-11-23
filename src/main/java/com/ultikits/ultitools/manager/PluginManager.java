@@ -25,7 +25,6 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
-import java.util.function.BiConsumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
@@ -258,19 +257,8 @@ public class PluginManager {
      */
     private final Map<UltiToolsPlugin, List<Runnable>> supersedeHandovers =
             Collections.synchronizedMap(new IdentityHashMap<>());
+    private final ModuleJarAdmission moduleJarAdmission;
     private ClassLoader classLoader;
-    private BiConsumer<Class<?>, String[]> moduleScanObserver;
-
-    /**
-     * Installs the framework's diagnostic callback, invoked with the actual merged scan roots
-     * immediately before component scanning. It does not decide whether any bean is accepted.
-     *
-     * @param observer module main class and the already-resolved component scan packages
-     */
-    @ApiStatus.Internal
-    public void setModuleScanObserver(BiConsumer<Class<?>, String[]> observer) {
-        this.moduleScanObserver = observer;
-    }
     @Getter
     private TaskManager taskManager;
     @Getter
@@ -325,6 +313,21 @@ public class PluginManager {
      */
     static final Set<Class<?>> FRAMEWORK_SCHEDULED_OWNER_TYPES = Collections.unmodifiableSet(
             new LinkedHashSet<>(Collections.<Class<?>>singletonList(PlayerCacheManager.class)));
+
+    /** Creates a standalone manager with its own admission snapshot. */
+    public PluginManager() {
+        this(new ModuleJarAdmission());
+    }
+
+    /**
+     * Uses the admission snapshot that built this start's module class path.
+     *
+     * @param moduleJarAdmission metadata and decisions from class-path collection
+     */
+    @ApiStatus.Internal
+    public PluginManager(ModuleJarAdmission moduleJarAdmission) {
+        this.moduleJarAdmission = moduleJarAdmission;
+    }
 
     /**
      * Returns the modules currently loaded, in load order, as an unmodifiable snapshot.
@@ -475,12 +478,13 @@ public class PluginManager {
      * @param mainClassName the main class it declares
      * @return {@code true} when it is a duplicate copy
      */
-    private static boolean isDuplicateCopy(File pluginJar, File supplier, String mainClassName) {
+    private boolean isDuplicateCopy(File pluginJar, File supplier, String mainClassName) {
         File folder = pluginJar.getAbsoluteFile().getParentFile();
         File supplierFolder = supplier.getAbsoluteFile().getParentFile();
         return folder != null && supplierFolder != null
                 && canonicalPath(folder).equals(canonicalPath(supplierFolder))
-                && mainClassName.equals(PluginYmlReader.readFromJarFile(supplier).getMain());
+                && moduleJarAdmission.inspect(supplier).isApiAllowed()
+                && mainClassName.equals(moduleJarAdmission.inspect(supplier).getMetadata().getMain());
     }
 
     /**
@@ -1595,7 +1599,8 @@ public class PluginManager {
      * fixes for the full real-machine reproduction.
      * <p>
      * Every refusal path here logs a specific, actionable SEVERE naming the module and the exact
-     * reason (no {@code plugin.yml}/no {@code main:}, the declared class failed to load, the
+     * reason (no {@code plugin.yml}/no {@code main:}, an invalid or below-minimum API declaration,
+     * the declared class failed to load, the
      * declared class is not a concrete {@code UltiToolsPlugin}, or -- because every module shares
      * one classloader over the whole module directory -- the declared class resolved but actually
      * belongs to a different, already-installed module's jar) and returns {@code null} -- never a
@@ -1616,7 +1621,8 @@ public class PluginManager {
             return null;
         }
 
-        PluginYmlReader.PluginYmlInfo ymlInfo = PluginYmlReader.readFromJarFile(pluginJar);
+        ModuleJarAdmission.Entry admission = moduleJarAdmission.inspect(pluginJar);
+        PluginYmlReader.PluginYmlInfo ymlInfo = admission.getMetadata();
         String mainClassName = ymlInfo.getMain();
         if (mainClassName == null || mainClassName.trim().isEmpty()) {
             Bukkit.getLogger().log(Level.SEVERE,
@@ -1628,14 +1634,26 @@ public class PluginManager {
         // #516: kept per main class, whether or not the class loads, so an uninstall can find every
         // JAR that declares a loaded module -- the loader's own read, not a second scan.
         moduleJarIndex.record(mainClassName, pluginJar);
+        if (!admission.isApiAllowed()) {
+            UltiTools framework = UltiTools.getInstance();
+            String frameworkVersion = framework.getDescription().getVersion();
+            if (admission.getApiLevel() == null) {
+                String raw = ymlInfo.getApiVersion();
+                String read = raw == null ? framework.i18n("<missing>") : "'" + raw + "'";
+                Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + String.format(framework.i18n(
+                        "Module '%s' has no valid api-version (read: %s); UltiTools-API %s requires an integer api-version of %d or higher -- refusing to load. Install a module rebuilt for the current UltiTools-API."),
+                        pluginJar.getName(), read, frameworkVersion, ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
+            } else {
+                Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + String.format(framework.i18n(
+                        "Module '%s' declares api-version %d, below the minimum %d required by UltiTools-API %s; refusing to load. Install a module rebuilt for the current UltiTools-API; changing api-version alone does not make an old module compatible."),
+                        pluginJar.getName(), admission.getApiLevel(), ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, frameworkVersion));
+            }
+            return null;
+        }
 
         try {
-            // No class-load audit here (#557): this step used to record the main class and emit a
-            // summary for the jar, and the entity scan then emitted a second summary for the same jar,
-            // so every module was reported twice. The entity scan visits every class of the jar,
-            // including this one, so it is the single audit per module.
-            // Use security-validated class loading (checks dangerous classes/packages)
-            // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
+            // Validate the main class name format, then check the module hierarchy below.
+            // Do not use loadPluginClass: its com.ultikits. prefix check would reject third-party modules.
             Class<?> aClass = ClassLoaderUtils.loadClass(mainClassName);
             if (!UltiToolsPlugin.class.isAssignableFrom(aClass)
                     || aClass.isInterface()
@@ -1707,7 +1725,7 @@ public class PluginManager {
                     + e.getMessage() + " -- refusing to load.", e);
             return null;
         } catch (SecurityException e) {
-            // Security violations must be logged — only triggers for actually dangerous classes
+            // Name-format validation or the classloader (for example, package sealing) can reject the class.
             Bukkit.getLogger().log(Level.WARNING,
                 "[UltiTools-API] Security violation while loading declared main class '"
                     + mainClassName + "' for module '" + pluginJar.getName() + "': " + e.getMessage());
@@ -1923,10 +1941,6 @@ public class PluginManager {
             // the jar itself could not be read -- exactly once per call, naming pluginJar as the
             // module.
             ModuleScanDiagnostics.emitSummary(pluginJar.getName());
-            // GEN-07 (D-14): the class-load audit summary lands at the same point, so the two
-            // diagnostics read as one pattern. This is the only place a jar's audit is emitted
-            // (#557): the scan records every class of the jar, the main class included.
-            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return entities;
     }
@@ -1965,10 +1979,6 @@ public class PluginManager {
     private static Optional<Class<?>> resolveEntityClass(
             String className, String moduleName, List<String> softDepend) {
         try {
-            // GEN-07 (D-14): records what the removed classload filter layers would have refused
-            // for className, independent of whether loadClass below succeeds or throws. Purely
-            // observational; never refuses.
-            ClassLoaderUtils.recordClassloadFilterAudit(moduleName, className);
             Class<?> aClass = ClassLoaderUtils.loadClass(className);
             if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
                 return Optional.of(aClass);
@@ -1992,6 +2002,7 @@ public class PluginManager {
                     "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
             }
         } catch (SecurityException e) {
+            // This includes malformed entry names and classloader rejections such as package sealing.
             Bukkit.getLogger().log(Level.WARNING,
                 "[UltiTools-API] Security violation during entity scan: " + className + " - " + e.getMessage());
         }
@@ -3264,9 +3275,6 @@ public class PluginManager {
 
             // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
             String[] scanPackages = getPluginScanPackages(pluginClass);
-            if (moduleScanObserver != null) {
-                moduleScanObserver.accept(pluginClass, scanPackages);
-            }
             if (scanPackages.length > 0) {
                 pluginContext.scanComponents(scanPackages);
             }

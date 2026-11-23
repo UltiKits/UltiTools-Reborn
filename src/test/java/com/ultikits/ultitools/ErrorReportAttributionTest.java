@@ -137,8 +137,7 @@ public class ErrorReportAttributionTest {
     private ModuleClassLoader modules() throws IOException {
         URL first = jar("A").toUri().toURL();
         URL second = jar("B").toUri().toURL();
-        return new ModuleClassLoader(new URL[] {first, second}, getClass().getClassLoader(),
-                null, Collections.emptyList(), null);
+        return new ModuleClassLoader(new URL[] {first, second}, getClass().getClassLoader());
     }
 
     private Path jar(String suffix) throws IOException {
