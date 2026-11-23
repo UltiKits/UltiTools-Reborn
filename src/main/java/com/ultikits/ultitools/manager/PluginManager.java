@@ -1630,12 +1630,7 @@ public class PluginManager {
         moduleJarIndex.record(mainClassName, pluginJar);
 
         try {
-            // No class-load audit here (#557): this step used to record the main class and emit a
-            // summary for the jar, and the entity scan then emitted a second summary for the same jar,
-            // so every module was reported twice. The entity scan visits every class of the jar,
-            // including this one, so it is the single audit per module.
-            // Use security-validated class loading (checks dangerous classes/packages)
-            // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
+            // Validate the main class name format, then check the module hierarchy below.
             Class<?> aClass = ClassLoaderUtils.loadClass(mainClassName);
             if (!UltiToolsPlugin.class.isAssignableFrom(aClass)
                     || aClass.isInterface()
@@ -1923,10 +1918,6 @@ public class PluginManager {
             // the jar itself could not be read -- exactly once per call, naming pluginJar as the
             // module.
             ModuleScanDiagnostics.emitSummary(pluginJar.getName());
-            // GEN-07 (D-14): the class-load audit summary lands at the same point, so the two
-            // diagnostics read as one pattern. This is the only place a jar's audit is emitted
-            // (#557): the scan records every class of the jar, the main class included.
-            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return entities;
     }
@@ -1965,10 +1956,6 @@ public class PluginManager {
     private static Optional<Class<?>> resolveEntityClass(
             String className, String moduleName, List<String> softDepend) {
         try {
-            // GEN-07 (D-14): records what the removed classload filter layers would have refused
-            // for className, independent of whether loadClass below succeeds or throws. Purely
-            // observational; never refuses.
-            ClassLoaderUtils.recordClassloadFilterAudit(moduleName, className);
             Class<?> aClass = ClassLoaderUtils.loadClass(className);
             if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
                 return Optional.of(aClass);

@@ -11,10 +11,10 @@ import com.ultikits.ultitools.UltiTools;
  * Forwards the records of a dedicated diagnostics logger to the framework's own plugin logger, so they
  * reach the server console at their real level and in the server's normal log format (#557).
  * <p>
- * The two diagnostics that use it, {@code ClassloadFilterAudit} and {@code ModuleScanDiagnostics}, keep
+ * The module-scan diagnostics ({@code ModuleScanDiagnostics}) keep
  * their own non-root logger with parent handlers disabled, so a record never propagates on its own to
  * the root logger {@code SystemLogHandler} watches. What this bridge forwards is a copy, logged on the
- * plugin logger; both classes emit only records without a {@link Throwable} at SEVERE, which is what
+ * plugin logger; the diagnostics emit only records without a {@link Throwable} at SEVERE, which is what
  * {@code SystemLogHandler} would auto-report, so forwarding does not turn a summary into an error
  * report.
  * <p>
@@ -25,7 +25,7 @@ import com.ultikits.ultitools.UltiTools;
  */
 final class PluginLoggerBridge extends Handler {
 
-    // Shared by both diagnostics bridges: Paper can re-log stderr through either one on this thread.
+    // Shared by bridge instances: Paper can re-log stderr through either one on this thread.
     private static final ThreadLocal<Boolean> WRITING_FALLBACK = new ThreadLocal<>();
 
     /**

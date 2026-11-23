@@ -3762,7 +3762,7 @@ its meaning.
     correct a recursively logging formatter or parameter implementation rather than relying on the
     log stream to stop that recursion.
   - Bukkit `/reload` is unsupported. If an old plugin class loader remains reachable after such a
-    reload, its audit/scan logger bridges can remain attached and duplicate diagnostic lines. Use a
+    reload, its module-scan logger bridge can remain attached and duplicate diagnostic lines. Use a
     full server stop and start after changing plugin JARs. `/ul reload` reloads module configuration;
     it is not Bukkit `/reload` and does not replace plugin JARs.
   - `FrameworkText.format(key, args)` requires a valid source format string and matching arguments.
@@ -3880,7 +3880,7 @@ its meaning.
   3 秒，且 4 个工作线程同时阻塞，这个已按超时答复的请求仍会在之后入队，并占用 64 个等待位置中的一个，直到有工作线程空出；
   其间后来的请求可能被当作队列已满而拒绝。不会发出错误的回复。
 
-### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
+### Framework text follows `language` (6.3.0)
 
 Each corrects a declared behaviour the framework did not deliver. The panel protocol is unchanged.
 
@@ -3903,18 +3903,16 @@ Each corrects a declared behaviour the framework did not deliver. The panel prot
   English log messages that carried full-width punctuation (`Configuration save failed！File path：…`,
   `… load failed！`) now use ASCII punctuation; a tool that matched the full-width form must be updated.
   `FrameworkText` (`com.ultikits.ultitools.utils`, `@ApiStatus.Internal`) is added for this.
-- **The class-load audit is quiet on a clean start** (#557). The audit (new in 6.3.0) reports which classes the
-  name-based filters removed in 6.3.0 would have refused. A module for which nothing would have been refused is
-  logged at `FINE` on the audit's own logger and is not forwarded to the console, and a module with at least one
-  such class gets ONE `INFO` line naming the jar and the count, through the plugin logger. (Earlier 6.3.0 snapshots
-  printed each summary as two `WARN` lines, twice per module, through the standard error stream, with an internal
-  requirement code.) The module-scan diagnostics (also new in 6.3.0) log their `SEVERE` summary for a skipped class
-  through the plugin logger, so the console shows it as `ERROR` and the panel stream as `error` (#571; earlier
-  6.3.0 snapshots printed it as `WARN` through the standard error stream). `SecurityPolicy`'s one-time deprecation
-  warning (new in 6.3.0) carries no internal code either.
-
-  中文补充：模块扫描诊断（6.3.0 新增）的 `SEVERE` 汇总（某模块跳过了加载失败的类）经插件日志输出，控制台显示为 `ERROR`，
-  并以 `error` 级别推送到面板（#571；本周期较早的 6.3.0 快照经标准错误流输出，显示为 `WARN`）。
+- **Module-scan diagnostics** report skipped classes through the plugin logger at `SEVERE`,
+  displayed as `ERROR` in the console and `error` in the panel stream. As of 7.0.0, the
+  observe-only class-name filter audit and its startup summaries are removed. The deprecated
+  `SecurityPolicy.isSafeClassName(String)`, `isSafeParameterType(Class<?>)`,
+  `addTrustedPackage(String)` and `addDangerousClass(String)` no-op methods are removed, as are
+  `getSecurityPolicySummary()` and the `ClassLoaderUtils.recordClassloadFilterAudit(String, String)` /
+  `emitClassloadFilterAuditSummary(String)` audit bridges. There is no replacement name filter or
+  audit configuration. `SecurityPolicy.isValidModuleJar(File)` and
+  `isSafeFileStructure(long, int)` still reject invalid archives, files above 100 MB and archives
+  above 10,000 entries; these checks do not sandbox loaded code.
 
 ### JSON transactions (6.3.0) — staged, atomic and durable
 

@@ -16,14 +16,8 @@ public class ClassLoaderUtils {
     /**
      * Validate class name format.
      *
-     * <p><b>GEN-07 (D-13, since 6.3.0):</b> this method no longer calls into
-     * {@link SecurityPolicy} at all -- that class's four name-based checks are now unconditional
-     * no-ops (D-12), and the framework must not call a method it has just declared to do nothing.
-     * {@link #VALID_CLASS_NAME_PATTERN} is the only check left here, and it is input validation,
-     * not security: a {@code null} is guarded explicitly before the regex runs (a bare
-     * {@code Pattern.matcher(null)} throws {@link NullPointerException} rather than failing to
-     * match), so a {@code null}/blank/malformed class name is still rejected, just for a
-     * different reason than before.</p>
+     * <p>This is input validation, not a security boundary. Null, blank and malformed
+     * names are rejected before the classloader is called.</p>
      *
      * @param className class name to validate
      * @throws SecurityException if the class name is null or does not match the expected format
@@ -45,12 +39,12 @@ public class ClassLoaderUtils {
     }
 
     /**
-     * Load a class using the plugin class loader with security validation.
+     * Load a class using the plugin class loader with name-format validation.
      *
      * @param className class name
      * @return loaded class
      * @throws ClassNotFoundException if class not found
-     * @throws SecurityException if class is dangerous
+     * @throws SecurityException if the class name format is invalid
      */
     public static Class<?> loadClass(String className) throws ClassNotFoundException, SecurityException {
         validateClassName(className);
@@ -62,13 +56,13 @@ public class ClassLoaderUtils {
     }
     
     /**
-     * Load a class using the plugin class loader with initialization control and security validation.
+     * Load a class using the plugin class loader with initialization control and name-format validation.
      *
      * @param className class name
      * @param initialize whether to initialize the class
      * @return loaded class
      * @throws ClassNotFoundException if class not found
-     * @throws SecurityException if class is dangerous
+     * @throws SecurityException if the class name format is invalid
      */
     // codacy:ignore - Reflection is required for plugin framework class loading, className is validated
     public static Class<?> loadClass(String className, boolean initialize) throws ClassNotFoundException, SecurityException {
@@ -87,7 +81,7 @@ public class ClassLoaderUtils {
      * @param className class name
      * @return loaded plugin class
      * @throws ClassNotFoundException if class not found
-     * @throws SecurityException if class is dangerous or invalid
+     * @throws SecurityException if the class name or plugin hierarchy is invalid
      */
     public static Class<?> loadPluginClass(String className) throws ClassNotFoundException, SecurityException {
         // Additionally validate that the plugin class is under the ultikits package
@@ -110,39 +104,6 @@ public class ClassLoaderUtils {
         return clazz;
     }
     
-    /**
-     * GEN-07 (D-14) package-boundary bridge into the package-private {@code ClassloadFilterAudit}
-     * evaluator, for {@code PluginManager} (a different package, {@code manager}) to record what
-     * the removed classload filter layers would have refused for {@code className} during
-     * {@code moduleName}'s scan. {@code ClassloadFilterAudit} stays package-private per D-14 (its
-     * four relocated lists must not become part of the public surface); this method is the one
-     * public seam a caller outside {@code utils} needs, mirroring the position of the
-     * {@link #loadClass(String)} call site it is always paired with. Purely observational: never
-     * throws, never refuses, and does not affect whether {@code className} loads.
-     *
-     * @param moduleName the module (or scan unit) currently being evaluated
-     * @param className  the class name being evaluated
-     * @since 6.3.0
-     */
-    public static void recordClassloadFilterAudit(String moduleName, String className) {
-        ClassloadFilterAudit.record(moduleName, className);
-    }
-
-    /**
-     * GEN-07 (D-14) package-boundary bridge: emits the package-private
-     * {@code ClassloadFilterAudit}'s one-INFO-per-module summary for {@code moduleName}, always --
-     * even when nothing was recorded (a module the removed layers would have refused nothing from
-     * is itself the measurement, not silence). Call once, at the same point
-     * {@code ModuleScanDiagnostics.emitSummary} is called for the same module, so the two
-     * diagnostics land together.
-     *
-     * @param moduleName the module whose scan just finished
-     * @since 6.3.0
-     */
-    public static void emitClassloadFilterAuditSummary(String moduleName) {
-        ClassloadFilterAudit.emitSummary(moduleName);
-    }
-
     /**
      * Validate that a class loader has the correct parent hierarchy.
      *
