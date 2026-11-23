@@ -52,6 +52,14 @@ class MessageKeyTest {
     }
 
     @Test
+    void namespaceFor_overLongModuleName_isRejected() {
+        String moduleName = "a".repeat(129);
+        assertThatThrownBy(() -> MessageKey.namespaceFor(moduleName))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining(moduleName);
+        assertThat(MessageKey.namespaceFor("A".repeat(128))).hasSize(128);
+    }
+
+    @Test
     void nullArguments_nameTheRejectedParameter() {
         assertThatNullPointerException().isThrownBy(() -> MessageKey.of(null, "a")).withMessage("namespace");
         assertThatNullPointerException().isThrownBy(() -> MessageKey.of("a", null)).withMessage("path");

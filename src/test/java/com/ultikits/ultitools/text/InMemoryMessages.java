@@ -3,9 +3,13 @@ package com.ultikits.ultitools.text;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.text.NumberFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.time.temporal.ChronoField;
+import java.time.temporal.TemporalAccessor;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -25,9 +29,10 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.ComponentLike;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.Tag;
-import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+import net.kyori.adventure.text.minimessage.tag.resolver.ArgumentQueue;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import net.kyori.adventure.text.minimessage.translation.Argument;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
 /** Test-only catalogue renderer, deliberately separate from any production registration or translator. */
 public final class InMemoryMessages implements Messages {
@@ -36,6 +41,7 @@ public final class InMemoryMessages implements Messages {
     private final Map<MessageKey, Map<Locale, String>> catalogues = new ConcurrentHashMap<>();
     private final Map<String, Locale> sources = new ConcurrentHashMap<>();
     private final Set<Missing> reported = ConcurrentHashMap.newKeySet();
+    private final Set<BadFormat> reportedFormats = ConcurrentHashMap.newKeySet();
     private final List<LogRecord> warnings = new CopyOnWriteArrayList<>();
     private final Logger logger = Logger.getAnonymousLogger();
 
@@ -51,8 +57,12 @@ public final class InMemoryMessages implements Messages {
                 }
             }
 
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() {
+                // Records are kept in memory; there is nothing to flush.
+            }
+            @Override public void close() {
+                // The in-memory handler owns no external resource.
+            }
         });
     }
 
@@ -64,14 +74,8 @@ public final class InMemoryMessages implements Messages {
         sources.put(catalogueNamespace, sourceLanguage);
     }
 
-    public List<LogRecord> warnings() {
-        return List.copyOf(warnings);
-    }
-
-    @Override
-    public String namespace() {
-        return namespace;
-    }
+    public List<LogRecord> warnings() { return List.copyOf(warnings); }
+    @Override public String namespace() { return namespace; }
 
     @Override
     public MessageKey key(String path) {
@@ -89,50 +93,99 @@ public final class InMemoryMessages implements Messages {
         String template = lookup(translated.key(), locale);
         if (template == null) {
             if (reported.add(new Missing(translated.key(), locale))) {
-                logger.warning("Missing message " + translated.key() + " for " + locale.toLanguageTag());
+                LogRecord record = new LogRecord(Level.WARNING, "Missing message {0} for {1}");
+                record.setParameters(new Object[] {translated.key().translationKey(), locale.toLanguageTag()});
+                logger.log(record);
             }
             return Component.text(translated.key().translationKey());
         }
         List<TagResolver> arguments = new ArrayList<>();
         for (Arg arg : translated.args()) {
-            arguments.add(argumentResolver(arg, locale));
+            arguments.add(argumentResolver(arg, locale, translated.key()));
         }
-        return MiniMessage.miniMessage().deserialize(template, TagResolver.resolver(arguments));
+        // The resolver builder gives the last added resolver priority, ahead of built-in tags.
+        return MiniMessage.builder().tags(TagResolver.resolver(TagResolver.standard(), TagResolver.resolver(arguments)))
+                .build().deserialize(template);
     }
 
-    private TagResolver argumentResolver(Arg arg, Locale locale) {
-        return switch (arg) {
-            case Arg.Unparsed unparsed -> Placeholder.unparsed(unparsed.name(), unparsed.value());
-            case Arg.Numeric numeric -> TagResolver.resolver(numeric.name(), (arguments, context) -> {
-                NumberFormat format = arguments.hasNext()
-                        ? new DecimalFormat(arguments.pop().value(), DecimalFormatSymbols.getInstance(locale))
-                        : NumberFormat.getNumberInstance(locale);
-                return Tag.inserting(Component.text(format.format(numeric.value())));
-            });
-            case Arg.Moment moment -> TagResolver.resolver(moment.name(), (arguments, context) -> {
-                DateTimeFormatter format;
-                if (arguments.hasNext()) {
-                    format = DateTimeFormatter.ofPattern(arguments.pop().value(), locale);
-                } else if (moment.value().isSupported(ChronoField.HOUR_OF_DAY)) {
-                    format = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withLocale(locale);
-                } else {
-                    format = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale);
+    private TagResolver argumentResolver(Arg arg, Locale locale, MessageKey key) {
+        return TagResolver.resolver(arg.name(), (arguments, context) -> {
+            try {
+                return Tag.inserting(formatArgument(arg, locale, arguments));
+            } catch (RuntimeException malformed) {
+                if (reportedFormats.add(new BadFormat(key, locale, arg.name()))) {
+                    LogRecord record = new LogRecord(Level.WARNING, "Invalid format for {0} in {1}, argument {2}");
+                    record.setParameters(new Object[] {key.translationKey(), locale.toLanguageTag(), arg.name()});
+                    record.setThrown(malformed);
+                    logger.log(record);
                 }
-                return Tag.inserting(Component.text(format.format(moment.value())));
-            });
-            case Arg.Localized localized -> Placeholder.component(localized.name(), render(localized.value(), locale));
+                return Tag.inserting(safeDefault(arg, locale));
+            }
+        });
+    }
+
+    private Component formatArgument(Arg arg, Locale locale, ArgumentQueue arguments) {
+        String pattern = arguments.hasNext() ? arguments.pop().value() : null;
+        if (arguments.hasNext()) {
+            throw new IllegalArgumentException("Unexpected format argument");
+        }
+        if (pattern == null) {
+            return defaultValue(arg, locale);
+        }
+        return switch (arg) {
+            case Arg.Numeric numeric -> Component.text(new DecimalFormat(pattern,
+                    DecimalFormatSymbols.getInstance(locale)).format(numeric.value()));
+            case Arg.Moment moment -> Component.text(DateTimeFormatter.ofPattern(pattern, locale)
+                    .format(temporal(moment)));
+            case Arg.Unparsed ignored -> throw new IllegalArgumentException("Strings take no format");
+            case Arg.Localized ignored -> throw new IllegalArgumentException("Text takes no format");
         };
+    }
+
+    private Component safeDefault(Arg arg, Locale locale) {
+        try {
+            return defaultValue(arg, locale);
+        } catch (RuntimeException unusable) {
+            Object value = switch (arg) {
+                case Arg.Unparsed unparsed -> unparsed.value();
+                case Arg.Numeric numeric -> numeric.value();
+                case Arg.Moment moment -> moment.value();
+                case Arg.Localized localized -> localized.value();
+            };
+            return Component.text(String.valueOf(value));
+        }
+    }
+
+    private Component defaultValue(Arg arg, Locale locale) {
+        return switch (arg) {
+            case Arg.Unparsed unparsed -> Component.text(unparsed.value());
+            case Arg.Numeric numeric -> Component.text(NumberFormat.getNumberInstance(locale).format(numeric.value()));
+            case Arg.Moment moment -> {
+                TemporalAccessor value = temporal(moment);
+                boolean date = value.isSupported(ChronoField.EPOCH_DAY);
+                boolean time = value.isSupported(ChronoField.HOUR_OF_DAY);
+                DateTimeFormatter format = date && time ? DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
+                        : time ? DateTimeFormatter.ofLocalizedTime(FormatStyle.MEDIUM)
+                        : DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM);
+                yield Component.text(format.withLocale(locale).format(value));
+            }
+            case Arg.Localized localized -> render(localized.value(), locale);
+        };
+    }
+
+    private static TemporalAccessor temporal(Arg.Moment moment) {
+        return moment.value() instanceof Instant instant
+                ? ZonedDateTime.ofInstant(instant, ZoneId.systemDefault()) : moment.value();
     }
 
     private String lookup(MessageKey key, Locale locale) {
         Map<Locale, String> values = catalogues.getOrDefault(key, Map.of());
         Set<Locale> candidates = new LinkedHashSet<>();
-        candidates.add(locale);
-        candidates.add(Locale.forLanguageTag(locale.getLanguage()));
-        candidates.add(resolver.fallback());
+        addCandidate(candidates, locale);
+        addCandidate(candidates, resolver.fallback());
         Locale source = sources.get(key.namespace());
         if (source != null) {
-            candidates.add(source);
+            addCandidate(candidates, source);
         }
         for (Locale candidate : candidates) {
             String value = values.get(candidate);
@@ -141,6 +194,11 @@ public final class InMemoryMessages implements Messages {
             }
         }
         return null;
+    }
+
+    private static void addCandidate(Set<Locale> candidates, Locale locale) {
+        candidates.add(locale);
+        candidates.add(Locale.forLanguageTag(locale.getLanguage()));
     }
 
     @Override
@@ -173,11 +231,12 @@ public final class InMemoryMessages implements Messages {
             arguments.add(switch (arg) {
                 case Arg.Unparsed unparsed -> Argument.string(unparsed.name(), unparsed.value());
                 case Arg.Numeric numeric -> Argument.numeric(numeric.name(), numeric.value());
-                case Arg.Moment moment -> Argument.tagResolver(argumentResolver(moment, resolver.fallback()));
+                case Arg.Moment moment -> Argument.tagResolver(argumentResolver(moment, resolver.fallback(), translated.key()));
                 case Arg.Localized localized -> Argument.component(localized.name(), shared(localized.value()));
             });
         }
-        return Component.translatable(translated.key().translationKey(), arguments);
+        return Component.translatable(translated.key().translationKey(), arguments)
+                .fallback(PlainTextComponentSerializer.plainText().serialize(render(text, resolver.fallback())));
     }
 
     @Override
@@ -189,4 +248,5 @@ public final class InMemoryMessages implements Messages {
     }
 
     private record Missing(MessageKey key, Locale locale) { }
+    private record BadFormat(MessageKey key, Locale locale, String argument) { }
 }

@@ -6,10 +6,17 @@ import java.util.regex.Pattern;
 import net.kyori.adventure.text.ComponentLike;
 
 /**
- * A named message argument, referenced by a translation as {@code <player>}.
- * Values are formatted at render time in the target locale; positional arguments are unsupported.
- * The set of permitted subtypes may grow in a 7.x minor release. Code outside the framework
- * must not switch over it exhaustively without a {@code default} branch.
+ * A named message argument. A translation is a MiniMessage string that refers to arguments by name:
+ * {@code "Welcome, <player>!"}. Positional arguments are not supported. An argument name takes
+ * precedence over a built-in MiniMessage tag of the same name ({@code <newline>}, {@code <score>}, ...).
+ *
+ * <p>A format the engine cannot apply (a malformed pattern, an unknown keyword, a field the value does
+ * not have) never makes rendering throw: the value is shown in its kind's default format for the
+ * render locale (or {@code String.valueOf(value)} if even that fails), and one WARNING is logged per
+ * (message key, locale, argument name).
+ *
+ * <p>The set of permitted subtypes may grow in a 7.x minor release. Code outside the framework must
+ * not switch over it exhaustively without a {@code default} branch.
  */
 public sealed interface Arg permits Arg.Unparsed, Arg.Numeric, Arg.Moment, Arg.Localized {
     /** Returns the tag name, matching {@code [a-z0-9_-]+}. */
@@ -20,12 +27,23 @@ public sealed interface Arg permits Arg.Unparsed, Arg.Numeric, Arg.Moment, Arg.L
         return new Unparsed(name, value);
     }
 
-    /** Returns a number formatted with the target locale unless the translation specifies a pattern. */
+    /**
+     * Returns a number formatted with the target locale unless the translation specifies a pattern.
+     * The value must be immutable (use Integer, Long, Double, BigDecimal ...); a mutable Number such as
+     * AtomicInteger makes equal texts unequal later and changes what renders.
+     */
     static Arg number(String name, Number value) {
         return new Numeric(name, value);
     }
 
-    /** Returns a date/time formatted with the target locale unless the translation specifies a pattern. */
+    /**
+     * A date/time argument. Accepted values: {@link java.time.Instant} (shown in
+     * {@link java.time.ZoneId#systemDefault()} at render time), {@link java.time.ZonedDateTime} and
+     * {@link java.time.OffsetDateTime} (shown in their own zone or offset), {@link java.time.LocalDateTime},
+     * {@link java.time.LocalDate} and {@link java.time.LocalTime}; any other {@code TemporalAccessor} is
+     * formatted as is. A format that needs a field the value lacks never throws (see the class
+     * documentation). The value must be immutable.
+     */
     static Arg time(String name, TemporalAccessor value) {
         return new Moment(name, value);
     }

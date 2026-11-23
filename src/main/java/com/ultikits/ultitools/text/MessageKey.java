@@ -59,12 +59,12 @@ public record MessageKey(String namespace, String path) {
      * Lowercases a module name with {@link Locale#ROOT}, replacing every character
      * outside {@code [a-z0-9_.-]} with {@code _}. Uniqueness is checked at module load.
      *
-     * @throws IllegalArgumentException if the result is empty or {@code ..}
+     * @throws IllegalArgumentException if the result is empty, {@code ..}, or longer than 128 characters
      */
     public static String namespaceFor(String moduleName) {
         Objects.requireNonNull(moduleName, "moduleName");
         String namespace = moduleName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_.-]", "_");
-        if (namespace.isEmpty() || "..".equals(namespace)) {
+        if (namespace.isEmpty() || "..".equals(namespace) || namespace.length() > 128) {
             throw new IllegalArgumentException("Invalid module namespace: " + moduleName);
         }
         return namespace;

@@ -11,9 +11,11 @@ import org.jetbrains.annotations.ApiStatus;
  * Thread-safe message rendering, callable from any thread. The injected instance belongs to a
  * module's namespace, which affects only {@link #key(String)}; all namespaces can be rendered.
  *
- * <p>Lookup order: requested locale exactly, its language, {@link LocaleResolver#fallback()},
- * the catalogue's source language, then the raw {@link MessageKey#translationKey()} as visible text.
+ * <p>Lookup order: requested exactly, requested language; fallback() exactly, fallback() language;
+ * source language exactly, source language's language; then the key itself. Each candidate is tried
+ * exactly and then by language only; a candidate equal to an earlier one is skipped.
  * An absent catalogue or key never throws and logs one WARNING per (key, requested locale) pair.
+ * For argument formatting syntax: see {@link Arg}.
  */
 @ApiStatus.NonExtendable
 public interface Messages {
@@ -79,6 +81,8 @@ public interface Messages {
      * In auto mode a translated text becomes a translatable component for Paper's per-client
      * rendering; in forced mode it is rendered server-side in the forced locale. Per-player
      * overrides cannot apply to shared objects. Literal text remains literal.
+     * In auto mode the translatable component's fallback is the plain text rendered under
+     * {@link LocaleResolver#fallback()}, with arguments formatted in that fallback locale.
      */
     Component shared(Text text);
 

@@ -4,7 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.ultikits.ultitools.utils.MockBukkitHelper;
+import java.text.NumberFormat;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.ArrayList;
@@ -19,6 +24,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
+import java.util.logging.SimpleFormatter;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TranslatableComponent;
@@ -52,7 +58,9 @@ public abstract class AbstractMessagesContractTest {
         void put(MessageKey key, Locale locale, String template);
         void sourceLanguage(String namespace, Locale locale);
         List<LogRecord> warnings();
-        @Override default void close() { }
+        @Override default void close() {
+            // Stateless fixtures have no resources to release.
+        }
     }
 
     @BeforeEach
@@ -102,9 +110,9 @@ public abstract class AbstractMessagesContractTest {
         List<LogRecord> records = fixture.warnings().subList(before, fixture.warnings().size());
         assertThat(records).hasSize(3).allSatisfy(record -> {
             assertThat(record.getLevel()).isEqualTo(Level.WARNING);
-            assertThat(record.getMessage()).contains("sample:");
+            assertThat(text(record)).contains("sample:");
         });
-        assertThat(records.stream().filter(record -> record.getMessage().contains(missing.translationKey())))
+        assertThat(records.stream().filter(record -> text(record).contains(missing.translationKey())))
                 .hasSize(2);
     }
 
@@ -204,8 +212,16 @@ public abstract class AbstractMessagesContractTest {
     @Test
     void shared_autoMode_returnsTranslatable() {
         Component rendered = messages.shared(Text.of(GREETING));
-        assertThat(rendered).isInstanceOfSatisfying(TranslatableComponent.class,
-                translatable -> assertThat(translatable.key()).isEqualTo(GREETING.translationKey()));
+        assertThat(rendered).isInstanceOfSatisfying(TranslatableComponent.class, translatable -> {
+            assertThat(translatable.key()).isEqualTo(GREETING.translationKey());
+            assertThat(translatable.fallback()).isEqualTo(plain(messages.render(Text.of(GREETING), Locale.CHINESE)));
+        });
+        MessageKey number = MessageKey.of("sample", "shared_number");
+        fixture.put(number, Locale.CHINESE, "数量 <n>");
+        Text withNumber = Text.of(number, Arg.number("n", 1234.5));
+        assertThat(messages.shared(withNumber)).isInstanceOfSatisfying(TranslatableComponent.class,
+                translatable -> assertThat(translatable.fallback())
+                        .isEqualTo(plain(messages.render(withNumber, Locale.CHINESE))));
         assertThat(messages.shared(Text.plain("literal"))).isEqualTo(Component.text("literal"));
     }
 
@@ -263,7 +279,7 @@ public abstract class AbstractMessagesContractTest {
                 assertThat(result.get(30, TimeUnit.SECONDS)).isTrue();
             }
         }
-        assertThat(fixture.warnings().stream().filter(record -> record.getMessage().contains(missing.translationKey())))
+        assertThat(fixture.warnings().stream().filter(record -> text(record).contains(missing.translationKey())))
                 .hasSize(1);
     }
 
@@ -300,6 +316,78 @@ public abstract class AbstractMessagesContractTest {
         assertThatNullPointerException().isThrownBy(() -> messages.send(viewer, GREETING, (Arg[]) null)).withMessage("args");
         assertThatNullPointerException().isThrownBy(() -> messages.sendActionBar(null, text)).withMessage("audience");
         assertThatNullPointerException().isThrownBy(() -> messages.sendActionBar(viewer, null)).withMessage("text");
+    }
+
+    @Test
+    void render_malformedFormat_showsDefaultAndWarnsOnce() {
+        List<String> templates = List.of("<n:'#,##0.0.0'>", "<date:'HH:mm'>", "<date:'{'>");
+        int before = fixture.warnings().size();
+        for (int index = 0; index < templates.size(); index++) {
+            MessageKey key = MessageKey.of("sample", "bad_format_" + index);
+            fixture.put(key, Locale.ENGLISH, templates.get(index));
+            boolean numeric = index == 0;
+            Arg arg = numeric ? Arg.number("n", 1234.5) : Arg.time("date", LocalDate.of(2026, 3, 5));
+            String expected = numeric ? NumberFormat.getNumberInstance(Locale.US).format(1234.5)
+                    : DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.US)
+                            .format(LocalDate.of(2026, 3, 5));
+            for (int repeat = 0; repeat < 2; repeat++) {
+                assertThat(plain(messages.render(key, Locale.US, arg))).isEqualTo(expected);
+            }
+            assertThat(fixture.warnings().stream().filter(record -> text(record).contains(key.translationKey())))
+                    .singleElement().satisfies(record -> {
+                        assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+                        assertThat(text(record)).contains(arg.name());
+                    });
+        }
+        assertThat(fixture.warnings().subList(before, fixture.warnings().size())).hasSize(templates.size());
+    }
+
+    @Test
+    void render_argNamedLikeBuiltInTag_usesArgument() {
+        MessageKey key = MessageKey.of("sample", "tag_collision");
+        fixture.put(key, Locale.ENGLISH, "<newline>|<score>");
+        assertThat(plain(messages.render(key, Locale.US, Arg.string("newline", "N"), Arg.string("score", "S"))))
+                .isEqualTo("N|S");
+    }
+
+    @Test
+    void render_instantArg_usesServerDefaultZone() {
+        MessageKey key = MessageKey.of("sample", "instant");
+        Instant instant = Instant.parse("2026-11-23T12:00:00Z");
+        ZonedDateTime zoned = ZonedDateTime.ofInstant(instant, ZoneId.systemDefault());
+        fixture.put(key, Locale.ENGLISH, "<t>");
+        assertThat(plain(messages.render(key, Locale.US, Arg.time("t", instant))))
+                .isEqualTo(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withLocale(Locale.US).format(zoned));
+        fixture.put(key, Locale.ENGLISH, "<t:'yyyy-MM-dd HH:mm'>");
+        assertThat(plain(messages.render(key, Locale.US, Arg.time("t", instant))))
+                .isEqualTo(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.US).format(zoned));
+    }
+
+    @Test
+    void render_localTimeArg_defaultFormat_isTimeOnly() {
+        MessageKey key = MessageKey.of("sample", "time_only");
+        LocalTime time = LocalTime.of(9, 5);
+        fixture.put(key, Locale.ENGLISH, "<t>");
+        assertThat(plain(messages.render(key, Locale.US, Arg.time("t", time))))
+                .isEqualTo(DateTimeFormatter.ofLocalizedTime(FormatStyle.MEDIUM).withLocale(Locale.US).format(time));
+    }
+
+    @Test
+    void render_regionalOperatorFallback_matchesLanguageCatalogue() {
+        Fixture regional = createFixture(Locale.SIMPLIFIED_CHINESE, Optional.empty());
+        fixtures.add(regional);
+        regional.sourceLanguage("sample", Locale.ENGLISH);
+        regional.put(GREETING, Locale.CHINESE, "你好");
+        regional.put(GREETING, Locale.ENGLISH, "Hello");
+        assertThat(plain(regional.messages().render(GREETING, Locale.FRENCH))).isEqualTo("你好");
+        MessageKey sourceOnly = MessageKey.of("other", "regional_source");
+        regional.sourceLanguage("other", Locale.US);
+        regional.put(sourceOnly, Locale.ENGLISH, "Source language");
+        assertThat(plain(regional.messages().render(sourceOnly, Locale.FRENCH))).isEqualTo("Source language");
+    }
+
+    private static String text(LogRecord record) {
+        return new SimpleFormatter().formatMessage(record);
     }
 
     private static String plain(Component component) {
