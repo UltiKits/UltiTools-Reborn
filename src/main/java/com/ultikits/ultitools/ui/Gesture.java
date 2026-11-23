@@ -37,7 +37,7 @@ public sealed interface Gesture permits Gesture.Pickup, Gesture.Place, Gesture.S
     record QuickMoveOut(GridSlot slot) implements Gesture {
         public QuickMoveOut { Objects.requireNonNull(slot, "slot"); }
     }
-    /** Shift-click on a viewer inventory slot (Bukkit slot number): into visible EDITABLE bindings. */
+    /** Shift-click on one of the viewer's storage slots ({@code playerSlot} 0..35): into visible EDITABLE bindings. */
     record QuickMoveIn(int playerSlot) implements Gesture { }
     /** Cursor drag over top slots only; {@code one}: one per slot, else split evenly. */
     record Spread(Set<GridSlot> slots, boolean one) implements Gesture {

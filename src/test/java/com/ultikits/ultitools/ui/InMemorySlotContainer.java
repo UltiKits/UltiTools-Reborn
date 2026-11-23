@@ -308,7 +308,10 @@ final class InMemorySlotContainer implements SlotContainer {
         Map<UUID, List<ItemStack>> batches = changes().putInBy();
         List<CompletableFuture<?>> pending = new ArrayList<>();
         batches.forEach((player, items) -> pending.add(returns.apply(player, UiTestItems.copies(items))
-                .thenAccept(delivery -> undelivered(player, delivery.undelivered())).toCompletableFuture()));
+                .handle((delivery, failure) -> {
+                    undelivered(player, failure == null ? delivery.undelivered() : items);
+                    return null;
+                }).toCompletableFuture()));
         if (includeBaseline) {
             List<ItemStack> remaining = subtract(contents, changes().putIn());
             undelivered(NIL, remaining);

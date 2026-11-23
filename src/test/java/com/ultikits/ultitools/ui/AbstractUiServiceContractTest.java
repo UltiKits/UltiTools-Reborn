@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import org.bukkit.entity.Item;
 import org.bukkit.inventory.ItemStack;
@@ -1003,6 +1004,85 @@ public abstract class AbstractUiServiceContractTest {
         verify(observed, never()).setItemOnCursor(any());
         assertThat(viewer.getItemOnCursor()).isEqualTo(UiTestItems.dirt(3));
         assertThat(container.get(0)).isEqualTo(UiTestItems.stone(8));
+    }
+
+    @Test
+    void showFromResultDependentDuringUnload_isClosedOwnerUnloaded() {
+        ProbeBackend backend = backend(Confirm.class);
+        UiSession<Boolean> first = service.show(viewer, confirm());
+        settle();
+        AtomicReference<UiSession<Boolean>> second = new AtomicReference<>();
+        first.result().thenAccept(ignored -> second.set(service.show(viewer, confirm())));
+        fixture.unload(service.owner());
+        assertThat(outcome(second.get())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.OWNER_UNLOADED));
+        settle();
+        assertThat(backend.opened()).containsExactly(first);
+    }
+    @Test
+    void containerDuringUnload_throws() {
+        backend(Confirm.class);
+        UiSession<Boolean> first = service.show(viewer, confirm());
+        settle();
+        ContainerSpec spec = editableStorage(1).build();
+        AtomicReference<Throwable> observed = new AtomicReference<>();
+        first.result().thenAccept(ignored -> {
+            try {
+                service.container(spec);
+            } catch (Throwable failure) {
+                observed.set(failure);
+            }
+        });
+        fixture.unload(service.owner());
+        assertThat(observed.get()).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> service.container(spec)).isInstanceOf(IllegalStateException.class);
+    }
+    @Test
+    void ownerUnload_returnDisposition_deliversToOnlineContributorBeforeUnloadReturns() {
+        SlotContainer container = service.container(editableStorage(1).endWhenUnviewed(false).build());
+        InMemoryViewerItems side = new InMemoryViewerItems(36);
+        side.cursor(UiTestItems.stone(8));
+        assertThat(fixture.engine().apply(bound(container), viewer, side, new Gesture.Place(GridSlot.ofIndex(0), false))).isTrue();
+        fixture.unload(service.owner());
+        assertThat(viewer.getInventory().getItem(0)).isEqualTo(UiTestItems.stone(8));
+        assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.RETURNED);
+    }
+    @Test
+    void deliver_afterOwnerUnload_completesAllUndelivered() {
+        fixture.unload(service.owner());
+        Delivery delivery = EditableContractSupport.completed(service.deliver(viewer, List.of(UiTestItems.stone(3))));
+        assertThat(delivery.undelivered()).containsExactly(UiTestItems.stone(3));
+        assertThat(delivery.given()).isEmpty();
+        assertThat(delivery.dropped()).isEmpty();
+        assertThat(viewer.getInventory().getStorageContents()).allSatisfy(item -> assertThat(item == null || item.isEmpty()).isTrue());
+        settle();
+        assertThat(viewer.getInventory().getStorageContents()).allSatisfy(item -> assertThat(item == null || item.isEmpty()).isTrue());
+    }
+    @Test
+    void return_contributorQuitsBeforeDelivery_goesToUndeliveredOnce() {
+        List<UUID> batches = new ArrayList<>();
+        List<ItemStack> returned = new ArrayList<>();
+        SlotContainer container = service.container(editableStorage(1).endWhenUnviewed(false)
+                .undelivered((player, items) -> { batches.add(player); returned.addAll(items); }).build());
+        InMemoryViewerItems side = new InMemoryViewerItems(36);
+        side.cursor(UiTestItems.stone(8));
+        assertThat(fixture.engine().apply(bound(container), viewer, side, new Gesture.Place(GridSlot.ofIndex(0), false))).isTrue();
+        CompletionStage<EndOutcome> ending = container.end();
+        fixture.disconnect(viewer);
+        settle();
+        assertThat(batches).containsExactly(viewer.getUniqueId());
+        assertThat(returned).containsExactly(UiTestItems.stone(8));
+        assertThat(EditableContractSupport.completed(ending)).isEqualTo(EndOutcome.RETURNED);
+    }
+    @Test
+    void deliver_neverFillsArmourOrOffHand() {
+        for (int i = 0; i < 36; i++) { viewer.getInventory().setItem(i, UiTestItems.dirt(64)); }
+        CompletionStage<Delivery> result = service.deliver(viewer, List.of(UiTestItems.stone(5)));
+        settle();
+        Delivery delivery = EditableContractSupport.completed(result);
+        assertThat(delivery.given()).isEmpty();
+        assertThat(delivery.dropped()).containsExactly(UiTestItems.stone(5));
+        assertThat(viewer.getInventory().getArmorContents()).allSatisfy(item -> assertThat(item == null || item.isEmpty()).isTrue());
+        assertThat(viewer.getInventory().getItemInOffHand().isEmpty()).isTrue();
     }
 
     private Optional<RecordingScheduler.Scope> entityScope() {

@@ -15,7 +15,6 @@ import java.util.UUID;
 import java.util.Locale;
 import java.util.Set;
 import java.util.LinkedHashSet;
-import java.util.concurrent.RejectedExecutionException;
 import org.bukkit.Bukkit;
 import org.bukkit.inventory.ItemStack;
 import com.ultikits.ultitools.text.FixedLocaleResolver;
@@ -49,7 +48,7 @@ class InMemoryUiService implements UiService {
         Objects.requireNonNull(spec, "spec");
         registry.checkThread();
         if (unloaded) {
-            throw new RejectedExecutionException("Owner unloaded: " + owner);
+            throw new IllegalStateException("Owner unloaded: " + owner);
         }
         InMemorySlotContainer container = new InMemorySlotContainer(owner, spec, registry.scheduler,
                 this::returnToContributor, registry.warnings::add, registry::redraw);
@@ -70,10 +69,12 @@ class InMemoryUiService implements UiService {
         List<ItemStack> copy = UiTestItems.copies(items);
         PendingDelivery delivery = new PendingDelivery(player, copy);
         synchronized (registry) {
-            pendingDeliveries.add(delivery);
-            if (unloading) {
+            if (unloading && Thread.currentThread() == registry.thread) { // NOPMD - only the unloading thread may give synchronously
                 delivery.run();
+            } else if (unloaded) {
+                delivery.result.complete(new Delivery(List.of(), List.of(), copy));
             } else {
+                pendingDeliveries.add(delivery);
                 registry.dispatch(player, delivery);
             }
         }
@@ -353,14 +354,15 @@ class InMemoryUiService implements UiService {
             List<MemorySession<?>> closing;
             synchronized (this) {
                 InMemoryUiService service = (InMemoryUiService) service(owner);
+                service.unloaded = true;
                 service.unloading = true;
                 closing = sessions.stream().filter(session -> session.service.owner().equals(owner)).toList();
             }
-            for (MemorySession<?> session : closing) {
+            for (MemorySession<?> session : List.copyOf(closing)) {
                 session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
                 session.closeAndComplete();
             }
-            containers.stream().filter(container -> container.owner().equals(owner)).forEach(InMemorySlotContainer::unload);
+            List.copyOf(containers).stream().filter(container -> container.owner().equals(owner)).forEach(InMemorySlotContainer::unload);
             owners.get(owner).flushDeliveries();
             synchronized (this) {
                 owners.get(owner).unloaded = true;
