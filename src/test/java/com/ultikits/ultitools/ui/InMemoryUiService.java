@@ -199,9 +199,19 @@ class InMemoryUiService implements UiService {
             session.requestClose(CloseReason.UNSUPPORTED);
             return;
         }
+        takeBindings(session);
         replacePrevious(session);
         session.openWith(selected);
         scheduleTimeout(session, options);
+    }
+
+    private void takeBindings(MemorySession<?> session) {
+        synchronized (registry) {
+            if (session instanceof MemoryGridSession grid) {
+                grid.rendered = grid.current;
+                boundContainers(grid.rendered).forEach(container -> container.attach(session));
+            }
+        }
     }
 
     private UiBackend select(MemorySession<?> session) {
@@ -433,7 +443,7 @@ class InMemoryUiService implements UiService {
                 }
                 if (this instanceof MemoryGridSession grid && backend != null) {
                     boundContainers(grid.rendered).forEach(container -> {
-                        container.detach(this, true);
+                        container.detach(this);
                         if (service.unloading && container.owner().equals(service.owner())) {
                             container.unload();
                         }
@@ -452,8 +462,6 @@ class InMemoryUiService implements UiService {
                 registry.active.put(viewer.getUniqueId(), this);
                 backend = selected;
                 if (this instanceof MemoryGridSession grid) {
-                    grid.rendered = grid.current;
-                    boundContainers(grid.rendered).forEach(container -> container.attach(this));
                     grid.drawPicture();
                 }
                 selected.open(this, callbacks());
@@ -510,6 +518,9 @@ class InMemoryUiService implements UiService {
                 if (next.rows() != current.rows()) {
                     throw new IllegalArgumentException("A grid update must retain the row count");
                 }
+                if (Thread.currentThread() == registry.thread) { // NOPMD - mutable container state is read only on its thread
+                    validateContainers(next);
+                }
                 current = next;
                 registry.dispatch(viewer, this::notifyBackend);
             }
@@ -521,15 +532,14 @@ class InMemoryUiService implements UiService {
                 if (!isOpen() || backend == null || current.equals(rendered)) {
                     return;
                 }
-                validateContainers(current);
                 Grid previous = rendered;
                 Set<InMemorySlotContainer> before = boundContainers(previous);
                 Set<InMemorySlotContainer> after = boundContainers(current);
-                before.stream().filter(container -> !after.contains(container)).forEach(container -> container.detach(this, false));
-                after.stream().filter(container -> !before.contains(container)).forEach(container -> container.attach(this));
+                after.forEach(container -> container.attach(this));
                 rendered = current;
                 drawPicture();
                 backend.update(this, previous, current);
+                before.stream().filter(container -> !after.contains(container)).forEach(container -> container.detach(this));
             }
         }
 

@@ -8,7 +8,9 @@ import org.jetbrains.annotations.ApiStatus;
 /**
  * Items that one or more framework screens show and edit. Owned by the module whose {@link UiService}
  * created it; outlives any screen. Not thread-safe: confined to its thread (on Paper, the main thread);
- * every method throws {@link IllegalStateException} when called from another thread.
+ * every method except {@link #owner()}, {@link #size()} and {@link #kind()} throws {@link IllegalStateException}
+ * when called from another thread. {@link #owner()}, {@link #size()} and {@link #kind()} never change and may be
+ * called from any thread, so a {@link Grid} that binds a container can be built on any thread.
  *
  * <p>Conservation: in a {@link ContainerSpec#storage storage} container, items enter only from a viewer's
  * cursor or inventory, from {@link #load} or from {@link ContainerSpec.Builder#initial}, and leave only to a
@@ -33,7 +35,10 @@ import org.jetbrains.annotations.ApiStatus;
  * player's own contributions first, then other contributors, then the baseline. Unattributed baseline
  * items go to the handler under the nil UUID. COMMIT ends after the commit outcome; Unknown keeps items
  * with the store. drain() ends without a disposition. Templates discard their copies. After end the
- * container is not viewed and cannot be shown again. In-memory contents are not crash-journalled; modules
+ * container is not viewed and cannot be shown again. Showing or updating to a grid that binds an ended container
+ * throws IllegalStateException when called on the container's thread; if the container ends after that call and
+ * before the screen gets the snapshot, its bound slots show nothing and refuse every gesture.
+ * In-memory contents are not crash-journalled; modules
  * needing crash safety must persist them.
  */
 @ApiStatus.NonExtendable
@@ -46,7 +51,7 @@ public interface SlotContainer {
     ItemStack get(int index);
     /** Copies of every index, length {@link #size()}. */
     List<ItemStack> contents();
-    /** Whether a screen currently shows this container. */
+    /** Whether a session shows this container: the snapshot its backend was last given binds it, and that session has not been closed yet. */
     boolean isViewed();
     /**
      * Puts the container into or out of {@link ContainerState#READ_ONLY} (for example while both traders have

@@ -68,9 +68,9 @@ final class InMemorySlotContainer implements SlotContainer {
             throw new IllegalStateException("Container cannot be changed in " + state);
         }
     }
-    @Override public String owner() { checkThread(); return owner; }
-    @Override public int size() { checkThread(); return spec.size(); }
-    @Override public ContainerKind kind() { checkThread(); return spec.kind(); }
+    @Override public String owner() { return owner; }
+    @Override public int size() { return spec.size(); }
+    @Override public ContainerKind kind() { return spec.kind(); }
     @Override public ContainerState state() { checkThread(); return state; }
     @Override public ItemStack get(int index) { checkThread(); return UiTestItems.copy(contents.get(index)); }
     @Override public List<ItemStack> contents() { checkThread(); return UiTestItems.copies(contents); }
@@ -107,14 +107,14 @@ final class InMemorySlotContainer implements SlotContainer {
     void attach(UiSession<?> session) {
         checkThread();
         if (state == ContainerState.ENDED) {
-            throw new IllegalStateException("Cannot show an ended container");
+            return;
         }
         viewers.add(session);
     }
-    void detach(UiSession<?> session, boolean closed) {
+    void detach(UiSession<?> session) {
         checkThread();
         boolean removed = viewers.remove(session);
-        if (removed && closed && viewers.isEmpty() && spec.endWhenUnviewed()) {
+        if (removed && viewers.isEmpty() && spec.endWhenUnviewed() && state != ContainerState.ENDED) {
             end();
         }
     }

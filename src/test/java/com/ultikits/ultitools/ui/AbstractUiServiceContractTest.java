@@ -772,7 +772,8 @@ public abstract class AbstractUiServiceContractTest {
     @Test
     void update_rebinding_neverChangesContents() {
         backend(Grid.class);
-        SlotContainer first = service.container(editableStorage(2).baseline(List.of(UiTestItems.stone(3), UiTestItems.dirt(4))).build());
+        SlotContainer first = service.container(editableStorage(2).endWhenUnviewed(false)
+                .baseline(List.of(UiTestItems.stone(3), UiTestItems.dirt(4))).build());
         SlotContainer other = service.container(editableStorage(1).baseline(List.of(UiTestItems.stone(8))).build());
         GridSession session = service.show(viewer, bound(first));
         settle();
@@ -1006,6 +1007,79 @@ public abstract class AbstractUiServiceContractTest {
         assertThat(container.get(0)).isEqualTo(UiTestItems.stone(8));
     }
 
+    @Test
+    void secondGridBindingSameContainer_handsOverWithoutEnding() {
+        ProbeBackend backend = backend(Grid.class);
+        AtomicInteger writes = new AtomicInteger();
+        SlotContainer container = service.container(editableStorage(1).disposition(Disposition.COMMIT).store(snapshot -> {
+            writes.incrementAndGet(); return CompletableFuture.completedFuture(StoreAnswer.written());
+        }).build());
+        GridSession first = service.show(viewer, bound(container));
+        settle();
+        GridSession second = service.show(viewer, Grid.builder(Text.plain("Next"), 1)
+                .bind(GridSlot.ofIndex(0), container, 0, BindingMode.EDITABLE).build());
+        settle();
+        assertThat(outcome(first)).isEqualTo(new UiResult.Closed<Ack>(CloseReason.REPLACED));
+        assertThat(second.isOpen()).isTrue();
+        assertThat(backend.opened()).containsExactly(first, second);
+        assertThat(container.state()).isEqualTo(ContainerState.EDITABLE);
+        assertThat(container.isViewed()).isTrue();
+        assertThat(writes).hasValue(0);
+    }
+    @Test
+    void openAfterBoundContainerEnded_showsNothingAndRefuses() {
+        ProbeBackend backend = backend(Grid.class);
+        SlotContainer container = service.container(editableStorage(1).endWhenUnviewed(false)
+                .baseline(List.of(UiTestItems.stone(8))).build());
+        GridSession session = service.show(viewer, bound(container));
+        container.end();
+        settle();
+        assertThat(backend.opened()).containsExactly(session);
+        assertThat(session.isOpen()).isTrue();
+        assertThat(session.result().toCompletableFuture()).isNotDone();
+        assertThat(fixture.shown(session, GridSlot.ofIndex(0)).isEmpty()).isTrue();
+        assertThat(fixture.gesture(session, new InMemoryViewerItems(36), new Gesture.Pickup(GridSlot.ofIndex(0), false))).isFalse();
+    }
+    @Test
+    void update_rebindingAwayFromContainer_endsItWhenUnviewed() {
+        backend(Grid.class);
+        SlotContainer first = service.container(editableStorage(1).build());
+        SlotContainer next = service.container(editableStorage(1).build());
+        GridSession session = service.show(viewer, bound(first));
+        settle();
+        InMemoryViewerItems side = new InMemoryViewerItems(36);
+        side.cursor(UiTestItems.stone(8));
+        assertThat(fixture.gesture(session, side, new Gesture.Place(GridSlot.ofIndex(0), false))).isTrue();
+        session.update(bound(next));
+        settle();
+        assertThat(first.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(viewer.getInventory().getItem(0)).isEqualTo(UiTestItems.stone(8));
+        assertThat(next.isViewed()).isTrue();
+    }
+    @Test
+    void update_pagingWithinContainer_keepsItViewed() {
+        backend(Grid.class);
+        SlotContainer container = service.container(editableStorage(18).build());
+        GridSession session = service.show(viewer, Grid.builder(TITLE, 1).bindRange(0, 0, 9, container, 0, BindingMode.EDITABLE).build());
+        settle();
+        session.update(Grid.builder(TITLE, 1).bindRange(0, 0, 9, container, 9, BindingMode.EDITABLE).build());
+        settle();
+        assertThat(container.state()).isEqualTo(ContainerState.EDITABLE);
+        assertThat(container.isViewed()).isTrue();
+    }
+    @Test
+    void update_rebindingAwayWithEndWhenUnviewedFalse_keepsContainer() {
+        backend(Grid.class);
+        SlotContainer first = service.container(editableStorage(1).endWhenUnviewed(false).build());
+        SlotContainer next = service.container(editableStorage(1).build());
+        GridSession session = service.show(viewer, bound(first));
+        settle();
+        session.update(bound(next));
+        settle();
+        assertThat(first.state()).isEqualTo(ContainerState.EDITABLE);
+        assertThat(first.isViewed()).isFalse();
+        assertThat(next.isViewed()).isTrue();
+    }
     @Test
     void showFromResultDependentDuringUnload_isClosedOwnerUnloaded() {
         ProbeBackend backend = backend(Confirm.class);

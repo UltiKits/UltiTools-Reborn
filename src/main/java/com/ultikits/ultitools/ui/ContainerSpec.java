@@ -130,7 +130,16 @@ public final class ContainerSpec {
             undelivered = Objects.requireNonNull(handler, "handler");
             return this;
         }
-        /** Default true: the container ends when the last screen showing it closes, for any reason. */
+        /**
+         * Default true: the container ends as soon as no session shows it any more, whatever the reason: the last
+         * showing session closes (in that session's close step, after its screen closes and before its result
+         * completes), or {@link GridSession#update} gives every showing session a snapshot that no longer binds it.
+         * Showing another grid that binds the same container hands it over without ending it; paging within the same
+         * container never ends it. Opening any intent that does not bind it (a Confirm, a Form, another grid) for its
+         * last viewer ends it, so a module that opens sub-screens over a container and comes back builds it with
+         * {@code endWhenUnviewed(false)} and calls {@link SlotContainer#end()} or {@link SlotContainer#drain()} itself.
+         * A container that was never shown does not end this way.
+         */
         public Builder endWhenUnviewed(boolean end) { endWhenUnviewed = end; return this; }
         /** Called after each applied transfer, on the container's thread; exceptions are logged and swallowed. */
         public Builder onChange(Consumer<ContainerChange> listener) {

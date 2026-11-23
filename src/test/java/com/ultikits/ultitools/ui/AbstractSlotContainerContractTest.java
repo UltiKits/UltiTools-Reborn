@@ -206,7 +206,7 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
     }
     @Test void offThread_anyMethod_throws() throws InterruptedException {
         SlotContainer container = service.container(storage(1).store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.written())).build());
-        List<Runnable> methods = List.of(container::owner, container::size, container::kind, container::state, () -> container.get(0),
+        List<Runnable> methods = List.of(container::state, () -> container.get(0),
                 container::contents, container::isViewed, () -> container.setReadOnly(false), () -> container.load(List.of(ItemStack.empty())),
                 container::changes, container::commit, container::drain, container::end);
         List<Throwable> failures = new ArrayList<>();
@@ -216,8 +216,25 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
         }), "container-caller");
         caller.start(); caller.join(10_000);
         assertThat(caller.isAlive()).isFalse();
-        assertThat(failures).hasSize(13).allSatisfy(failure -> assertThat(failure).isInstanceOf(IllegalStateException.class));
+        assertThat(failures).hasSize(10).allSatisfy(failure -> assertThat(failure).isInstanceOf(IllegalStateException.class));
         assertThat(container.state()).isEqualTo(ContainerState.EDITABLE);
+    }
+    @Test void offThread_immutableGetters_answer() throws Throwable {
+        SlotContainer container = service.container(storage(1).build());
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread caller = new Thread(() -> {
+            try {
+                assertThat(container.owner()).isEqualTo(service.owner());
+                assertThat(container.size()).isOne();
+                assertThat(container.kind()).isEqualTo(ContainerKind.STORAGE);
+                assertThat(grid(container).binding(SLOT)).isPresent();
+            } catch (Throwable thrown) {
+                failure.set(thrown);
+            }
+        }, "immutable-container-caller");
+        caller.start(); caller.join(10_000);
+        assertThat(caller.isAlive()).isFalse();
+        if (failure.get() != null) { throw failure.get(); }
     }
     @Test void loadAndChanges_copyAndResetBaseline() {
         SlotContainer container = service.container(storage(1).build());
