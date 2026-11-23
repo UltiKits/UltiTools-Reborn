@@ -51,8 +51,8 @@ public abstract class AbstractUiServiceContractTest {
         void advanceTicks(long ticks);
         void disconnect(PlayerMock player);
         void unload(String owner);
-        boolean inEntityTask(Player player);
-        boolean inGlobalTask();
+        /** The scheduler wrapper used for every scheduled service step. */
+        RecordingScheduler scheduler();
         List<LogRecord> warnings();
         @Override void close();
     }
@@ -152,7 +152,7 @@ public abstract class AbstractUiServiceContractTest {
         ProbeBackend backend = backend(Confirm.class);
         UiSession<Boolean> session = service.show(viewer, confirm());
         AtomicReference<Boolean> entityThread = new AtomicReference<>();
-        session.result().thenAccept(ignored -> entityThread.set(fixture.inEntityTask(viewer)));
+        session.result().thenAccept(ignored -> entityThread.set(RecordingScheduler.inEntityTask(viewer)));
         settle();
         backend.callbacks(session).completed(true);
         assertThat(session.result().toCompletableFuture()).isNotDone();
@@ -199,7 +199,7 @@ public abstract class AbstractUiServiceContractTest {
         fixture.disconnect(viewer);
         UiSession<Boolean> session = service.show(viewer, confirm());
         AtomicReference<Boolean> globalThread = new AtomicReference<>();
-        session.result().thenAccept(ignored -> globalThread.set(fixture.inGlobalTask()));
+        session.result().thenAccept(ignored -> globalThread.set(RecordingScheduler.inGlobalTask()));
         settle();
         assertThat(outcome(session)).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.DISCONNECTED));
         assertThat(globalThread).hasValue(true);
@@ -212,7 +212,7 @@ public abstract class AbstractUiServiceContractTest {
         UiSession<Boolean> session = service.show(viewer, confirm());
         settle();
         AtomicReference<Boolean> globalThread = new AtomicReference<>();
-        session.result().thenAccept(ignored -> globalThread.set(fixture.inGlobalTask()));
+        session.result().thenAccept(ignored -> globalThread.set(RecordingScheduler.inGlobalTask()));
         fixture.disconnect(viewer);
         settle();
         assertThat(outcome(session)).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.DISCONNECTED));
@@ -324,7 +324,7 @@ public abstract class AbstractUiServiceContractTest {
         Grid grid = Grid.builder(TITLE, 1).set(slot, GridItem.of(ICON, event -> {
             calls.incrementAndGet();
             click.set(event);
-            entityThread.set(fixture.inEntityTask(viewer));
+            entityThread.set(RecordingScheduler.inEntityTask(viewer));
         })).build();
         GridSession session = service.show(viewer, grid);
         settle();

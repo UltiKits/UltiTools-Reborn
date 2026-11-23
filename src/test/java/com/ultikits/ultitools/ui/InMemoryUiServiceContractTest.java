@@ -75,7 +75,7 @@ class InMemoryUiServiceContractTest extends AbstractUiServiceContractTest {
         UiSession<Boolean> session = service.show(viewer, confirm());
         settle();
         AtomicReference<Boolean> globalThread = new AtomicReference<>();
-        session.result().thenAccept(ignored -> globalThread.set(fixture.inGlobalTask()));
+        session.result().thenAccept(ignored -> globalThread.set(RecordingScheduler.inGlobalTask()));
         backend.callbacks(session).closed(CloseReason.DISCONNECTED);
         fixture.disconnect(viewer);
         settle();
@@ -103,7 +103,7 @@ class InMemoryUiServiceContractTest extends AbstractUiServiceContractTest {
         caller.join();
         UiSession<Boolean> session = reference.get();
         AtomicReference<Boolean> entityThread = new AtomicReference<>();
-        session.result().thenAccept(ignored -> entityThread.set(fixture.inEntityTask(viewer)));
+        session.result().thenAccept(ignored -> entityThread.set(RecordingScheduler.inEntityTask(viewer)));
         settle();
         Thread closer = new Thread(session::close, "ui-test-closer");
         closer.start();

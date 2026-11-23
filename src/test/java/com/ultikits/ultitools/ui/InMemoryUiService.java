@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.ui;
 
 import com.ultikits.ultitools.scheduling.ManualScheduler;
-import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.TaskHandle;
 import com.ultikits.ultitools.scheduling.TaskRetiredException;
 import java.time.Duration;
@@ -100,14 +99,12 @@ class InMemoryUiService implements UiService {
     /** Shared player registry and virtual clock, independent of any one module's task lifetime. */
     static final class Registry implements AbstractUiServiceContractTest.Fixture {
         private final ManualScheduler.Engine clock = new ManualScheduler.Engine();
-        private final Scheduler scheduler = clock.scheduler("UiRuntime");
+        private final RecordingScheduler scheduler = new RecordingScheduler(clock.scheduler("UiRuntime"));
         private final Map<String, InMemoryUiService> owners = new HashMap<>();
         private final List<AbstractUiServiceContractTest.ProbeBackend> backends = new ArrayList<>();
         private final List<MemorySession<?>> sessions = new ArrayList<>();
         private final Map<UUID, MemorySession<?>> active = new HashMap<>();
         private final List<LogRecord> warnings = new ArrayList<>();
-        private final ThreadLocal<Player> entityTask = new ThreadLocal<>();
-        private final ThreadLocal<Boolean> globalTask = new ThreadLocal<>();
 
         @Override public synchronized UiService service(String owner) {
             Objects.requireNonNull(owner, "owner");
@@ -135,13 +132,8 @@ class InMemoryUiService implements UiService {
                     onGlobal(action);
                     return;
                 }
-                entityTask.set(viewer);
-                try {
-                    synchronized (this) {
-                        action.run();
-                    }
-                } finally {
-                    entityTask.remove();
+                synchronized (this) {
+                    action.run();
                 }
             });
             scheduled.completion().whenComplete((ignored, failure) -> {
@@ -153,13 +145,8 @@ class InMemoryUiService implements UiService {
 
         private void onGlobal(Runnable action) {
             scheduler.global().run(() -> {
-                globalTask.set(true);
-                try {
-                    synchronized (this) {
-                        action.run();
-                    }
-                } finally {
-                    globalTask.remove();
+                synchronized (this) {
+                    action.run();
                 }
             });
         }
@@ -183,10 +170,7 @@ class InMemoryUiService implements UiService {
                 }
             }
         }
-        @Override public boolean inEntityTask(Player player) {
-            return entityTask.get() == player && scheduler.entity(player).isCurrentThread();
-        }
-        @Override public boolean inGlobalTask() { return Boolean.TRUE.equals(globalTask.get()) && scheduler.global().isCurrentThread(); }
+        @Override public RecordingScheduler scheduler() { return scheduler; }
         @Override public synchronized List<LogRecord> warnings() { return List.copyOf(warnings); }
         @Override public void close() { clock.close(); }
     }
