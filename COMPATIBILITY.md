@@ -28,8 +28,9 @@ Call the sound and enchantment APIs during gameplay, not from static initializer
 numeric IDs and old names renamed after 1.20 (for example `GRASS`, `CHAIN` and `SCUTE`) return `null`.
 The native `Material`, `ItemStack` and `Enchantment` entrypoints remain available. GUI glass colours,
 button materials, teleport sound (volume 1, pitch 0) and notification text remain unchanged.
-The unused `Sounds` enum (including `getKey()`) and `Colors.getCode()` are removed;
-`Colors` and `Colors.getGlassPaneMaterial()` remain available.
+The unused `Sounds` enum and `Colors.getCode()` are removed; the `Colors` enum itself remains.
+`Colors.getGlassPaneMaterial()` is new in 7.0.0 and does not exist in 6.x; code that has to compile on
+both lines uses `Material.<COLOR>_STAINED_GLASS_PANE` directly.
 
 7.0 不再提供 XSeries 与 `XVersionUtils`；保留 XSeries 的模块须自行打包并重定位
 （shade + relocate），UltiTools 模块不能使用 Paper 的 `libraries:`。推荐使用上面的 Paper
