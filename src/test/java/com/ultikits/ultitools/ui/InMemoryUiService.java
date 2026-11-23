@@ -9,9 +9,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import org.bukkit.entity.Player;
@@ -40,12 +45,21 @@ class InMemoryUiService implements UiService {
         Objects.requireNonNull(viewer, "viewer");
         Objects.requireNonNull(intent, "intent");
         Objects.requireNonNull(options, "options");
+        MemorySession<R> session = newSession(viewer, intent);
+        boolean ownerUnloaded;
         synchronized (registry) {
-            MemorySession<R> session = newSession(viewer, intent);
+            ownerUnloaded = unloaded;
             registry.sessions.add(session);
-            registry.dispatch(viewer, () -> open(session, options));
-            return session;
         }
+        if (ownerUnloaded) {
+            session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
+            session.closeAndComplete();
+        } else if (!viewer.isOnline()) {
+            session.requestClose(CloseReason.DISCONNECTED);
+        } else {
+            registry.dispatch(viewer, () -> openTask(session, options));
+        }
+        return session;
     }
 
     @SuppressWarnings("unchecked") // Grid is sealed to UiIntent<Ack>; runtime narrowing preserves R.
@@ -56,44 +70,59 @@ class InMemoryUiService implements UiService {
         return new MemorySession<>(this, viewer, intent);
     }
 
-    @SuppressWarnings("unchecked") // Class.getClass loses the UiIntent<R> type arguments, not the intent kind.
-    private <R> void open(MemorySession<R> session, ShowOptions options) {
-        if (!session.open) {
-            return;
-        }
-        if (unloaded) {
-            session.finish(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
+    private <R> void openTask(MemorySession<R> session, ShowOptions options) {
+        if (!session.isOpen()) {
             return;
         }
         if (!session.viewer.isOnline()) {
-            session.finish(new UiResult.Closed<>(CloseReason.DISCONNECTED));
+            session.requestClose(CloseReason.DISCONNECTED);
             return;
         }
-        MemorySession<?> previous = registry.active.get(session.viewer.getUniqueId());
-        if (previous != null) {
-            previous.finish(new UiResult.Closed<>(CloseReason.REPLACED));
+        UiBackend selected = select(session);
+        if (selected == null) {
+            session.requestClose(CloseReason.UNSUPPORTED);
+            return;
         }
-        Class<? extends UiIntent<?>> kind = (Class<? extends UiIntent<?>>) session.intent.getClass();
-        UiBackend selected = null;
-        for (UiBackend candidate : registry.backends) {
-            if (candidate.supports(kind, session.viewer) && (selected == null || candidate.priority() > selected.priority())) {
-                selected = candidate;
+        replacePrevious(session);
+        session.openWith(selected);
+        scheduleTimeout(session, options);
+    }
+
+    private UiBackend select(MemorySession<?> session) {
+        synchronized (registry) {
+            UiBackend selected = null;
+            for (UiBackend candidate : registry.backends) {
+                if (candidate.supports(session.intent(), session.viewer)
+                        && (selected == null || candidate.priority() > selected.priority())) {
+                    selected = candidate;
+                }
+            }
+            return selected;
+        }
+    }
+
+    private void replacePrevious(MemorySession<?> session) {
+        MemorySession<?> previous;
+        synchronized (registry) {
+            previous = registry.active.get(session.viewer.getUniqueId());
+        }
+        if (previous != null) {
+            previous.choose(new UiResult.Closed<>(CloseReason.REPLACED));
+            previous.closeAndComplete();
+        }
+    }
+
+    private void scheduleTimeout(MemorySession<?> session, ShowOptions options) {
+        synchronized (registry) {
+            if (session.isOpen()) {
+                timeoutFor(session.intent(), options).ifPresent(timeout -> session.timeout = registry.scheduler.global()
+                        .runLater(timeout, () -> session.requestClose(CloseReason.TIMED_OUT)));
             }
         }
-        if (selected == null) {
-            session.finish(new UiResult.Closed<>(CloseReason.UNSUPPORTED));
-            return;
-        }
-        registry.active.put(session.viewer.getUniqueId(), session);
-        session.backend = selected;
-        selected.open(session, session.callbacks());
-        Duration timeout = options.timeout().orElse(session.intent instanceof Grid ? Duration.ZERO : Duration.ofMinutes(10));
-        if (session.intent instanceof Grid && options.noTimeout()) {
-            timeout = Duration.ZERO;
-        }
-        if (session.open && !timeout.isZero()) {
-            session.timeout = registry.scheduler.global().runLater(timeout, () -> session.requestClose(CloseReason.TIMED_OUT));
-        }
+    }
+
+    private static Optional<Duration> timeoutFor(UiIntent<?> intent, ShowOptions options) {
+        return intent instanceof Grid ? options.timeout() : Optional.of(options.timeout().orElse(Duration.ofMinutes(10)));
     }
 
     /** Shared player registry and virtual clock, independent of any one module's task lifetime. */
@@ -101,28 +130,28 @@ class InMemoryUiService implements UiService {
         private final ManualScheduler.Engine clock = new ManualScheduler.Engine();
         private final RecordingScheduler scheduler = new RecordingScheduler(clock.scheduler("UiRuntime"));
         private final Map<String, InMemoryUiService> owners = new HashMap<>();
-        private final List<AbstractUiServiceContractTest.ProbeBackend> backends = new ArrayList<>();
+        private final List<UiBackend> backends = new ArrayList<>();
         private final List<MemorySession<?>> sessions = new ArrayList<>();
         private final Map<UUID, MemorySession<?>> active = new HashMap<>();
-        private final List<LogRecord> warnings = new ArrayList<>();
+        private final List<LogRecord> warnings = new CopyOnWriteArrayList<>();
+        private final Queue<Runnable> retiredContinuations = new ConcurrentLinkedQueue<>();
 
         @Override public synchronized UiService service(String owner) {
             Objects.requireNonNull(owner, "owner");
             return owners.computeIfAbsent(owner, name -> new InMemoryUiService(this, name));
         }
 
-        @Override public synchronized void register(AbstractUiServiceContractTest.ProbeBackend backend) {
+        @Override public synchronized void register(UiBackend backend) {
             Objects.requireNonNull(backend, "backend");
-            for (AbstractUiServiceContractTest.ProbeBackend existing : backends) {
-                if (existing.priority() == backend.priority()
-                        && existing.kinds().stream().anyMatch(backend.kinds()::contains)) {
-                    throw new IllegalStateException("Equal backend priorities for a shared intent kind");
+            for (UiBackend existing : backends) {
+                if (existing.priority() == backend.priority()) {
+                    throw new IllegalStateException("Equal backend priorities");
                 }
             }
             backends.add(backend);
         }
 
-        private void dispatch(Player viewer, Runnable action) {
+        void dispatch(Player viewer, Runnable action) {
             if (!viewer.isOnline()) {
                 onGlobal(action);
                 return;
@@ -132,46 +161,57 @@ class InMemoryUiService implements UiService {
                     onGlobal(action);
                     return;
                 }
-                synchronized (this) {
-                    action.run();
-                }
+                action.run();
             });
             scheduled.completion().whenComplete((ignored, failure) -> {
-                if (failure instanceof TaskRetiredException) {
-                    onGlobal(action);
+                Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
+                if (cause instanceof TaskRetiredException) {
+                    retiredContinuations.add(action);
                 }
             });
         }
 
-        private void onGlobal(Runnable action) {
-            scheduler.global().run(() -> {
-                synchronized (this) {
-                    action.run();
-                }
-            });
-        }
+        private void onGlobal(Runnable action) { scheduler.global().run(action); }
 
-        @Override public void advanceTicks(long ticks) { clock.advanceTicks(ticks); }
-        @Override public synchronized void disconnect(PlayerMock player) {
-            player.disconnect();
-            clock.retire(player);
-            for (MemorySession<?> session : List.copyOf(sessions)) {
-                if (session.viewer == player) {
-                    session.requestClose(CloseReason.DISCONNECTED);
-                }
+        private void flushRetired() {
+            // Retirement completes handles while the manual engine is iterating its task list.
+            Runnable action;
+            while ((action = retiredContinuations.poll()) != null) {
+                onGlobal(action);
             }
         }
-        @Override public synchronized void unload(String owner) {
-            InMemoryUiService service = (InMemoryUiService) service(owner);
-            service.unloaded = true;
-            for (MemorySession<?> session : List.copyOf(sessions)) {
-                if (session.service == service) {
-                    session.requestClose(CloseReason.OWNER_UNLOADED);
-                }
+
+        @Override public void advanceTicks(long ticks) {
+            for (long i = 0; i < ticks; i++) {
+                flushRetired();
+                clock.advanceTicks(1);
+            }
+            flushRetired();
+        }
+        @Override public void disconnect(PlayerMock player) {
+            player.disconnect();
+            clock.retire(player);
+            flushRetired();
+            List<MemorySession<?>> quitting;
+            synchronized (this) {
+                quitting = sessions.stream().filter(session -> session.viewer.getUniqueId().equals(player.getUniqueId())).toList();
+            }
+            quitting.forEach(session -> session.requestClose(CloseReason.DISCONNECTED));
+        }
+        @Override public void unload(String owner) {
+            List<MemorySession<?>> closing;
+            synchronized (this) {
+                InMemoryUiService service = (InMemoryUiService) service(owner);
+                service.unloaded = true;
+                closing = sessions.stream().filter(session -> session.service.owner().equals(owner)).toList();
+            }
+            for (MemorySession<?> session : closing) {
+                session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
+                session.closeAndComplete();
             }
         }
         @Override public RecordingScheduler scheduler() { return scheduler; }
-        @Override public synchronized List<LogRecord> warnings() { return List.copyOf(warnings); }
+        @Override public List<LogRecord> warnings() { return List.copyOf(warnings); }
         @Override public void close() { clock.close(); }
     }
 
@@ -181,9 +221,10 @@ class InMemoryUiService implements UiService {
         final Player viewer;
         private final UiIntent<R> intent;
         private final CompletableFuture<UiResult<R>> completion = new CompletableFuture<>();
-        private UiBackend backend;
-        private TaskHandle timeout;
-        boolean open = true;
+        UiBackend backend;
+        TaskHandle timeout;
+        private UiResult<R> chosen;
+        private boolean closedAndCompleted;
 
         MemorySession(InMemoryUiService service, Player viewer, UiIntent<R> intent) {
             this.service = service;
@@ -195,27 +236,59 @@ class InMemoryUiService implements UiService {
         @Override public Player viewer() { return viewer; }
         @Override public UiIntent<R> intent() { return intent; }
         @Override public CompletionStage<UiResult<R>> result() { return completion.minimalCompletionStage(); }
-        @Override public boolean isOpen() { synchronized (registry) { return open; } }
+        @Override public boolean isOpen() { synchronized (registry) { return chosen == null; } }
         @Override public void close() { requestClose(CloseReason.CLOSED_BY_CODE); }
 
-        final void requestClose(CloseReason reason) {
-            registry.dispatch(viewer, () -> finish(new UiResult.Closed<>(reason)));
+        final void requestClose(CloseReason reason) { chooseAndQueue(new UiResult.Closed<>(reason)); }
+
+        final void chooseAndQueue(UiResult<R> result) {
+            if (choose(result)) {
+                registry.dispatch(viewer, this::closeAndComplete);
+            }
         }
 
-        final void finish(UiResult<R> result) {
-            if (!open) {
-                return;
+        final boolean choose(UiResult<R> result) {
+            synchronized (registry) {
+                if (chosen != null) {
+                    return false;
+                }
+                chosen = result;
+                if (timeout != null) {
+                    timeout.cancel();
+                }
+                return true;
             }
-            open = false;
-            if (timeout != null) {
-                timeout.cancel();
-            }
-            registry.active.remove(viewer.getUniqueId(), this);
-            registry.sessions.remove(this);
-            if (backend != null) {
-                backend.close(this);
+        }
+
+        final void closeAndComplete() {
+            UiResult<R> result;
+            synchronized (registry) {
+                if (closedAndCompleted || chosen == null) {
+                    return;
+                }
+                closedAndCompleted = true;
+                registry.active.remove(viewer.getUniqueId(), this);
+                registry.sessions.remove(this);
+                if (backend != null) {
+                    backend.close(this);
+                }
+                result = chosen;
             }
             completion.complete(result);
+        }
+
+        final void openWith(UiBackend selected) {
+            synchronized (registry) {
+                if (!isOpen()) {
+                    return;
+                }
+                registry.active.put(viewer.getUniqueId(), this);
+                backend = selected;
+                if (this instanceof MemoryGridSession grid) {
+                    grid.rendered = grid.current;
+                }
+                selected.open(this, callbacks());
+            }
         }
 
         private UiBackend.BackendCallbacks<R> callbacks() {
@@ -223,7 +296,7 @@ class InMemoryUiService implements UiService {
                 @Override public void completed(R value) {
                     Objects.requireNonNull(value, "value");
                     if (!(intent instanceof Grid)) {
-                        registry.dispatch(viewer, () -> finish(new UiResult.Completed<>(value)));
+                        chooseAndQueue(new UiResult.Completed<>(value));
                     }
                 }
                 @Override public void closed(CloseReason reason) {
@@ -232,8 +305,11 @@ class InMemoryUiService implements UiService {
                 @Override public void clicked(GridSlot slot, ClickKind kind) {
                     Objects.requireNonNull(slot, "slot");
                     Objects.requireNonNull(kind, "kind");
-                    if (MemorySession.this instanceof MemoryGridSession grid) {
-                        registry.dispatch(viewer, () -> grid.clicked(slot, kind));
+                    synchronized (registry) {
+                        if (isOpen() && MemorySession.this instanceof MemoryGridSession grid) {
+                            grid.rendered.item(slot).flatMap(GridItem::action)
+                                    .ifPresent(action -> registry.dispatch(viewer, () -> grid.runAction(action, slot, kind)));
+                        }
                     }
                 }
             };
@@ -242,38 +318,53 @@ class InMemoryUiService implements UiService {
 
     private static final class MemoryGridSession extends MemorySession<Ack> implements GridSession {
         private Grid current;
+        private Grid rendered;
 
         MemoryGridSession(InMemoryUiService service, Player viewer, Grid grid) {
             super(service, viewer, grid);
             current = grid;
+            rendered = grid;
         }
         @Override public void update(Grid next) {
             Objects.requireNonNull(next, "next");
             synchronized (registry) {
-                if (!open) {
+                if (!isOpen()) {
                     return;
                 }
                 if (next.rows() != current.rows()) {
                     throw new IllegalArgumentException("A grid update must retain the row count");
                 }
                 current = next;
+                registry.dispatch(viewer, this::notifyBackend);
             }
         }
         @Override public Grid current() { synchronized (registry) { return current; } }
 
-        private void clicked(GridSlot slot, ClickKind kind) {
-            if (!open) {
-                return;
+        private void notifyBackend() {
+            synchronized (registry) {
+                if (!isOpen() || backend == null || current.equals(rendered)) {
+                    return;
+                }
+                Grid previous = rendered;
+                rendered = current;
+                backend.update(this, previous, current);
             }
-            current.item(slot).flatMap(GridItem::action).ifPresent(action -> {
+        }
+
+        void runAction(GridAction action, GridSlot slot, ClickKind kind) {
+            synchronized (registry) {
+                if (!isOpen()) {
+                    return;
+                }
                 try {
                     action.onClick(new Click(viewer, slot, kind, this));
                 } catch (Exception thrown) {
-                    LogRecord record = new LogRecord(Level.WARNING, "Grid action failed for owner " + service.owner());
+                    LogRecord record = new LogRecord(Level.WARNING, "Grid action failed for owner {0}");
+                    record.setParameters(new Object[] {service.owner()});
                     record.setThrown(thrown);
                     registry.warnings.add(record);
                 }
-            });
+            }
         }
     }
 

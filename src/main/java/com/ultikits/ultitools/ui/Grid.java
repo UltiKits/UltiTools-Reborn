@@ -90,6 +90,7 @@ public final class Grid implements UiIntent<Ack> {
         }
 
         private void validate() {
+            // Seam: the editable-slot change adds binding checks here.
             items.keySet().forEach(this::requireSlot);
         }
 
