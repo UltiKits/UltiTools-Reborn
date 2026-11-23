@@ -12,6 +12,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
+import java.util.Locale;
+import java.util.Set;
+import java.util.LinkedHashSet;
+import java.util.concurrent.RejectedExecutionException;
+import org.bukkit.Bukkit;
+import org.bukkit.inventory.ItemStack;
+import com.ultikits.ultitools.text.FixedLocaleResolver;
+import com.ultikits.ultitools.text.InMemoryMessages;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -34,6 +42,80 @@ class InMemoryUiService implements UiService {
     }
 
     @Override public String owner() { return owner; }
+
+    @Override public SlotContainer container(ContainerSpec spec) {
+        Objects.requireNonNull(spec, "spec");
+        registry.checkThread();
+        if (unloaded) {
+            throw new RejectedExecutionException("Owner unloaded: " + owner);
+        }
+        InMemorySlotContainer container = new InMemorySlotContainer(owner, spec, registry.scheduler,
+                this::returnToContributor, registry.warnings::add, registry::redraw);
+        registry.containers.add(container);
+        return container;
+    }
+
+    private CompletionStage<Delivery> returnToContributor(UUID contributor, List<ItemStack> items) {
+        Player player = Bukkit.getPlayer(contributor);
+        if (player == null || !player.isOnline()) {
+            return CompletableFuture.completedFuture(new Delivery(List.of(), List.of(), items)).minimalCompletionStage();
+        }
+        return deliver(player, items);
+    }
+
+    @Override public CompletionStage<Delivery> deliver(Player player, List<ItemStack> items) {
+        Objects.requireNonNull(player, "player");
+        List<ItemStack> copy = UiTestItems.copies(items);
+        CompletableFuture<Delivery> result = new CompletableFuture<>();
+        registry.dispatch(player, () -> result.complete(give(player, copy)));
+        return result.minimalCompletionStage();
+    }
+
+    private Delivery give(Player player, List<ItemStack> items) {
+        if (!player.isOnline()) {
+            return new Delivery(List.of(), List.of(), items);
+        }
+        ItemStack[] storage = player.getInventory().getStorageContents();
+        InMemoryViewerItems side = new InMemoryViewerItems(storage.length);
+        for (int i = 0; i < storage.length; i++) {
+            side.slot(i, storage[i] == null ? ItemStack.empty() : storage[i]);
+        }
+        List<ItemStack> given = new ArrayList<>();
+        List<ItemStack> dropped = new ArrayList<>();
+        for (ItemStack item : items) {
+            if (!item.isEmpty()) {
+                int fits = UiTestItems.fit(side, item);
+                UiTestItems.insert(side, item, fits);
+                int rest = item.getAmount() - fits;
+                if (rest < item.getAmount()) {
+                    given.add(UiTestItems.amount(item, item.getAmount() - rest));
+                }
+                if (rest > 0) {
+                    ItemStack drop = UiTestItems.amount(item, rest);
+                    player.getWorld().dropItemNaturally(player.getLocation(), UiTestItems.copy(drop));
+                    dropped.add(drop);
+                }
+            }
+        }
+        for (int i = 0; i < storage.length; i++) {
+            player.getInventory().setItem(i, side.slot(i));
+        }
+        return new Delivery(given, dropped, List.of());
+    }
+
+    private static Set<InMemorySlotContainer> boundContainers(Grid grid) {
+        Set<InMemorySlotContainer> result = new LinkedHashSet<>();
+        grid.bindings().values().forEach(binding -> result.add((InMemorySlotContainer) binding.container()));
+        return result;
+    }
+
+    private static void validateContainers(Grid grid) {
+        boundContainers(grid).forEach(container -> {
+            if (container.state() == ContainerState.ENDED) {
+                throw new IllegalStateException("Cannot show an ended container");
+            }
+        });
+    }
     @Override public <R> UiSession<R> show(Player viewer, UiIntent<R> intent) { return show(viewer, intent, ShowOptions.defaults()); }
     @Override public GridSession show(Player viewer, Grid grid) { return show(viewer, grid, ShowOptions.defaults()); }
     @Override public GridSession show(Player viewer, Grid grid, ShowOptions options) {
@@ -45,6 +127,9 @@ class InMemoryUiService implements UiService {
         Objects.requireNonNull(viewer, "viewer");
         Objects.requireNonNull(intent, "intent");
         Objects.requireNonNull(options, "options");
+        if (intent instanceof Grid grid && Thread.currentThread() == registry.thread) { // NOPMD - validate synchronously on the container thread
+            validateContainers(grid);
+        }
         MemorySession<R> session = newSession(viewer, intent);
         boolean ownerUnloaded;
         synchronized (registry) {
@@ -135,6 +220,37 @@ class InMemoryUiService implements UiService {
         private final Map<UUID, MemorySession<?>> active = new HashMap<>();
         private final List<LogRecord> warnings = new CopyOnWriteArrayList<>();
         private final Queue<Runnable> retiredContinuations = new ConcurrentLinkedQueue<>();
+        private final Thread thread = Thread.currentThread();
+        private final List<InMemorySlotContainer> containers = new ArrayList<>();
+        private final InMemoryMessages messages = new InMemoryMessages("test",
+                new FixedLocaleResolver(Locale.ENGLISH, Optional.empty()));
+        private final GestureEngine engine = new InMemoryGestureEngine((player, text) -> player.sendMessage(messages.render(text, player)));
+
+        void checkThread() {
+            if (Thread.currentThread() != thread) { // NOPMD - the registry captures the server thread
+                throw new IllegalStateException("Container creation requires the server thread");
+            }
+        }
+        private void redraw() {
+            List<MemorySession<?>> snapshot = List.copyOf(sessions);
+            for (MemorySession<?> session : snapshot) {
+                if (session instanceof MemoryGridSession grid && grid.isOpen() && grid.backend != null) {
+                    dispatch(grid.viewer, () -> {
+                        if (grid.isOpen()) {
+                            grid.backend.update(grid, grid.rendered, grid.rendered);
+                        }
+                    });
+                }
+            }
+        }
+        @Override public GestureEngine engine() { return engine; }
+        @Override public boolean gesture(GridSession session, ViewerItems side, Gesture gesture) {
+            if (!session.isOpen()) {
+                return false;
+            }
+            MemoryGridSession grid = (MemoryGridSession) session;
+            return engine.apply(grid.rendered, grid.viewer, side, gesture);
+        }
 
         @Override public synchronized UiService service(String owner) {
             Objects.requireNonNull(owner, "owner");
@@ -201,14 +317,15 @@ class InMemoryUiService implements UiService {
         @Override public void unload(String owner) {
             List<MemorySession<?>> closing;
             synchronized (this) {
-                InMemoryUiService service = (InMemoryUiService) service(owner);
-                service.unloaded = true;
+                service(owner);
                 closing = sessions.stream().filter(session -> session.service.owner().equals(owner)).toList();
             }
             for (MemorySession<?> session : closing) {
                 session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
                 session.closeAndComplete();
             }
+            containers.stream().filter(container -> container.owner().equals(owner)).forEach(InMemorySlotContainer::unload);
+            owners.get(owner).unloaded = true;
         }
         @Override public RecordingScheduler scheduler() { return scheduler; }
         @Override public List<LogRecord> warnings() { return List.copyOf(warnings); }
@@ -272,6 +389,9 @@ class InMemoryUiService implements UiService {
                 if (backend != null) {
                     backend.close(this);
                 }
+                if (this instanceof MemoryGridSession grid && backend != null) {
+                    boundContainers(grid.rendered).forEach(container -> container.detach(this, true));
+                }
                 result = chosen;
             }
             completion.complete(result);
@@ -286,6 +406,7 @@ class InMemoryUiService implements UiService {
                 backend = selected;
                 if (this instanceof MemoryGridSession grid) {
                     grid.rendered = grid.current;
+                    boundContainers(grid.rendered).forEach(container -> container.attach(this));
                 }
                 selected.open(this, callbacks());
             }
@@ -345,7 +466,12 @@ class InMemoryUiService implements UiService {
                 if (!isOpen() || backend == null || current.equals(rendered)) {
                     return;
                 }
+                validateContainers(current);
                 Grid previous = rendered;
+                Set<InMemorySlotContainer> before = boundContainers(previous);
+                Set<InMemorySlotContainer> after = boundContainers(current);
+                before.stream().filter(container -> !after.contains(container)).forEach(container -> container.detach(this, false));
+                after.stream().filter(container -> !before.contains(container)).forEach(container -> container.attach(this));
                 rendered = current;
                 backend.update(this, previous, current);
             }

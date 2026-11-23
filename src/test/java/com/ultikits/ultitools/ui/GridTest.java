@@ -97,6 +97,64 @@ class GridTest {
         assertThatNullPointerException().isThrownBy(() -> Grid.builder(TITLE, 1).build().item(null)).withMessage("slot");
     }
 
+    @Test
+    void bind_sameIndexTwice_throws() {
+        SlotContainer container = sizedContainer(3);
+        assertThatThrownBy(() -> Grid.builder(TITLE, 1).bind(GridSlot.ofIndex(0), container, 1, BindingMode.EDITABLE)
+                .bind(GridSlot.ofIndex(1), container, 1, BindingMode.VIEW).build()).isInstanceOf(IllegalArgumentException.class);
+        assertThat(Grid.builder(TITLE, 1).bind(GridSlot.ofIndex(0), container, 1, BindingMode.VIEW)
+                .bind(GridSlot.ofIndex(1), sizedContainer(3), 1, BindingMode.VIEW).build().bindings()).hasSize(2);
+    }
+
+    @Test
+    void bind_replacesIcon_andSetReplacesBinding() {
+        SlotContainer container = sizedContainer(9);
+        GridSlot slot = GridSlot.ofIndex(0);
+        Grid.Builder builder = Grid.builder(TITLE, 1).set(slot, GridItem.of(ICON));
+        Grid bound = builder.bind(slot, container, 2, BindingMode.EDITABLE).build();
+        assertThat(bound.items()).isEmpty();
+        assertThat(bound.binding(slot)).contains(new SlotBinding(container, 2, BindingMode.EDITABLE));
+        assertThat(builder.set(slot, GridItem.of(ICON)).build().bindings()).isEmpty();
+        assertThat(bound.bindings()).hasSize(1);
+        assertThatThrownBy(() -> bound.bindings().clear()).isInstanceOf(UnsupportedOperationException.class);
+        assertThat(bound).isNotEqualTo(builder.build());
+        assertThat(bound).isEqualTo(Grid.builder(TITLE, 1).bind(slot, container, 2, BindingMode.EDITABLE).build());
+    }
+
+    @Test
+    void bind_indexOutsideContainer_throws() {
+        SlotContainer container = sizedContainer(3);
+        for (int index : new int[] {-1, 3, Integer.MAX_VALUE}) {
+            assertThatThrownBy(() -> Grid.builder(TITLE, 1).bind(GridSlot.ofIndex(0), container, index, BindingMode.EDITABLE))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> Grid.builder(TITLE, 1).bind(GridSlot.ofIndex(9), container, 0, BindingMode.VIEW))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Grid.builder(TITLE, 1).bindRange(0, 8, 2, container, 0, BindingMode.VIEW))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Grid.builder(TITLE, 2).bindRange(0, 8, 3, container, 1, BindingMode.VIEW))
+                .isInstanceOf(IllegalArgumentException.class);
+        Grid range = Grid.builder(TITLE, 2).bindRange(0, 8, 3, container, 0, BindingMode.EDITABLE).build();
+        assertThat(range.binding(GridSlot.ofIndex(10)).orElseThrow().index()).isEqualTo(2);
+        assertThatThrownBy(() -> new SlotBinding(null, 0, BindingMode.VIEW)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new SlotBinding(container, 0, null)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> range.binding(null)).isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void clear_removesBinding() {
+        GridSlot slot = GridSlot.ofIndex(0);
+        Grid grid = Grid.builder(TITLE, 1).bind(slot, sizedContainer(1), 0, BindingMode.VIEW).clear(slot).build();
+        assertThat(grid.bindings()).isEmpty();
+        assertThat(grid.item(slot)).isEmpty();
+    }
+
+    private static SlotContainer sizedContainer(int size) {
+        SlotContainer container = org.mockito.Mockito.mock(SlotContainer.class);
+        org.mockito.Mockito.when(container.size()).thenReturn(size);
+        return container;
+    }
+
     private static final class EqualAction implements GridAction {
         @Override public void onClick(GridClick click) {
             // Deliberately value-equal handlers verify that GridItem still uses identity.

@@ -15,6 +15,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletionStage;
+import org.bukkit.Material;
+import org.bukkit.inventory.ItemStack;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -35,7 +39,7 @@ import org.mockbukkit.mockbukkit.entity.PlayerMock;
  * Contract of a {@link UiService} implementation: backend selection, session lifecycle, threads and grid
  * snapshots, driven through registered probe backends. It does not prove what a real backend does with player
  * input (for example that a dismissed Confirm never yields {@code true}, or that inventory events are
- * cancelled); each backend proves that in its own tests.
+ * cancelled: E1 event cancellation and its closed allowlist); each backend proves that in its own tests.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 public abstract class AbstractUiServiceContractTest {
@@ -77,6 +81,10 @@ public abstract class AbstractUiServiceContractTest {
         void unload(String owner);
         /** The scheduler wrapper the implementation submits through (see {@link #createFixture()}). */
         RecordingScheduler scheduler();
+        /** The container engine, driven directly by the editable contract without event decoding. */
+        GestureEngine engine();
+        /** Drives input as a backend does: use its last rendered snapshot and refuse a terminal session. */
+        boolean gesture(GridSession session, ViewerItems side, Gesture gesture);
         /** Thread-safe snapshot of WARNING-or-higher records the implementation logged so far. */
         List<LogRecord> warnings();
         /** Releases the scheduler and every resource of the fixture. */
@@ -93,6 +101,17 @@ public abstract class AbstractUiServiceContractTest {
         private final List<UiSession<?>> closed = new ArrayList<>();
         private final List<String> operations;
         private final List<Update> updates = new ArrayList<>();
+        private final Map<UiSession<?>, Grid> screens = new IdentityHashMap<>();
+        private final Map<UiSession<?>, Map<GridSlot, ItemStack>> pictures = new IdentityHashMap<>();
+        private final Map<UiSession<?>, Map<GridSlot, ItemStack>> closingPictures = new IdentityHashMap<>();
+
+        private static Map<GridSlot, ItemStack> picture(Grid grid) {
+            Map<GridSlot, ItemStack> result = new java.util.LinkedHashMap<>();
+            grid.bindings().forEach((slot, binding) -> result.put(slot, binding.container().get(binding.index())));
+            return result;
+        }
+        public ItemStack shown(GridSession session, GridSlot slot) { return pictures.get(session).get(slot).clone(); }
+        public ItemStack atClose(GridSession session, GridSlot slot) { return closingPictures.get(session).get(slot).clone(); }
         private final List<Optional<RecordingScheduler.Scope>> openScopes = new ArrayList<>();
         private final List<Optional<RecordingScheduler.Scope>> closeScopes = new ArrayList<>();
 
@@ -117,15 +136,24 @@ public abstract class AbstractUiServiceContractTest {
             opened.add(session);
             openScopes.add(RecordingScheduler.current());
             operations.add("open");
+            if (session instanceof GridSession grid) {
+                screens.put(session, grid.current());
+                pictures.put(session, picture(grid.current()));
+            }
         }
         @Override public void update(GridSession session, Grid previous, Grid next) {
             updates.add(new Update(session, previous, next, RecordingScheduler.current()));
             operations.add("update");
+            screens.put(session, next);
+            pictures.put(session, picture(next));
         }
         @Override public void close(UiSession<?> session) {
             closed.add(session);
             closeScopes.add(RecordingScheduler.current());
             operations.add("close");
+            if (screens.containsKey(session)) {
+                closingPictures.put(session, picture(screens.remove(session)));
+            }
         }
         public List<Update> updates() { return List.copyOf(updates); }
         public List<Optional<RecordingScheduler.Scope>> openScopes() { return List.copyOf(openScopes); }
@@ -690,6 +718,246 @@ public abstract class AbstractUiServiceContractTest {
         for (int i = 1; i < updates.size(); i++) {
             assertThat(updates.get(i).previous()).isSameAs(updates.get(i - 1).next());
         }
+    }
+
+    private ContainerSpec.Builder editableStorage(int size) {
+        return ContainerSpec.storage(size).disposition(Disposition.RETURN_TO_CONTRIBUTORS)
+                .undelivered((player, items) -> { /* Individual tests install handlers when observing returns. */ });
+    }
+    private static Grid bound(SlotContainer container) {
+        return Grid.builder(TITLE, 1).bind(GridSlot.ofIndex(0), container, 0, BindingMode.EDITABLE).build();
+    }
+    private static List<CloseReason> closingReasons() {
+        return List.of(CloseReason.PLAYER, CloseReason.DISCONNECTED, CloseReason.REPLACED, CloseReason.TIMED_OUT,
+                CloseReason.CLOSED_BY_CODE, CloseReason.OWNER_UNLOADED);
+    }
+    private void closeForReason(ProbeBackend backend, GridSession session, CloseReason reason) {
+        switch (reason) {
+            case PLAYER -> backend.callbacks(session).closed(CloseReason.PLAYER);
+            case DISCONNECTED -> fixture.disconnect((PlayerMock) session.viewer());
+            case REPLACED -> service.show(session.viewer(), confirm());
+            case TIMED_OUT -> fixture.advanceTicks(25);
+            case CLOSED_BY_CODE -> session.close();
+            case OWNER_UNLOADED -> fixture.unload(service.owner());
+            default -> throw new AssertionError("Not a shown-session close reason: " + reason);
+        }
+        settle();
+        assertThat(outcome(session)).isEqualTo(new UiResult.Closed<Ack>(reason));
+    }
+    @Test
+    void close_anyReason_neverChangesContents() {
+        ProbeBackend backend = backend(Grid.class, Confirm.class);
+        for (CloseReason reason : closingReasons()) {
+            PlayerMock player = server.addPlayer();
+            SlotContainer container = service.container(editableStorage(1).endWhenUnviewed(false).baseline(List.of(UiTestItems.stone(8))).build());
+            GridSession session = service.show(player, bound(container), ShowOptions.builder().timeout(Duration.ofSeconds(1)).build());
+            settle();
+            closeForReason(backend, session, reason);
+            // The screen close itself never moves items; unload's separate disposition may empty the container.
+            assertThat(backend.atClose(session, GridSlot.ofIndex(0))).isEqualTo(UiTestItems.stone(8));
+            if (reason != CloseReason.OWNER_UNLOADED) {
+                assertThat(container.contents()).containsExactly(UiTestItems.stone(8));
+            }
+        }
+    }
+    @Test
+    void update_rebinding_neverChangesContents() {
+        backend(Grid.class);
+        SlotContainer first = service.container(editableStorage(2).baseline(List.of(UiTestItems.stone(3), UiTestItems.dirt(4))).build());
+        SlotContainer other = service.container(editableStorage(1).baseline(List.of(UiTestItems.stone(8))).build());
+        GridSession session = service.show(viewer, bound(first));
+        settle();
+        session.update(bound(other));
+        settle();
+        assertThat(first.contents()).containsExactly(UiTestItems.stone(3), UiTestItems.dirt(4));
+        assertThat(other.contents()).containsExactly(UiTestItems.stone(8));
+        assertThat(first.state()).isEqualTo(ContainerState.EDITABLE);
+        assertThat(first.isViewed()).isFalse();
+        assertThat(other.isViewed()).isTrue();
+    }
+    @Test
+    void lastViewerCloses_endWhenUnviewed_runsDispositionOnce() {
+        ProbeBackend backend = backend(Grid.class);
+        SlotContainer container = service.container(editableStorage(1).initial(viewer.getUniqueId(), List.of(UiTestItems.stone(8))).build());
+        GridSession first = service.show(viewer, bound(container));
+        GridSession second = service.show(server.addPlayer(), bound(container));
+        settle();
+        first.close(); settle();
+        assertThat(container.state()).isEqualTo(ContainerState.EDITABLE);
+        assertThat(container.isViewed()).isTrue();
+        AtomicReference<ContainerState> atCompletion = new AtomicReference<>();
+        second.result().thenAccept(ignored -> {
+            assertThat(backend.closed()).contains(second);
+            atCompletion.set(container.state());
+        });
+        second.close(); second.close(); settle();
+        assertThat(atCompletion).hasValue(ContainerState.ENDED);
+        assertThat(container.isViewed()).isFalse();
+        assertThat(viewer.getInventory().getItem(0)).isEqualTo(UiTestItems.stone(8));
+        assertThat(java.util.Arrays.stream(viewer.getInventory().getStorageContents()).filter(java.util.Objects::nonNull)
+                .filter(item -> !item.isEmpty()).mapToInt(ItemStack::getAmount).sum()).isEqualTo(8);
+        assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.RETURNED);
+        assertThat(backend.closed()).containsExactly(first, second);
+    }
+    @Test
+    void lastViewerCloses_everyReason_endsAfterBackendClose() {
+        ProbeBackend backend = backend(Grid.class, Confirm.class);
+        for (CloseReason reason : closingReasons()) {
+            AtomicInteger dispositions = new AtomicInteger();
+            SlotContainer container = service.container(editableStorage(1).baseline(List.of(UiTestItems.stone(8)))
+                    .undelivered((player, items) -> dispositions.incrementAndGet()).build());
+            GridSession session = service.show(server.addPlayer(), bound(container), ShowOptions.builder().timeout(Duration.ofSeconds(1)).build());
+            settle();
+            AtomicReference<ContainerState> atCompletion = new AtomicReference<>();
+            session.result().thenAccept(ignored -> atCompletion.set(container.state()));
+            closeForReason(backend, session, reason);
+            assertThat(backend.atClose(session, GridSlot.ofIndex(0))).isEqualTo(UiTestItems.stone(8));
+            assertThat(atCompletion).hasValue(ContainerState.ENDED);
+            assertThat(dispositions).hasValue(1);
+        }
+    }
+    @Test
+    void endWhenUnviewedFalse_lastClose_keepsContainer() {
+        backend(Grid.class);
+        SlotContainer container = service.container(editableStorage(1).endWhenUnviewed(false).baseline(List.of(UiTestItems.stone(8))).build());
+        GridSession session = service.show(viewer, bound(container));
+        settle(); session.close(); settle();
+        assertThat(container.isViewed()).isFalse();
+        assertThat(container.state()).isEqualTo(ContainerState.EDITABLE);
+        assertThat(container.get(0)).isEqualTo(UiTestItems.stone(8));
+    }
+    @Test
+    void ownerUnload_endsOwnContainersOnly() {
+        backend(Grid.class);
+        SlotContainer own = service.container(editableStorage(1).endWhenUnviewed(false).build());
+        SlotContainer unviewed = service.container(editableStorage(1).endWhenUnviewed(false).build());
+        SlotContainer other = fixture.service("OtherModule").container(editableStorage(1).build());
+        CompletableFuture<StoreAnswer> write = new CompletableFuture<>();
+        SlotContainer committing = service.container(editableStorage(1).disposition(Disposition.COMMIT).store(snapshot -> write)
+                .initial(viewer.getUniqueId(), List.of(UiTestItems.stone(8))).build());
+        CompletionStage<CommitOutcome> pending = committing.commit();
+        GridSession session = service.show(viewer, bound(own));
+        settle();
+        fixture.unload(service.owner());
+        assertThat(outcome(session)).isEqualTo(new UiResult.Closed<Ack>(CloseReason.OWNER_UNLOADED));
+        assertThat(own.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(unviewed.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(committing.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(EditableContractSupport.completed(pending)).isEqualTo(CommitOutcome.UNKNOWN);
+        assertThat(other.state()).isEqualTo(ContainerState.EDITABLE);
+        write.complete(StoreAnswer.refused(List.of(ItemStack.empty())));
+        settle();
+        assertThat(committing.state()).isEqualTo(ContainerState.ENDED);
+    }
+    @Test
+    void showGridBindingEndedContainer_throws() {
+        backend(Grid.class);
+        SlotContainer container = service.container(ContainerSpec.template(1).build());
+        Grid grid = bound(container);
+        container.end();
+        assertThatThrownBy(() -> service.show(viewer, grid)).isInstanceOf(IllegalStateException.class);
+    }
+    @Test
+    void deliver_fullInventory_dropsRest() {
+        for (int i = 0; i < 36; i++) { viewer.getInventory().setItem(i, UiTestItems.dirt(64)); }
+        viewer.getInventory().setItem(5, UiTestItems.stone(62));
+        CompletionStage<Delivery> result = service.deliver(viewer, List.of(UiTestItems.stone(8)));
+        AtomicReference<Boolean> entity = new AtomicReference<>();
+        result.thenAccept(ignored -> entity.set(RecordingScheduler.inEntityTask(viewer)));
+        settle();
+        Delivery delivery = EditableContractSupport.completed(result);
+        assertThat(delivery.given()).containsExactly(UiTestItems.stone(2));
+        assertThat(delivery.dropped()).containsExactly(UiTestItems.stone(6));
+        assertThat(delivery.undelivered()).isEmpty();
+        assertThat(viewer.getInventory().getItem(5)).isEqualTo(UiTestItems.stone(64));
+        assertThat(viewer.getWorld().getEntitiesByClass(org.bukkit.entity.Item.class)).anySatisfy(item ->
+                assertThat(item.getItemStack()).isEqualTo(UiTestItems.stone(6)));
+        assertThat(entity).hasValue(true);
+    }
+    @Test
+    void deliver_offline_allUndelivered() {
+        ItemStack source = UiTestItems.stone(8);
+        CompletionStage<Delivery> result = service.deliver(viewer, List.of(source));
+        source.setAmount(1);
+        fixture.disconnect(viewer);
+        settle();
+        Delivery delivery = EditableContractSupport.completed(result);
+        assertThat(delivery.given()).isEmpty();
+        assertThat(delivery.dropped()).isEmpty();
+        assertThat(delivery.undelivered()).containsExactly(UiTestItems.stone(8));
+    }
+    @Test
+    void closeInsideAction_takesEffectAfterHandler() {
+        ProbeBackend backend = backend(Grid.class);
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<Boolean> deferred = new AtomicReference<>();
+        GridSession session = service.show(viewer, Grid.builder(TITLE, 1).set(0, 0, ICON, click -> {
+            calls.incrementAndGet(); click.session().close();
+            deferred.set(!click.session().isOpen() && backend.closed().isEmpty()
+                    && !click.session().result().toCompletableFuture().isDone());
+        }).build());
+        settle(); backend.callbacks(session).clicked(GridSlot.ofIndex(0), ClickKind.LEFT); settle();
+        assertThat(calls).hasValue(1);
+        assertThat(deferred).hasValue(true);
+        assertThat(outcome(session)).isEqualTo(new UiResult.Closed<Ack>(CloseReason.CLOSED_BY_CODE));
+        assertThat(backend.closed()).containsExactly(session);
+    }
+    @Test
+    void gesture_usesRenderedBindings_andTerminalSessionMovesNothing() {
+        backend(Grid.class);
+        SlotContainer old = service.container(editableStorage(1).endWhenUnviewed(false).baseline(List.of(UiTestItems.stone(8))).build());
+        SlotContainer next = service.container(editableStorage(1).endWhenUnviewed(false).baseline(List.of(UiTestItems.dirt(3))).build());
+        GridSession session = service.show(viewer, bound(old)); settle();
+        session.update(bound(next));
+        InMemoryViewerItems side = new InMemoryViewerItems(36);
+        assertThat(fixture.gesture(session, side, new Gesture.Pickup(GridSlot.ofIndex(0), false))).isTrue();
+        assertThat(side.cursor()).isEqualTo(UiTestItems.stone(8));
+        assertThat(next.get(0)).isEqualTo(UiTestItems.dirt(3));
+        settle(); session.close(); side.cursor(ItemStack.empty());
+        assertThat(fixture.gesture(session, side, new Gesture.Pickup(GridSlot.ofIndex(0), false))).isFalse();
+        assertThat(next.get(0)).isEqualTo(UiTestItems.dirt(3));
+    }
+    @Test
+    void closeInsidePolicy_takesEffectAfterGestureHandler() {
+        ProbeBackend backend = backend(Grid.class);
+        AtomicReference<GridSession> shown = new AtomicReference<>();
+        AtomicReference<Boolean> closedInsidePolicy = new AtomicReference<>();
+        SlotContainer container = service.container(editableStorage(1).endWhenUnviewed(false).policy(request -> {
+            shown.get().close();
+            closedInsidePolicy.set(!shown.get().isOpen() && backend.closed().isEmpty()
+                    && !shown.get().result().toCompletableFuture().isDone());
+            return TransferDecision.allow();
+        }).build());
+        GridSession session = service.show(viewer, bound(container)); shown.set(session); settle();
+        InMemoryViewerItems side = new InMemoryViewerItems(36); side.cursor(UiTestItems.stone(8));
+        assertThat(fixture.gesture(session, side, new Gesture.Place(GridSlot.ofIndex(0), false))).isTrue();
+        assertThat(closedInsidePolicy).hasValue(true);
+        assertThat(backend.closed()).isEmpty();
+        settle();
+        assertThat(backend.closed()).containsExactly(session);
+        assertThat(outcome(session)).isEqualTo(new UiResult.Closed<Ack>(CloseReason.CLOSED_BY_CODE));
+    }
+    @Test
+    void endWhileViewed_showsEmptyAndRefusesMoreInput() {
+        ProbeBackend backend = backend(Grid.class);
+        SlotContainer container = service.container(ContainerSpec.template(1).baseline(List.of(UiTestItems.stone(8))).build());
+        GridSession session = service.show(viewer, bound(container)); settle();
+        assertThat(backend.shown(session, GridSlot.ofIndex(0))).isEqualTo(UiTestItems.stone(8));
+        container.end(); fixture.advanceTicks(1);
+        assertThat(backend.shown(session, GridSlot.ofIndex(0)).isEmpty()).isTrue();
+        assertThat(fixture.gesture(session, new InMemoryViewerItems(36), new Gesture.Pickup(GridSlot.ofIndex(0), false))).isFalse();
+    }
+    @Test
+    void openGrid_neverTouchesCursor() {
+        backend(Grid.class);
+        viewer.setItemOnCursor(UiTestItems.dirt(3));
+        SlotContainer container = service.container(editableStorage(1).baseline(List.of(UiTestItems.stone(8))).build());
+        Player observed = org.mockito.Mockito.spy(viewer);
+        service.show(observed, bound(container)); settle();
+        org.mockito.Mockito.verify(observed, org.mockito.Mockito.never()).getItemOnCursor();
+        org.mockito.Mockito.verify(observed, org.mockito.Mockito.never()).setItemOnCursor(org.mockito.ArgumentMatchers.any());
+        assertThat(viewer.getItemOnCursor()).isEqualTo(UiTestItems.dirt(3));
+        assertThat(container.get(0)).isEqualTo(UiTestItems.stone(8));
     }
 
     private Optional<RecordingScheduler.Scope> entityScope() {
