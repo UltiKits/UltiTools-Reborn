@@ -189,7 +189,8 @@ class ModuleScanQuietStartTest {
         File jar = new File(tempDir, "metadata.jar");
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
             output.putNextEntry(new JarEntry("plugin.yml"));
-            output.write(("main: " + CleanPlugin.class.getName() + "\n").getBytes(StandardCharsets.UTF_8));
+            output.write(("main: " + CleanPlugin.class.getName() + "\napi-version: 700\n")
+                    .getBytes(StandardCharsets.UTF_8));
             output.closeEntry();
             // Bytes are irrelevant: name validation rejects the entry before calling the loader.
             output.putNextEntry(new JarEntry(entry));
