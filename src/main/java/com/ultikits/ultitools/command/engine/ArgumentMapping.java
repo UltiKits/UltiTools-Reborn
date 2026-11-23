@@ -22,19 +22,31 @@ record ArgumentMapping(Class<?> javaType, boolean greedy, ArgumentType<?> type, 
 
     private static ArgumentType<?> single(Class<?> type, NativeArgumentTypes nativeTypes) {
         if (type.equals(String.class)) return new TokenArgumentType();
-        if (type.equals(int.class) || type.equals(Integer.class)) return IntegerArgumentType.integer();
-        if (type.equals(long.class) || type.equals(Long.class)) return LongArgumentType.longArg();
-        if (type.equals(double.class) || type.equals(Double.class)) return DoubleArgumentType.doubleArg();
-        if (type.equals(float.class) || type.equals(Float.class)) return FloatArgumentType.floatArg();
-        if (type.equals(boolean.class) || type.equals(Boolean.class)) return BoolArgumentType.bool();
-        if (type.equals(short.class) || type.equals(Short.class)) return IntegerArgumentType.integer(Short.MIN_VALUE, Short.MAX_VALUE);
-        if (type.equals(byte.class) || type.equals(Byte.class)) return IntegerArgumentType.integer(Byte.MIN_VALUE, Byte.MAX_VALUE);
+        ArgumentType<?> numeric = numeric(type);
+        if (numeric != null) return numeric;
+        ArgumentType<?> narrow = narrowPrimitive(type);
+        if (narrow != null) return narrow;
         try { return nativeTypes.type(type); }
         catch (CommandCompilationException absent) {
             var parser = com.ultikits.ultitools.abstracts.command.parser.TypeParserRegistry.getInstance().getParser(type);
             if (parser == null) throw absent;
             return new TypeParserArgumentType<>(parser);
         }
+    }
+
+    private static ArgumentType<?> numeric(Class<?> type) {
+        if (type.equals(int.class) || type.equals(Integer.class)) return IntegerArgumentType.integer();
+        if (type.equals(long.class) || type.equals(Long.class)) return LongArgumentType.longArg();
+        if (type.equals(double.class) || type.equals(Double.class)) return DoubleArgumentType.doubleArg();
+        if (type.equals(float.class) || type.equals(Float.class)) return FloatArgumentType.floatArg();
+        return null;
+    }
+
+    private static ArgumentType<?> narrowPrimitive(Class<?> type) {
+        if (type.equals(boolean.class) || type.equals(Boolean.class)) return BoolArgumentType.bool();
+        if (type.equals(short.class) || type.equals(Short.class)) return IntegerArgumentType.integer(Short.MIN_VALUE, Short.MAX_VALUE);
+        if (type.equals(byte.class) || type.equals(Byte.class)) return IntegerArgumentType.integer(Byte.MIN_VALUE, Byte.MAX_VALUE);
+        return null;
     }
 
     Object value(CommandContext<CommandSourceStack> context, String name, boolean empty)

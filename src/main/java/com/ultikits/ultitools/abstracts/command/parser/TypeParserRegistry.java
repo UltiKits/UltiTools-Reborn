@@ -30,7 +30,10 @@ public final class TypeParserRegistry {
         return instance;
     }
 
-    /** @param parser the parser to register @param <T> its result type */
+    /**
+     * @param parser the parser to register
+     * @param <T> its result type
+     */
     public <T> void register(TypeParser<T> parser) {
         Objects.requireNonNull(parser, "Parser cannot be null");
         for (Class<?> type : parser.getSupportedTypes()) parsers.put(type, parser);
@@ -38,13 +41,20 @@ public final class TypeParserRegistry {
         orderedParsers.sort((p1, p2) -> Integer.compare(p2.getPriority(), p1.getPriority()));
     }
 
-    /** @param parser the exact parser to unregister @param <T> its result type */
+    /**
+     * @param parser the exact parser to unregister
+     * @param <T> its result type
+     */
     public <T> void unregister(TypeParser<T> parser) {
         for (Class<?> type : parser.getSupportedTypes()) parsers.remove(type, parser);
         orderedParsers.remove(parser);
     }
 
-    /** @param type the declared type @param <T> the result type @return its custom parser, or null */
+    /**
+     * @param type the declared type
+     * @param <T> the result type
+     * @return its custom parser, or null
+     */
     @SuppressWarnings("unchecked")
     @Nullable
     public <T> TypeParser<T> getParser(Class<T> type) {
@@ -84,7 +94,10 @@ public final class TypeParserRegistry {
         return parser.parseArray(values);
     }
 
-    /** @param type the declared type @return whether a custom parser is registered */
+    /**
+     * @param type the declared type
+     * @return whether a custom parser is registered
+     */
     public boolean hasParser(Class<?> type) { return getParser(type) != null; }
 
     /** @return the explicitly registered parsers in priority order */

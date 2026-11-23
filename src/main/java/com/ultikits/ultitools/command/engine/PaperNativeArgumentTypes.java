@@ -23,6 +23,9 @@ final class PaperNativeArgumentTypes implements NativeArgumentTypes {
         if (type.equals(OfflinePlayer.class)) return new OfflinePlayerArgumentType();
         if (type.equals(World.class)) return ArgumentTypes.world();
         if (type.equals(GameMode.class)) return ArgumentTypes.gameMode();
+        return resourceOrPosition(type);
+    }
+    private static ArgumentType<?> resourceOrPosition(Class<?> type) {
         if (type.equals(UUID.class)) return ArgumentTypes.uuid();
         if (type.equals(Enchantment.class)) return ArgumentTypes.resource(RegistryKey.ENCHANTMENT);
         if (type.equals(Material.class)) return new MaterialArgumentType();
