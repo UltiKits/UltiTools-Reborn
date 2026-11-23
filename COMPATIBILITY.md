@@ -5,6 +5,19 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Adventure chat confirmation callbacks (as of 7.0.0)
+
+`ChatCallbackManager` and its hidden `/ultitools_callback` command are removed. Module authors
+who used that manager directly must migrate to Adventure's `ClickEvent.callback` with
+`ClickCallback.Options.builder().uses(1).build()` for a one-use callback.
+`ChatConfirm` uses this API for both buttons and runs a button's action only when the clicking
+audience is a player whose UUID matches the target player's UUID. Each button has its own
+one-use callback; the text, colours and message delivery are unchanged.
+
+中文补充：7.0 删除 `ChatCallbackManager` 与隐藏命令 `/ultitools_callback`，直接使用过它的模块
+须改用 `ClickEvent.callback`。聊天确认按钮仅接受目标玩家（比较 UUID）点击，确认、取消各自一次；
+文字、颜色与发送方式不变。
+
 ## Native item and sound APIs (as of 7.0.0)
 
 UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads
