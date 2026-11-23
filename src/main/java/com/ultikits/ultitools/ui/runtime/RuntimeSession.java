@@ -20,7 +20,12 @@ import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
-/** Outcome selection is synchronous; screen cleanup and result delivery are ordered continuations.
+/**
+ * Outcome selection is synchronous; screen cleanup and result delivery are ordered continuations.
+ * Existing screens close on the viewer lane (or the global pump after retirement), except owner unload,
+ * which closes them synchronously on the unloading thread. A show rejected during or after unload has
+ * neither a backend nor bindings and completes inline on its caller's thread, including an async caller.
+ * Future dependents run without the runtime lock.
  * @param <R> the intent's answer type
  */
 @ApiStatus.Internal
@@ -96,6 +101,11 @@ class RuntimeSession<R> implements UiSession<R> {
         }
     }
 
+    /**
+     * No supporting backend leaves the previous session untouched. Once a supporting backend is selected,
+     * replacement is committed before calling open: an open failure intentionally leaves the old session
+     * REPLACED and closes this one as UNSUPPORTED; it does not restore the previous screen.
+     */
     final void openTask(ShowOptions options) {
         if (!isOpen()) { return; }
         if (!viewer.isOnline()) { requestClose(CloseReason.DISCONNECTED); return; }

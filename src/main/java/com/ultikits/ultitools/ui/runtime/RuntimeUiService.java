@@ -27,7 +27,7 @@ import org.bukkit.inventory.PlayerInventory;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
-/** One module's view of the shared session registry and item-delivery lifecycle. */
+/** One module copy's view of the shared session registry and item-delivery lifecycle. */
 @ApiStatus.Internal
 final class RuntimeUiService implements UiService, ContainerHost {
     final UiRuntime runtime;
