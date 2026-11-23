@@ -10,8 +10,6 @@ import javax.annotation.Nullable;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Material;
-import org.bukkit.NamespacedKey;
-import org.bukkit.Registry;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemFlag;
@@ -190,7 +188,7 @@ public class ItemStackBuilder {
      */
     public ItemStackBuilder glow() {
         if (itemMeta != null) {
-            Enchantment glowEnchant = Registry.ENCHANTMENT.get(NamespacedKey.minecraft("luck_of_the_sea"));
+            Enchantment glowEnchant = Enchantment.LUCK_OF_THE_SEA;
             if (glowEnchant != null) {
                 itemMeta.addEnchant(glowEnchant, 1, true);
             }
