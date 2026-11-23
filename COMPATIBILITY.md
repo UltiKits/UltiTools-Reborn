@@ -90,9 +90,11 @@ Paper 的 `setData` / `unsetData`。透传值不翻译，按插入顺序应用�
 Names use `ITEM_NAME`, not the italic custom-name component. The renderer does not restyle names.
 Lore lines are rendered through `Messages` in the same locale as the name.
 Specify any desired colours in the text rather than relying on a framework colour default.
+Lore defaults to non-italic only when italic is unset; explicit italic styling is preserved and colours are unchanged.
 
 中文补充：名字使用 `ITEM_NAME`，渲染器不追加名字样式；名字和说明行使用同一语言渲染。
-需要指定颜色时请在文本中明确设置，框架不替作者决定颜色。
+需要指定颜色时请在文本中明确设置，框架不替作者决定颜色；说明行未指定斜体时默认不斜体，
+显式斜体保持原样，颜色不变。
 
 ### Stored item arrays
 

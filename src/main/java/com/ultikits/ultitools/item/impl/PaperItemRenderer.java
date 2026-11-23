@@ -12,6 +12,7 @@ import io.papermc.paper.datacomponent.item.TooltipDisplay;
 import java.util.Locale;
 import java.util.Objects;
 import net.kyori.adventure.audience.Audience;
+import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Registry;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.ItemType;
@@ -79,7 +80,8 @@ public final class PaperItemRenderer implements ItemRenderer {
     private void applyLore(ItemStack stack, ItemSpec spec, Locale locale) {
         if (!spec.lore().isEmpty()) {
             stack.setData(DataComponentTypes.LORE,
-                    ItemLore.lore(spec.lore().stream().map(line -> messages.render(line, locale)).toList()));
+                    ItemLore.lore(spec.lore().stream().map(line -> messages.render(line, locale)
+                            .decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE)).toList()));
         }
     }
 
