@@ -3,12 +3,13 @@ package com.ultikits.ultitools.widgets.impl;
 import org.bukkit.entity.Player;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.manager.ChatCallbackManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.widgets.Confirm;
 
+import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
+import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -31,10 +32,11 @@ import net.kyori.adventure.text.format.TextDecoration;
  * @author wisdomme
  * @see Confirm
  * @see InventoryConfirm
- * @see ChatCallbackManager
  * @since 6.0.0
  */
 public class ChatConfirm implements Confirm {
+    private static final ClickCallback.Options ONE_USE = ClickCallback.Options.builder().uses(1).build();
+
     /** Custom confirm button text, null uses default i18n "OK" */
     private String confirmText;
     /** Custom cancel button text, null uses the default cancel-button i18n key (see {@link #getCancelText()}) */
@@ -107,18 +109,25 @@ public class ChatConfirm implements Confirm {
                 .append(Component
                         .text("[ " + getConfirmText() + " ]")
                         .color(TextColor.color(0, 255, 0))
-                        .clickEvent(ClickEvent.runCommand("/ultitools_callback " + ChatCallbackManager.registerCallback(onConfirm)))
+                        .clickEvent(ClickEvent.callback(audience -> runIfTarget(audience, onConfirm), ONE_USE))
                 )
                 .append(Component.text("     "))
                 .append(Component
                         .text("[ " + getCancelText() + " ]")
                         .color(TextColor.color(255, 0, 0))
-                        .clickEvent(ClickEvent.runCommand("/ultitools_callback " + ChatCallbackManager.registerCallback(onCancel)))
+                        .clickEvent(ClickEvent.callback(audience -> runIfTarget(audience, onCancel), ONE_USE))
                 );
 
         MessageUtils.sendMessage(player, titleText);
         MessageUtils.sendMessage(player, descText);
         MessageUtils.sendMessage(player, actionBtn);
+    }
+
+    private void runIfTarget(Audience audience, Runnable action) {
+        if (audience instanceof Player clickingPlayer
+                && clickingPlayer.getUniqueId().equals(player.getUniqueId())) {
+            action.run();
+        }
     }
 
     @Override
