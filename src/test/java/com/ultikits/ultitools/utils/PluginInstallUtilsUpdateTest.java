@@ -132,7 +132,7 @@ class PluginInstallUtilsUpdateTest {
 
     /**
      * {@code /upm update} staging and the API level (plan 18-40): a download whose
-     * {@code api-version} lies outside {@code 630..<framework level>} -- served by a catalogue that
+     * {@code api-version} lies outside {@code 700..<framework level>} -- served by a catalogue that
      * does not filter -- is refused with the staging discarded and nothing recorded, and a catalogue
      * answering {@code latest} with 409 stages nothing.
      */
@@ -151,10 +151,10 @@ class PluginInstallUtilsUpdateTest {
             serverRoot = new File(tempDir, "server");
             dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
             oldJar = ModuleUpdateFixtures.moduleJar(new File(ModuleFileTransactions.modulesFolder(dataFolder),
-                    "demo-1.0.jar"), "Demo", "1.0", "demo", "630");
+                    "demo-1.0.jar"), "Demo", "1.0", "demo", "700");
             loaded = ModuleUpdateFixtures.loadedModule("Demo", "1.0", "demo");
             ultiTools = org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class);
-            ultiTools.when(com.ultikits.ultitools.UltiTools::getPluginVersion).thenReturn(630);
+            ultiTools.when(com.ultikits.ultitools.UltiTools::getPluginVersion).thenReturn(700);
         }
 
         @AfterEach
@@ -180,7 +180,7 @@ class PluginInstallUtilsUpdateTest {
         }
 
         @Test
-        @DisplayName("a staged download declaring api-version 620 is refused: FAILED, the reason naming 620 and 630..630, nothing recorded")
+        @DisplayName("a staged download declaring api-version 620 is refused: FAILED, the reason naming 620 and 700..700, nothing recorded")
         void olderDownload_isRefused() throws IOException {
             java.util.Map<String, String> before = snapshot();
 
@@ -189,21 +189,21 @@ class PluginInstallUtilsUpdateTest {
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
             assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_INCOMPATIBLE_API_LEVEL);
-            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "620", 630, 630, 630);
+            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "620", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
         @Test
-        @DisplayName("a staged download declaring api-version 640 on a 630 framework is refused the same way")
+        @DisplayName("a staged download declaring api-version 710 on a 700 framework is refused the same way")
         void newerDownload_isRefused() throws IOException {
             java.util.Map<String, String> before = snapshot();
 
             ModuleFileTransactions.StageResult result = stage(ModuleUpdateFixtures.catalogue("demo", "1.1"),
-                    ModuleUpdateFixtures.downloading("Demo", "1.1", "demo", "640"));
+                    ModuleUpdateFixtures.downloading("Demo", "1.1", "demo", "710"));
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
             assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_INCOMPATIBLE_API_LEVEL);
-            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "640", 630, 630, 630);
+            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "710", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
@@ -217,15 +217,15 @@ class PluginInstallUtilsUpdateTest {
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
             assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_NO_API_LEVEL);
-            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", 630, 630, 630);
+            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
         @Test
-        @DisplayName("control: a staged download declaring api-version 630 is staged")
+        @DisplayName("control: a staged download declaring api-version 700 is staged")
         void compatibleDownload_isStaged() {
             ModuleFileTransactions.StageResult result = stage(ModuleUpdateFixtures.catalogue("demo", "1.1"),
-                    ModuleUpdateFixtures.downloading("Demo", "1.1", "demo", "630"));
+                    ModuleUpdateFixtures.downloading("Demo", "1.1", "demo", "700"));
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
         }
@@ -245,7 +245,7 @@ class PluginInstallUtilsUpdateTest {
 
                 assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
                 assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_NO_COMPATIBLE_UPDATE);
-                assertThat(result.getReasonArgs()).containsExactly("demo", 630, 630, 630);
+                assertThat(result.getReasonArgs()).containsExactly("demo", 700, 700, 700);
                 assertThat(downloads).isEmpty();
                 assertThat(snapshot()).isEqualTo(before);
             } finally {
@@ -351,7 +351,7 @@ class PluginInstallUtilsUpdateTest {
                 org.mockito.Mockito.when(instance.getPluginManager()).thenReturn(pluginManager);
                 org.mockito.Mockito.when(instance.getDataFolder()).thenReturn(dataFolder);
                 ultiTools.when(com.ultikits.ultitools.UltiTools::getInstance).thenReturn(instance);
-                ultiTools.when(com.ultikits.ultitools.UltiTools::getPluginVersion).thenReturn(630);
+                ultiTools.when(com.ultikits.ultitools.UltiTools::getPluginVersion).thenReturn(700);
                 catalogue.mode(com.ultikits.ultitools.stub.StubCatalogue.Mode.TAMPER_HASH);
                 PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
 

@@ -1,4 +1,5 @@
 {
+  "Module '%s' declares api-version %d, below the minimum %d required by UltiTools-API 7.0; refusing to load. Install a module rebuilt for UltiTools-API 7.0 or later; changing api-version alone does not make a 6.x module compatible.": "Module '%s' declares api-version %d, below the minimum %d required by UltiTools-API 7.0; refusing to load. Install a module rebuilt for UltiTools-API 7.0 or later; changing api-version alone does not make a 6.x module compatible.",
   "Unlinking this server from UltiCloud...": "Unlinking this server from UltiCloud...",
   "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.": "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.",
   "Use /ulticloud login to link it again.": "Use /ulticloud login to link it again.",

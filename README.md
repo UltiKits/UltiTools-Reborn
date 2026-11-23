@@ -123,7 +123,7 @@ This generates a complete, compilable project with `pom.xml`, main class, `plugi
 name: MyPlugin
 version: '${project.version}'
 main: com.example.myplugin.MyPlugin
-api-version: 630
+api-version: 700
 authors: [ YourName ]
 ```
 

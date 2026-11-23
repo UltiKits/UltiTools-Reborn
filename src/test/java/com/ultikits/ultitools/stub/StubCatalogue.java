@@ -87,7 +87,7 @@ public final class StubCatalogue implements AutoCloseable {
     public static final String MODULE = "demo";
     /** The module's name on its card. */
     public static final String MODULE_NAME = "Demo";
-    /** The newest compatible version, {@code apiLevel} 630, publicly downloadable. */
+    /** The newest compatible version, {@code apiLevel} 700, publicly downloadable. */
     public static final String VERSION = "1.1.0";
     /** The version marked {@code license_required}, at {@link #LICENSED_API_LEVEL}. */
     public static final String LICENSED_VERSION = "2.0.0";
@@ -143,7 +143,7 @@ public final class StubCatalogue implements AutoCloseable {
     private final HttpServer server;
     private final List<Request> requests = Collections.synchronizedList(new ArrayList<>());
     private volatile Mode mode = Mode.NORMAL;
-    private volatile byte[] jar = moduleJar(MODULE_NAME, VERSION, MODULE, "630");
+    private volatile byte[] jar = moduleJar(MODULE_NAME, VERSION, MODULE, "700");
     private volatile int servedBytes;
     private volatile boolean clientAborted;
     private final CountDownLatch clientAbortSeen = new CountDownLatch(1);
@@ -161,7 +161,7 @@ public final class StubCatalogue implements AutoCloseable {
 
     /**
      * Starts a stub on a free loopback port, serving the vendored catalogue shapes and a module JAR declaring
-     * {@code api-version 630}.
+     * {@code api-version 700}.
      *
      * @return the running stub
      * @throws IOException when the loopback server cannot be started
@@ -563,7 +563,7 @@ public final class StubCatalogue implements AutoCloseable {
     /** {@link #VERSION} as the version route and the versions page carry it, with the mode applied. */
     private JsonObject publicVersion() {
         String override = downloadPathOverride;
-        JsonObject data = versionObject(PUBLIC_VERSION_FIXTURE, VERSION, true, 630,
+        JsonObject data = versionObject(PUBLIC_VERSION_FIXTURE, VERSION, true, 700,
                 override == null ? downloadUrl(downloadOrigin(), MODULE, VERSION) : downloadOrigin() + override);
         if (mode == Mode.LICENSE_REQUIRED) {
             JsonObject download = new JsonObject();
@@ -650,7 +650,7 @@ public final class StubCatalogue implements AutoCloseable {
         JsonArray items = new JsonArray();
         for (int i = 0; i < versionCount; i++) {
             String version = i == 0 ? VERSION : "1.0." + i;
-            JsonObject item = versionObject(PUBLIC_VERSION_FIXTURE, version, i == 0, 630,
+            JsonObject item = versionObject(PUBLIC_VERSION_FIXTURE, version, i == 0, 700,
                     downloadUrl(downloadOrigin(), MODULE, version));
             item.addProperty("changelog", repeat(WIDE_CHARACTER, changelogChars));
             item.addProperty("sizeBytes", (long) jar.length);

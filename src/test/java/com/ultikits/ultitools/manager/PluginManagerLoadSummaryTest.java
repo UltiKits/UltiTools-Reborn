@@ -148,8 +148,8 @@ class PluginManagerLoadSummaryTest {
     @Test
     @DisplayName("two loadable modules and one JAR whose main class overrides the now-final unregisterSelf(): the refusal line, then 'Succeeded loaded 2, Failed 1.'")
     void refusedJarBesideLoadableModules_isCountedAsFailed() throws Exception {
-        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
-        moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule"), "630");
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "700");
+        moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule"), "700");
         moduleJar("ultirecipe-1.0.0.jar", "LegacyModule", legacyModule("LegacyModule"), "620");
 
         start();
@@ -183,8 +183,8 @@ class PluginManagerLoadSummaryTest {
     @Test
     @DisplayName("a module excluded because a required plugin is missing is counted in Failed")
     void missingRequiredPlugin_isCounted() throws Exception {
-        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
-        moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule", "NoSuchModule"), "630");
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "700");
+        moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule", "NoSuchModule"), "700");
 
         start();
 
@@ -194,9 +194,9 @@ class PluginManagerLoadSummaryTest {
     @Test
     @DisplayName("two modules in a dependency cycle are each counted in Failed")
     void dependencyCycle_isCounted() throws Exception {
-        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
-        moduleJar("charlie-1.0.jar", "CharlieModule", module("CharlieModule", "DeltaModule"), "630");
-        moduleJar("delta-1.0.jar", "DeltaModule", module("DeltaModule", "CharlieModule"), "630");
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "700");
+        moduleJar("charlie-1.0.jar", "CharlieModule", module("CharlieModule", "DeltaModule"), "700");
+        moduleJar("delta-1.0.jar", "DeltaModule", module("DeltaModule", "CharlieModule"), "700");
 
         start();
 
@@ -206,8 +206,8 @@ class PluginManagerLoadSummaryTest {
     @Test
     @DisplayName("a module whose registration fails is counted once, as before")
     void failedRegistration_isCountedOnce() throws Exception {
-        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
-        moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule"), "630");
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "700");
+        moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule"), "700");
         failingRegistration.add(PACKAGE + "BravoModule");
 
         start();
@@ -218,8 +218,8 @@ class PluginManagerLoadSummaryTest {
     @Test
     @DisplayName("two copies of one loadable module: 'Succeeded loaded 1, Failed 0.' and the duplicate-copies warning naming both")
     void secondCopyOfALoadedModule_isNotCounted() throws Exception {
-        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
-        moduleJar("alpha-copy.jar", "AlphaModule", module("AlphaModule"), "630");
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "700");
+        moduleJar("alpha-copy.jar", "AlphaModule", module("AlphaModule"), "700");
 
         start();
 
@@ -232,7 +232,7 @@ class PluginManagerLoadSummaryTest {
     @Test
     @DisplayName("a JAR whose plugin.yml has no main: and a file that fails the JAR validation are each counted")
     void noMainAndInvalidArchive_areCounted() throws Exception {
-        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "700");
         File noMain = new File(modules, "library-1.0.jar");
         try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(noMain.toPath()))) {
             out.putNextEntry(new JarEntry("plugin.yml"));
@@ -253,7 +253,7 @@ class PluginManagerLoadSummaryTest {
     void distinctPackagesWithTheSameMainNameAreAllRegistered() throws Exception {
         for (int i = 0; i < 5; i++) {
             String mainSuffix = "fixture" + i + ".Main";
-            moduleJar("same-name-" + i + ".jar", mainSuffix, module(mainSuffix), "630");
+            moduleJar("same-name-" + i + ".jar", mainSuffix, module(mainSuffix), "700");
         }
 
         start();
