@@ -61,6 +61,20 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 
 <br>
 
+## 7.0
+
+- Inject `com.ultikits.ultitools.scheduling.Scheduler` with `@Autowired` in module beans. Each module
+  instance owns its scheduler; unloading it cancels pending and repeating work without affecting a
+  same-name replacement. An already running one-shot task may finish.
+- Do not submit tasks from `onUnregister()` or `@PreDestroy`: the module scheduler has already retired
+  and rejects submissions with `RejectedExecutionException`. Perform unload cleanup directly.
+- Literal `@Scheduled(async = true)` periods use wall-clock time (50 ms per configured tick). A lagging
+  server no longer stretches those periods. Config-bound async tasks still use a global tick trigger.
+
+**Known limitation:** do not schedule from bean constructors or `@PostConstruct`. If module loading
+fails before the module enters the loaded-module list, those tasks are not retired. Start tasks from
+a point after the module has enabled successfully instead.
+
 ## Getting Started
 
 ### Requirements

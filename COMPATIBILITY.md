@@ -5,6 +5,20 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## 7.0
+
+- Inject `com.ultikits.ultitools.scheduling.Scheduler` with `@Autowired` in module beans. Each module
+  instance owns its scheduler; unloading it cancels pending and repeating work without affecting a
+  same-name replacement. An already running one-shot task may finish.
+- Do not submit tasks from `onUnregister()` or `@PreDestroy`: the module scheduler has already retired
+  and rejects submissions with `RejectedExecutionException`. Perform unload cleanup directly.
+- Literal `@Scheduled(async = true)` periods use wall-clock time (50 ms per configured tick). A lagging
+  server no longer stretches those periods. Config-bound async tasks still use a global tick trigger.
+
+**Known limitation:** do not schedule from bean constructors or `@PostConstruct`. If module loading
+fails before the module enters the loaded-module list, those tasks are not retired. Start tasks from
+a point after the module has enabled successfully instead.
+
 ## Native item and sound APIs (as of 7.0.0)
 
 UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads
