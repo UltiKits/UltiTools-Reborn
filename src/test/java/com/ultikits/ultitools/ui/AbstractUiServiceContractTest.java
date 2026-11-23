@@ -91,6 +91,12 @@ public abstract class AbstractUiServiceContractTest {
         GestureEngine engine();
         /** Drives input as a backend does: use its last rendered snapshot and refuse a terminal session. */
         boolean gesture(GridSession session, ViewerItems side, Gesture gesture);
+        /**
+         * What the viewer's screen of {@code session} currently shows at the bound slot {@code slot}, as last drawn by
+         * the implementation (a real backend reads its open inventory view); {@code ItemStack.empty()} if nothing.
+         * A copy. Called on the tick thread.
+         */
+        ItemStack shown(GridSession session, GridSlot slot);
         /** Thread-safe snapshot of WARNING-or-higher records the implementation logged so far. */
         List<LogRecord> warnings();
         /** Releases the scheduler and every resource of the fixture. */
@@ -108,7 +114,6 @@ public abstract class AbstractUiServiceContractTest {
         private final List<String> operations;
         private final List<Update> updates = new ArrayList<>();
         private final Map<UiSession<?>, Grid> screens = new IdentityHashMap<>();
-        private final Map<UiSession<?>, Map<GridSlot, ItemStack>> pictures = new IdentityHashMap<>();
         private final Map<UiSession<?>, Map<GridSlot, ItemStack>> closingPictures = new IdentityHashMap<>();
 
         private static Map<GridSlot, ItemStack> picture(Grid grid) {
@@ -116,7 +121,6 @@ public abstract class AbstractUiServiceContractTest {
             grid.bindings().forEach((slot, binding) -> result.put(slot, binding.container().get(binding.index())));
             return result;
         }
-        public ItemStack shown(GridSession session, GridSlot slot) { return pictures.get(session).get(slot).clone(); }
         public ItemStack atClose(GridSession session, GridSlot slot) { return closingPictures.get(session).get(slot).clone(); }
         private final List<Optional<RecordingScheduler.Scope>> openScopes = new ArrayList<>();
         private final List<Optional<RecordingScheduler.Scope>> closeScopes = new ArrayList<>();
@@ -144,14 +148,12 @@ public abstract class AbstractUiServiceContractTest {
             operations.add("open");
             if (session instanceof GridSession grid) {
                 screens.put(session, grid.current());
-                pictures.put(session, picture(grid.current()));
             }
         }
         @Override public void update(GridSession session, Grid previous, Grid next) {
             updates.add(new Update(session, previous, next, RecordingScheduler.current()));
             operations.add("update");
             screens.put(session, next);
-            pictures.put(session, picture(next));
         }
         @Override public void close(UiSession<?> session) {
             closed.add(session);
@@ -985,9 +987,9 @@ public abstract class AbstractUiServiceContractTest {
         ProbeBackend backend = backend(Grid.class);
         SlotContainer container = service.container(ContainerSpec.template(1).baseline(List.of(UiTestItems.stone(8))).build());
         GridSession session = service.show(viewer, bound(container)); settle();
-        assertThat(backend.shown(session, GridSlot.ofIndex(0))).isEqualTo(UiTestItems.stone(8));
+        assertThat(fixture.shown(session, GridSlot.ofIndex(0))).isEqualTo(UiTestItems.stone(8));
         container.end(); fixture.advanceTicks(1);
-        assertThat(backend.shown(session, GridSlot.ofIndex(0)).isEmpty()).isTrue();
+        assertThat(fixture.shown(session, GridSlot.ofIndex(0)).isEmpty()).isTrue();
         assertThat(fixture.gesture(session, new InMemoryViewerItems(36), new Gesture.Pickup(GridSlot.ofIndex(0), false))).isFalse();
     }
     @Test

@@ -261,17 +261,22 @@ class InMemoryUiService implements UiService {
                 throw new IllegalStateException("Container creation requires the server thread");
             }
         }
-        private void redraw() {
+        void redraw(InMemorySlotContainer changed) {
             List<MemorySession<?>> snapshot = List.copyOf(sessions);
             for (MemorySession<?> session : snapshot) {
-                if (session instanceof MemoryGridSession grid && grid.isOpen() && grid.backend != null) {
+                if (session instanceof MemoryGridSession grid && grid.isOpen() && grid.backend != null
+                        && boundContainers(grid.rendered).contains(changed)) {
                     dispatch(grid.viewer, () -> {
                         if (grid.isOpen()) {
-                            grid.backend.update(grid, grid.rendered, grid.rendered);
+                            grid.drawPicture();
                         }
                     });
                 }
             }
+        }
+        @Override public ItemStack shown(GridSession session, GridSlot slot) {
+            MemoryGridSession grid = (MemoryGridSession) session;
+            return UiTestItems.copy(grid.picture.getOrDefault(slot, ItemStack.empty()));
         }
         @Override public GestureEngine engine() { return engine; }
         @Override public boolean gesture(GridSession session, ViewerItems side, Gesture gesture) {
@@ -447,6 +452,7 @@ class InMemoryUiService implements UiService {
                 if (this instanceof MemoryGridSession grid) {
                     grid.rendered = grid.current;
                     boundContainers(grid.rendered).forEach(container -> container.attach(this));
+                    grid.drawPicture();
                 }
                 selected.open(this, callbacks());
             }
@@ -480,6 +486,13 @@ class InMemoryUiService implements UiService {
     private static final class MemoryGridSession extends MemorySession<Ack> implements GridSession {
         private Grid current;
         private Grid rendered;
+        private final Map<GridSlot, ItemStack> picture = new HashMap<>();
+
+        void drawPicture() {
+            picture.clear();
+            rendered.bindings().forEach((slot, binding) -> picture.put(slot,
+                    binding.container().state() == ContainerState.ENDED ? ItemStack.empty() : binding.container().get(binding.index())));
+        }
 
         MemoryGridSession(InMemoryUiService service, Player viewer, Grid grid) {
             super(service, viewer, grid);
@@ -513,6 +526,7 @@ class InMemoryUiService implements UiService {
                 before.stream().filter(container -> !after.contains(container)).forEach(container -> container.detach(this, false));
                 after.stream().filter(container -> !before.contains(container)).forEach(container -> container.attach(this));
                 rendered = current;
+                drawPicture();
                 backend.update(this, previous, current);
             }
         }

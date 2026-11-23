@@ -357,8 +357,9 @@ public abstract class AbstractGestureEngineContractTest extends EditableContract
         side.cursor(stone(8));
         assertThat(fixture.gesture(first, side, new Gesture.Place(SLOT, false))).isTrue();
         fixture.advanceTicks(1);
-        assertThat(backend.shown(first, SLOT)).isEqualTo(stone(8));
-        assertThat(backend.shown(second, SLOT)).isEqualTo(stone(8));
+        assertThat(fixture.shown(first, SLOT)).isEqualTo(stone(8));
+        assertThat(fixture.shown(second, SLOT)).isEqualTo(stone(8));
+        assertThat(backend.updates()).isEmpty();
     }
     @Test void onChangeThrows_isLoggedWithoutUndoingTransfer() {
         IllegalStateException failure = new IllegalStateException("listener");

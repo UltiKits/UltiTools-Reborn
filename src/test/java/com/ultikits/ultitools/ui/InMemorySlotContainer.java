@@ -30,7 +30,7 @@ final class InMemorySlotContainer implements SlotContainer {
     private final RecordingScheduler scheduler;
     private final BiFunction<UUID, List<ItemStack>, CompletionStage<Delivery>> returns;
     private final Consumer<LogRecord> warnings;
-    private final Runnable redraw;
+    private final Consumer<InMemorySlotContainer> redraw;
     private final Set<UiSession<?>> viewers = Collections.newSetFromMap(new IdentityHashMap<>());
     private final List<Contribution> ledger = new ArrayList<>();
     private final List<ItemStack> taken = new ArrayList<>();
@@ -45,7 +45,7 @@ final class InMemorySlotContainer implements SlotContainer {
 
     InMemorySlotContainer(String owner, ContainerSpec spec, RecordingScheduler scheduler,
             BiFunction<UUID, List<ItemStack>, CompletionStage<Delivery>> returns,
-            Consumer<LogRecord> warnings, Runnable redraw) {
+            Consumer<LogRecord> warnings, Consumer<InMemorySlotContainer> redraw) {
         this.owner = owner;
         this.spec = spec;
         this.scheduler = scheduler;
@@ -86,7 +86,7 @@ final class InMemorySlotContainer implements SlotContainer {
         baseline = new ArrayList<>(UiTestItems.copies(copy));
         ledger.clear();
         taken.clear();
-        redraw.run();
+        redraw.accept(this);
     }
     private List<ItemStack> checkedContents(List<ItemStack> next) {
         List<ItemStack> copy = UiTestItems.copies(next);
@@ -140,7 +140,7 @@ final class InMemorySlotContainer implements SlotContainer {
     }
     void changed(ContainerChange change) {
         checkThread();
-        redraw.run();
+        redraw.accept(this);
         try {
             spec.onChange().accept(change);
         } catch (Exception thrown) {
@@ -232,7 +232,7 @@ final class InMemorySlotContainer implements SlotContainer {
         CompletionStage<Void> refunded = returnContributions(false);
         contents = new ArrayList<>(current);
         baseline = new ArrayList<>(UiTestItems.copies(current));
-        redraw.run();
+        redraw.accept(this);
         ledger.clear();
         taken.clear();
         refunded.whenComplete((ignored, failure) -> onThread(() -> {
@@ -302,7 +302,7 @@ final class InMemorySlotContainer implements SlotContainer {
         taken.clear();
         viewers.clear();
         state = ContainerState.ENDED;
-        redraw.run();
+        redraw.accept(this);
     }
     private CompletionStage<Void> returnContributions(boolean includeBaseline) {
         Map<UUID, List<ItemStack>> batches = changes().putInBy();
