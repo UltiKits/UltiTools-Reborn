@@ -104,6 +104,8 @@ class ModuleScanQuietStartTest {
         };
         captureHandler.setLevel(Level.ALL);
         // Initialize before attaching: production may install its bridge in the static initializer.
+        // The class name is a compile-time class literal, not external input.
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
         Class.forName(ModuleScanDiagnostics.class.getName());
         diagnosticsLogger = Logger.getLogger(ModuleScanDiagnostics.class.getName());
         originalDiagnosticsLevel = diagnosticsLogger.getLevel();
