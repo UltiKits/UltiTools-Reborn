@@ -4,6 +4,7 @@ import java.util.function.Consumer;
 
 import javax.annotation.Nullable;
 
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
@@ -13,7 +14,6 @@ import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
 import com.ultikits.ultitools.entities.Colors;
-import com.ultikits.ultitools.utils.XVersionUtils;
 
 import mc.obliviate.inventory.Gui;
 import mc.obliviate.inventory.Icon;
@@ -112,7 +112,7 @@ public abstract class BaseInventoryPage extends Gui {
      * @return the background icon
      */
     protected Icon createBackgroundIcon() {
-        ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.GRAY);
+        ItemStack glass = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
         Icon icon = new Icon(glass);
         icon.setName(" ");
         return icon;
@@ -127,7 +127,7 @@ public abstract class BaseInventoryPage extends Gui {
      * @return the created icon
      */
     protected Icon createActionButton(Colors color, String name, Consumer<InventoryClickEvent> onClick) {
-        ItemStack glass = XVersionUtils.getColoredPlaneGlass(color);
+        ItemStack glass = new ItemStack(color.getGlassPaneMaterial());
         Icon icon = new Icon(glass);
         icon.setName(name);
         if (onClick != null) {

@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
@@ -19,7 +18,6 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.InventoryType;
-import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -31,9 +29,7 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.MessageUtils;
-import com.ultikits.ultitools.utils.XVersionUtils;
 
 import mc.obliviate.inventory.Icon;
 import net.kyori.adventure.text.Component;
@@ -58,17 +54,7 @@ class BaseConfirmationPageTest {
     @Mock
     private InventoryClickEvent mockClickEvent;
 
-    @Mock
-    private ItemStack mockGreenGlass;
-
-    @Mock
-    private ItemStack mockRedGlass;
-
-    @Mock
-    private ItemStack mockGrayGlass;
-
     private MockedStatic<UltiTools> ultiToolsMock;
-    private MockedStatic<XVersionUtils> xVersionUtilsMock;
     private MockedStatic<MessageUtils> messageUtilsMock;
 
     @BeforeEach
@@ -78,28 +64,16 @@ class BaseConfirmationPageTest {
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         
-        xVersionUtilsMock = mockStatic(XVersionUtils.class);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.GREEN)).thenReturn(mockGreenGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.RED)).thenReturn(mockRedGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(Colors.GRAY)).thenReturn(mockGrayGlass);
-        xVersionUtilsMock.when(() -> XVersionUtils.getColoredPlaneGlass(any(Colors.class))).thenReturn(mockGrayGlass);
-        
         messageUtilsMock = mockStatic(MessageUtils.class);
         messageUtilsMock.when(() -> MessageUtils.coloredMsg(anyString())).thenAnswer(i -> "§f" + i.getArgument(0));
         
         lenient().when(mockUltiTools.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
-        lenient().when(mockGreenGlass.getType()).thenReturn(Material.GREEN_STAINED_GLASS_PANE);
-        lenient().when(mockRedGlass.getType()).thenReturn(Material.RED_STAINED_GLASS_PANE);
-        lenient().when(mockGrayGlass.getType()).thenReturn(Material.GRAY_STAINED_GLASS_PANE);
     }
 
     @AfterEach
     void tearDown() {
         if (ultiToolsMock != null) {
             ultiToolsMock.close();
-        }
-        if (xVersionUtilsMock != null) {
-            xVersionUtilsMock.close();
         }
         if (messageUtilsMock != null) {
             messageUtilsMock.close();
@@ -365,9 +339,9 @@ class BaseConfirmationPageTest {
         void shouldUseGreenColorForOkButton() {
             TestConfirmationPage page = new TestConfirmationPage(mockPlayer, "confirm", "Confirm", 3);
             
-            page.testCreateOkButton();
+            Icon okButton = page.testCreateOkButton();
 
-            xVersionUtilsMock.verify(() -> XVersionUtils.getColoredPlaneGlass(Colors.GREEN), atLeastOnce());
+            assertEquals(Material.GREEN_STAINED_GLASS_PANE, okButton.getItem().getType());
             assertThat(page).isNotNull();
         }
 
@@ -378,7 +352,7 @@ class BaseConfirmationPageTest {
 
             Icon cancelButton = page.testCreateCancelButton();
 
-            xVersionUtilsMock.verify(() -> XVersionUtils.getColoredPlaneGlass(Colors.RED), atLeastOnce());
+            assertEquals(Material.RED_STAINED_GLASS_PANE, cancelButton.getItem().getType());
             assertNotNull(cancelButton);
         }
     }

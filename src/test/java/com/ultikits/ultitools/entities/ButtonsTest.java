@@ -60,6 +60,21 @@ class ButtonsTest {
     }
 
     @Test
+    void buttonMaterialsAndAmountsAreUnchanged() {
+        org.bukkit.Material[] expected = {
+            org.bukkit.Material.RED_STAINED_GLASS_PANE, org.bukkit.Material.RED_STAINED_GLASS_PANE,
+            org.bukkit.Material.OAK_SIGN, org.bukkit.Material.ENDER_EYE,
+            org.bukkit.Material.GREEN_STAINED_GLASS_PANE, org.bukkit.Material.RED_STAINED_GLASS_PANE
+        };
+        Buttons[] buttons = Buttons.values();
+        assertEquals(expected.length, buttons.length);
+        for (int i = 0; i < buttons.length; i++) {
+            assertEquals(expected[i], buttons[i].getItemStack().getType());
+            assertEquals(1, buttons[i].getItemStack().getAmount());
+        }
+    }
+
+    @Test
     void testProperties() {
         // Since we mocked i18n to return the key, we expect the key as name
         assertEquals("上一页", Buttons.PREVIOUS.getName());
