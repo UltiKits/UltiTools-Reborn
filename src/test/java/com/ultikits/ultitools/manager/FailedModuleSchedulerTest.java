@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.JarEntry;
@@ -127,7 +128,7 @@ class FailedModuleSchedulerTest {
             assertThat((Map<?, ?>) mappings.get(tasks)).isEmpty();
             assertThat(pending.state()).isEqualTo(TaskState.CANCELLED);
             assertThat(pending.completion().toCompletableFuture()).isCompletedExceptionally()
-                    .hasFailedWithThrowableThat().isInstanceOf(java.util.concurrent.CancellationException.class);
+                    .hasFailedWithThrowableThat().isInstanceOf(CancellationException.class);
             Scheduler scheduler = (Scheduler) moduleClass.getField("scheduler").get(module);
             assertThatThrownBy(() -> scheduler.global().run(runs::incrementAndGet))
                     .isInstanceOf(RejectedExecutionException.class);
