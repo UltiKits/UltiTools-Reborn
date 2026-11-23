@@ -10,6 +10,9 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import net.bytebuddy.jar.asm.ClassWriter;
+import net.bytebuddy.jar.asm.MethodVisitor;
+import net.bytebuddy.jar.asm.Opcodes;
 
 /** Failsafe runs after shade: inspect every class, including bundled dependency packages. */
 // The *IT suffix intentionally follows Maven Failsafe discovery for execution after package/shade.
@@ -40,12 +43,25 @@ class PackagedRuntimeLibraryIT {
         Path jar = temporary.resolve("dependency-control.jar");
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar))) {
             output.putNextEntry(new JarEntry("mc/obliviate/Injected.class"));
-            output.write(RuntimeApiGuardTest.methodFixture(
+            output.write(methodFixture(
                     "net/kyori/adventure/platform/bukkit/BukkitAudiences", "close", "()V"));
             output.closeEntry();
         }
         Map<String, byte[]> classes = RuntimeApiGuard.jarClasses(jar);
         assertThat(classes).hasSize(1);
         assertThat(RuntimeApiGuard.platformReferences(classes)).containsExactly("mc/obliviate/Injected.class");
+    }
+
+    private static byte[] methodFixture(String owner, String name, String descriptor) {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "control/Probe", null, "java/lang/Object", null);
+        MethodVisitor method = writer.visitMethod(Opcodes.ACC_PUBLIC, "probe", "()V", null, null);
+        method.visitCode();
+        method.visitMethodInsn(Opcodes.INVOKEVIRTUAL, owner, name, descriptor, false);
+        method.visitInsn(Opcodes.RETURN);
+        method.visitMaxs(2, 1);
+        method.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
     }
 }
