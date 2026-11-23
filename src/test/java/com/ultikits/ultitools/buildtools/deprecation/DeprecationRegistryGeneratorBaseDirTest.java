@@ -297,6 +297,8 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .isEqualTo(124);
         // Pin this cumulative-history fixture below its synthetic @removeIn 7.0.0 deadline and
         // outside the reset. Its semantics must not change with the product's current version.
+        // Test-only read of this project's own pom.xml; the path is a compile-time constant.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         String fixturePom = new String(Files.readAllBytes(Paths.get("pom.xml")), StandardCharsets.UTF_8)
                 .replaceFirst("<version>[^<]+</version>", "<version>6.6.0-SNAPSHOT</version>")
                 .replace("<japicmp.skip>true</japicmp.skip>", "<japicmp.skip>false</japicmp.skip>");

@@ -3,11 +3,15 @@ package com.ultikits.ultitools.context;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,6 +23,8 @@ import com.ultikits.ultitools.aop.AopAdvisor;
 import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.MethodInterceptor;
 import com.ultikits.ultitools.aop.ProxyFactory;
+import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
 @DisplayName("SimpleContainer AOP integration")
 class SimpleContainerAopTest {
@@ -47,6 +53,54 @@ class SimpleContainerAopTest {
 
     public static class Plain {
         public String work() { return "plain"; }
+    }
+
+    public static sealed class SealedManaged permits SealedChild {
+        @Transactional
+        public void work() {
+            // Fixture method: only its annotation matters.
+        }
+    }
+
+    public static final class SealedChild extends SealedManaged { }
+
+    @Test
+    @DisplayName("Should reject sealed AOP beans without diagnosing a missing classpath symbol")
+    void shouldRejectSealedBeanWithoutMissingSymbolDiagnostics() {
+        SimpleContainer container = containerWithAop();
+        container.registerBean(SealedManaged.class);
+        Logger logger = Logger.getLogger(SimpleContainer.class.getName());
+        List<String> messages = new ArrayList<>();
+        Handler handler = new Handler() {
+            @Override public void publish(LogRecord record) {
+                messages.add(record.getMessage());
+            }
+            @Override public void flush() {
+                // Nothing is buffered.
+            }
+            @Override public void close() {
+                // Nothing to release.
+            }
+        };
+        logger.addHandler(handler);
+        try {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                ContainerException failure = assertThrows(
+                        ContainerException.class,
+                        () -> container.getBean(SealedManaged.class));
+                assertEquals(ErrorCode.BEAN_CREATION_FAILED,
+                        failure.getErrorCode());
+                assertTrue(failure.getMessage().contains("SEALED_CLASS"), failure.getMessage());
+                assertTrue(failure.getMessage().contains("Remove the 'sealed' keyword"), failure.getMessage());
+            }
+            assertTrue(messages.stream().anyMatch(message -> message.contains("Failed to create bean")),
+                    messages.toString());
+            assertTrue(messages.stream().noneMatch(message -> message.contains("absent from the classpath")),
+                    messages.toString());
+        } finally {
+            logger.removeHandler(handler);
+            container.close();
+        }
     }
 
     private static SimpleContainer containerWithAop() {

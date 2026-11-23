@@ -189,34 +189,32 @@ public class AopProxyResolver {
         Set<Method> annotated = AopEligibility.findAopAnnotatedMethods(scan);
         Set<Method> intercepted = collectInterceptedMethods(scan);
         // Two different questions, and conflating them cost the warnings once already. Whether to
-        // diagnose at all depends on whether the author asked for anything; whether a final class
-        // is fatal depends on whether something would actually have been proxied.
+        // diagnose at all depends on whether the author asked for anything; whether a final or
+        // sealed class is fatal depends on whether something would actually have been proxied.
         boolean anythingAsked = !intercepted.isEmpty() || !annotated.isEmpty();
         boolean somethingWouldBeProxied = !intercepted.isEmpty();
 
-        // One case is fatal and the rest are not, and the line between them is whether the author
-        // is being told about a method or about the class. A final class cannot be subclassed, so
-        // no proxy exists at all and nothing the author writes elsewhere will change that - Spring
-        // throws AopConfigException for the same shape. Every other problem is a single method the
-        // proxy cannot reach; Spring ignores those, and so does this, because failing the load
-        // stopped whoever extended a class rather than whoever wrote the annotation, and the
-        // remedy named a file they may not own. Ignoring is not the same as silence: each one is
-        // named in a warning, since an annotation that quietly does nothing is exactly what left
+        // Class-level blockers are fatal only when interception is needed: final and sealed
+        // classes do not permit a generated subclass, so no proxy exists at all. Spring throws
+        // AopConfigException for the final-class shape. Method-level problems instead name one
+        // method the proxy cannot reach; those produce warnings, not a module load failure.
+        // Ignoring is not silence: an annotation that quietly does nothing is exactly what left
         // @ExceptionCatch inert from 6.2.0 to 6.3.0. See issue #309.
         List<AopEligibility.Problem> blocking = new ArrayList<>();
-        // Skipped entirely when nothing asked for interception: check() would otherwise build a
-        // FINAL_CLASS problem and its remedy string for every plain final bean, for nothing.
+        // Skipped when nothing asked for interception: class-level remedies would be unused.
         for (AopEligibility.Problem problem : anythingAsked
                 ? AopEligibility.check(beanClass, annotated)
                 : java.util.Collections.<AopEligibility.Problem>emptyList()) {
-            if (problem.getKind() == AopEligibility.Problem.Kind.FINAL_CLASS) {
+            if (problem.getKind() == AopEligibility.Problem.Kind.FINAL_CLASS
+                    || problem.getKind() == AopEligibility.Problem.Kind.SEALED_CLASS) {
                 if (somethingWouldBeProxied) {
                     blocking.add(problem);
                 } else {
-                    // Final, but nothing was going to be proxied anyway, so dropping 'final' would
-                    // not have made the annotations work. Say so rather than fail the load.
+                    // Dropping the class restriction would not make these methods interceptable.
+                    String restriction = problem.getKind() == AopEligibility.Problem.Kind.FINAL_CLASS
+                            ? "final" : "sealed";
                     LOGGER.warning("AOP annotations on " + beanClass.getName()
-                            + " have no effect: the class is final, so no proxy can be generated, "
+                            + " have no effect: the class is " + restriction + ", so no proxy can be generated, "
                             + "and none of its annotated methods could be intercepted in any case.");
                 }
             } else {

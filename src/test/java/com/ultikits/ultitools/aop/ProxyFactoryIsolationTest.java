@@ -100,8 +100,8 @@ class ProxyFactoryIsolationTest {
             Object proxy = factory.createProxyClass(isolatedClass, intercepted)
                     .getDeclaredConstructor().newInstance();
 
-            // The INJECTION strategy puts the proxy in the target's own loader and package, so
-            // a package-private method is overridable and therefore interceptable.
+            // 代理必须定义在目标类自己的加载器和运行期包中，
+            // 包级私有方法才可以被覆写并参与拦截。
             assertEquals("intercepted:pkg-original", pkgMethod.invoke(proxy));
         }
     }
