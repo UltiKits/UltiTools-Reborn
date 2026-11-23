@@ -28,10 +28,10 @@ updates:
       - dependency-name: "com.google.code.gson:gson"
       # Release tooling pin; upgrade only with the retained-artifact publisher.
       - dependency-name: "org.sonatype.central:central-publishing-maven-plugin"
-      # Mockito already runs on JDK 21, but a new major needs a reviewed JDK/API baseline.
+      # Mockito already runs on JDK 25, but a new major needs a reviewed JDK/API baseline.
       - dependency-name: "org.mockito:*"
         versions: [">=6"]
-      # Paper 26.x moves beyond the JDK 21 / Paper 1.21 compile-time baseline.
+      # Paper 26.x moves beyond the Paper 1.21 compile-time API baseline.
       - dependency-name: "io.papermc.paper:paper-api"
         versions: [">=1.22"]
 

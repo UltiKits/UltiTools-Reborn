@@ -198,6 +198,19 @@ class FixtureGitIsolationTests(unittest.TestCase):
 
 
 class MainOnlyWorkflowTests(unittest.TestCase):
+    def test_build_and_publication_workflows_use_jdk25(self):
+        expected = {"maven-ci.yml": 3, "publish-packages.yml": 2,
+                    "random-order-tests.yml": 1, "snapshot-publish.yml": 1}
+        for name, count in expected.items():
+            with self.subTest(workflow=name):
+                workflow = load_workflow(WORKFLOWS / name)
+                setups = [step for job in workflow["jobs"].values() for step in job["steps"]
+                          if step.get("uses", "").startswith("actions/setup-java@")]
+                self.assertEqual(len(setups), count)
+                for setup in setups:
+                    self.assertEqual(setup["with"]["java-version"], "25")
+                    self.assertEqual(setup["with"]["distribution"], "temurin")
+
     def test_main_job_always_reports_and_heavy_steps_are_gated(self):
         workflow = load_workflow(WORKFLOWS / "maven-ci.yml")
         self.assertEqual(workflow["on"], {"push": {"branches": ["main", "release/**"]},
@@ -206,7 +219,7 @@ class MainOnlyWorkflowTests(unittest.TestCase):
         self.assertEqual(job["name"], "🧪 Test & Coverage")
         self.assertNotIn("if", job)
         self.assertNotIn("needs", job)
-        for name in ("☕ Set up JDK 21", "🧪 Build & Test with Coverage", "🧪 Run isolated-tagged tests",
+        for name in ("☕ Set up JDK 25", "🧪 Build & Test with Coverage", "🧪 Run isolated-tagged tests",
                      "📤 Upload Coverage Report"):
             self.assertEqual(step_named(job, name)["if"], "steps.changes.outputs.build == 'true'")
         isolated = step_named(job, "🧪 Run isolated-tagged tests")["run"]
@@ -314,7 +327,7 @@ class MainOnlyWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow["on"]["push"], {"branches": ["main"]})
         job = workflow["jobs"]["snapshot-publish"]
         self.assertEqual(job["if"], "github.ref == 'refs/heads/main'")
-        for name in ("Set up JDK 21", "Classify the project version"):
+        for name in ("Set up JDK 25", "Classify the project version"):
             self.assertEqual(step_named(job, name)["if"], "steps.changes.outputs.product == 'true'")
         self.assertEqual(step_named(job, "Deploy snapshot to Central")["if"],
                          "steps.changes.outputs.product == 'true' && steps.version.outputs.kind == 'snapshot'")

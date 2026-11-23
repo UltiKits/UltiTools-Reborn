@@ -202,9 +202,9 @@ class ReleaseValidationTests(unittest.TestCase):
         # the steps allowed before the pin are listed by name: anything new placed before it fails here.
         allowed = {
             ("maven-ci.yml", "release-tooling"): [
-                "📥 Checkout code", "Classify changed paths", "☕ Set up JDK 21"],
+                "📥 Checkout code", "Classify changed paths", "☕ Set up JDK 25"],
             ("publish-packages.yml", "publish-central"): [
-                "📥 Checkout code", "☕ Set up JDK 21 with Sonatype credentials", "🔑 Check GPG key expiry",
+                "📥 Checkout code", "☕ Set up JDK 25 with Sonatype credentials", "🔑 Check GPG key expiry",
                 "📥 Download and verify the retained release files", "🔍 Check Maven Central for this coordinate"],
         }
         for (workflow, job_name), names in allowed.items():

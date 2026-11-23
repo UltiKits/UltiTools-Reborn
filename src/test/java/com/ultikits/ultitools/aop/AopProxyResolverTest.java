@@ -53,6 +53,13 @@ class AopProxyResolverTest {
         public String helper() { return "helper"; }
     }
 
+    public static class SingleTransactionalMethod {
+        @Transactional
+        public void work() {
+            // Intentionally empty: the resolver only inspects the annotation.
+        }
+    }
+
     public static final class FinalManaged {
         @Transactional
         public String work() { return "nope"; }
@@ -280,11 +287,11 @@ class AopProxyResolverTest {
                     "requires a TransactionManager bound to a DataSource, see #195/#196");
 
             ContainerException thrown = assertThrows(ContainerException.class,
-                    () -> bare.resolve(Managed.class));
+                    () -> bare.resolve(SingleTransactionalMethod.class));
 
-            assertTrue(thrown.getMessage().contains("Transactional"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("@Transactional"), thrown.getMessage());
             assertTrue(thrown.getMessage().contains("#195"), thrown.getMessage());
-            assertTrue(thrown.getMessage().contains("work"),
+            assertTrue(thrown.getMessage().contains(SingleTransactionalMethod.class.getName() + "#work"),
                     "the message must name the offending method: " + thrown.getMessage());
         }
 
