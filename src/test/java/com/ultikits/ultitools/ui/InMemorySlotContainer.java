@@ -138,9 +138,9 @@ final class InMemorySlotContainer implements SlotContainer {
             }
         }
     }
+    void redraw() { redraw.accept(this); }
     void changed(ContainerChange change) {
         checkThread();
-        redraw.accept(this);
         try {
             spec.onChange().accept(change);
         } catch (Exception thrown) {

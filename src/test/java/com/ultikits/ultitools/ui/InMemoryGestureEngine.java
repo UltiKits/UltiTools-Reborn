@@ -7,7 +7,8 @@ import static com.ultikits.ultitools.ui.UiTestItems.room;
 import com.ultikits.ultitools.text.Text;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -15,7 +16,7 @@ import java.util.function.BiConsumer;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-/** Reference arithmetic: plan all transfers, then publish all state before any change listener. */
+/** Reference arithmetic: decide and apply each transfer, then publish to listeners and viewers. */
 final class InMemoryGestureEngine implements GestureEngine {
     private final BiConsumer<Player, Text> messages;
     InMemoryGestureEngine(BiConsumer<Player, Text> messages) { this.messages = messages; }
@@ -52,7 +53,7 @@ final class InMemoryGestureEngine implements GestureEngine {
             return 0;
         }
         TransferDecision decision = container(binding).decide(plan.viewer, kind, binding.index(), item, requested);
-        decision.message().ifPresent(message -> messages.accept(plan.viewer, message));
+        decision.message().filter(plan.sent::add).ifPresent(message -> messages.accept(plan.viewer, message));
         return decision.allowedAmount(requested);
     }
     private void pickup(Grid grid, Plan plan, Gesture.Pickup gesture) {
@@ -195,7 +196,7 @@ final class InMemoryGestureEngine implements GestureEngine {
     private static final class Plan {
         private final Player viewer;
         private final InMemoryViewerItems side;
-        private final Map<SlotBinding, ItemStack> replacements = new LinkedHashMap<>();
+        private final Set<Text> sent = new LinkedHashSet<>();
         private final List<Applied> transfers = new ArrayList<>();
         Plan(Player viewer, ViewerItems source) {
             this.viewer = viewer;
@@ -205,33 +206,33 @@ final class InMemoryGestureEngine implements GestureEngine {
                 side.slot(i, source.slot(i));
             }
         }
-        ItemStack item(SlotBinding binding) {
-            return replacements.containsKey(binding) ? UiTestItems.copy(replacements.get(binding)) : binding.container().get(binding.index());
-        }
+        ItemStack item(SlotBinding binding) { return binding.container().get(binding.index()); }
         void remove(SlotBinding binding, ItemStack item, int moved) {
             if (moved > 0) {
-                replacements.put(binding, amount(item, count(item) - moved));
-                transfers.add(new Applied(container(binding), new ContainerChange(viewer, TransferKind.TAKE_OUT, binding.index(), item, moved)));
+                container(binding).replace(binding.index(), amount(item, count(item) - moved));
+                record(binding, TransferKind.TAKE_OUT, item, moved);
             }
         }
         void add(SlotBinding binding, ItemStack item, int moved) {
             if (moved > 0) {
-                replacements.put(binding, amount(item, count(item(binding)) + moved));
-                transfers.add(new Applied(container(binding), new ContainerChange(viewer, TransferKind.PUT_IN, binding.index(), item, moved)));
+                container(binding).replace(binding.index(), amount(item, count(item(binding)) + moved));
+                record(binding, TransferKind.PUT_IN, item, moved);
             }
+        }
+        void record(SlotBinding binding, TransferKind kind, ItemStack item, int moved) {
+            container(binding).record(viewer, kind, binding.index(), item, moved);
+            transfers.add(new Applied(container(binding), new ContainerChange(viewer, kind, binding.index(), item, moved)));
         }
         boolean apply(ViewerItems target) {
             if (transfers.isEmpty()) {
                 return false;
             }
-            replacements.forEach((binding, item) -> container(binding).replace(binding.index(), item));
             target.cursor(side.cursor());
             for (int i = 0; i < side.inventorySize(); i++) {
                 target.slot(i, side.slot(i));
             }
-            transfers.forEach(transfer -> transfer.container.record(viewer, transfer.change.kind(), transfer.change.index(),
-                    transfer.change.item(), transfer.change.amount()));
             transfers.forEach(transfer -> transfer.container.changed(transfer.change));
+            transfers.stream().map(Applied::container).distinct().forEach(InMemorySlotContainer::redraw);
             return true;
         }
     }

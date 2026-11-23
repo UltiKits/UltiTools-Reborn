@@ -264,6 +264,67 @@ public abstract class AbstractGestureEngineContractTest extends EditableContract
         viewer.assertSaid("Not allowed");
         viewer.assertNoMoreSaid();
     }
+    private static int total(List<ItemStack> items) {
+        return items.stream().mapToInt(ItemStack::getAmount).sum();
+    }
+    private TransferPolicy capacityPolicy(AtomicReference<SlotContainer> container) {
+        return request -> request.kind() == TransferKind.PUT_IN
+                ? TransferDecision.allowAtMost(Math.max(0, 10 - total(container.get().contents()))) : TransferDecision.allow();
+    }
+    @Test void quickMoveIn_capacityPolicy_seesEarlierTransfersOfSameGesture() {
+        AtomicReference<SlotContainer> reference = new AtomicReference<>();
+        SlotContainer container = service.container(storage(3).policy(capacityPolicy(reference)).build());
+        reference.set(container);
+        InMemoryViewerItems side = side();
+        side.slot(10, stone(64));
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 3, container, 0, BindingMode.EDITABLE).build();
+        assertThat(engine.apply(grid, viewer, side, new Gesture.QuickMoveIn(10))).isTrue();
+        assertThat(total(container.contents())).isEqualTo(10);
+        assertThat(side.slot(10)).isEqualTo(stone(54));
+    }
+    @Test void spread_capacityPolicy_seesEarlierTransfersOfSameGesture() {
+        AtomicReference<SlotContainer> reference = new AtomicReference<>();
+        SlotContainer container = service.container(storage(3).policy(capacityPolicy(reference)).build());
+        reference.set(container);
+        InMemoryViewerItems side = side();
+        side.cursor(stone(64));
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 3, container, 0, BindingMode.EDITABLE).build();
+        assertThat(engine.apply(grid, viewer, side, new Gesture.Spread(grid.bindings().keySet(), false))).isTrue();
+        assertThat(total(container.contents())).isEqualTo(10);
+        assertThat(side.cursor()).isEqualTo(stone(54));
+    }
+    @Test void swap_bothHalvesSeeStateBeforeGesture() {
+        AtomicReference<SlotContainer> reference = new AtomicReference<>();
+        List<ItemStack> seen = new ArrayList<>();
+        List<TransferKind> order = new ArrayList<>();
+        SlotContainer container = service.container(storage(1).baseline(List.of(stone(5))).policy(request -> {
+            seen.add(reference.get().get(0)); order.add(request.kind()); return TransferDecision.allow();
+        }).build());
+        reference.set(container);
+        InMemoryViewerItems side = side(); side.cursor(dirt(3));
+        assertThat(apply(container, side, new Gesture.SwapWithCursor(SLOT))).isTrue();
+        assertThat(seen).containsExactly(stone(5), stone(5));
+        assertThat(order).containsExactly(TransferKind.TAKE_OUT, TransferKind.PUT_IN);
+        assertThat(container.get(0)).isEqualTo(dirt(3));
+        assertThat(side.cursor()).isEqualTo(stone(5));
+    }
+    @Test void refusalMessage_onMultiSlotGesture_isSentOncePerDistinctText() {
+        SlotContainer container = service.container(storage(3).policy(request -> TransferDecision.refuse(Text.plain("Full"))).build());
+        InMemoryViewerItems side = side(); side.slot(10, stone(64));
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 3, container, 0, BindingMode.EDITABLE).build();
+        assertThat(engine.apply(grid, viewer, side, new Gesture.QuickMoveIn(10))).isFalse();
+        viewer.assertSaid("Full"); viewer.assertNoMoreSaid();
+    }
+    @Test void onChange_runsAfterWholeGesture() {
+        AtomicReference<SlotContainer> reference = new AtomicReference<>();
+        List<Integer> seen = new ArrayList<>();
+        SlotContainer container = service.container(storage(2).onChange(change -> seen.add(total(reference.get().contents()))).build());
+        reference.set(container);
+        InMemoryViewerItems side = side(); side.cursor(stone(10));
+        Grid grid = Grid.builder(TITLE, 1).bindRange(0, 0, 2, container, 0, BindingMode.EDITABLE).build();
+        assertThat(engine.apply(grid, viewer, side, new Gesture.Spread(grid.bindings().keySet(), false))).isTrue();
+        assertThat(seen).containsExactly(10, 10);
+    }
     @Test void quickMoveOut_fullInventory_keepsRestInContainer() {
         SlotContainer container = service.container(storage(1).baseline(List.of(stone(8))).build());
         InMemoryViewerItems side = side();
