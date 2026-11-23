@@ -78,6 +78,31 @@ class CatalogueLoaderTest {
     }
 
     @Test
+    void operatorOverrides_addLanguagesWarnOnUnknownKeysAndNeverWrite() throws Exception {
+        file("en.yml", "greeting: shipped\nother: retained\n");
+        Path operator = Files.createDirectories(root.resolve("operator"));
+        String edited = "# operator bytes\ngreeting: overridden\nunknown: accepted\n";
+        Files.writeString(operator.resolve("en.yml"), edited);
+        Files.writeString(operator.resolve("fr.yml"), "greeting: bonjour\n");
+        Files.createDirectories(operator.resolve("reference"));
+        Files.writeString(operator.resolve("reference/de.yml"), "greeting: ignored\n");
+        CatalogueLoader loader = new CatalogueLoader();
+        var shipped = loader.load("sample", Locale.ENGLISH, root.toUri().toURL());
+        var loaded = loader.withOverrides(shipped, operator);
+        assertThat(loaded.catalogue().lookup("greeting", List.of(Locale.ENGLISH))).contains("overridden");
+        assertThat(loaded.catalogue().lookup("other", List.of(Locale.ENGLISH))).contains("retained");
+        assertThat(loaded.catalogue().lookup("greeting", List.of(Locale.FRENCH))).contains("bonjour");
+        assertThat(loaded.catalogue().hasLocale(Locale.GERMAN)).isFalse();
+        assertThat(loaded.catalogue().lookup("unknown", List.of(Locale.ENGLISH))).contains("accepted");
+        assertThat(loaded.diagnostics()).singleElement().asString().contains("unknown");
+        assertThat(Files.readString(operator.resolve("en.yml"))).isEqualTo(edited);
+        assertThat(loaded.shippedFiles()).isEqualTo(shipped.shippedFiles());
+        Path absent = root.resolve("absent");
+        loader.withOverrides(shipped, absent);
+        assertThat(absent).doesNotExist();
+    }
+
+    @Test
     void catalogueSnapshots_areImmutableAndOverridesAreLanguageSpecific() {
         var builder = new Catalogue.Builder("sample", Locale.ENGLISH).put(Locale.ENGLISH, "hello", "old");
         Catalogue snapshot = builder.build();

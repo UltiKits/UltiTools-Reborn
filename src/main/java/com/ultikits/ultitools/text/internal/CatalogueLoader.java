@@ -51,6 +51,20 @@ public final class CatalogueLoader {
         return new Loaded(parseFiles(namespace, sourceLocale, files, diagnostics), diagnostics, files);
     }
 
+    /** Reads operator-owned overrides without creating or rewriting any operator file. */
+    public Loaded withOverrides(Loaded shipped, Path directory) {
+        List<String> diagnostics = new ArrayList<>(shipped.diagnostics());
+        Map<String, String> files = new LinkedHashMap<>();
+        try {
+            readDirectory(directory, files, diagnostics);
+        } catch (IOException failure) {
+            diagnostics.add(directory + ": " + failure.getMessage());
+        }
+        Catalogue base = shipped.catalogue();
+        Catalogue overrides = parseFiles(base.namespace(), base.sourceLocale(), files, diagnostics, base);
+        return new Loaded(base.withOverrides(overrides), diagnostics, shipped.shippedFiles());
+    }
+
     private static void readDirectory(Path directory, Map<String, String> files, List<String> diagnostics)
             throws IOException {
         if (!Files.isDirectory(directory)) {
@@ -88,6 +102,11 @@ public final class CatalogueLoader {
 
     private static Catalogue parseFiles(String namespace, Locale sourceLocale, Map<String, String> files,
             List<String> diagnostics) {
+        return parseFiles(namespace, sourceLocale, files, diagnostics, null);
+    }
+
+    private static Catalogue parseFiles(String namespace, Locale sourceLocale, Map<String, String> files,
+            List<String> diagnostics, @Nullable Catalogue shipped) {
         Catalogue.Builder builder = new Catalogue.Builder(namespace, sourceLocale);
         java.util.Set<Locale> loaded = new java.util.HashSet<>();
         files.forEach((file, text) -> {
@@ -97,7 +116,13 @@ public final class CatalogueLoader {
             } else if (!loaded.add(locale.orElseThrow())) {
                 diagnostics.add(file + ": Duplicate normalized catalogue locale");
             } else {
-                parseFile(namespace, file, text, diagnostics).ifPresent(values -> builder.putAll(locale.orElseThrow(), values));
+                parseFile(namespace, file, text, diagnostics).ifPresent(values -> {
+                    if (shipped != null) {
+                        values.keySet().stream().filter(path -> !shipped.contains(path)).forEach(path ->
+                                diagnostics.add(file + ": Override key not present in shipped catalogues: " + path));
+                    }
+                    builder.putAll(locale.orElseThrow(), values);
+                });
             }
         });
         return builder.build();

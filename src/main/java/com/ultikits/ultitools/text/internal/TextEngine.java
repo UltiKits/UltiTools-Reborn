@@ -52,7 +52,8 @@ public final class TextEngine implements AutoCloseable {
     /** Creates and publishes the framework catalogue at startup. */
     public TextEngine(LocaleResolver resolver, Logger logger, @Nullable URL codeSource, Path overrideDirectory) {
         this(resolver, logger);
-        CatalogueLoader.Loaded loaded = loader.load(MessageKey.FRAMEWORK_NAMESPACE, Locale.ENGLISH, codeSource);
+        CatalogueLoader.Loaded loaded = loader.withOverrides(
+                loader.load(MessageKey.FRAMEWORK_NAMESPACE, Locale.ENGLISH, codeSource), overrideDirectory);
         publish(new Prepared("UltiTools framework", codeSource, overrideDirectory, loaded), this);
     }
 
@@ -80,7 +81,7 @@ public final class TextEngine implements AutoCloseable {
                     + sourceLocale.toLanguageTag() + "'");
             loaded = new CatalogueLoader.Loaded(loaded.catalogue(), diagnostics, loaded.shippedFiles());
         }
-        return new Prepared(pluginName, codeSource, overrideDirectory, loaded);
+        return new Prepared(pluginName, codeSource, overrideDirectory, loader.withOverrides(loaded, overrideDirectory));
     }
 
     /** Prepares resources using plugin.yml's optional source-language, defaulting to English. */
@@ -130,7 +131,8 @@ public final class TextEngine implements AutoCloseable {
             return;
         }
         Prepared prepared = current.prepared();
-        CatalogueLoader.Loaded loaded = loader.load(namespace, current.catalogue().sourceLocale(), prepared.codeSource());
+        CatalogueLoader.Loaded loaded = loader.withOverrides(
+                loader.load(namespace, current.catalogue().sourceLocale(), prepared.codeSource()), prepared.overrideDirectory());
         published.put(namespace, new Published(current.owner(), current.pluginName(), loaded.catalogue(), prepared));
         loaded.diagnostics().forEach(logger::warning);
     }

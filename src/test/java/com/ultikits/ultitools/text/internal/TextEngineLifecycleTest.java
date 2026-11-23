@@ -99,6 +99,24 @@ class TextEngineLifecycleTest {
         assertThat(diagnostics).hasSize(1);
     }
 
+    @Test
+    void reloadOverrides_replacesSnapshotAndRemovingOverrideRevealsShippedValue() throws Exception {
+        var prepared = prepare("reload", "greeting: Shipped\n");
+        engine.publish(prepared, this);
+        Catalogue before = engine.catalogue("sample");
+        Path directory = Files.createDirectories(prepared.overrideDirectory());
+        Files.writeString(directory.resolve("en.yml"), "greeting: Edited\n");
+        engine.reloadOverrides("sample");
+        assertThat(text()).isEqualTo("Edited");
+        assertThat(before.lookup("greeting", List.of(Locale.ENGLISH))).contains("Shipped");
+        Files.delete(directory.resolve("en.yml"));
+        engine.reloadOverrides("sample");
+        assertThat(text()).isEqualTo("Shipped");
+        engine.withdraw("sample", this);
+        engine.reloadOverrides("sample");
+        assertThat(engine.catalogue("sample")).isNull();
+    }
+
     private TextEngine.Prepared prepare(String folder, String contents) throws Exception {
         return engine.prepare("sample", "Sample", source(folder, contents).toUri().toURL(),
                 temporary.resolve("operator/messages"), Locale.ENGLISH);
