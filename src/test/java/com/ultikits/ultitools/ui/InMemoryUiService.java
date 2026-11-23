@@ -35,6 +35,8 @@ class InMemoryUiService implements UiService {
     private final Registry registry;
     private final String owner;
     private boolean unloaded;
+    private boolean unloading;
+    private final List<PendingDelivery> pendingDeliveries = new ArrayList<>();
 
     InMemoryUiService(Registry registry, String owner) {
         this.registry = Objects.requireNonNull(registry, "registry");
@@ -66,9 +68,37 @@ class InMemoryUiService implements UiService {
     @Override public CompletionStage<Delivery> deliver(Player player, List<ItemStack> items) {
         Objects.requireNonNull(player, "player");
         List<ItemStack> copy = UiTestItems.copies(items);
-        CompletableFuture<Delivery> result = new CompletableFuture<>();
-        registry.dispatch(player, () -> result.complete(give(player, copy)));
-        return result.minimalCompletionStage();
+        PendingDelivery delivery = new PendingDelivery(player, copy);
+        synchronized (registry) {
+            pendingDeliveries.add(delivery);
+            if (unloading) {
+                delivery.run();
+            } else {
+                registry.dispatch(player, delivery);
+            }
+        }
+        return delivery.result.minimalCompletionStage();
+    }
+
+    private final class PendingDelivery implements Runnable {
+        private final Player player;
+        private final List<ItemStack> items;
+        private final CompletableFuture<Delivery> result = new CompletableFuture<>();
+        PendingDelivery(Player player, List<ItemStack> items) { this.player = player; this.items = items; }
+        @Override public void run() {
+            synchronized (registry) {
+                if (!result.isDone()) {
+                    result.complete(give(player, items));
+                    pendingDeliveries.remove(this);
+                }
+            }
+        }
+    }
+
+    private void flushDeliveries() {
+        registry.checkThread();
+        // Unload owns every Paper entity context; no next tick is required for owed items.
+        List.copyOf(pendingDeliveries).forEach(PendingDelivery::run);
     }
 
     private Delivery give(Player player, List<ItemStack> items) {
@@ -317,7 +347,8 @@ class InMemoryUiService implements UiService {
         @Override public void unload(String owner) {
             List<MemorySession<?>> closing;
             synchronized (this) {
-                service(owner);
+                InMemoryUiService service = (InMemoryUiService) service(owner);
+                service.unloading = true;
                 closing = sessions.stream().filter(session -> session.service.owner().equals(owner)).toList();
             }
             for (MemorySession<?> session : closing) {
@@ -325,7 +356,11 @@ class InMemoryUiService implements UiService {
                 session.closeAndComplete();
             }
             containers.stream().filter(container -> container.owner().equals(owner)).forEach(InMemorySlotContainer::unload);
-            owners.get(owner).unloaded = true;
+            owners.get(owner).flushDeliveries();
+            synchronized (this) {
+                owners.get(owner).unloaded = true;
+                owners.get(owner).unloading = false;
+            }
         }
         @Override public RecordingScheduler scheduler() { return scheduler; }
         @Override public List<LogRecord> warnings() { return List.copyOf(warnings); }
@@ -390,7 +425,12 @@ class InMemoryUiService implements UiService {
                     backend.close(this);
                 }
                 if (this instanceof MemoryGridSession grid && backend != null) {
-                    boundContainers(grid.rendered).forEach(container -> container.detach(this, true));
+                    boundContainers(grid.rendered).forEach(container -> {
+                        container.detach(this, true);
+                        if (service.unloading && container.owner().equals(service.owner())) {
+                            container.unload();
+                        }
+                    });
                 }
                 result = chosen;
             }

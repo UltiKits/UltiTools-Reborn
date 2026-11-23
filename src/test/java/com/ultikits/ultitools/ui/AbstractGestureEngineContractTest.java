@@ -62,17 +62,8 @@ public abstract class AbstractGestureEngineContractTest extends EditableContract
         System.out.println("Editable exhaustive conservation/atomicity combinations: " + combinations);
     }
     private void checkCombination(ContainerKind kind, BindingMode mode, int policy, int held, int cursor, int hotbar, Gesture gesture) {
-        TransferPolicy decision = ignored -> switch (policy) {
-            case 0 -> TransferDecision.allow();
-            case 1 -> TransferDecision.allowAtMost(1);
-            default -> TransferDecision.refuse();
-        };
-        ItemStack slot = switch (held) {
-            case 0 -> ItemStack.empty();
-            case 1 -> stone(5);
-            case 2 -> dirt(5);
-            default -> stone(64);
-        };
+        TransferPolicy decision = policyFor(policy);
+        ItemStack slot = slotItem(held);
         ContainerSpec.Builder builder = kind == ContainerKind.STORAGE ? storage(2) : ContainerSpec.template(2);
         SlotContainer container = service.container(builder.policy(decision).baseline(List.of(slot, ItemStack.empty())).build());
         InMemoryViewerItems side = side();
@@ -98,6 +89,21 @@ public abstract class AbstractGestureEngineContractTest extends EditableContract
             assertThat(container.contents()).as("atomicity: %s", gesture).isEqualTo(originalContainer);
             assertThat(playerItems(side)).isEqualTo(originalSide);
         }
+    }
+    private static TransferPolicy policyFor(int policy) {
+        return ignored -> switch (policy) {
+            case 0 -> TransferDecision.allow();
+            case 1 -> TransferDecision.allowAtMost(1);
+            default -> TransferDecision.refuse();
+        };
+    }
+    private static ItemStack slotItem(int held) {
+        return switch (held) {
+            case 0 -> ItemStack.empty();
+            case 1 -> stone(5);
+            case 2 -> dirt(5);
+            default -> stone(64);
+        };
     }
     private static ItemStack stateItem(int state) { return state == 0 ? ItemStack.empty() : state == 1 ? stone(3) : dirt(3); }
     private static boolean partialSwap(Gesture gesture, ItemStack held, List<ItemStack> side, int hotbar, int policy) {

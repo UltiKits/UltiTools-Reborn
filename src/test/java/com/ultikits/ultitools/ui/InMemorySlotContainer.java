@@ -236,7 +236,9 @@ final class InMemorySlotContainer implements SlotContainer {
         ledger.clear();
         taken.clear();
         refunded.whenComplete((ignored, failure) -> onThread(() -> {
-            state = previous;
+            if (state != ContainerState.ENDED) {
+                state = previous;
+            }
             expected.complete(CommitOutcome.REFUSED);
         }));
     }
@@ -283,12 +285,16 @@ final class InMemorySlotContainer implements SlotContainer {
     }
     void unload() {
         checkThread();
-        if (state == ContainerState.COMMITTING && commitFuture != null && !commitFuture.isDone() && answeredSequence < sequence) {
-            answeredSequence = sequence;
-            state = ContainerState.FAILED;
-            commitFuture.complete(CommitOutcome.UNKNOWN);
-        }
         end();
+        if (state == ContainerState.COMMITTING && commitFuture != null && !commitFuture.isDone()) {
+            if (answeredSequence < sequence) {
+                answeredSequence = sequence;
+                state = ContainerState.FAILED;
+                commitFuture.complete(CommitOutcome.UNKNOWN);
+            } else {
+                clearAndEnd();
+            }
+        }
     }
     private void clearAndEnd() {
         contents = UiTestItems.empty(spec.size());

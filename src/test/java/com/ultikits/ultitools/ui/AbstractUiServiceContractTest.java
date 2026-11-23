@@ -856,6 +856,43 @@ public abstract class AbstractUiServiceContractTest {
         assertThat(committing.state()).isEqualTo(ContainerState.ENDED);
     }
     @Test
+    void ownerUnload_startingCommitDisposition_keepsUnknownWriteWithStore() {
+        AtomicInteger writes = new AtomicInteger();
+        CompletableFuture<StoreAnswer> answer = new CompletableFuture<>();
+        SlotContainer container = service.container(editableStorage(1).disposition(Disposition.COMMIT)
+                .initial(viewer.getUniqueId(), List.of(UiTestItems.stone(8)))
+                .store(snapshot -> { writes.incrementAndGet(); return answer; }).build());
+        fixture.unload(service.owner());
+        assertThat(container.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(writes).hasValue(1);
+        assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.UNKNOWN_KEPT_BY_STORE);
+        answer.complete(StoreAnswer.refused(List.of(ItemStack.empty()))); settle();
+        assertThat(container.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(viewer.getInventory().getStorageContents()).allSatisfy(item -> assertThat(item == null || item.isEmpty()).isTrue());
+    }
+    @Test
+    void ownerUnload_afterRefusalBeforeRefundDelivery_endsSynchronously() {
+        backend(Grid.class);
+        SlotContainer container = service.container(editableStorage(1).endWhenUnviewed(false)
+                .initial(viewer.getUniqueId(), List.of(UiTestItems.stone(8)))
+                .store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.refused(List.of(ItemStack.empty())))).build());
+        GridSession session = service.show(viewer, bound(container)); settle();
+        AtomicReference<ContainerState> atCompletion = new AtomicReference<>();
+        session.result().thenAccept(ignored -> atCompletion.set(container.state()));
+        CompletionStage<CommitOutcome> pending = container.commit();
+        assertThat(pending.toCompletableFuture()).isNotDone();
+        fixture.unload(service.owner());
+        assertThat(atCompletion).hasValue(ContainerState.ENDED);
+        assertThat(outcome(session)).isEqualTo(new UiResult.Closed<Ack>(CloseReason.OWNER_UNLOADED));
+        assertThat(container.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(viewer.getInventory().getItem(0)).isEqualTo(UiTestItems.stone(8));
+        assertThat(EditableContractSupport.completed(pending)).isEqualTo(CommitOutcome.REFUSED);
+        settle();
+        assertThat(EditableContractSupport.completed(container.end())).isEqualTo(EndOutcome.REFUSED_RETURNED);
+        assertThat(container.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(viewer.getInventory().getItem(0)).isEqualTo(UiTestItems.stone(8));
+    }
+    @Test
     void showGridBindingEndedContainer_throws() {
         backend(Grid.class);
         SlotContainer container = service.container(ContainerSpec.template(1).build());
