@@ -11,6 +11,7 @@ import org.jetbrains.annotations.ApiStatus;
  * module's own classes, the framework and the server API; do not reference other plugins' classes.
  * A thrown exception or error prevents only this module from loading at this start. Fix or remove
  * it and restart; an updated module is subject to the ordinary post-load rollback observation.
+ * No order is promised between different modules' bootstrappers.
  *
  * @since 7.0.0
  */

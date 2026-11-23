@@ -21,6 +21,7 @@ final class ModuleBootstraps {
     static Run runAll(ModuleJarAdmission admission, ClassLoader loader, Logger logger) {
         Map<Path, Throwable> failures = new LinkedHashMap<>();
         int attempted = 0;
+        // Filename order makes diagnostics repeatable; it is not an ordering contract for modules.
         for (Map.Entry<Path, ModuleJarAdmission.Entry> module : admission.entries().entrySet()) {
             PluginYmlReader.PluginYmlInfo metadata = module.getValue().getMetadata();
             String bootstrapper = metadata.getBootstrapper();
