@@ -17,6 +17,7 @@ import org.jetbrains.annotations.Nullable;
  * Each slot is empty, an icon ({@link GridItem}: shown, never takeable) or a binding to a {@link SlotContainer}
  * index ({@link #bindings()}; EDITABLE or VIEW). Never completes with a value; it ends with
  * {@link UiResult.Closed}. Refresh by pushing a new snapshot through {@link GridSession#update(Grid)}.
+ * Opening a grid never reads or writes the viewer's cursor.
  */
 public final class Grid implements UiIntent<Ack> {
     /** The fixed number of columns. */
@@ -66,7 +67,7 @@ public final class Grid implements UiIntent<Ack> {
     }
 
     @Override public int hashCode() { return Objects.hash(title, rows, items); }
-    @Override public String toString() { return "Grid[title=" + title + ", rows=" + rows + ", items=" + items + ']'; }
+    @Override public String toString() { return "Grid[title=" + title + ", rows=" + rows + ", items=" + items + ", bindings=" + bindings + ']'; }
 
     /** A reusable, non-thread-safe snapshot builder. */
     public static final class Builder {

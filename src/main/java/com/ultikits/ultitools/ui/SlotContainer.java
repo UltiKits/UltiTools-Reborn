@@ -40,6 +40,13 @@ import org.jetbrains.annotations.ApiStatus;
  * before the screen gets the snapshot, its bound slots show nothing and refuse every gesture.
  * In-memory contents are not crash-journalled; modules
  * needing crash safety must persist them.
+ *
+ * <p>Known limitations. A transfer policy that calls this container's mutators is not supported (see
+ * {@link TransferPolicy}). Amounts in {@code baseline}, {@code initial}, {@link #load} and a Refused answer's
+ * contents are taken as given, even above an item's max stack size; they are the module's data. Under
+ * RETURN_TO_CONTRIBUTORS with a baseline, a viewer who takes out a baseline item consumes other contributors'
+ * credit before the baseline (ledger order), so that contributor's matching items may go to the undelivered
+ * handler under the nil UUID instead of back to them. In-memory contents are not crash-journalled.
  */
 @ApiStatus.NonExtendable
 public interface SlotContainer {
@@ -77,6 +84,7 @@ public interface SlotContainer {
     /**
      * Removes and returns every item; the container becomes {@code ENDED} and its disposition does not run.
      * The caller now owns the returned items (for example to hand a trade offer to the other player).
+     * @throws IllegalStateException unless EDITABLE or READ_ONLY
      */
     List<ItemStack> drain();
     /** Runs the disposition now; idempotent; the stage completes once the disposition has finished. */

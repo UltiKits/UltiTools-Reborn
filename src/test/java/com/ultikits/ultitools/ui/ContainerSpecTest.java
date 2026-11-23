@@ -46,6 +46,10 @@ class ContainerSpecTest {
         assertThat(spec.policy().decide(new TransferRequest(MockBukkit.getMock().addPlayer(), TransferKind.PUT_IN, 0,
                 ItemStack.empty(), 10)).allowedAmount(10)).isEqualTo(10);
     }
+    @Test void template_initialContributor_isRejected() {
+        assertThatThrownBy(() -> ContainerSpec.template(1).initial(UUID.randomUUID(), List.of(UiTestItems.stone(5))).build())
+                .isInstanceOf(IllegalArgumentException.class);
+    }
     @Test void bounds_validateSizeTimeoutAndContentsLength() {
         for (int size : new int[] {0, -1, 4097, Integer.MAX_VALUE}) {
             assertThatThrownBy(() -> ContainerSpec.storage(size)).isInstanceOf(IllegalArgumentException.class);

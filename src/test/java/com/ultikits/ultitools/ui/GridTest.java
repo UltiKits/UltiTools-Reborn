@@ -151,6 +151,14 @@ class GridTest {
         assertThat(grid.item(slot)).isEmpty();
     }
 
+    @Test
+    void toString_includesBindings() {
+        GridSlot slot = GridSlot.ofIndex(0);
+        SlotContainer container = sizedContainer(1);
+        Grid grid = Grid.builder(TITLE, 1).bind(slot, container, 0, BindingMode.EDITABLE).build();
+        assertThat(grid.toString()).contains("bindings=" + grid.bindings());
+    }
+
     private static SlotContainer sizedContainer(int size) {
         SlotContainer container = mock(SlotContainer.class);
         when(container.size()).thenReturn(size);

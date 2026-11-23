@@ -52,6 +52,28 @@ public abstract class AbstractSlotContainerContractTest extends EditableContract
         assertThat(undelivered).isEmpty();
         assertThatThrownBy(container::drain).isInstanceOf(IllegalStateException.class);
     }
+    @Test void ended_onlyGettersChangesAndEndAnswer() {
+        SlotContainer container = service.container(storage(1).initial(viewer.getUniqueId(), List.of(stone(8))).build());
+        assertThat(container.drain()).containsExactly(stone(8));
+        assertThat(container.owner()).isEqualTo(service.owner());
+        assertThat(container.size()).isOne();
+        assertThat(container.kind()).isEqualTo(ContainerKind.STORAGE);
+        assertThat(container.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(container.isViewed()).isFalse();
+        assertThat(container.get(0)).isEqualTo(ItemStack.empty());
+        assertThat(container.contents()).containsExactly(ItemStack.empty());
+        assertThat(container.changes().isEmpty()).isTrue();
+        CompletionStage<EndOutcome> end = container.end();
+        assertThat(completed(end)).isEqualTo(EndOutcome.DRAINED);
+        assertThat((Object) container.end()).isSameAs(end);
+        assertThatThrownBy(() -> container.setReadOnly(false)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> container.load(List.of(ItemStack.empty()))).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(container::drain).isInstanceOf(IllegalStateException.class);
+        SlotContainer commitContainer = service.container(committed(1)
+                .store(snapshot -> CompletableFuture.completedFuture(StoreAnswer.written())).build());
+        assertThat(commitContainer.drain()).containsExactly(ItemStack.empty());
+        assertThatThrownBy(commitContainer::commit).isInstanceOf(IllegalStateException.class);
+    }
     @Test void return_offlineContributor_goesToUndeliveredOnce() {
         SlotContainer container = service.container(storage(1).initial(viewer.getUniqueId(), List.of(stone(8))).build());
         fixture.disconnect(viewer);

@@ -146,7 +146,7 @@ public final class ContainerSpec {
             onChange = Objects.requireNonNull(listener, "listener");
             return this;
         }
-        /** Initial contents, counted as put in by {@code contributor} (the RETURN disposition gives them back to them). */
+        /** Initial contents, counted as put in by {@code contributor} (the RETURN disposition gives them back to them). Storage only: a template rejects it at {@link #build()}. */
         public Builder initial(UUID contributor, List<ItemStack> contents) {
             Objects.requireNonNull(contributor, "contributor");
             List<ItemStack> copy = sizedCopy(contents);
@@ -172,11 +172,17 @@ public final class ContainerSpec {
         }
         private void validate() {
             if (kind == ContainerKind.TEMPLATE) {
-                if (disposition != null || store != null || undelivered != null) {
-                    throw new IllegalArgumentException("templates have no disposition, store or undelivered handler");
-                }
-                return;
+                validateTemplate();
+            } else {
+                validateStorage();
             }
+        }
+        private void validateTemplate() {
+            if (disposition != null || store != null || undelivered != null || contributor != null) {
+                throw new IllegalArgumentException("templates have no disposition, store, undelivered handler or contributed initial contents");
+            }
+        }
+        private void validateStorage() {
             if (disposition == null || undelivered == null) {
                 throw new IllegalArgumentException("storage requires a disposition and undelivered handler");
             }
