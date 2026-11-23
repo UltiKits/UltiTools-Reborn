@@ -843,7 +843,7 @@
             <groupId>net.kyori</groupId>
             <artifactId>adventure-text-minimessage</artifactId>
             <version>5.2.0</version>
-            <scope>test</scope>
+            <scope>provided</scope>
         </dependency>
         <!-- RegistryKey.key() exposes this Paper-provided type to the registry contract test. -->
         <dependency>
