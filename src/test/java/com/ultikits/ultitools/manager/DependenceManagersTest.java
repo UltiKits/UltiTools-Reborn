@@ -479,7 +479,7 @@ class DependenceManagersTest {
         }
 
         /**
-         * Codex P2, PR #463: {@code plugin.yml} only softdepends on {@code Vault} itself, not on
+         * Codex P2, PR #463: {@code paper-plugin.yml} declares an optional server dependency on {@code Vault} itself, not on
          * any economy-providing plugin (e.g. EssentialsX) -- Vault is guaranteed to enable before
          * UltiTools, but an economy plugin has no declared ordering relative to UltiTools at all,
          * and commonly enables after it. Logging {@code EconomyUtils#logStartupState()}'s one-time

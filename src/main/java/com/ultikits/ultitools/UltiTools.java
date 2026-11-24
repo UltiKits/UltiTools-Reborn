@@ -9,13 +9,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
-import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
-import java.security.CodeSource;
-import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -32,11 +29,14 @@ import java.util.stream.Collectors;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.bootstrap.BootstrapResult;
+import com.ultikits.ultitools.bootstrap.ModuleClassPath;
 import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
@@ -84,7 +84,6 @@ import com.ultikits.ultitools.utils.CloudFeatures;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.OfficialLanguageFiles;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
-import com.ultikits.ultitools.utils.SecurityPolicy;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
@@ -100,10 +99,6 @@ import lombok.Setter;
  */
 public final class UltiTools extends JavaPlugin implements Localized {
     private static final Pattern VERSION_PATTERN = Pattern.compile("^([0-9]+\\.[0-9]+\\.[0-9]+)(?:-[0-9A-Za-z]+)*$");
-    // Deliberately java.util.logging, not Bukkit.getLogger() — this backs a static, test-seam
-    // method (collectModuleJarUrls) that must be callable from a plain JUnit test with no live
-    // Bukkit server (see the WIRE-11 test-seam decision recorded in 04-03-PLAN.md).
-    private static final Logger MODULE_SCAN_LOGGER = Logger.getLogger(UltiTools.class.getName());
 
     /** D-03: the operator-editable blocklist's shipped default commands. */
     private static final List<String> DEFAULT_COMMAND_BLOCKLIST = Collections.unmodifiableList(Arrays.asList(
@@ -143,6 +138,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Getter
     private DependenceManagers dependenceManagers;
     private URLClassLoader ultiToolsClassLoader;
+    private final BootstrapResult bootstrap;
     /**
      * The module update and removal transactions of this start (#505): applied before the module
      * class loader is built, decided after the modules load.
@@ -242,6 +238,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private CloudFeatures cloudFeatures;
 
     /**
+     * Receives the one module-set decision made by the Paper bootstrapper.
+     *
+     * @param bootstrap this start's internal bootstrap result, not a module-facing API
+     */
+    @ApiStatus.Internal
+    public UltiTools(BootstrapResult bootstrap) {
+        this.bootstrap = bootstrap;
+    }
+
+    /**
      * The UltiCloud player-link API (as of 6.3.1): one object for the whole time the framework is enabled. It works
      * before, during and between connections -- a create while the server is not connected completes with
      * {@link CloudPlayerLinks.Failure#NOT_CONNECTED} -- and the handler a module sets on it stays registered across
@@ -333,7 +339,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 ConsoleMirror.install();
             }
             // Plugin classloader initialization
-            URL serverJar = getServerJar();
+            URL serverJar = ModuleClassPath.serverJarOf(getLogger());
             try {
                 if (serverJar != null) {
                     File serverFile = new File(serverJar.toURI());
@@ -376,12 +382,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
     public void onEnable() {
         // #621: inbound panel work is accepted again (cleared first in onDisable).
         PluginInitiationUtils.startAcceptingPanelMessages();
-        // #505: recorded module updates are put in place before the class loader opens any module
-        // JAR, and decided after the modules load (initPluginModules). Their log lines wait for
-        // the language to be loaded.
-        moduleFileTransactions = new ModuleFileTransactions(getDataFolder());
-        moduleJarAdmission = new ModuleJarAdmission();
-        ultiToolsClassLoader = new ModuleClassLoader(getModuleUrls(), getClassLoader());
+        // Paper bootstrap already applied file transactions and decided this start's module set.
+        // Reports still wait for the language, and update observation still follows module loading.
+        consumeBootstrap(bootstrap);
         this.eventBus = new EventBus();
 
         if (!initDependencies()) {
@@ -397,6 +400,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         initPanelResponderRegistry();
         // Plan 22-21 (S-60): the player-link API exists before the modules that set its handler load.
         cloudFeatures = CloudFeatures.start(this);
+        registerModuleDependencyLoaders();
         initPluginModules();
         migrateCapabilitiesConfig();
         initWebSocketManagers();
@@ -434,6 +438,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
         long ticks = EarlyLogCapture.RELEASE_AFTER_MS / 50L + 20L;
         Bukkit.getScheduler().runTaskLater(this, EarlyLogCapture::releaseIfExpired, ticks);
+    }
+
+    // Package-private lifecycle seam: validate before accessing a failed handover's resources.
+    void consumeBootstrap(BootstrapResult prepared) {
+        if (prepared.classPathFailure() != null) {
+            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
+                    "Failed to initialize plugin module loading", prepared.classPathFailure());
+        }
+        moduleFileTransactions = prepared.transactions();
+        moduleJarAdmission = prepared.admission();
+        ultiToolsClassLoader = prepared.classLoader();
     }
 
     private boolean initDependencies() {
@@ -566,7 +581,15 @@ public final class UltiTools extends JavaPlugin implements Localized {
         panelResponderRegistry = new PanelResponderRegistry();
     }
 
-    private void initPluginModules() {
+    // Package-private seam for dependency lookup; onEnable keeps the startup steps explicit.
+    void registerModuleDependencyLoaders() {
+        bootstrap.classLoader().addDeclaredDependencies(moduleJarAdmission, name -> {
+            Plugin dependency = Bukkit.getPluginManager().getPlugin(name);
+            return dependency == null || dependency.equals(this) ? null : dependency.getClass().getClassLoader();
+        });
+    }
+
+    void initPluginModules() {
         pluginManager = new PluginManager(moduleJarAdmission);
         File file = ModuleFileTransactions.modulesFolder(getDataFolder());
         if (!file.exists()) {
@@ -1077,113 +1100,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (IOException ex) {
             return null;
         }
-    }
-
-    /**
-     * Get server jar file URL.
-     *
-     * @return Server jar file URL
-     */
-    public URL getServerJar() {
-        ProtectionDomain protectionDomain = Bukkit.class.getProtectionDomain();
-        CodeSource codeSource = protectionDomain.getCodeSource();
-        if (codeSource == null) {
-            return null;
-        }
-        if (codeSource.getLocation().toString().startsWith("union:")) {
-            String replace = codeSource.getLocation().toString().replace("union:", "file:").split("%")[0];
-            try {
-                return new java.net.URI(replace).toURL();
-            } catch (MalformedURLException | URISyntaxException e) {
-                getLogger().log(Level.WARNING, "Failed to parse server JAR URL: " + replace, e);
-            }
-        }
-        return codeSource.getLocation();
-    }
-
-    /**
-     * Get URLs for module plugin JARs in the UltiTools/plugins directory.
-     *
-     * @return Array of URLs for module plugin JARs
-     */
-    private URL[] getModuleUrls() {
-        return moduleClassPath(moduleFileTransactions, ModuleFileTransactions.modulesFolder(getDataFolder()),
-                getServerJar(), moduleJarAdmission);
-    }
-
-    /**
-     * The module class path of this start: first the recorded module updates are put in place
-     * (#505), then the modules folder is listed -- in that order, so the class loader is built over
-     * the new JARs and never opens a JAR an update replaces.
-     *
-     * @param transactions  this start's transactions
-     * @param modulesFolder the modules folder
-     * @param serverJar     the server JAR, or {@code null}
-     * @return the URLs to build the module class loader from
-     */
-    static URL[] moduleClassPath(ModuleFileTransactions transactions, File modulesFolder, URL serverJar) {
-        return moduleClassPath(transactions, modulesFolder, serverJar, new ModuleJarAdmission());
-    }
-
-    /** Builds the class path using the same admission snapshot later consumed by discovery. */
-    static URL[] moduleClassPath(ModuleFileTransactions transactions, File modulesFolder, URL serverJar,
-                                 ModuleJarAdmission admission) {
-        transactions.applyBeforeLoad();
-        List<URL> urls = new ArrayList<>();
-        if (serverJar != null) {
-            urls.add(serverJar);
-        }
-        urls.addAll(collectModuleJarUrls(modulesFolder, admission));
-        return urls.toArray(new URL[0]);
-    }
-
-    /**
-     * Scan a directory for module plugin JARs and collect the URLs of the ones that pass
-     * {@link SecurityPolicy#isValidModuleJar(File)} — a JAR is validated <b>before</b> its URL is
-     * added, never after. A failing JAR is skipped and named in a WARNING; the scan continues and
-     * never throws (D-05: module-granularity skip, not a bootstrap abort).
-     *
-     * <p>Package-private and static so it can be exercised directly by a test against a
-     * {@code @TempDir}, without standing up the whole plugin.</p>
-     *
-     * @param pluginDir directory to scan for module JARs
-     * @return collected URLs of the JARs that passed validation, empty if {@code pluginDir} is
-     *         {@code null} or does not exist
-     */
-    static List<URL> collectModuleJarUrls(File pluginDir) {
-        return collectModuleJarUrls(pluginDir, new ModuleJarAdmission());
-    }
-
-    /** API refusals are silent here; discovery reports each once after language initialization. */
-    static List<URL> collectModuleJarUrls(File pluginDir, ModuleJarAdmission admission) {
-        List<URL> urls = new ArrayList<>();
-        if (pluginDir == null || !pluginDir.exists()) {
-            return urls;
-        }
-        File[] pluginFiles = ModuleFileTransactions.moduleJars(pluginDir);
-        if (pluginFiles == null) {
-            return urls;
-        }
-        for (File f : pluginFiles) {
-            if (!SecurityPolicy.isValidModuleJar(f)) {
-                MODULE_SCAN_LOGGER.log(Level.WARNING,
-                        "[UltiTools-API] Skipped module JAR (failed security validation), not added "
-                                + "to module classpath: " + f.getName());
-                continue;
-            }
-            ModuleJarAdmission.Entry result = admission.inspect(f);
-            String main = result.getMetadata().getMain();
-            // Unreadable metadata or a missing main keeps its existing discovery diagnostic.
-            if (main != null && !main.trim().isEmpty() && !result.isApiAllowed()) {
-                continue;
-            }
-            try {
-                urls.add(f.toURI().toURL());
-            } catch (MalformedURLException e) {
-                MODULE_SCAN_LOGGER.log(Level.WARNING, "Failed to add module JAR to classpath: " + f.getName(), e);
-            }
-        }
-        return urls;
     }
 
     /**

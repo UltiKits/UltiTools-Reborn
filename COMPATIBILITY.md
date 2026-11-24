@@ -379,11 +379,38 @@ are refused. Previously the cache entry was silently removed without saving. Imp
 bean is not added to cache tracking. Save failures still log a warning and remove the entry;
 this change adds no persistence or retry guarantee.
 
+## Two-stage Paper startup and known limitations (as of 7.0.0)
+
+The framework JAR now contains `paper-plugin.yml`, not `plugin.yml`. Module JARs still use their
+own `plugin.yml`. Paper runs the framework bootstrap before loading worlds; module discovery,
+IoC and normal enable hooks still run during plugin enable. If the entire bootstrap preparation
+fails, the framework reports the retained error and is disabled during enable; it does not run
+successfully with an empty module set.
+
+- **Runtime downloads need network access or a populated cache.** Paper resolves the five coordinates
+  in `ultitools-libraries.txt` before the framework can add its own diagnostics. If a download fails,
+  Paper may report only `Error resolving libraries`. Check connectivity and access to the Maven mirror.
+  To use another mirror, set Paper's `PAPER_DEFAULT_CENTRAL_REPOSITORY` environment variable to its Maven
+  repository URL before starting the server. Already cached libraries can be reused without a download.
+- **Restart the server after changing JARs.** `/ul reload` reloads configuration, not classes. Server
+  `/reload`, plugin-manager hot reload, and disabling then re-enabling UltiTools without a full restart
+  are unsupported: the module loader is closed when the framework disables and is not rebuilt by re-enable.
+- **A stop during world loading can undo a pending update.** Updates are applied before worlds load,
+  but confirmed only after modules finish loading during enable. A stop or crash in that interval leaves
+  the update unconfirmed; the next start restores the previous JAR. Let startup finish before stopping.
+- **A failed module hook is not a separate class sandbox.** Its module is not enabled, but its JAR remains
+  on the shared module class path. Other modules that use its classes can still be affected, especially
+  by a failed static initializer. Do not initialize shared libraries that need Bukkit during bootstrap.
+- **Declare every server-plugin dependency you use.** Declared `depend`/`softdepend` plugins are visible
+  during enable; undeclared plugins are not guaranteed to be visible. A dependency's own loader may expose
+  its transitive dependencies (for example through Vault). Such incidental visibility is not a supported
+  dependency declaration and must not be relied on.
+
 ## Paper and Java baseline (as of 7.0.0-SNAPSHOT)
 
 The baseline is **Paper 26.3 build 258 with Java 25**. The build pins
 `paper-api:26.3.build.258-stable`, compiles with `--release 25` (class major 69), and the
-framework's `plugin.yml` declares `api-version: '26.3'`. Each framework version targets
+framework's `paper-plugin.yml` declares `api-version: '26.3'`. Each framework version targets
 one latest Paper version; compatibility with older servers is not promised.
 
 The former older-Paper API fixture, its retrieval/skip settings and the Java 8 API-signature
@@ -561,7 +588,8 @@ explains it; the sections below are the reference and stay authoritative where t
 ## XSeries 14 (as of 6.3.1)
 
 The framework-provided XSeries runtime library moves from **13.7.1 to 14.0.0**;
-Paper still downloads it through `plugin.yml` `libraries:` rather than finding it shaded in the framework JAR.
+In 6.x, Paper downloads it through `plugin.yml` `libraries:` rather than finding it shaded in the framework JAR.
+In 7.0, XSeries is no longer supplied by the framework; modules that use it must shade and relocate their own copy.
 These removed APIs belong to the bundled XSeries library, not to UltiTools-API's own API.
 Third-party modules using XSeries must check these removed public APIs and recompile:
 
@@ -2149,7 +2177,7 @@ explain that release line, not an exception to these five 7.x rules.
 - **MAJOR**: reserved for a change of direction at the framework level. It will not be issued
   merely to clean up deprecated API.
 
-Libraries delivered through `plugin.yml` `libraries:` (for example XSeries) follow their own versioning,
+Runtime libraries (the Paper loader in 7.0, or `plugin.yml` `libraries:` in 6.x) follow their own versioning,
 not this framework's version-number contract.
 
 ### When a public API becomes eligible for removal
@@ -2258,8 +2286,8 @@ So: the *ordering* of module version numbers is consumed by machines, while the 
 MAJOR/MINOR/PATCH is not — that part is addressed to server owners. On the framework side both are
 machine-consumed, which is why its version number does not have the same freedom.
 
-Libraries the framework delivers at runtime through its `plugin.yml` `libraries:` block (XSeries,
-HikariCP, ByteBuddy and the others in [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
+Libraries the framework delivers at runtime through its Paper loader (or its `plugin.yml` `libraries:` block
+in 6.x; see [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
 are not covered by the framework's version number either. They keep their own versioning, and a
 framework MINOR or PATCH release may move one of them to a new major version; that release's notes
 and its entry in this file name the library's removals (for example XSeries 13.7.1 to 14.0.0 in
@@ -5084,7 +5112,7 @@ older servers are not promised compatibility.
 | Server | Paper (plain Spigot is not supported — the code uses Adventure `Component` throughout) |
 | Build JDK | 25 |
 | Bytecode target | Java 25 (`--release 25`, class major 69) |
-| `api-version` in `plugin.yml` | `26.3` (Bukkit API level, not a module's integer UltiTools API level) |
+| `api-version` in the framework's `paper-plugin.yml` | `26.3` (Paper API level, not a module's integer UltiTools API level) |
 | `api-version` in a module's `plugin.yml` | An integer UltiTools API level, not the Paper version; 7.0 requires at least `700`. A declaration below `700`, missing, empty or non-integer is refused before main-class resolution and excluded from the shared class path; `/upm` uses the same minimum rule |
 | Target server | Paper 26.3 build 258 (`paper-api:26.3.build.258-stable`); not a minimum-version range |
 | Server Java | Java 25, matching the framework bytecode target |
@@ -5191,7 +5219,7 @@ The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and Univer
 
 | Delivery route | Version decided by | Examples |
 |---|---|---|
-| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | commons-dbutils, Java-WebSocket, ByteBuddy, JavaMail (`com.sun.mail:javax.mail`), HikariCP, XSeries |
+| The Paper `UltiToolsLoader`, using the coordinates in `ultitools-libraries.txt` (in 6.x: `plugin.yml` `libraries:`) | **This repository** | commons-dbutils, Java-WebSocket, ByteBuddy, JavaMail (`com.sun.mail:javax.mail`), HikariCP; XSeries was supplied in 6.x only |
 | Shipped by the Paper server itself | **The Paper build the server owner installed** | Gson, MySQL Connector/J, protobuf, slf4j, the SQLite driver, native Adventure, log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
 
 As of 6.3.0, Gson, MySQL Connector/J, protobuf and slf4j are no longer listed under `libraries:`. Paper
@@ -5206,7 +5234,7 @@ delivered at all; the framework uses Paper's native Adventure (see the plan 18-3
 above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
 delivered through the `libraries:` route in the table instead, the same way HikariCP already
 was. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
-along for the ride: declare it yourself (the version in the framework's `plugin.yml` `libraries:` block,
+along for the ride: declare it yourself (in 6.x, the version in the framework's `plugin.yml` `libraries:` block,
 `com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1, or your own pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
@@ -5217,7 +5245,7 @@ server; it only creates the impression that the problem has been fixed.
 Note that Maven's `provided` scope is **not** this boundary: the dependencies of both routes that the
 framework compiles against are declared `provided` in `pom.xml` (for example HikariCP from the first, Gson from the
 second), and the Paper-shipped libraries it does not compile against are not declared at all. What decides the
-category is whether the dependency appears in the `libraries:` block, not the scope.
+category is whether the dependency appears in the Paper loader's coordinate list (the `libraries:` block in 6.x), not the scope.
 
 Server owners are advised to keep up with Paper builds, security builds in particular.
 

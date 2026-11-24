@@ -1,5 +1,7 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.bootstrap.ModuleClassPath;
+
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.catalogue;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.downloading;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.loadedModule;
@@ -55,7 +57,7 @@ class ModuleUpdateStartupOrderTest {
                 new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar), catalogue("demo", "1.1"),
                 downloading("Demo", "1.1", "demo"));
 
-        URL[] classPath = UltiTools.moduleClassPath(new ModuleFileTransactions(dataFolder), modules, null);
+        URL[] classPath = ModuleClassPath.moduleClassPath(new ModuleFileTransactions(dataFolder), modules, null);
 
         assertThat(Arrays.asList(classPath)).containsExactly(new File(modules, "demo-1.1.jar").toURI().toURL());
     }
@@ -70,7 +72,7 @@ class ModuleUpdateStartupOrderTest {
                 new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar), catalogue("demo", "1.1"),
                 downloading("Demo", "1.1", "demo"));
         ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
-        UltiTools.moduleClassPath(start, modules, null);
+        ModuleClassPath.moduleClassPath(start, modules, null);
         UltiToolsPlugin loadedNew = loadedModule("Demo", "1.1", "demo");
 
         Throwable thrown = catchThrowable(() -> UltiTools.loadModulesThenObserve(start, () -> {

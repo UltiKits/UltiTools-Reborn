@@ -1,5 +1,7 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.bootstrap.ModuleClassPath;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -53,7 +55,7 @@ class ModuleAdmissionClassPathTest {
         File current = module("m-7.0.0.jar", "700", "current", false);
         ModuleJarAdmission admission = new ModuleJarAdmission();
         try (MockedStatic<PluginYmlReader> metadata = mockStatic(PluginYmlReader.class, CALLS_REAL_METHODS)) {
-            List<URL> urls = UltiTools.collectModuleJarUrls(modules.toFile(), admission);
+            List<URL> urls = ModuleClassPath.collectModuleJarUrls(modules.toFile(), admission);
             List<LogRecord> logs = new ArrayList<>();
             Logger logger = Logger.getAnonymousLogger();
             logger.setUseParentHandlers(false);

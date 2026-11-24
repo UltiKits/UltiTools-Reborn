@@ -11,6 +11,8 @@ place that defines what "the same bytes" means:
             retention directory and write the public release manifest beside them
   validate  re-check a manifest, the retained bytes, the source commit they came from and,
             when given, the authority and UAT receipts that accepted that exact manifest
+            --primary-jar instead checks one local JAR's content and expected --version (including
+            SNAPSHOTs); it cannot accept release authority, UAT receipts or a publication handoff
   stage     print the retained files to upload, in manifest order, after re-validating them
   compare   classify assets already on a release (downloaded into a directory) against the
             manifest: identical, partial or absent (reconcilable) or mismatch (never replaced)
@@ -224,22 +226,24 @@ def parse_plugin_yml(text, problems):
 
 
 def inspect_primary(data, version, problems):
-    """Return (main class entry, plugin.yml values) of the shaded plugin JAR."""
+    """Return (main class entry, paper-plugin.yml values) of the shaded Paper plugin JAR."""
     archive, names = open_zip(data, problems, "primary JAR")
     if archive is None:
         return None, {}
-    if "plugin.yml" not in names:
-        problems.add("plugin_yml_missing", "the primary JAR has no plugin.yml; this is not a plugin JAR")
+    if "plugin.yml" in names:
+        problems.add("legacy_plugin_yml_present", "the primary JAR still contains a legacy root plugin.yml")
+    if "paper-plugin.yml" not in names:
+        problems.add("paper_plugin_yml_missing", "the primary JAR has no root paper-plugin.yml; this is not a Paper plugin JAR")
         return None, {}
-    plugin = parse_plugin_yml(archive.read("plugin.yml").decode("utf-8", "replace"), problems)
+    plugin = parse_plugin_yml(archive.read("paper-plugin.yml").decode("utf-8", "replace"), problems)
     if plugin.get("version") != version:
-        problems.add("plugin_version_mismatch", "plugin.yml version %r, release %r" % (plugin.get("version"), version))
+        problems.add("plugin_version_mismatch", "paper-plugin.ymlversion %r, release %r" % (plugin.get("version"), version))
     main = plugin.get("main") or ""
     entry = main.replace(".", "/") + ".class"
     if not main or entry not in names:
-        problems.add("main_class_missing", "plugin.yml main %r has no class entry; wrong JAR selected" % main)
+        problems.add("main_class_missing", "paper-plugin.ymlmain %r has no class entry; wrong JAR selected" % main)
     if not plugin.get("api-version"):
-        problems.add("plugin_api_version_missing", "plugin.yml declares no api-version")
+        problems.add("plugin_api_version_missing", "paper-plugin.ymldeclares no api-version")
     return entry, plugin
 
 
@@ -507,10 +511,10 @@ def check_retained(manifest, folder, problems):
         problems.add("pom_coordinates", "POM %s:%s, manifest %s:%s" % (group, artifact_id, manifest["group_id"],
                                                                        manifest["artifact_id"]))
     if plugin.get("api-version") != manifest["plugin_api_version"]:
-        problems.add("plugin_api_version_mismatch", "plugin.yml %r, manifest %r" % (
+        problems.add("plugin_api_version_mismatch", "paper-plugin.yml%r, manifest %r" % (
             plugin.get("api-version"), manifest["plugin_api_version"]))
     if plugin.get("identify-string") != manifest["identify_string"]:
-        problems.add("identify_string_mismatch", "plugin.yml %r, manifest %r (exact comparison)" % (
+        problems.add("identify_string_mismatch", "paper-plugin.yml%r, manifest %r (exact comparison)" % (
             plugin.get("identify-string"), manifest["identify_string"]))
     return contents
 
@@ -939,8 +943,31 @@ def validated(args, problems):
     return manifest, manifest_sha
 
 
-def cmd_validate(args):
+def validate_primary_jar(args):
+    """Content-only check for local builds, including SNAPSHOTs; never a publication receipt."""
     problems = Problems()
+    if not args.version:
+        problems.add("version_required", "--primary-jar requires the expected --version")
+    if any((args.source_checkout, args.authority_receipt, args.uat_receipt, args.expected_source_head,
+            args.tag, args.shell)):
+        problems.add("content_only", "--primary-jar cannot validate source, authority or UAT receipts, tags or shell handoffs")
+    data = read_regular(Path(args.primary_jar), problems, "primary JAR")
+    if data is not None:
+        inspect_primary(data, args.version, problems)
+    if problems or data is None:
+        problems.emit()
+        return 1
+    print(json.dumps({"status": "ok", "scope": "primary-jar-content-only", "version": args.version,
+                      "bytes": len(data), "sha256": sha256_bytes(data), "release_authorized": False}, sort_keys=True))
+    return 0
+
+
+def cmd_validate(args):
+    if args.primary_jar:
+        return validate_primary_jar(args)
+    problems = Problems()
+    if args.version:
+        problems.add("manifest_version", "manifest validation takes its version only from the manifest")
     manifest, manifest_sha = validated(args, problems)
     if problems or manifest is None:
         problems.emit()
@@ -1484,7 +1511,10 @@ def main(argv=None):
     retain.add_argument("--version", required=True)
     retain.add_argument("--retain-dir", required=True)
     validate = sub.add_parser("validate", help="re-check a manifest, its retained bytes, source and receipts")
-    validate.add_argument("--manifest", required=True)
+    validation_input = validate.add_mutually_exclusive_group(required=True)
+    validation_input.add_argument("--manifest")
+    validation_input.add_argument("--primary-jar", help="content-only local JAR check; never release acceptance")
+    validate.add_argument("--version", help="expected descriptor version for --primary-jar only")
     validate.add_argument("--source-checkout")
     validate.add_argument("--authority-receipt")
     validate.add_argument("--uat-receipt")

@@ -548,6 +548,29 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 <br>
 
+## Startup and known limitations
+
+UltiTools 7.0 is a Paper plugin: its JAR contains `paper-plugin.yml`, while modules continue to
+use their own `plugin.yml`. Paper runs module bootstrap hooks before worlds load; normal module
+loading happens during enable. An overall bootstrap failure disables the framework during enable
+with the retained error, rather than silently running without modules.
+
+- First start needs network access to download runtime libraries, unless they are already cached.
+  If Paper reports `Error resolving libraries`, check connectivity or set
+  `PAPER_DEFAULT_CENTRAL_REPOSITORY` to an accessible Maven mirror before starting the server.
+- Use a full server restart after JAR changes. `/ul reload` reloads configuration only. `/reload`,
+  plugin-manager hot reload, and disabling then re-enabling UltiTools are unsupported.
+- Pending updates are applied before world loading and confirmed after modules load. Stopping or
+  crashing in between causes the next start to restore the previous JAR; let startup finish first.
+- A module whose bootstrap hook fails is not enabled, but its classes remain on the shared class
+  path. Other modules that reference those classes can be affected. Do not initialize shared
+  libraries that need Bukkit in an early hook.
+- Declare every server plugin a module uses in `depend` or `softdepend`. Undeclared visibility is
+  not guaranteed, even if a dependency such as Vault happens to expose its own dependencies.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md#two-stage-paper-startup-and-known-limitations-as-of-700)
+for the startup and class-loading boundaries.
+
 ## Documentation
 
 Architecture notes, module guides, tutorials and the API reference live on the

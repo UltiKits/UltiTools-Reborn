@@ -1654,6 +1654,12 @@ public class PluginManager {
             return null;
         }
 
+        if (admission.getBootstrapFailure() != null) {
+            Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + String.format(
+                    UltiTools.getInstance().i18n("module.bootstrap.failed"), pluginJar.getName()));
+            return null;
+        }
+
         try {
             // Validate the main class name format, then check the module hierarchy below.
             // Do not use loadPluginClass: its com.ultikits. prefix check would reject third-party modules.

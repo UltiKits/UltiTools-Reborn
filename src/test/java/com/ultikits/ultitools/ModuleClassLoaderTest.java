@@ -55,8 +55,15 @@ class ModuleClassLoaderTest {
     }
 
     @Test
-    void loaderRemainsAnInternalType() {
-        assertThat(java.lang.reflect.Modifier.isPublic(ModuleClassLoader.class.getModifiers())).isFalse();
+    void loaderRemainsAnInternalType() throws Exception {
+        assertThat(java.lang.reflect.Modifier.isPublic(ModuleClassLoader.class.getModifiers())).isTrue();
+        // ApiStatus is CLASS-retained, so inspect the compiled marker rather than runtime reflection.
+        try (InputStream bytes = ModuleClassLoader.class.getResourceAsStream("ModuleClassLoader.class")) {
+            assertThat(bytes).isNotNull();
+            byte[] bytecode = read(bytes);
+            assertThat(new String(bytecode, StandardCharsets.ISO_8859_1))
+                    .contains("Lorg/jetbrains/annotations/ApiStatus$Internal;");
+        }
     }
 
     @Test

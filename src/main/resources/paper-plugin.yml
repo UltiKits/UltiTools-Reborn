@@ -1,0 +1,19 @@
+name: UltiTools
+version: '${project.version}'
+main: com.ultikits.ultitools.UltiTools
+bootstrapper: com.ultikits.ultitools.bootstrap.UltiToolsBootstrap
+loader: com.ultikits.ultitools.bootstrap.UltiToolsLoader
+api-version: '26.3'
+prefix: UltiTools
+authors: [ wisdomme ]
+load: POSTWORLD
+dependencies:
+  server:
+    Vault:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+      join-classpath: true
