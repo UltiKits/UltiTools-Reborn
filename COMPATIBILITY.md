@@ -671,8 +671,6 @@ records the audit's behaviour in that release, not its availability in 7.0.0.
 implementation depended on deprecated, version-unstable server internals, and message text
 containing quotes could break its generated JSON. Use `sendTitleNotification`,
 `sendActionBarNotification` or chat instead. Rebuild callers against 7.0 after migrating.
-The remaining `NotificationService` signatures will be adjusted separately in subsequent 7.0
-changes and documented in this file when those changes land.
 
 `widgets.Hologram`, which spawned an invisible armour stand for each text line, is also removed.
 Use Paper's native `TextDisplay` API instead; a single display can contain multiple lines.
@@ -696,14 +694,89 @@ TextDisplay display = world.spawn(location, TextDisplay.class, d -> {
 
 中文补充：7.0.0 删除 `widgets.Toast` 和 `NotificationService#sendToastNotification`，旧实现依赖已弃用、
 跨版本不稳定的服务端内部接口，消息中的引号还可能破坏生成的 JSON。请改用 `sendTitleNotification`、
-`sendActionBarNotification` 或聊天，并在迁移后针对 7.0 重新构建调用方。`NotificationService` 的其余
-方法签名将在 7.0 后续改动中另行调整，届时在本文件单独记录。
+`sendActionBarNotification` 或聊天，并在迁移后针对 7.0 重新构建调用方。
 
 `widgets.Hologram` 也被删除，旧实现为每行文字生成一个隐形盔甲架；请改用 Paper 原生 `TextDisplay`，
 单个显示实体即可包含多行文字。示例中的 `messages` 是模块注入的 `Messages` 服务，用于生成共享文本；
 `World#spawn` 必须在拥有目标位置的线程上调用，请先通过模块注入的 `Scheduler` 切换线程，
 并在生成实体前检查可能为 null 的 `Location#getWorld()`。示例关闭实体持久化，调用方负责管理实体，
 不再需要时调用 `display.remove()`。
+
+### Notification service migration
+
+`NotificationService` renders `Text` with the recipient's resolved locale, including keys from other
+module namespaces. Its twelve sending methods return `void` (four abstract methods and eight default
+convenience overloads), rather than reporting unreliable boolean success. Chat, action bars and titles
+are sent on the calling thread; boss-bar creation, replacement, sound and countdown run in the player's
+`Scheduler#entity` context. Methods may be called from any thread.
+
+| Before 7.0 | As of 7.0.0 |
+|---|---|
+| Message, title, subtitle and action-bar `String` arguments | `com.ultikits.ultitools.text.Text` |
+| Boss-bar `int seconds` | Positive `java.time.Duration`; default remains 25 seconds |
+| `org.bukkit.Sound` | `net.kyori.adventure.sound.Sound`, preserving the caller's source, volume and pitch |
+| Title fade-in / stay / fade-out `int` ticks | Adventure `Title.Times`; defaults remain 500 ms / 2.5 s / 1 s |
+| `boolean` return values | `void`; required null arguments throw NPE naming the parameter, non-positive duration throws `IllegalArgumentException` |
+| Two overloads taking a caller-owned Bukkit `BossBar` | One full overload taking Adventure `BossBar.Color` and `BossBar.Overlay` |
+| `new InMemoryNotificationService()` | `new InMemoryNotificationService(Messages, Scheduler)`, or preferably inject `NotificationService` |
+| Named aliases `inMemoryNotificationService` and the interface class-name string | Resolve by type: `context.getBean(NotificationService.class)` / `@Autowired NotificationService` |
+
+```java
+// Inject Messages and NotificationService. Player/operator text is an argument, never a template.
+Text greeting = Text.of(messages.key("notify.hello"), Arg.string("name", player.getName()));
+notifications.sendMessageNotification(player, greeting);
+notifications.sendActionBarNotification(player, greeting);
+notifications.sendSubTitleNotification(player, greeting);
+notifications.sendTitleNotification(player, greeting, Text.plain("Ready"), null,
+        Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(3), Duration.ofMillis(500)));
+Sound sound = Sound.sound(org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, Sound.Source.MASTER, 1f, 1f);
+notifications.sendBossBarNotification(player, greeting, Duration.ofSeconds(5),
+        BossBar.Color.GREEN, BossBar.Overlay.PROGRESS, sound);
+// For already-built fixed components, use Text.literal(component); for plain strings, Text.plain(value).
+```
+
+Here `Sound`, `BossBar` and `Title` are Adventure types, and the message catalogue's argument placeholder
+is `<name>`. No manual MiniMessage escaping or template concatenation is needed.
+
+A player has at most one notification boss bar. A second call reuses it but now **replaces the text,
+colour and overlay**, cancels the previous countdown and restarts the complete lifetime. Previously,
+the text stayed stale and concurrent countdowns made repeated notifications disappear early. Countdown
+updates no longer run on Bukkit's asynchronous scheduler. They advance in 250 ms steps (five nominal
+ticks); an already removed player gets no bar, and disconnecting retires the countdown and forgets the
+entry. Reconnecting starts a fresh bar. A service instance no longer shares a static player cache.
+
+The root service is constructed and cached on first type lookup, so registration order does not bind
+it to the text/scheduling registration block. Both engines are present in 7.0; a custom container must
+register `Messages` and `Scheduler` before resolving the service. A missing dependency currently causes
+the constructor's named NPE; the failed lookup is not cached and succeeds after registration. Optional
+`@Autowired(required = false)` does not swallow an exception thrown by a registered supplier.
+
+The fifteen active module source trees were checked with a positive `UltiToolsPlugin` search control:
+only `UltiSocial` calls the service in production (`SocialListener.java`, three chat calls, return values
+ignored). No module directly constructs `InMemoryNotificationService`, uses its former test hooks,
+looks up either removed alias or supplies a Bukkit boss bar. Modules still need the documented 7.0
+rebuild; these findings do not promise compatibility for old binaries or third-party modules.
+
+中文补充：通知服务改用 `Text` 按收件玩家语言渲染，十二个发送方法均返回 `void`，其中四个抽象方法、
+八个默认便捷重载。文字参数由 `String` 改成 `Text`，Boss 栏秒数由 `int` 改成正 `Duration`，
+声音由 Bukkit `Sound` 改成 Adventure `Sound`，标题 tick 参数改成 `Title.Times`。默认 Boss 栏仍为
+25 秒，标题仍为 500 毫秒 / 2.5 秒 / 1 秒；声音使用调用方提供的来源、音量和音调，不再固定音量 10。
+必需参数为 null 时抛出以参数名为消息的 NPE，非正时长抛出 `IllegalArgumentException`。
+
+两个接收调用方 Bukkit `BossBar` 的重载删除，改为完整重载传入 Adventure 的颜色与样式。
+实现类无参构造器改成 `(Messages, Scheduler)`；更推荐按 `NotificationService` 类型注入。
+`inMemoryNotificationService` 和接口全限定类名字符串两个名称别名删除，请改用类型查询或 `@Autowired`。
+聊天、动作栏与标题保留在调用线程发送；Boss 栏的创建、替换、声音和倒计时全部进入玩家实体上下文。
+同一玩家仍最多一条 Boss 栏，但再次调用会替换文字、颜色、样式并重启唯一倒计时，不再文字不变或加速消失。
+更新步长为 250 毫秒（名义五 tick）；已退出玩家不显示，断线退役自动清理状态，重连后可重新显示。
+
+根容器首次按类型取服务时才构造并缓存，不依赖文本和调度服务的注册行序；7.0 已包含两种引擎。
+自建容器须先注册 `Messages` 与 `Scheduler`，缺失时目前由构造器抛 `messages` / `scheduler` NPE，
+失败不会缓存，补齐后可重试。`@Autowired(required = false)` 不会吞掉已注册供应器抛出的异常。
+模块检查有已知必命中的对照：十五个在用模块中仅 `UltiSocial` 的 `SocialListener.java` 有三处生产聊天调用，
+均不读返回值；直接构造实现类、使用旧测试钩子、查询被删别名或传入 Bukkit Boss 栏的模块调用均未发现。
+请按上表示例迁移并重新构建；玩家或服主提供的内容使用 `Arg.string`，不要拼进 MiniMessage 模板，
+占位符写 `<name>`。本地模块检查不构成旧二进制或第三方模块的兼容承诺。
 
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 

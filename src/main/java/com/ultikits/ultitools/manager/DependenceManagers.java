@@ -80,10 +80,10 @@ public class DependenceManagers {
         context.registerSingleton("inMemeryTeleportService", teleportService);
         context.registerSingleton(TeleportService.class.getName(), teleportService);
 
-        // Register NotificationService
-        InMemoryNotificationService notificationService = new InMemoryNotificationService();
-        context.registerSingleton("inMemoryNotificationService", notificationService);
-        context.registerSingleton(NotificationService.class.getName(), notificationService);
+        // Register NotificationService: built on first lookup, because its Messages and Scheduler are
+        // registered by the text and scheduling services, whose registration order here is not fixed.
+        context.registerTypeSupplier(NotificationService.class,
+                () -> new InMemoryNotificationService(context.getBean(Messages.class), context.getBean(Scheduler.class)));
 
         LocaleResolver localeResolver = ConfiguredLocaleResolver.forConfig(plugin::getConfig, plugin.getLogger());
         TextEngine textEngine = new TextEngine(localeResolver, plugin.getLogger(),
