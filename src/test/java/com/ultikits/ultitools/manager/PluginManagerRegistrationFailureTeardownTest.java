@@ -9,15 +9,15 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,7 +42,7 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * bean's own scheduling call threw. This suite drives {@code attemptPluginRegistration} directly
  * (via reflection -- it is private, and this is a framework-internal registration-lifecycle
  * detail, not a public contract) with a real {@link TaskManager} and a real, mocked
- * {@link BukkitScheduler} that fails deterministically on the SECOND scheduling call, exactly
+ * {@link PaperBackend} that fails deterministically on the SECOND scheduling call, exactly
  * like {@link TaskManagerTest.MidScanFailureTests}.
  */
 @DisplayName("PluginManager registration teardown on a mid-scan task-registration failure (WR-02, #410)")
@@ -51,6 +51,7 @@ class PluginManagerRegistrationFailureTeardownTest {
 
     private PluginManager pluginManager;
     private TaskManager taskManager;
+    private PaperBackend backend;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -72,7 +73,8 @@ class PluginManagerRegistrationFailureTeardownTest {
         // taskManager is null until this test wires a real one directly -- exactly the
         // instance whose mid-scan-failure contract (#410) this suite is proving end to end
         // through the surrounding caller, not in isolation.
-        taskManager = new TaskManager(mockHostPlugin);
+        backend = mock(PaperBackend.class);
+        taskManager = new TaskManager(new PaperSchedulerEngine(mockHostPlugin, mockHostPlugin.getLogger(), backend));
         setField(pluginManager, "taskManager", taskManager);
     }
 
@@ -111,10 +113,8 @@ class PluginManagerRegistrationFailureTeardownTest {
             bukkit.when(Bukkit::getLogger).thenReturn(
                     Logger.getLogger("PluginManagerRegistrationFailureTeardownTest.tearsDown"));
 
-            BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-            bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
-            BukkitTask firstTask = mock(BukkitTask.class);
-            when(mockScheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+            ScheduledTask firstTask = mock(ScheduledTask.class);
+            when(backend.global(any(), anyLong()))
                     .thenReturn(firstTask)
                     .thenThrow(new RuntimeException(
                             "simulated: host plugin became disabled mid-registration"));
@@ -150,10 +150,8 @@ class PluginManagerRegistrationFailureTeardownTest {
             bukkit.when(Bukkit::getLogger).thenReturn(
                     Logger.getLogger("PluginManagerRegistrationFailureTeardownTest.unregisterFails"));
 
-            BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-            bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
-            when(mockScheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
-                    .thenReturn(mock(BukkitTask.class))
+            when(backend.global(any(), anyLong()))
+                    .thenReturn(mock(ScheduledTask.class))
                     .thenThrow(new RuntimeException("simulated: host plugin became disabled mid-registration"));
 
             SimpleContainer realContext = new SimpleContainer();

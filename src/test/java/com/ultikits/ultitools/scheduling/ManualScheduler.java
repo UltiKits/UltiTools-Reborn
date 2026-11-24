@@ -182,11 +182,13 @@ public final class ManualScheduler implements Scheduler {
         @Override
         public synchronized void retire(Entity entity) {
             retired.add(entity);
+            List<ManualTask> retiring = new ArrayList<>();
             for (ManualTask task : tasks) {
-                if (task.context.entity == entity) {
-                    task.retire();
+                if (task.context.entity == entity) { // NOPMD - entity retirement follows the exact instance.
+                    retiring.add(task);
                 }
             }
+            retiring.forEach(ManualTask::retire);
         }
 
         @Override

@@ -46,8 +46,8 @@ class ProxyIdentityConsolidationTest {
     private static Class<?> taskManagerResolves(Class<?> clazz) throws Exception {
         Method getTargetClass = TaskManager.class.getDeclaredMethod("getTargetClass", Class.class);
         getTargetClass.setAccessible(true);
-        // hostPlugin is irrelevant to getTargetClass; null is safe here.
-        return (Class<?>) getTargetClass.invoke(new TaskManager(null), clazz);
+        // Invoke the real private unwrap site on an inert instance; no scheduler is needed.
+        return (Class<?>) getTargetClass.invoke(mock(TaskManager.class), clazz);
     }
 
     /** Reflectively invokes {@code ExceptionInterceptor}'s private unwrap site. */

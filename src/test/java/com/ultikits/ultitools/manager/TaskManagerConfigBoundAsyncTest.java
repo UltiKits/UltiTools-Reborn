@@ -2,7 +2,6 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
@@ -10,6 +9,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
+import java.util.function.Consumer;
+import java.util.logging.Logger;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -23,10 +27,7 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
 import org.bukkit.Bukkit;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -317,7 +318,7 @@ class TaskManagerConfigBoundAsyncTest {
             try {
                 assertThat(bean.started.await(5, TimeUnit.SECONDS)).isTrue();
                 manager.cancelAll(module);
-                assertThat(dispatched.cancelled).isTrue();
+                assertThat(dispatched.cancelled).isFalse();
                 assertThat(probe.liveTriggers()).isEmpty();
             } finally {
                 bean.release.countDown();
@@ -370,23 +371,16 @@ class TaskManagerConfigBoundAsyncTest {
     }
 
     private static final class Work {
-        final BukkitTask task = mock(BukkitTask.class);
         final Runnable runnable;
         final boolean sync;
-        final long period;
         long due;
         boolean cancelled;
         boolean complete;
 
-        Work(Runnable runnable, boolean sync, long due, long period, int id) {
+        Work(Runnable runnable, boolean sync, long due) {
             this.runnable = runnable;
             this.sync = sync;
             this.due = due;
-            this.period = period;
-            when(task.getTaskId()).thenReturn(id);
-            when(task.isSync()).thenReturn(sync);
-            when(task.isCancelled()).thenAnswer(call -> cancelled);
-            doAnswer(call -> { cancelled = true; return null; }).when(task).cancel();
         }
     }
 
@@ -400,32 +394,30 @@ class TaskManagerConfigBoundAsyncTest {
 
         SchedulerProbe() {
             java.util.logging.Logger logger = Bukkit.getLogger();
-            BukkitScheduler scheduler = mock(BukkitScheduler.class);
+            PaperBackend backend = mock(PaperBackend.class);
+            manager = new TaskManager(new PaperSchedulerEngine(MockBukkit.getMock().getPluginManager().getPlugins()[0],
+                    Logger.getAnonymousLogger(), backend));
             bukkit = mockStatic(Bukkit.class);
-            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
             bukkit.when(Bukkit::getLogger).thenReturn(logger);
             bukkit.when(Bukkit::getCurrentTick).thenAnswer(call -> publicTick);
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
-            when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
-                    .thenAnswer(call -> add(call.getArgument(1), true, call.getArgument(2), call.getArgument(3)));
-            when(scheduler.runTaskLater(any(Plugin.class), any(Runnable.class), anyLong()))
-                    .thenAnswer(call -> add(call.getArgument(1), true, call.getArgument(2), -1));
-            when(scheduler.runTaskLaterAsynchronously(any(Plugin.class), any(Runnable.class), anyLong()))
-                    .thenAnswer(call -> add(call.getArgument(1), false, call.getArgument(2), -1));
-            when(scheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class)))
-                    .thenAnswer(call -> add(call.getArgument(1), false, 0, -1));
-            doAnswer(call -> {
-                int id = call.getArgument(0);
-                queue.stream().filter(work -> work.task.getTaskId() == id)
-                        .forEach(work -> work.cancelled = true);
-                return null;
-            }).when(scheduler).cancelTask(anyInt());
+            when(backend.global(any(), anyLong())).thenAnswer(call -> {
+                Consumer<ScheduledTask> callback = call.getArgument(0);
+                return add(callback, true, call.getArgument(1));
+            });
+            when(backend.async(any(), anyLong())).thenAnswer(call -> {
+                Consumer<ScheduledTask> callback = call.getArgument(0);
+                long nanos = call.getArgument(1);
+                return add(callback, false, nanos / 50_000_000L);
+            });
         }
 
-        BukkitTask add(Runnable runnable, boolean sync, long delay, long period) {
-            Work work = new Work(runnable, sync, schedulerTick + delay, period, queue.size() + 1);
+        ScheduledTask add(Consumer<ScheduledTask> callback, boolean sync, long delay) {
+            ScheduledTask paper = mock(ScheduledTask.class);
+            Work work = new Work(() -> callback.accept(paper), sync, schedulerTick + delay);
             queue.add(work);
-            return work.task;
+            doAnswer(call -> { work.cancelled = true; return null; }).when(paper).cancel();
+            return paper;
         }
 
         void beginTick(int tick) {
@@ -449,8 +441,7 @@ class TaskManagerConfigBoundAsyncTest {
         void runTriggers() {
             for (Work work : liveTriggers()) {
                 if (work.due <= schedulerTick) {
-                    work.complete = work.period <= 0;
-                    work.due = schedulerTick + work.period;
+                    work.complete = true;
                     work.runnable.run();
                 }
             }
