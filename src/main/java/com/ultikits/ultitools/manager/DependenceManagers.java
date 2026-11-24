@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.item.impl.ItemServices;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.internal.FrameworkSchedulerBean;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
@@ -131,6 +132,7 @@ public class DependenceManagers {
         // uses for its own one-time start-up lines -- guarantees every plugin that will enable
         // during this start-up already has, before this runs.
         Bukkit.getScheduler().runTask(plugin, EconomyUtils::logStartupState);
+        ItemServices.register(context);
     }
 
     /**
