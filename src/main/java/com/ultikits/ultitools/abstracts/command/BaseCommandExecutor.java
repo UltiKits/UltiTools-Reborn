@@ -599,7 +599,7 @@ public abstract class BaseCommandExecutor {
     /**
      * Runs the sender-type and permission validators, then shows help if they pass.
      * <p>
-     * Before 6.3.0 the help short-circuit sat at the very top of {@link #invokeTyped}, ahead of the
+     * Before 6.3.0 the help short-circuit sat at the very top of the old Bukkit executor, ahead of the
      * {@code CommandContext} being built, so it bypassed the entire validator chain (#381). Two
      * consequences were measured on a real server: a console received the full help of a
      * {@code @CmdTarget(PLAYER)} command -- including, in one module, an admin section gated only
@@ -623,7 +623,7 @@ public abstract class BaseCommandExecutor {
      * still denies help, exactly as before.
      *
      * @param context the command context, already built
-     * @return {@code true} always -- Bukkit's contract for a handled command
+     * @return {@code true} always, indicating that the help invocation was handled
      * @since 6.3.0
      */
     @org.jetbrains.annotations.ApiStatus.Internal

@@ -260,7 +260,8 @@ class BaseCommandExecutorTest {
             boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "test", new String[]{"unknown", "cmd"});
             
             assertTrue(result);
-            assertTrue(executor.helpCalled); // Should show help for unknown command
+            assertTrue(executor.helpCalled);
+            org.mockito.Mockito.verify(mockPlayer).sendMessage(org.mockito.ArgumentMatchers.contains("未知指令"));
         }
         
 
@@ -518,7 +519,7 @@ class BaseCommandExecutorTest {
         void shouldReturnMappedLiteralsForConsoleSender() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
-            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockSender, mockCommand, "test", new String[]{"action"});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockSender, mockCommand, "test", new String[]{"a"});
             
             assertTrue(suggestions.contains("action"));
         }

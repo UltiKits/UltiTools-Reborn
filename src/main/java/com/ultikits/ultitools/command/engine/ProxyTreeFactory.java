@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.command.engine;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import com.mojang.brigadier.StringReader;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -61,10 +63,20 @@ final class ProxyTreeFactory {
             proxy = new ArgumentCommandNode<CommandSourceStack, Object>(real.getName(), cast(argument.getType()), execute,
                     requires, null, modifier, real.isFork(), (context, builder) -> suggest(lookup, context, builder)) {
                 @Override public CommandNode<CommandSourceStack> getRedirect() { return redirect.get(); }
+                @Override public Collection<? extends CommandNode<CommandSourceStack>> getRelevantNodes(StringReader input) {
+                    return relevant(lookup, this, input);
+                }
             };
         } else {
             proxy = new LiteralCommandNode<CommandSourceStack>(real.getName(), execute, requires, null, modifier, real.isFork()) {
                 @Override public CommandNode<CommandSourceStack> getRedirect() { return redirect.get(); }
+                @Override public Collection<? extends CommandNode<CommandSourceStack>> getRelevantNodes(StringReader input) {
+                    return relevant(lookup, this, input);
+                }
+                @Override public CompletableFuture<Suggestions> listSuggestions(CommandContext<CommandSourceStack> context,
+                        SuggestionsBuilder builder) {
+                    return suggest(lookup, context, builder);
+                }
             };
         }
         proxies.put(path, proxy);
@@ -82,11 +94,24 @@ final class ProxyTreeFactory {
         return internal == null ? () -> target : () -> proxies.get(internal);
     }
 
-    private static CompletableFuture<Suggestions> suggest(Supplier<CommandNode<CommandSourceStack>> lookup,
-            CommandContext<CommandSourceStack> context, SuggestionsBuilder builder) throws CommandSyntaxException {
+    private static Collection<? extends CommandNode<CommandSourceStack>> relevant(
+            Supplier<CommandNode<CommandSourceStack>> lookup, CommandNode<CommandSourceStack> proxy, StringReader input) {
         var current = lookup.get();
-        return current == null || !current.canUse(context.getSource())
-                ? builder.buildFuture() : current.listSuggestions(context, builder);
+        if (current == null) return List.of();
+        List<CommandNode<CommandSourceStack>> selected = new ArrayList<>();
+        for (var candidate : current.getRelevantNodes(input)) {
+            var child = proxy.getChild(candidate.getName());
+            if (child != null) selected.add(child);
+        }
+        return selected;
+    }
+
+    private static CompletableFuture<Suggestions> suggest(Supplier<CommandNode<CommandSourceStack>> lookup,
+            CommandContext<CommandSourceStack> context, SuggestionsBuilder builder) {
+        var current = lookup.get();
+        if (current == null || !current.canUse(context.getSource())) return builder.buildFuture();
+        try { return current.listSuggestions(context, builder); }
+        catch (CommandSyntaxException failure) { return CompletableFuture.failedFuture(failure); }
     }
 
     private static List<String> childPath(List<String> parent, String name) {

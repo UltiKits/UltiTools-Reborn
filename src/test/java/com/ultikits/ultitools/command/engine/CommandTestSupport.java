@@ -14,13 +14,19 @@ public final class CommandTestSupport {
     private CommandTestSupport() { /* Test utility. */ }
 
     public static CommandDispatcher<CommandSourceStack> dispatcher(BaseCommandExecutor executor, String label) {
-        var invocation = new CommandInvocation(executor);
+        var invocation = new CommandInvocation(executor, label);
+        var annotation = com.ultikits.ultitools.context.MergedAnnotationResolver.find(executor.getClass(),
+                com.ultikits.ultitools.annotations.command.CmdExecutor.class);
         var compiled = new CommandTreeCompiler(new StringNativeArgumentTypes()).compile(executor, "test", List.of(label),
-                "", false, invocation::run, invocation::help);
-        var dispatcher = new CommandDispatcher<CommandSourceStack>();
-        var replies = new FrameworkReplies(executor, compiled.tree(), dispatcher::execute);
-        dispatcher.getRoot().addChild(replies.tree());
-        return dispatcher;
+                annotation == null ? "" : annotation.permission(), annotation != null && annotation.requireOp(),
+                invocation::run, invocation::help);
+        var bindings = new CommandBindings(java.util.logging.Logger.getLogger("command-test"),
+                () -> { /* No client synchronization in this dispatcher-only test driver. */ });
+        var replies = new FrameworkReplies(executor, compiled.tree(), (input, source) -> bindings.dispatch(label, input, source));
+        bindings.bind(executor, "test", executor, new CompiledCommand(label, List.of(), "test", replies.tree(), compiled.signature()));
+        var commands = new RecordingCommands();
+        bindings.onCommands(commands);
+        return commands.getDispatcher();
     }
 
     public static boolean dispatch(BaseCommandExecutor executor, CommandSender sender, Command command, String label, String[] args) {

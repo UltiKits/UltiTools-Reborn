@@ -63,7 +63,7 @@ public final class CommandContext {
 
     /**
      * The concrete {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor} class
-     * dispatching this command -- {@code this.getClass()} captured in {@code onCommand}, i.e.
+     * dispatching this command -- the live executor class captured by typed invocation, i.e.
      * the SAME class {@code PluginManager}'s load-time contract gate inspects via
      * {@code executor.getClass()}. WR-02 (05-REVIEW.md): {@link #matchedMethod}'s {@code
      * getDeclaringClass()} is NOT always this class -- an inherited, unoverridden {@code
@@ -84,8 +84,8 @@ public final class CommandContext {
     private final Class<?> executorClass;
 
     /**
-     * The executor instance dispatching this command -- {@code this} captured in
-     * {@code BaseCommandExecutor#onCommand}. The config-bound {@code @CmdCD} cache is kept per
+     * The live executor instance captured by the typed command invocation.
+     * The config-bound {@code @CmdCD} cache is kept per
      * executor instance, because neither the binding key nor the executor class identifies the
      * owning module when a {@code CooldownValidator} is shared (#531). {@code null} for a context
      * built without it.

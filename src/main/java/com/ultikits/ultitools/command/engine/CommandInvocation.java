@@ -2,6 +2,7 @@ package com.ultikits.ultitools.command.engine;
 
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.Locale;
 import org.bukkit.Bukkit;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.context.CommandContext;
@@ -14,7 +15,12 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 /** Adapts parsed Brigadier values to the existing validation and execution pipeline. */
 final class CommandInvocation {
     private final BaseCommandExecutor executor;
-    CommandInvocation(BaseCommandExecutor executor) { this.executor = executor; }
+    private final String commandName;
+    CommandInvocation(BaseCommandExecutor executor) { this(executor, null); }
+    CommandInvocation(BaseCommandExecutor executor, String commandName) {
+        this.executor = executor;
+        this.commandName = commandName;
+    }
 
     int run(CommandContext<CommandSourceStack> context, Method method, Map<String, Object> values) {
         if (!refused(context)) {
@@ -48,8 +54,9 @@ final class CommandInvocation {
     }
 
     private String rootName(CommandContext<CommandSourceStack> context) {
+        if (commandName != null) return commandName;
         CmdExecutor annotation = MergedAnnotationResolver.find(executor.getClass(), CmdExecutor.class);
-        return annotation == null ? context.getInput().split("\\s+", 2)[0] : annotation.alias()[0].toLowerCase(java.util.Locale.ROOT);
+        return annotation == null ? context.getInput().split("\\s+", 2)[0] : annotation.alias()[0].toLowerCase(Locale.ROOT);
     }
 
     static String[] rawArgs(String input) {

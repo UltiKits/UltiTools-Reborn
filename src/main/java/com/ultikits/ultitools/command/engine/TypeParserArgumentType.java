@@ -18,8 +18,13 @@ final class TypeParserArgumentType<T> implements CustomArgumentType<T, String> {
         String value = new TokenArgumentType().parse(reader);
         try { return parser.parse(value); }
         catch (TypeParseException error) {
-            throw new SimpleCommandExceptionType(new LiteralMessage(error.getMessage())).createWithContext(reader);
+            throw new ParserFailure(error.getMessage()).createWithContext(reader);
         }
     }
     @Override public ArgumentType<String> getNativeType() { return StringArgumentType.string(); }
+
+    /** Keeps module parser failures identifiable when a greedy array resolves its elements. */
+    static final class ParserFailure extends SimpleCommandExceptionType {
+        ParserFailure(String message) { super(new LiteralMessage(message)); }
+    }
 }

@@ -29,12 +29,12 @@ class FrameworkRepliesTest {
             for (String line : List.of("test sett x", "test count abc", "test count", "test list extra", "test")) {
                 assertThatCode(() -> dispatcher.execute(line, source)).doesNotThrowAnyException();
             }
-            assertThat(replies).hasSize(5);
+            assertThat(replies).hasSize(7);
             assertThat(replies.getFirst()).contains("未知指令");
-            assertThat(replies.subList(1, 4)).allMatch(text -> text.contains("指令正确用法"));
+            assertThat(replies).filteredOn(text -> text.contains("指令正确用法")).hasSize(3);
             assertThat(dispatcher.execute("test count 5", source)).isEqualTo(1);
             assertThat(executor.count).isEqualTo(5);
-            assertThat(replies).hasSize(5);
+            assertThat(replies).hasSize(7);
             var suggestions = dispatcher.getCompletionSuggestions(dispatcher.parse("test ", source)).get().getList();
             assertThat(suggestions).extracting(s -> s.getText()).contains("count", "list", "help")
                     .doesNotContain("__ultitools_unmatched");
@@ -56,6 +56,13 @@ class FrameworkRepliesTest {
             assertThat(executor.calls).isEqualTo(1);
         }
     }
+    @Test void fallbackKeepsLaterParameterSuggestionsFromTheRealTree() {
+        var dispatcher = CommandTestSupport.dispatcher(new Fixture(), "test");
+        var source = CommandDispatchTest.source(mock(CommandSender.class));
+        var suggestions = dispatcher.getCompletionSuggestions(dispatcher.parse("test pair first ", source)).join();
+        assertThat(suggestions.getList()).extracting(value -> value.getText()).containsExactly("second");
+    }
+
     @CmdExecutor(alias = "test") static class Fixture extends BaseCommandExecutor {
         Integer count;
         String name;
@@ -63,6 +70,9 @@ class FrameworkRepliesTest {
         Fixture() { super(ValidatorChain.builder().build()); }
         @CmdMapping(format = "count <n>") public void count(@CmdParam("n") int n) { count = n; calls++; }
         @CmdMapping(format = "list") public void list() { calls++; }
+        @CmdMapping(format = "pair <first> <second>") public void pair(@CmdParam("first") String first,
+                @CmdParam(value = "second", suggest = "seconds") String second) { calls++; }
+        public List<String> seconds() { return List.of("second"); }
         @CmdMapping(format = "after <name> add") public void after(@CmdParam("name") String value) { name = value; calls++; }
         @Override protected void handleHelp(CommandSender sender) { sender.sendMessage("help"); }
     }

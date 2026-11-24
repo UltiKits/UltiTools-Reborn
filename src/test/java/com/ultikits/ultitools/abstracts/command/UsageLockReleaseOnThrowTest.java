@@ -277,19 +277,16 @@ class UsageLockReleaseOnThrowTest {
     }
 
     @Test
-    @DisplayName("a wrong argument count with a throwing refusal hook runs every refusal hook once, not twice")
-    void argumentCountRefusalRunsEachHookOnce() {
-        // Local Codex review of #570, run 1: the refusal for a wrong argument count ran inside the
-        // try whose catch notifies the validators again, so a hook that threw made every hook run twice
-        // (a second lock release could free a lock another dispatch had taken in between).
+    @DisplayName("missing typed arguments never enter validation or acquire a usage lock")
+    void argumentParsingRefusalDoesNotEnterTheValidatorChain() {
         CountingHookValidator counting = new CountingHookValidator();
         GuardedExecutor executor = new GuardedExecutor(ValidatorChain.builder()
                 .add(new ThrowingHookValidator()).add(counting).build());
 
-        assertThrows(IllegalStateException.class,
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
                 () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"widget"}));
 
-        assertEquals(1, counting.refusals.get(), "each refusal hook runs exactly once");
+        assertEquals(0, counting.refusals.get(), "Brigadier refuses incomplete input before validation");
         assertEquals(0, executor.bodies.get());
     }
 

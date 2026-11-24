@@ -496,7 +496,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * Fails the command closed for a config-bound {@code @CmdCD} this validator never had resolved
      * -- reachable only when a {@code CooldownValidator} is added after the module loaded, or an
      * executor is registered outside the module loader. Treating it as "no cooldown" would be a
-     * silent no-op, and throwing would escape {@code onCommand} as Bukkit's generic internal
+     * silent no-op, and throwing would escape typed dispatch as the platform's generic internal
      * error; instead the player gets the same message shape as a failed command, and the cause is
      * logged at SEVERE and sent to the error report collector like any other command failure
      * (#531 gate-1 WR-02).
