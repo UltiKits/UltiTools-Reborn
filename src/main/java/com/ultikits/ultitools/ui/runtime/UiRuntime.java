@@ -10,6 +10,7 @@ import com.ultikits.ultitools.ui.SlotContainer;
 import com.ultikits.ultitools.ui.UiBackend;
 import com.ultikits.ultitools.ui.UiResult;
 import com.ultikits.ultitools.ui.UiService;
+import com.ultikits.ultitools.ui.UiSession;
 import com.ultikits.ultitools.ui.ViewerItems;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -65,6 +66,15 @@ public final class UiRuntime implements AutoCloseable {
             if (!closed) { owners.add(service); }
             return service;
         }
+    }
+
+    /** Returns a diagnostic name for backend logging, read once when opening a session. */
+    public String ownerName(UiSession<?> session) {
+        Objects.requireNonNull(session, "session");
+        if (!(session instanceof RuntimeSession<?> own) || !own.runtime.equals(this)) {
+            throw new IllegalArgumentException("Session belongs to another UI runtime");
+        }
+        return own.service.owner();
     }
 
     /** Registers a backend, rejecting an equal priority independently of the supported intent types. */
