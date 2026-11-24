@@ -50,6 +50,7 @@ final class CommandTreeCompiler {
 
     CompiledCommand compile(BaseCommandExecutor executor, String description, List<String> aliases,
             String permission, boolean requireOp, Invocation invocation, Command<CommandSourceStack> help) {
+        rejectDuplicateFormats(executor);
         List<String> labels = aliases.stream().map(s -> s.toLowerCase(Locale.ROOT)).toList();
         Spec root = new Spec(labels.getFirst(), null, null);
         List<Method> methods = new ArrayList<>(executor.getMappings().values());
@@ -75,6 +76,19 @@ final class CommandTreeCompiler {
                 .executes(help).build();
         root.getChildren().forEach(copy::addChild);
         return copy;
+    }
+
+    private static void rejectDuplicateFormats(BaseCommandExecutor executor) {
+        Map<String, Method> effective = executor.getMappings();
+        for (Method method : ReflectionUtil.getAllMethods(executor.getClass())) {
+            CmdMapping annotation = method.getAnnotation(CmdMapping.class);
+            if (annotation == null) continue;
+            Method winner = effective.get(annotation.format());
+            // Subclass shadowing stays unchanged; only two effective declarations in one class conflict.
+            if (winner != null && !winner.equals(method) && winner.getDeclaringClass().equals(method.getDeclaringClass())) {
+                throw invalid(executor.getClass(), method, annotation.format(), "duplicate path with " + winner.getName());
+            }
+        }
     }
 
     private void add(Spec root, Class<?> owner, Method method, String format) {
