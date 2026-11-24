@@ -306,7 +306,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"install", "test-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
@@ -328,7 +328,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"install", "test-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
@@ -350,7 +350,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"install", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -372,7 +372,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"install", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -395,7 +395,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"versions", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -417,7 +417,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"versions", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -439,7 +439,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -461,7 +461,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -483,7 +483,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -759,7 +759,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
             new String[]{"install", "test-plugin"});
         server.getScheduler().performOneTick();
         

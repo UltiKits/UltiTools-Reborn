@@ -454,7 +454,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
                 .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "test-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
@@ -472,7 +472,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting("bad-plugin", "1.0.0"))
                 .thenReturn(PluginInstallUtils.InstallResult.failed());
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "bad-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
@@ -488,7 +488,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting("latest-plugin", null))
                 .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "latest-plugin"});
         server.getScheduler().performOneTick();
         
@@ -506,7 +506,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting("fail-plugin", null))
                 .thenReturn(PluginInstallUtils.InstallResult.failed());
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "fail-plugin"});
         server.getScheduler().performOneTick();
         
@@ -522,7 +522,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting("console-plugin", null))
                 .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
                 new String[]{"install", "console-plugin"});
         server.getScheduler().performOneTick();
         
@@ -540,7 +540,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("versioned-plugin"))
                 .thenReturn(versions);
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"versions", "versioned-plugin"});
         server.getScheduler().performOneTick();
         
@@ -564,7 +564,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("null-plugin"))
                 .thenReturn(null);
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"versions", "null-plugin"});
         server.getScheduler().performOneTick();
         
@@ -580,7 +580,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("empty-plugin"))
                 .thenReturn(Collections.emptyList());
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"versions", "empty-plugin"});
         server.getScheduler().performOneTick();
         
@@ -601,7 +601,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("console-versions"))
                 .thenReturn(versions);
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
                 new String[]{"versions", "console-versions"});
         server.getScheduler().performOneTick();
         
@@ -618,7 +618,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("remove-plugin"), anyList()))
                 .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"uninstall", "remove-plugin"});
         server.getScheduler().performOneTick();
         
@@ -641,7 +641,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("missing-plugin"), anyList()))
                 .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"uninstall", "missing-plugin"});
         server.getScheduler().performOneTick();
         
@@ -657,7 +657,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("io-error-plugin"), anyList()))
                 .thenThrow(new IOException("File access error"));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", 
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"uninstall", "io-error-plugin"});
         server.getScheduler().performOneTick();
         
@@ -677,7 +677,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("console-uninstall"), anyList()))
                 .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm", 
+        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
                 new String[]{"uninstall", "console-uninstall"});
         server.getScheduler().performOneTick();
         

@@ -321,7 +321,7 @@ class BaseCommandExecutorTabCompletionTest {
         void overLongArgumentVectorReturnsEmptyListWithoutThrowing() {
             MultiTokenExecutor executor = new MultiTokenExecutor();
 
-            List<String> completions = assertDoesNotThrow(() -> com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, 
+            List<String> completions = assertDoesNotThrow(() -> com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor,
                     player, mockCommand, "fixture", new String[]{"give", "alice", "extra", "waytoolong"}));
 
             assertThat(completions).isEmpty();
@@ -409,7 +409,7 @@ class BaseCommandExecutorTabCompletionTest {
         void playerCommandArgsSignatureStillWorks() {
             SignatureShapeExecutor executor = new SignatureShapeExecutor();
 
-            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, 
+            List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor,
                     player, mockCommand, "fixture", new String[]{"playercommandargs", ""});
 
             assertThat(completions).containsExactly("threeArgResult");
