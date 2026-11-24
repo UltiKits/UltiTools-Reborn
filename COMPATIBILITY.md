@@ -5,6 +5,22 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## 7.0
+
+- Inject `com.ultikits.ultitools.scheduling.Scheduler` with `@Autowired` in module beans. Each module
+  instance owns its scheduler; unloading it cancels pending and repeating work without affecting a
+  same-name replacement. An already running one-shot task may finish.
+- Do not submit tasks from `onUnregister()` or `@PreDestroy`: the module scheduler has already retired
+  and rejects submissions with `RejectedExecutionException`. Perform unload cleanup directly.
+- Literal `@Scheduled(async = true)` periods use wall-clock time (50 ms per configured tick). A lagging
+  server no longer stretches those periods. Config-bound async tasks still use a global tick trigger.
+- A negative literal `@Scheduled(delay = ...)` now refuses the module load; 6.x treated it as zero.
+  Use `delay = 0` for no initial wait rather than a negative sentinel.
+
+A failed module load also retires that instance's injected scheduler and cancels pending and repeating
+work submitted during bean construction, `@PostConstruct`, or `registerSelf()`. An already running
+one-shot task may finish. This guarantee applies to the module-owned scheduler, not direct Bukkit tasks.
+
 ## Adventure chat confirmation callbacks (as of 7.0.0)
 
 `ChatCallbackManager` and its hidden `/ultitools_callback` command are removed. Module authors
