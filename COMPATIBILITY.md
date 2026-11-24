@@ -91,6 +91,15 @@ Additional 6.x migration differences:
   the framework handles that syntax event through the same reply path. Unavailable subcommands
   behave as nonexistent for that sender, including when typed explicitly.
   中文补充：没有权限或不允许该发送者使用的子命令，对该发送者表现为不存在；硬输入的回复也相同。
+- **Known limitation:** a command that has both a root-level catch-all argument and a
+  permission-gated subcommand answers a sender without that permission with the unknown-command
+  reply and help when they type the subcommand's name. Neither business mapping executes; other
+  words are still handled by the catch-all argument, so such a command does not fully hide that
+  the name is special. Module authors who need command-name secrecy should not put these two
+  forms at the same level.
+  中文补充：**已知限制：**同一层同时有根级任意文字参数与受权限限制的子命令时，无权限发送者
+  输入该子命令名会收到未知指令回复与帮助，两种业务都不执行；其他词仍由任意文字参数处理，
+  因而无法完全隐藏这个名称的特殊性。需要保密命令名的模块作者不要把这两种形式放在同一层。
 - Every literal position is case-insensitive, including literals following typed arguments.
   An argument or fallback callback gives a same-position literal priority regardless of case,
   then re-dispatches at most once through the same live binding and validator chain. Argument
