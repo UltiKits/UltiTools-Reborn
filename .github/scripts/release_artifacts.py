@@ -11,6 +11,8 @@ place that defines what "the same bytes" means:
             retention directory and write the public release manifest beside them
   validate  re-check a manifest, the retained bytes, the source commit they came from and,
             when given, the authority and UAT receipts that accepted that exact manifest
+            --primary-jar instead checks one local JAR's content and expected --version (including
+            SNAPSHOTs); it cannot accept release authority, UAT receipts or a publication handoff
   stage     print the retained files to upload, in manifest order, after re-validating them
   compare   classify assets already on a release (downloaded into a directory) against the
             manifest: identical, partial or absent (reconcilable) or mismatch (never replaced)
@@ -941,8 +943,31 @@ def validated(args, problems):
     return manifest, manifest_sha
 
 
-def cmd_validate(args):
+def validate_primary_jar(args):
+    """Content-only check for local builds, including SNAPSHOTs; never a publication receipt."""
     problems = Problems()
+    if not args.version:
+        problems.add("version_required", "--primary-jar requires the expected --version")
+    if any((args.source_checkout, args.authority_receipt, args.uat_receipt, args.expected_source_head,
+            args.tag, args.shell)):
+        problems.add("content_only", "--primary-jar cannot validate source, authority or UAT receipts, tags or shell handoffs")
+    data = read_regular(Path(args.primary_jar), problems, "primary JAR")
+    if data is not None:
+        inspect_primary(data, args.version, problems)
+    if problems or data is None:
+        problems.emit()
+        return 1
+    print(json.dumps({"status": "ok", "scope": "primary-jar-content-only", "version": args.version,
+                      "bytes": len(data), "sha256": sha256_bytes(data), "release_authorized": False}, sort_keys=True))
+    return 0
+
+
+def cmd_validate(args):
+    if args.primary_jar:
+        return validate_primary_jar(args)
+    problems = Problems()
+    if args.version:
+        problems.add("manifest_version", "manifest validation takes its version only from the manifest")
     manifest, manifest_sha = validated(args, problems)
     if problems or manifest is None:
         problems.emit()
@@ -1486,7 +1511,10 @@ def main(argv=None):
     retain.add_argument("--version", required=True)
     retain.add_argument("--retain-dir", required=True)
     validate = sub.add_parser("validate", help="re-check a manifest, its retained bytes, source and receipts")
-    validate.add_argument("--manifest", required=True)
+    validation_input = validate.add_mutually_exclusive_group(required=True)
+    validation_input.add_argument("--manifest")
+    validation_input.add_argument("--primary-jar", help="content-only local JAR check; never release acceptance")
+    validate.add_argument("--version", help="expected descriptor version for --primary-jar only")
     validate.add_argument("--source-checkout")
     validate.add_argument("--authority-receipt")
     validate.add_argument("--uat-receipt")

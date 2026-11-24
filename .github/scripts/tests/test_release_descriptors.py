@@ -1,6 +1,9 @@
 """The framework release is a Paper plugin; module plugin.yml files are unrelated."""
 
+import contextlib
 import importlib.util
+import json
+import tempfile
 import io
 import unittest
 import zipfile
@@ -24,6 +27,25 @@ class ReleaseDescriptorTests(unittest.TestCase):
         problems = HELPER.Problems()
         entry, values = HELPER.inspect_primary(content.getvalue(), "7.0.0", problems)
         return problems.items, entry, values
+
+    def test_cli_can_check_snapshot_content_without_accepting_a_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "framework.jar"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("paper-plugin.yml", DESCRIPTOR.replace(b"7.0.0", b"7.0.0-SNAPSHOT"))
+                archive.writestr("fixture/Main.class", b"class fixture")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = HELPER.main(["validate", "--primary-jar", str(path), "--version", "7.0.0-SNAPSHOT"])
+            self.assertEqual(status, 0)
+            receipt = json.loads(output.getvalue())
+            self.assertEqual(receipt["scope"], "primary-jar-content-only")
+            self.assertFalse(receipt["release_authorized"])
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(HELPER.main(["validate", "--primary-jar", str(path), "--version", "7.0.0"]), 0)
+                self.assertNotEqual(HELPER.main(["validate", "--primary-jar", str(path), "--version", "7.0.0-SNAPSHOT",
+                                                "--uat-receipt", "never-read.json"]), 0)
+                self.assertNotEqual(HELPER.main(["validate", "--primary-jar", str(path)]), 0)
 
     def test_accepts_only_the_paper_descriptor_at_the_root(self):
         problems, entry, values = self.inspect(["paper-plugin.yml"])
