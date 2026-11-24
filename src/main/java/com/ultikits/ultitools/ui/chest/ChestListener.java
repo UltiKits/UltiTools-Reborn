@@ -117,16 +117,14 @@ public final class ChestListener implements Listener {
     }
 
     private void dispatch(ChestScreen screen, InventoryView view, ClickDecision decision) {
-        switch (decision) {
-            case ClickDecision.Apply apply -> runtime.applyGesture(screen.session(),
+        if (decision instanceof ClickDecision.Apply apply) {
+            runtime.applyGesture(screen.session(),
                     new PlayerViewerItems(view, (Player) view.getPlayer()), apply.gesture());
-            case ClickDecision.Report report -> {
-                if (screen.acceptIconClick(report.slot(), report.kind(), nanoTime.getAsLong())) {
-                    screen.callbacks().clicked(report.slot(), report.kind());
-                }
-            }
-            default -> { /* Cancel has no side effects; Allow is handled before dispatch. */ }
+        } else if (decision instanceof ClickDecision.Report report
+                && screen.acceptIconClick(report.slot(), report.kind(), nanoTime.getAsLong())) {
+            screen.callbacks().clicked(report.slot(), report.kind());
         }
+        // Cancel has no side effects; Allow is handled before dispatch.
     }
 
     private static ClickInput input(ChestScreen screen, InventoryClickEvent event) {

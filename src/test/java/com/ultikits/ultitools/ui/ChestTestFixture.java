@@ -5,6 +5,7 @@ import com.ultikits.ultitools.item.ItemSpec;
 import com.ultikits.ultitools.scheduling.ManualScheduler;
 import com.ultikits.ultitools.text.FixedLocaleResolver;
 import com.ultikits.ultitools.text.InMemoryMessages;
+import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.chest.ChestBackend;
 import com.ultikits.ultitools.ui.runtime.ContainerRuntime;
@@ -36,7 +37,7 @@ abstract class ChestTestFixture {
     UiRuntime runtime;
     UiService service;
     ChestBackend backend;
-    InMemoryMessages messages;
+    Messages messages;
 
     @BeforeEach void prepareChest() {
         server = MockBukkit.mock();
@@ -44,7 +45,7 @@ abstract class ChestTestFixture {
         server.addPlayer(player);
         clock = new ManualScheduler.Engine();
         scheduler = new RecordingScheduler(clock.scheduler("UiRuntime"));
-        messages = new InMemoryMessages("test", new FixedLocaleResolver(Locale.ENGLISH, Optional.empty()));
+        messages = createMessages();
         runtime = new UiRuntime(scheduler, createContainerRuntime(), Logger.getAnonymousLogger(), Thread.currentThread());
         backend = new ChestBackend(runtime, new MinimalItemRenderer(messages), messages, scheduler);
         runtime.register(backend);
@@ -56,6 +57,10 @@ abstract class ChestTestFixture {
             if (runtime != null) { runtime.close(); }
             if (clock != null) { clock.close(); }
         } finally { MockBukkit.unmock(); }
+    }
+
+    Messages createMessages() {
+        return new InMemoryMessages("test", new FixedLocaleResolver(Locale.ENGLISH, Optional.empty()));
     }
 
     ContainerRuntime createContainerRuntime() { return new InMemoryContainerRuntime(); }
@@ -87,7 +92,7 @@ abstract class ChestTestFixture {
     }
 
     // The existing item-package renderer is package-private; this local minimal renderer uses the same seams.
-    private record MinimalItemRenderer(InMemoryMessages messages) implements ItemRenderer {
+    private record MinimalItemRenderer(Messages messages) implements ItemRenderer {
         @Override public ItemStack render(ItemSpec spec, Locale locale) {
             ItemStack item = new ItemStack(Material.matchMaterial(spec.itemType().asString()), spec.amount());
             if (spec.name() != null) { item.setData(DataComponentTypes.ITEM_NAME, messages.render(spec.name(), locale)); }

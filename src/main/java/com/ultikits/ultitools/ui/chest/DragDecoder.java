@@ -21,8 +21,12 @@ public final class DragDecoder {
             return new ClickDecision.Allow();
         }
         if (!targets.values().stream().allMatch(DragDecoder::bound)) { return new ClickDecision.Cancel(); }
+        return boundDrag(type, targets.keySet());
+    }
+
+    private static ClickDecision boundDrag(DragType type, Set<Integer> targets) {
         Set<GridSlot> slots = new LinkedHashSet<>();
-        for (int raw : targets.keySet()) {
+        for (int raw : targets) {
             if (raw < 0 || raw >= 54) { return new ClickDecision.Cancel(); }
             slots.add(GridSlot.ofIndex(raw));
         }
