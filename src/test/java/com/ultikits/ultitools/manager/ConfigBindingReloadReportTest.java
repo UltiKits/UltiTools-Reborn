@@ -29,7 +29,9 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitScheduler;
+import io.papermc.paper.threadedregions.scheduler.GlobalRegionScheduler;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
+import java.util.function.Consumer;
 import org.mockito.AdditionalAnswers;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -444,20 +446,19 @@ class ConfigBindingReloadReportTest {
         tasks.registerScheduledMethods(module, first);
         tasks.registerScheduledMethods(module, second);
         config.setPeriodSeconds(10);
-        BukkitScheduler real = Bukkit.getScheduler();
-        BukkitScheduler failing = mock(BukkitScheduler.class, AdditionalAnswers.delegatesTo(real));
+        GlobalRegionScheduler real = Bukkit.getGlobalRegionScheduler();
+        GlobalRegionScheduler failing = mock(GlobalRegionScheduler.class, AdditionalAnswers.delegatesTo(real));
         AtomicInteger arms = new AtomicInteger();
         doAnswer(call -> {
             if (arms.incrementAndGet() == 2) {
                 throw new IllegalStateException("scheduler unavailable");
             }
-            return real.runTaskTimer(call.getArgument(0), (Runnable) call.getArgument(1),
-                    (Long) call.getArgument(2), (Long) call.getArgument(3));
-        }).when(failing).runTaskTimer(Mockito.any(Plugin.class), Mockito.any(Runnable.class),
-                Mockito.anyLong(), Mockito.anyLong());
+            return real.runDelayed(call.getArgument(0), (Consumer<ScheduledTask>) call.getArgument(1),
+                    (Long) call.getArgument(2));
+        }).when(failing).runDelayed(Mockito.any(Plugin.class), Mockito.any(), Mockito.anyLong());
         ReloadReport report;
         try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class, Mockito.CALLS_REAL_METHODS)) {
-            bukkit.when(Bukkit::getScheduler).thenReturn(failing);
+            bukkit.when(Bukkit::getGlobalRegionScheduler).thenReturn(failing);
             report = module.reloadWithReport();
         }
         MockBukkit.getMock().getScheduler().performTicks(201);

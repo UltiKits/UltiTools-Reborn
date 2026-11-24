@@ -1,20 +1,21 @@
 package com.ultikits.ultitools.manager;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitRunnable;
-import org.bukkit.scheduler.BukkitTask;
 
 import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -24,31 +25,26 @@ import com.ultikits.ultitools.aop.ProxyOf;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.utils.ReflectionUtil;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.Ticks;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Manages scheduled tasks for plugin modules.
  * <p>
- * Scans beans for {@link Scheduled} annotated methods and registers them
- * as Bukkit tasks. Automatically cancels all tasks when a plugin is unloaded.
- * <p>
- * <b>Thread-confinement assumption (IN-02, gate-1 review, 16-REVIEW-residue.md):</b>
- * {@link #pluginTasks}/{@link #externalTasks}/{@link #coreTasks} are plain, non-concurrent
- * collections ({@code HashMap}/{@code ArrayList}). {@link #scanAndSchedule(UltiToolsPlugin, Object, Consumer)}
- * mutates them synchronously, once per successfully-scheduled task, inside its own scan loop
- * (#410) - every current call site ({@code PluginManager.onPluginRegistered},
- * {@link #registerScheduledMethodsCore(Object)}, {@link #registerScheduledMethodsExternal(String,
- * Object)}) runs during plugin loading on the main thread, so this is safe today, but nothing
- * enforces it. A future caller invoking any {@code registerScheduledMethods*} entry point from
- * an async context would race these collections with no compile-time or runtime signal - the
- * same main-thread-only contract {@link com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiScheduler}'s
- * own class javadoc documents explicitly for its collections.
+ * Scans beans for {@link Scheduled} methods and runs them on their owner's scheduler.
+ * Module registration, reload and the diagnostic task counts are main-thread confined;
+ * the scheduler engine itself supports concurrent submission and retirement.
  * <p>
  * <b>Config-bound tasks (#531):</b> a {@link Scheduled} method whose period or delay is bound to
  * a module config key is scheduled from the key's value (seconds, times 20) and kept as a
  * {@link BoundTask} handle in {@link #boundTasks}, so {@link #rescheduleBound(UltiToolsPlugin)}
  * can find that one method's task again after {@code /ul reload}. A method with no binding takes
- * exactly the pre-#531 path -- same scheduler call, same bucket, same log line.
+ * the literal scheduling path, with the same timing values and log line.
  *
  * @since 6.2.0
  */
@@ -56,44 +52,57 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public class TaskManager {
 
-    private final Map<UltiToolsPlugin, List<BukkitTask>> pluginTasks = new HashMap<>();
-    private final Map<String, List<BukkitTask>> externalTasks = new HashMap<>();
-    /**
-     * Tasks owned by the framework itself rather than by a plugin module or an external plugin.
-     * <p>
-     * A framework-owned object belongs to no {@code SimpleContainer}, so it is reached by neither
-     * {@link #registerScheduledMethods(UltiToolsPlugin, Object)} nor {@link
-     * #registerScheduledMethodsExternal(String, Object)} -- both of which iterate a container's
-     * beans. Before 6.3.0 there was no third bucket, which is why {@code
-     * PlayerCacheManager.sweepExpiredEntries()} carried a {@code @Scheduled} annotation that was
-     * never registered and never ran (#384).
-     *
-     * @since 6.3.0
-     */
-    private final List<BukkitTask> coreTasks = new ArrayList<>();
-    /**
-     * Config-bound tasks, per module, as handles that remember their method, their binding, their
-     * current timing and their last run -- the per-method record the three buckets above do not
-     * keep. Only modules can bind, so there is no external or core counterpart.
-     *
-     * @since 6.3.0
-     */
-    private final Map<UltiToolsPlugin, List<BoundTask>> boundTasks = new HashMap<>();
-    private final JavaPlugin hostPlugin;
+    private final PaperSchedulerEngine engine;
+    private final Map<UltiToolsPlugin, Scheduler> moduleSchedulers = new IdentityHashMap<>();
+    /** Weak identity tombstones prevent resurrection without retaining unloaded module class loaders. */
+    private final List<WeakReference<UltiToolsPlugin>> retiredModules = new ArrayList<>();
+    private final Map<String, Scheduler> externalSchedulers = new HashMap<>();
+    /** Annotation handles retained for diagnostic counts only, never for lifecycle cancellation. */
+    private final Map<Scheduler, List<TaskHandle>> scheduledTasks = new IdentityHashMap<>();
+    private final Map<UltiToolsPlugin, List<BoundTask>> boundTasks = new IdentityHashMap<>();
+    private Scheduler coreScheduler;
 
     public TaskManager(JavaPlugin hostPlugin) {
-        this.hostPlugin = hostPlugin;
+        this(new PaperSchedulerEngine(hostPlugin, hostPlugin.getLogger(), PaperBackend.live(hostPlugin)));
+    }
+
+    TaskManager(PaperSchedulerEngine engine) {
+        this.engine = engine;
     }
 
     /**
-     * Scan a bean for {@link Scheduled} methods and register them as Bukkit tasks.
+     * Returns this module instance's owner, independent of any same-name replacement.
+     * Must be called on the main thread, like module registration and unload.
+     *
+     * @param plugin the owning module instance
+     * @return the module's scheduler
+     * @throws RejectedExecutionException if this module instance was already retired
+     */
+    public Scheduler schedulerFor(UltiToolsPlugin plugin) {
+        if (wasRetired(plugin)) {
+            throw new RejectedExecutionException("Owner unloaded: " + plugin.getPluginName());
+        }
+        return moduleSchedulers.computeIfAbsent(plugin, module -> engine.newOwner(module.getPluginName()));
+    }
+
+    private boolean wasRetired(UltiToolsPlugin plugin) {
+        retiredModules.removeIf(reference -> reference.get() == null);
+        return retiredModules.stream().anyMatch(reference -> reference.get() == plugin); // NOPMD - Owners use instance identity.
+    }
+
+    private void record(Scheduler scheduler, TaskHandle task) {
+        scheduledTasks.computeIfAbsent(scheduler, ignored -> new ArrayList<>()).add(task);
+    }
+
+    /**
+     * Scan a bean for {@link Scheduled} methods and register them on the owning scheduler.
      *
      * @param plugin the owning plugin module
      * @param bean   the bean instance to scan
      */
     public void registerScheduledMethods(UltiToolsPlugin plugin, Object bean) {
-        scanAndSchedule(plugin, bean, task ->
-                pluginTasks.computeIfAbsent(plugin, k -> new ArrayList<>()).add(task));
+        Scheduler scheduler = schedulerFor(plugin);
+        scanAndSchedule(plugin, bean, scheduler, task -> record(scheduler, task));
     }
 
     /**
@@ -114,7 +123,11 @@ public class TaskManager {
      * @since 6.3.0
      */
     public void registerScheduledMethodsCore(Object bean) {
-        scanAndSchedule(null, bean, coreTasks::add);
+        if (coreScheduler == null) {
+            coreScheduler = engine.newOwner("UltiTools");
+        }
+        Scheduler scheduler = coreScheduler;
+        scanAndSchedule(null, bean, scheduler, task -> record(scheduler, task));
     }
 
     /**
@@ -127,15 +140,11 @@ public class TaskManager {
      * @since 6.3.0
      */
     public void cancelAllCore() {
-        for (BukkitTask task : coreTasks) {
-            try {
-                task.cancel();
-            } catch (Exception e) {
-                Bukkit.getLogger().log(Level.FINE,
-                        "[UltiTools-API] Task already cancelled: " + task.getTaskId());
-            }
+        if (coreScheduler != null) {
+            engine.retire(coreScheduler);
+            scheduledTasks.remove(coreScheduler);
+            coreScheduler = null;
         }
-        coreTasks.clear();
     }
 
     /**
@@ -168,13 +177,14 @@ public class TaskManager {
      *
      * @param module   the owning module, or {@code null} for an external plugin or the framework
      * @param bean     the instance to scan
+     * @param scheduler the instance-bound owner to submit to
      * @param recorder invoked once per successfully scheduled task, in declaration order, with
      *                 that task -- files it into this bean's owning bucket immediately
      * @throws PluginModuleException for a config-bound method with no {@code module}, or for a
      *                               binding that cannot be resolved
      * @since 6.3.0
      */
-    private void scanAndSchedule(UltiToolsPlugin module, Object bean, Consumer<BukkitTask> recorder) {
+    private void scanAndSchedule(UltiToolsPlugin module, Object bean, Scheduler scheduler, Consumer<TaskHandle> recorder) {
         Class<?> targetClass = getTargetClass(bean.getClass());
 
         // #532: the unwrapped class and its superclasses up to Object, each overridable method
@@ -197,39 +207,27 @@ public class TaskManager {
                 if (module == null) {
                     throw bindingOutsideModule(targetClass, method);
                 }
-                scheduleBound(module, bean, targetClass, method, scheduled);
+                scheduleBound(module, bean, targetClass, method, scheduled, scheduler);
                 continue;
             }
 
             method.setAccessible(true);
             final Method targetMethod = method;
 
-            BukkitRunnable runnable = new BukkitRunnable() {
-                @Override
-                public void run() {
-                    try {
-                        targetMethod.invoke(bean);
-                    } catch (Exception e) {
-                        Bukkit.getLogger().log(Level.WARNING,
-                                String.format("[UltiTools-API] Error executing @Scheduled method '%s.%s'",
-                                        targetClass.getSimpleName(), targetMethod.getName()),
-                                e);
-                    }
+            Runnable runnable = () -> {
+                try {
+                    targetMethod.invoke(bean);
+                } catch (Exception e) {
+                    Bukkit.getLogger().log(Level.WARNING,
+                            String.format("[UltiTools-API] Error executing @Scheduled method '%s.%s'",
+                                    targetClass.getSimpleName(), targetMethod.getName()), e);
                 }
             };
-
-            BukkitTask task;
-            if (scheduled.period() <= 0) {
-                // One-shot delayed task
-                task = scheduled.async()
-                        ? runnable.runTaskLaterAsynchronously(hostPlugin, scheduled.delay())
-                        : runnable.runTaskLater(hostPlugin, scheduled.delay());
-            } else {
-                // Repeating task
-                task = scheduled.async()
-                        ? runnable.runTaskTimerAsynchronously(hostPlugin, scheduled.delay(), scheduled.period())
-                        : runnable.runTaskTimer(hostPlugin, scheduled.delay(), scheduled.period());
-            }
+            TaskContext context = scheduled.async() ? scheduler.async() : scheduler.global();
+            TaskHandle task = scheduled.period() <= 0
+                    ? context.runLater(Ticks.of(scheduled.delay()), runnable)
+                    : context.runRepeating(Ticks.of(scheduled.delay()), Ticks.of(scheduled.period()),
+                            ignored -> runnable.run());
 
             // Record in the owning bucket NOW, before touching anything else -- an exception
             // from a LATER @Scheduled method's own scheduling call must not be able to un-record
@@ -254,33 +252,18 @@ public class TaskManager {
      * @param plugin the plugin to cancel tasks for
      */
     public void cancelAll(UltiToolsPlugin plugin) {
+        // Mark the lifetime closed before completing tasks: their continuations can re-enter schedulerFor.
+        if (!wasRetired(plugin)) {
+            retiredModules.add(new WeakReference<>(plugin));
+        }
+        Scheduler scheduler = moduleSchedulers.remove(plugin);
+        if (scheduler != null) {
+            engine.retire(scheduler);
+            scheduledTasks.remove(scheduler);
+        }
         List<BoundTask> bound = boundTasks.remove(plugin);
         if (bound != null) {
-            for (BoundTask handle : bound) {
-                try {
-                    handle.task.cancel();
-                } catch (Exception e) {
-                    // Task may already be cancelled
-                    Bukkit.getLogger().log(Level.FINE,
-                            "[UltiTools-API] Task already cancelled: " + handle.task.getTaskId());
-                }
-                for (BukkitRunnable worker : handle.asyncRuns) {
-                    worker.cancel();
-                }
-                handle.asyncRuns.clear();
-            }
-        }
-        List<BukkitTask> tasks = pluginTasks.remove(plugin);
-        if (tasks != null) {
-            for (BukkitTask task : tasks) {
-                try {
-                    task.cancel();
-                } catch (Exception e) {
-                    // Task may already be cancelled
-                    Bukkit.getLogger().log(Level.FINE,
-                            "[UltiTools-API] Task already cancelled: " + task.getTaskId());
-                }
-            }
+            bound.forEach(handle -> handle.asyncRuns.clear());
         }
     }
 
@@ -292,9 +275,10 @@ public class TaskManager {
      * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a bound value is out of range
      */
     private void scheduleBound(UltiToolsPlugin module, Object bean, Class<?> targetClass, Method method,
-                               Scheduled scheduled) {
+                               Scheduled scheduled, Scheduler scheduler) {
         BoundTask handle = BoundTask.resolveAtLoad(module, bean, targetClass, method, scheduled);
         method.setAccessible(true);
+        handle.scheduler = scheduler;
         handle.armTick = Bukkit.getCurrentTick();
         handle.task = arm(handle, handle.delayTicks);
         boundTasks.computeIfAbsent(module, k -> new ArrayList<>()).add(handle);
@@ -317,50 +301,33 @@ public class TaskManager {
 
     /**
      * Schedules {@code handle}'s method with its current timing, first running after
-     * {@code firstDelay} ticks. Each call builds a new runnable -- a {@link BukkitRunnable} can be
-     * scheduled only once. The trigger always runs on the main thread, where the reload step also
+     * {@code firstDelay} ticks. The trigger always runs on the main thread, where the reload step also
      * runs. An async binding records that observed fire before handing only its method body to an
      * async worker, one heartbeat later (#535).
      */
-    private BukkitTask arm(BoundTask handle, long firstDelay) {
-        BukkitRunnable runnable = new BukkitRunnable() {
-            @Override
-            public void run() {
-                handle.lastFireTick = Bukkit.getCurrentTick();
-                handle.hasRun = true;
-                if (handle.scheduled.async()) {
-                    dispatchAsync(handle);
-                } else {
-                    invokeBound(handle);
-                }
+    private TaskHandle arm(BoundTask handle, long firstDelay) {
+        Runnable runnable = () -> {
+            handle.lastFireTick = Bukkit.getCurrentTick();
+            handle.hasRun = true;
+            if (handle.scheduled.async()) {
+                dispatchAsync(handle);
+            } else {
+                invokeBound(handle);
             }
         };
+        TaskContext context = handle.scheduler.global();
         if (handle.periodTicks <= 0) {
-            return runnable.runTaskLater(hostPlugin, firstDelay);
+            return context.runLater(Ticks.of(firstDelay), runnable);
         }
-        return runnable.runTaskTimer(hostPlugin, firstDelay, handle.periodTicks);
+        return context.runRepeating(Ticks.of(firstDelay), Ticks.of(handle.periodTicks), ignored -> runnable.run());
     }
 
     /** Dispatches a due body without letting worker start/completion change the trigger's phase. */
     private void dispatchAsync(BoundTask handle) {
-        BukkitRunnable worker = new BukkitRunnable() {
-            @Override
-            public void run() {
-                try {
-                    invokeBound(handle);
-                } finally {
-                    handle.asyncRuns.remove(this);
-                }
-            }
-        };
-        // Record before submission: a worker may finish before its scheduler call returns.
+        TaskHandle worker = handle.scheduler.async().runLater(Ticks.TICK, () -> invokeBound(handle));
         handle.asyncRuns.add(worker);
-        try {
-            worker.runTaskLaterAsynchronously(hostPlugin, 1L);
-        } catch (RuntimeException failure) {
-            handle.asyncRuns.remove(worker);
-            throw failure;
-        }
+        // Register after insertion: an already finished worker immediately removes itself as well.
+        worker.completion().whenComplete((value, failure) -> handle.asyncRuns.remove(worker));
     }
 
     private static void invokeBound(BoundTask handle) {
@@ -598,7 +565,7 @@ public class TaskManager {
     /**
      * Per-method record of one config-bound {@link Scheduled} task: what to invoke, where its
      * bound values come from, its current timing in ticks, when it was armed and last ran, and
-     * its current sync Bukkit trigger. Timing is mutated only on the main thread. Async workers
+     * its current global-context trigger. Timing is mutated only on the main thread. Async workers
      * access only immutable invocation fields and the concurrent outstanding-work set.
      */
     static final class BoundTask {
@@ -609,7 +576,7 @@ public class TaskManager {
         final ConfigBindings.Source periodSource;
         final ConfigBindings.Source delaySource;
         /** Outstanding async bodies, removed on completion and cancelled on module unload. */
-        final Set<BukkitRunnable> asyncRuns = ConcurrentHashMap.newKeySet();
+        final Set<TaskHandle> asyncRuns = ConcurrentHashMap.newKeySet();
         long periodTicks;
         long delayTicks;
         /** Tick the task was first armed at load; the anchor for "arm tick + new delay". */
@@ -622,7 +589,8 @@ public class TaskManager {
         boolean hasRun;
         /** Observed start of the last run, stamped on the main thread; meaningful only when {@link #hasRun}. */
         int lastFireTick;
-        BukkitTask task;
+        TaskHandle task;
+        Scheduler scheduler;
 
         private BoundTask(Object bean, Method method, Scheduled scheduled, String owner,
                           ConfigBindings.Source periodSource, ConfigBindings.Source delaySource,
@@ -685,8 +653,8 @@ public class TaskManager {
      * @since 6.2.2
      */
     public void registerScheduledMethodsExternal(String pluginName, Object bean) {
-        scanAndSchedule(null, bean, task ->
-                externalTasks.computeIfAbsent(pluginName, k -> new ArrayList<>()).add(task));
+        Scheduler scheduler = externalSchedulers.computeIfAbsent(pluginName, engine::newOwner);
+        scanAndSchedule(null, bean, scheduler, task -> record(scheduler, task));
     }
 
     /**
@@ -696,16 +664,10 @@ public class TaskManager {
      * @since 6.2.2
      */
     public void cancelAllExternal(String pluginName) {
-        List<BukkitTask> tasks = externalTasks.remove(pluginName);
-        if (tasks != null) {
-            for (BukkitTask task : tasks) {
-                try {
-                    task.cancel();
-                } catch (Exception e) {
-                    Bukkit.getLogger().log(Level.FINE,
-                            "[UltiTools-API] Task already cancelled: " + task.getTaskId());
-                }
-            }
+        Scheduler scheduler = externalSchedulers.remove(pluginName);
+        if (scheduler != null) {
+            engine.retire(scheduler);
+            scheduledTasks.remove(scheduler);
         }
     }
 
@@ -713,9 +675,8 @@ public class TaskManager {
      * Get the number of registered tasks for a plugin (for testing).
      */
     int getTaskCount(UltiToolsPlugin plugin) {
-        List<BukkitTask> tasks = pluginTasks.get(plugin);
         List<BoundTask> bound = boundTasks.get(plugin);
-        return (tasks == null ? 0 : tasks.size()) + (bound == null ? 0 : bound.size());
+        return taskCount(moduleSchedulers.get(plugin)) + (bound == null ? 0 : bound.size());
     }
 
     /**
@@ -724,14 +685,18 @@ public class TaskManager {
      * @since 6.3.0
      */
     int getCoreTaskCount() {
-        return coreTasks.size();
+        return taskCount(coreScheduler);
     }
 
     /**
      * Get the number of registered tasks for an external plugin (for testing).
      */
     int getExternalTaskCount(String pluginName) {
-        List<BukkitTask> tasks = externalTasks.get(pluginName);
+        return taskCount(externalSchedulers.get(pluginName));
+    }
+
+    private int taskCount(Scheduler scheduler) {
+        List<TaskHandle> tasks = scheduledTasks.get(scheduler);
         return tasks == null ? 0 : tasks.size();
     }
 }
