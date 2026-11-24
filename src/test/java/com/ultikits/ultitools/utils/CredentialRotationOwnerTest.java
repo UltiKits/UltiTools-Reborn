@@ -55,6 +55,7 @@ class CredentialRotationOwnerTest {
     Path temp;
 
     private ServerMock server;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     private UltiCloudStub.Handle stub;
     private CloudFeatures features;
     private Path credentialFile;
@@ -64,6 +65,7 @@ class CredentialRotationOwnerTest {
     void setUp() throws Exception {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         Path state = temp.resolve("server").resolve(".ultikits");
         Files.createDirectories(state);
         credentialFile = state.resolve("credentials.json");
@@ -92,17 +94,27 @@ class CredentialRotationOwnerTest {
 
     @AfterEach
     void tearDown() throws Exception {
-        server.getScheduler().waitAsyncTasksFinished();
-        CloudSession.current().invalidate();
-        if (features != null) {
-            features.shutdown();
+        try {
+            if (server != null) { server.getScheduler().waitAsyncTasksFinished(); }
+            CloudSession.current().invalidate();
+            if (features != null) {
+                features.shutdown();
+            }
+            if (stub != null) { stub.close(); }
+            CloudTestAccess.reset();
+        } finally {
+            try {
+                if (frameworkScheduler != null) { frameworkScheduler.close(); }
+            } finally {
+                try {
+                    MockBukkitHelper.safeUnmock();
+                } finally {
+                    Field instance = UltiTools.class.getDeclaredField("ultiTools");
+                    instance.setAccessible(true);
+                    instance.set(null, null);
+                }
+            }
         }
-        stub.close();
-        CloudTestAccess.reset();
-        MockBukkitHelper.safeUnmock();
-        Field instance = UltiTools.class.getDeclaredField("ultiTools");
-        instance.setAccessible(true);
-        instance.set(null, null);
     }
 
     private void connectAndRotate() throws Exception {

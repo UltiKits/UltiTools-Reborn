@@ -5,10 +5,15 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -27,6 +32,17 @@ import org.junit.jupiter.api.Timeout;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.TaskRetiredException;
+import com.ultikits.ultitools.scheduling.TaskState;
+import com.ultikits.ultitools.scheduling.Ticks;
+import java.time.Duration;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -41,12 +57,23 @@ class InMemeryTeleportServiceTest {
 
     private ServerMock server;
     private InMemeryTeleportService teleportService;
+    private PaperSchedulerEngine engine;
+    private Scheduler scheduler;
+    private final List<Runnable> entityRetirements = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
-        MockBukkit.createMockPlugin();
+        org.bukkit.plugin.Plugin host = MockBukkit.createMockPlugin();
+        PaperBackend backend = spy(PaperBackend.live(host));
+        doAnswer(call -> {
+            entityRetirements.add(call.getArgument(2, Runnable.class));
+            return call.callRealMethod();
+        }).when(backend).entity(any(), any(), any(), org.mockito.ArgumentMatchers.anyLong());
+        engine = new PaperSchedulerEngine(host, host.getLogger(), backend);
+        scheduler = spy(engine.newOwner("UltiTools"));
+        FrameworkScheduling.install(scheduler);
 
         // Mock logger
         Logger mockLogger = mock(Logger.class);
@@ -66,8 +93,16 @@ class InMemeryTeleportServiceTest {
 
     @AfterEach
     void tearDown() {
-        clearStaticMaps();
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        try {
+            if (engine != null && scheduler != null) { engine.retire(scheduler); }
+        } finally {
+            try {
+                if (scheduler != null) { FrameworkScheduling.uninstall(scheduler); }
+                clearStaticMaps();
+            } finally {
+                com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+            }
+        }
     }
     
     @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
@@ -87,9 +122,92 @@ class InMemeryTeleportServiceTest {
             inMemoryLocationRecordField.setAccessible(true);
             Map<UUID, Location> inMemoryLocationRecord = (Map<UUID, Location>) inMemoryLocationRecordField.get(null);
             inMemoryLocationRecord.clear();
+
+            Field initialized = InMemeryTeleportService.class.getDeclaredField("schedulerInitialized");
+            initialized.setAccessible(true);
+            initialized.setBoolean(null, false);
         } catch (Exception e) {
             // 忽略清理异常
         }
+    }
+
+    @Test
+    void countdownRetiresWhenPlayerDisconnects() {
+        PlayerMock player = server.addPlayer();
+        Location original = player.getLocation();
+        Location target = original.clone().add(100, 0, 100);
+        AtomicReference<TaskHandle> countdown = captureCountdown(player);
+
+        teleportService.delayTeleport(player, target, 3);
+        assertThat(countdown.get()).as("countdown uses the player's entity context").isNotNull();
+        server.getScheduler().performTicks(1);
+        assertThat(countdown.get().state()).isEqualTo(TaskState.SCHEDULED);
+        player.disconnect();
+        assertThat(player.isOnline()).isFalse();
+        // MockBukkit does not retire a disconnected player's queued entity deliveries; Paper does.
+        entityRetirements.forEach(Runnable::run);
+        server.getScheduler().performTicks(10);
+
+        assertThat(countdown.get().state()).isEqualTo(TaskState.RETIRED);
+        assertThat(countdown.get().completion().toCompletableFuture())
+                .isCompletedExceptionally()
+                .hasFailedWithThrowableThat().isInstanceOf(TaskRetiredException.class);
+        server.getScheduler().performTicks(100);
+        assertThat(player.getLocation()).isEqualTo(original);
+        assertThat(teleportService.getLastTeleportLocation(player.getUniqueId())).isEmpty();
+    }
+
+    @Test
+    void countdownCompletesOnTheEntityAndCancelsItsHandle() {
+        PlayerMock player = server.addPlayer();
+        Location original = player.getLocation();
+        Location target = original.clone().add(100, 0, 100);
+        AtomicReference<TaskHandle> countdown = captureCountdown(player);
+        teleportService.delayTeleport(player, target, 3);
+        server.getScheduler().performTicks(61);
+
+        assertThat(countdown.get().state()).isEqualTo(TaskState.CANCELLED);
+        assertThat(player.getLocation()).isEqualTo(target);
+        assertThat(teleportService.getLastTeleportLocation(player.getUniqueId())).contains(original);
+        assertThat(InMemeryTeleportService.getTeleportingStatus(player.getUniqueId())).isFalse();
+        server.getScheduler().performTicks(20);
+        assertThat(teleportService.getLastTeleportLocation(player.getUniqueId())).contains(original);
+    }
+
+    @Test
+    void movementCheckRunsOnTheGlobalContextAndCancelsTheTeleport() {
+        PlayerMock player = server.addPlayer();
+        Location original = player.getLocation();
+        Location target = original.clone().add(100, 0, 100);
+        AtomicReference<TaskHandle> countdown = captureCountdown(player);
+        TaskContext global = spy(scheduler.global());
+        doReturn(global).when(scheduler).global();
+        teleportService.delayTeleport(player, target, 3);
+        server.getScheduler().performTicks(1);
+        Location moved = original.clone().add(1, 0, 0);
+        player.teleport(moved);
+        server.getScheduler().performTicks(20);
+
+        org.mockito.Mockito.verify(global).runRepeating(
+                org.mockito.ArgumentMatchers.eq(Duration.ZERO),
+                org.mockito.ArgumentMatchers.eq(Ticks.of(10)), any());
+        assertThat(countdown.get().state()).isEqualTo(TaskState.CANCELLED);
+        assertThat(InMemeryTeleportService.getTeleportingStatus(player.getUniqueId())).isFalse();
+        server.getScheduler().performTicks(60);
+        assertThat(player.getLocation()).isEqualTo(moved);
+        assertThat(teleportService.getLastTeleportLocation(player.getUniqueId())).isEmpty();
+    }
+
+    private AtomicReference<TaskHandle> captureCountdown(PlayerMock player) {
+        TaskContext entityContext = spy(scheduler.entity(player));
+        AtomicReference<TaskHandle> countdown = new AtomicReference<>();
+        doReturn(entityContext).when(scheduler).entity(player);
+        doAnswer(invocation -> {
+            TaskHandle handle = (TaskHandle) invocation.callRealMethod();
+            countdown.set(handle);
+            return handle;
+        }).when(entityContext).runRepeating(any(), any(), any());
+        return countdown;
     }
 
     @Test

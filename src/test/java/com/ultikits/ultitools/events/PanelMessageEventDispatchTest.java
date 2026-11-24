@@ -38,6 +38,10 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.TestHelper;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 
 /**
  * {@link PanelMessageEvent}'s own shape (Task 1), and — added by later tasks in the same plan —
@@ -193,6 +197,8 @@ class PanelMessageEventDispatchTest {
     class PublishBridge {
 
         private ServerMock server;
+        private PaperSchedulerEngine engine;
+        private Scheduler scheduler;
         private EventBus eventBus;
         private Logger mockLogger;
         private final List<PanelMessageEvent> received = new CopyOnWriteArrayList<>();
@@ -201,7 +207,10 @@ class PanelMessageEventDispatchTest {
         void setUp() throws Exception {
             MockBukkitHelper.ensureCleanState();
             server = MockBukkit.mock();
-            MockBukkit.createMockPlugin();
+            org.bukkit.plugin.Plugin host = MockBukkit.createMockPlugin();
+            engine = new PaperSchedulerEngine(host, host.getLogger(), PaperBackend.live(host));
+            scheduler = engine.newOwner("UltiTools");
+            FrameworkScheduling.install(scheduler);
 
             eventBus = new EventBus();
             eventBus.subscribe(PanelMessageEvent.class, received::add);
@@ -217,11 +226,19 @@ class PanelMessageEventDispatchTest {
 
         @AfterEach
         void tearDown() throws Exception {
-            eventBus.shutdown();
-            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-            instanceField.setAccessible(true);
-            instanceField.set(null, null);
-            MockBukkitHelper.safeUnmock();
+            try {
+                if (engine != null && scheduler != null) { engine.retire(scheduler); }
+            } finally {
+                try {
+                    if (scheduler != null) { FrameworkScheduling.uninstall(scheduler); }
+                    if (eventBus != null) { eventBus.shutdown(); }
+                    Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+                    instanceField.setAccessible(true);
+                    instanceField.set(null, null);
+                } finally {
+                    MockBukkitHelper.safeUnmock();
+                }
+            }
         }
 
         @Test
@@ -327,6 +344,8 @@ class PanelMessageEventDispatchTest {
     class SlowHandlerWarning {
 
         private ServerMock server;
+        private PaperSchedulerEngine engine;
+        private Scheduler scheduler;
         private EventBus eventBus;
         private Logger mockLogger;
 
@@ -334,7 +353,10 @@ class PanelMessageEventDispatchTest {
         void setUp() throws Exception {
             MockBukkitHelper.ensureCleanState();
             server = MockBukkit.mock();
-            MockBukkit.createMockPlugin();
+            org.bukkit.plugin.Plugin host = MockBukkit.createMockPlugin();
+            engine = new PaperSchedulerEngine(host, host.getLogger(), PaperBackend.live(host));
+            scheduler = engine.newOwner("UltiTools");
+            FrameworkScheduling.install(scheduler);
 
             eventBus = new EventBus();
 
@@ -348,11 +370,19 @@ class PanelMessageEventDispatchTest {
 
         @AfterEach
         void tearDown() throws Exception {
-            eventBus.shutdown();
-            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-            instanceField.setAccessible(true);
-            instanceField.set(null, null);
-            MockBukkitHelper.safeUnmock();
+            try {
+                if (engine != null && scheduler != null) { engine.retire(scheduler); }
+            } finally {
+                try {
+                    if (scheduler != null) { FrameworkScheduling.uninstall(scheduler); }
+                    if (eventBus != null) { eventBus.shutdown(); }
+                    Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+                    instanceField.setAccessible(true);
+                    instanceField.set(null, null);
+                } finally {
+                    MockBukkitHelper.safeUnmock();
+                }
+            }
         }
 
         /** Every {@code [PanelMessageEvent]}-tagged WARNING line logged so far. */

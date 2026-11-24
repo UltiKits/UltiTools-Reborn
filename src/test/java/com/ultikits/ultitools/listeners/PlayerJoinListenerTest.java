@@ -21,6 +21,10 @@ import org.mockbukkit.mockbukkit.entity.PlayerMock;
 import org.mockbukkit.mockbukkit.plugin.PluginManagerMock;
 import org.mockbukkit.mockbukkit.plugin.PluginMock;
 import me.clip.placeholderapi.PlaceholderAPI;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 
 /**
  * PlayerJoinListener 测试 - 使用 MockBukkit
@@ -32,12 +36,17 @@ class PlayerJoinListenerTest {
     private ServerMock server;
     private PlayerJoinListener listener;
     private PluginMock placeholderApi;
+    private PaperSchedulerEngine engine;
+    private Scheduler scheduler;
 
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
-        MockBukkit.createMockPlugin();
+        org.bukkit.plugin.Plugin host = MockBukkit.createMockPlugin();
+        engine = new PaperSchedulerEngine(host, host.getLogger(), PaperBackend.live(host));
+        scheduler = engine.newOwner("UltiTools");
+        FrameworkScheduling.install(scheduler);
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         PluginManagerMock pluginManager = (PluginManagerMock) server.getPluginManager();
         placeholderApi = PluginMock.builder().withPluginName("PlaceholderAPI").build();
@@ -50,7 +59,15 @@ class PlayerJoinListenerTest {
 
     @AfterEach
     void tearDown() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        try {
+            if (engine != null && scheduler != null) { engine.retire(scheduler); }
+        } finally {
+            try {
+                if (scheduler != null) { FrameworkScheduling.uninstall(scheduler); }
+            } finally {
+                com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+            }
+        }
     }
 
     @Nested
