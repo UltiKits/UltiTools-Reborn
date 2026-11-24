@@ -1,5 +1,7 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.bootstrap.ModuleClassPath;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.File;
@@ -112,9 +114,9 @@ class ModuleJarOrderTest {
     void classLoaderUrls_areInFileNameOrder() throws IOException {
         writeJars();
 
-        List<URL> first = UltiTools.collectModuleJarUrls(listingInOrder(modules,
+        List<URL> first = ModuleClassPath.collectModuleJarUrls(listingInOrder(modules,
                 Arrays.asList("charlie.jar", "echo.jar", "alpha.jar", "delta.jar", "bravo.jar")));
-        List<URL> second = UltiTools.collectModuleJarUrls(listingInOrder(modules,
+        List<URL> second = ModuleClassPath.collectModuleJarUrls(listingInOrder(modules,
                 Arrays.asList("bravo.jar", "delta.jar", "echo.jar", "alpha.jar", "charlie.jar")));
 
         assertThat(names(first)).containsExactlyElementsOf(SORTED);
@@ -135,6 +137,6 @@ class ModuleJarOrderTest {
         }
 
         assertThat(names(ModuleFileTransactions.moduleJars(modules))).containsExactlyElementsOf(SORTED);
-        assertThat(names(UltiTools.collectModuleJarUrls(modules))).containsExactlyElementsOf(SORTED);
+        assertThat(names(ModuleClassPath.collectModuleJarUrls(modules))).containsExactlyElementsOf(SORTED);
     }
 }

@@ -120,6 +120,16 @@ class PluginYmlReaderTest {
         assertThat(info.getMain()).isNull();
     }
 
+    @Test
+    void optionalBootstrapper_isReadFromTheModulesOwnDescriptor() throws Exception {
+        File declared = writePluginYmlJar("name: Early\nmain: fixture.Main\napi-version: 700\n"
+                + "bootstrapper: fixture.Early\n");
+        File absent = writePluginYmlJar("name: Ordinary\nmain: fixture.Main\napi-version: 700\n");
+        assertThat(PluginYmlReader.readFromJarFile(declared).getBootstrapper()).isEqualTo("fixture.Early");
+        assertThat(PluginYmlReader.readFromJarFile(absent).getBootstrapper()).isNull();
+        assertThat(PluginYmlReader.PluginYmlInfo.EMPTY.getBootstrapper()).isNull();
+    }
+
     private File writePluginYmlJar(String pluginYmlContent) throws Exception {
         File jar = new File(tempDir, "plugin-" + System.nanoTime() + ".jar");
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {

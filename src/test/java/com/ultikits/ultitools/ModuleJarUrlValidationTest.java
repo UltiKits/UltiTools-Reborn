@@ -1,5 +1,7 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.bootstrap.ModuleClassPath;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
@@ -25,13 +27,13 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Tests that a failing module JAR never enters the URL array {@code getModuleUrls()} hands to the
+ * Tests that a failing module JAR never enters the URL array {@code moduleClassPath()} hands to the
  * {@code URLClassLoader} (WIRE-11).
  * <br>
- * 测试未通过校验的模块 JAR 永远不会进入 {@code getModuleUrls()} 交给 {@code URLClassLoader}
+ * 测试未通过校验的模块 JAR 永远不会进入 {@code moduleClassPath()} 交给 {@code URLClassLoader}
  * 的 URL 数组（WIRE-11）。
  *
- * <p>Calls {@link UltiTools#collectModuleJarUrls(File)} directly against a {@code @TempDir} —
+ * <p>Calls {@link ModuleClassPath#collectModuleJarUrls(File)} directly against a {@code @TempDir} —
  * deliberately not MockBukkit, since the assertion is about a plain URL array, not a Bukkit API,
  * and MockBukkit does not simulate JVM classloading.</p>
  */
@@ -65,7 +67,7 @@ class ModuleJarUrlValidationTest {
                 // nothing to release
             }
         };
-        ultiToolsLogger = Logger.getLogger(UltiTools.class.getName());
+        ultiToolsLogger = Logger.getLogger("UltiTools");
         ultiToolsLogger.addHandler(captureHandler);
     }
 
@@ -80,7 +82,7 @@ class ModuleJarUrlValidationTest {
         File validJar = createJarWithEntries("valid.jar", 3);
         File oversizedJar = createJarWithEntries("oversized.jar", 10_001);
 
-        List<URL> urls = UltiTools.collectModuleJarUrls(tempDir);
+        List<URL> urls = ModuleClassPath.collectModuleJarUrls(tempDir);
 
         assertThat(urls).contains(validJar.toURI().toURL());
         assertThat(urls).doesNotContain(oversizedJar.toURI().toURL());
@@ -93,7 +95,7 @@ class ModuleJarUrlValidationTest {
         File notes = new File(tempDir, "notes.txt");
         Files.write(notes.toPath(), "not a jar".getBytes());
 
-        List<URL> urls = UltiTools.collectModuleJarUrls(tempDir);
+        List<URL> urls = ModuleClassPath.collectModuleJarUrls(tempDir);
 
         assertThat(urls).containsExactly(validJar.toURI().toURL());
     }
@@ -105,7 +107,7 @@ class ModuleJarUrlValidationTest {
         File garbage = new File(tempDir, "garbage.jar");
         Files.write(garbage.toPath(), new byte[]{1, 2, 3, 4, 5, 6, 7, 8});
 
-        List<URL> urls = UltiTools.collectModuleJarUrls(tempDir);
+        List<URL> urls = ModuleClassPath.collectModuleJarUrls(tempDir);
 
         assertThat(urls).containsExactly(validJar.toURI().toURL());
     }
@@ -117,7 +119,7 @@ class ModuleJarUrlValidationTest {
         File jarTwo = createJarWithEntries("two.jar", 2);
         File jarThree = createJarWithEntries("three.jar", 3);
 
-        List<URL> urls = UltiTools.collectModuleJarUrls(tempDir);
+        List<URL> urls = ModuleClassPath.collectModuleJarUrls(tempDir);
 
         assertThat(urls).containsExactlyInAnyOrder(
                 jarOne.toURI().toURL(), jarTwo.toURI().toURL(), jarThree.toURI().toURL());
@@ -129,7 +131,7 @@ class ModuleJarUrlValidationTest {
         File missing = new File(tempDir, "does-not-exist");
 
         List<URL> urls = new ArrayList<>();
-        assertThatCode(() -> urls.addAll(UltiTools.collectModuleJarUrls(missing))).doesNotThrowAnyException();
+        assertThatCode(() -> urls.addAll(ModuleClassPath.collectModuleJarUrls(missing))).doesNotThrowAnyException();
         assertThat(urls).isEmpty();
     }
 
@@ -138,7 +140,7 @@ class ModuleJarUrlValidationTest {
     void skippedFileProducesNamingWarning() throws Exception {
         File oversizedJar = createJarWithEntries("oversized.jar", 10_001);
 
-        UltiTools.collectModuleJarUrls(tempDir);
+        ModuleClassPath.collectModuleJarUrls(tempDir);
 
         boolean warned = capturedLogs.stream().anyMatch(record ->
                 Level.WARNING.equals(record.getLevel())

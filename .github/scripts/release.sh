@@ -351,12 +351,13 @@ if [ -z "$MODE" ]; then
     # 看起来正常但缺少被重定位的依赖。
     JAR="target/UltiTools-API-${VERSION}.jar"
     [ -f "$JAR" ] || die "The build finished but ${JAR} is missing."
-    # 列表一次性读进变量再用 case 匹配，不走管道（理由同上：pipefail 下 grep -q 会假失败）。
+    # Match complete entry names: paper-plugin.yml must not satisfy a plugin.yml check.
     JAR_ENTRIES="$(unzip -Z1 "$JAR")"
-    case "$JAR_ENTRIES" in
-        *plugin.yml*) ;;
-        *) die "${JAR} has no plugin.yml; this is not a usable plugin JAR." ;;
-    esac
+    grep -Fxq 'paper-plugin.yml' <<< "$JAR_ENTRIES" \
+        || die "${JAR} has no root paper-plugin.yml; this is not a usable Paper plugin JAR."
+    if grep -Fxq 'plugin.yml' <<< "$JAR_ENTRIES"; then
+        die "${JAR} still contains a legacy root plugin.yml."
+    fi
     case "$JAR_ENTRIES" in
         *com/ultikits/ultitools/UltiTools.class*) ;;
         *) die "${JAR} has no UltiTools.class; a sources JAR may have been picked." ;;

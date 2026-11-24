@@ -21,12 +21,13 @@
   |---|---|---|
   | `pom.xml` `<java.version>` | `25` | `--release 25` bytecode level (class major 69) |
   | CI toolchain + `paper-api` | JDK 25 · Paper `26.3.build.258-stable` | build toolchain and compile-time API |
-  | `plugin.yml` `api-version` | `26.3` | Bukkit API level |
+  | framework `paper-plugin.yml` `api-version` | `26.3` | Paper API level |
 
   As of `7.0.0-SNAPSHOT`, the pom uses `<release>${java.version}</release>` with Java 25, not
   separate `-source`/`-target` settings. Both building and running the framework require Java 25.
 - **Runtime dependency model:** Paper is the only declared server API (`paper-api`, `provided` scope).
-  Paper auto-downloads the `libraries:` entries declared in `src/main/resources/plugin.yml`.
+  Paper invokes `UltiToolsLoader` to download the coordinates in `src/main/resources/ultitools-libraries.txt`.
+  The framework JAR contains only `paper-plugin.yml`; module JARs still use their own `plugin.yml`.
   Materials, sounds and enchantments use Paper's native APIs. `obliviate-invs` and `UniversalScheduler` use Maven's default
   `compile` scope and are bundled by maven-shade-plugin.
   Plain Spigot is not supported. The 7.0 baseline is Paper 26.3 build 258 on Java 25. Each framework
@@ -213,7 +214,8 @@ Reading order for an agent starting work here:
 ## Last Verified
 
 - **Date:** 2026-10-21, against the 6.3.0 source.
-- **How:** every claim re-checked against `git`, `pom.xml`, `plugin.yml`, `.github/workflows/`, and the
+- **How:** every claim re-checked against `git`, `pom.xml`, the source descriptor (`plugin.yml` in 6.3.0,
+  replaced by `paper-plugin.yml` in 7.0), `.github/workflows/`, and the
   source tree. Nothing was carried over on trust.
 - **What this card is for:** the things that do not change — the annotation namespace, the base-class
   traps, the credential hazard, the line-ending convention. Anything that is a snapshot of current state

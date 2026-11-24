@@ -19,6 +19,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.bootstrap.ModuleClassPath;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.handler.ConsoleMirror;
 import com.ultikits.ultitools.manager.EarlyLogCapture;
@@ -35,16 +36,19 @@ class UltiToolsOnLoadFailureTest {
 
     private MockedStatic<UltiTools> instanceMock;
     private MockedStatic<ConsoleMirror> mirrorMock;
+    private MockedStatic<ModuleClassPath> classPathMock;
     private Object previousInstance;
 
     @BeforeEach
     void setUp() throws Exception {
         previousInstance = instanceField().get(null);
+        classPathMock = mockStatic(ModuleClassPath.class);
     }
 
     @AfterEach
     void tearDown() throws Exception {
         EarlyLogCapture.release();
+        classPathMock.close();
         if (mirrorMock != null) {
             mirrorMock.close();
         }
@@ -72,7 +76,7 @@ class UltiToolsOnLoadFailureTest {
         lenient().when(plugin.getConfig()).thenReturn(new YamlConfiguration());
         lenient().when(plugin.getLogger()).thenReturn(Logger.getLogger("UltiToolsOnLoadFailureTest"));
         // A space is legal in a URL but not in a URI, so toURI() throws URISyntaxException.
-        lenient().when(plugin.getServerJar()).thenReturn(new URL("file:/server dir/paper.jar"));
+        classPathMock.when(() -> ModuleClassPath.serverJarOf(org.mockito.ArgumentMatchers.any())).thenReturn(new URL("file:/server dir/paper.jar"));
         doCallRealMethod().when(plugin).onLoad();
         instanceMock = mockStatic(UltiTools.class);
         instanceMock.when(UltiTools::getInstance).thenReturn(plugin);
@@ -91,7 +95,7 @@ class UltiToolsOnLoadFailureTest {
         UltiTools plugin = mock(UltiTools.class);
         lenient().when(plugin.getConfig()).thenReturn(new YamlConfiguration());
         lenient().when(plugin.getLogger()).thenReturn(Logger.getLogger("UltiToolsOnLoadFailureTest"));
-        lenient().when(plugin.getServerJar()).thenReturn(new URL("file:/server/paper.jar"));
+        classPathMock.when(() -> ModuleClassPath.serverJarOf(org.mockito.ArgumentMatchers.any())).thenReturn(new URL("file:/server/paper.jar"));
         doCallRealMethod().when(plugin).onLoad();
         instanceMock = mockStatic(UltiTools.class);
         instanceMock.when(UltiTools::getInstance).thenReturn(plugin);
