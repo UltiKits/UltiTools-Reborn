@@ -14,6 +14,7 @@ import com.ultikits.ultitools.ui.UiSession;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.logging.Logger;
 import net.kyori.adventure.key.Key;
 import org.bukkit.entity.Player;
@@ -27,19 +28,23 @@ public final class DialogBackend implements UiBackend {
     private final DialogPresenter presenter;
     private final DialogAnswers answers;
     private final Logger logger;
+    private final Function<? super UiSession<?>, String> ownerNames;
     private final Map<UiSession<?>, DialogTicket> tickets = new ConcurrentHashMap<>();
 
     /** Creates an isolated backend; registration and message catalogues belong to runtime wiring. */
-    public DialogBackend(Messages messages, DialogPresenter presenter, Logger logger) {
+    public DialogBackend(Messages messages, DialogPresenter presenter, Logger logger,
+                         Function<? super UiSession<?>, String> ownerNames) {
         mapper = new DialogMapper(messages);
         this.presenter = Objects.requireNonNull(presenter, "presenter");
         this.logger = Objects.requireNonNull(logger, "logger");
+        this.ownerNames = Objects.requireNonNull(ownerNames, "ownerNames");
         answers = new DialogAnswers(logger);
     }
 
     /** Creates the Paper presenter without registering it or constructing any registry objects. */
-    public static DialogBackend paper(Messages messages, Logger logger) {
-        return new DialogBackend(messages, new PaperDialogPresenter(), logger);
+    public static DialogBackend paper(Messages messages, Logger logger,
+                                      Function<? super UiSession<?>, String> ownerNames) {
+        return new DialogBackend(messages, new PaperDialogPresenter(), logger, ownerNames);
     }
 
     @Override public Key id() { return Key.key("ultitools", "dialog"); }
@@ -82,7 +87,7 @@ public final class DialogBackend implements UiBackend {
     @Override
     public <R> void open(UiSession<R> session, BackendCallbacks<R> callbacks) {
         DialogModel model = mapper.map(session.intent(), session.viewer(), ESCAPE_CLOSES);
-        DialogTicket ticket = new DialogTicket(session, callbacks, answers, logger);
+        DialogTicket ticket = new DialogTicket(session, callbacks, answers, logger, ownerNames.apply(session));
         tickets.put(session, ticket);
         presenter.show(session.viewer(), model, ticket);
         ticket.shown();

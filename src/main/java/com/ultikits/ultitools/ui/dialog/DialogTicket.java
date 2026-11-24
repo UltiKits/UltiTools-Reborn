@@ -19,6 +19,7 @@ import org.jetbrains.annotations.Nullable;
 @ApiStatus.Internal
 public final class DialogTicket {
     private final UUID viewerId;
+    private final String ownerName;
     private final Logger logger;
     private final AtomicBoolean showing = new AtomicBoolean();
     private final AtomicReference<BiConsumer<ButtonRole, @Nullable DialogResponseView>> handler;
@@ -27,11 +28,13 @@ public final class DialogTicket {
      * Retains the typed callbacks only until the first answer or invalidation.
      * @param <R> the intent's answer type
      */
-    <R> DialogTicket(UiSession<R> session, BackendCallbacks<R> callbacks, DialogAnswers answers, Logger logger) {
+    <R> DialogTicket(UiSession<R> session, BackendCallbacks<R> callbacks, DialogAnswers answers, Logger logger,
+                     String ownerName) {
         viewerId = session.viewer().getUniqueId();
         this.logger = logger;
+        this.ownerName = ownerName;
         UiIntent<R> intent = session.intent();
-        handler = new AtomicReference<>((role, response) -> report(intent, callbacks, answers, role, response));
+        handler = new AtomicReference<>((role, response) -> report(intent, callbacks, answers, role, response, ownerName));
     }
 
     /**
@@ -39,9 +42,8 @@ public final class DialogTicket {
      * @param <R> the intent's answer type
      */
     private static <R> void report(UiIntent<R> intent, BackendCallbacks<R> callbacks, DialogAnswers answers,
-                                   ButtonRole role, @Nullable DialogResponseView response) {
-        // The current session seam deliberately exposes no owner; never infer it from a title or viewer.
-        UiResult<?> result = answers.read(intent, role, response, "<unavailable through UiSession>");
+                                   ButtonRole role, @Nullable DialogResponseView response, String ownerName) {
+        UiResult<?> result = answers.read(intent, role, response, ownerName);
         if (result instanceof UiResult.Closed<?> closed) {
             callbacks.closed(closed.reason());
         } else {
@@ -67,7 +69,7 @@ public final class DialogTicket {
             return;
         }
         if (!(audience instanceof Player player) || !viewerId.equals(player.getUniqueId())) {
-            logger.warning("Ignored dialog action from a different audience; owner unavailable through UiSession");
+            logger.warning("Ignored dialog action from a different audience for owner " + ownerName);
             return;
         }
         if (handler.compareAndSet(current, null)) {
