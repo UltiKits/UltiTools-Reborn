@@ -31,7 +31,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.bukkit.Bukkit;
-import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -945,7 +944,7 @@ class ConfigBindingValidationTest {
         private CommandContext contextFor(Player player, Method method, Object executor) {
             return CommandContext.builder()
                     .sender(player)
-                    .command(mock(Command.class))
+                    .commandName("test")
                     .alias("go")
                     .rawArgs(new String[]{})
                     .matchedMethod(method)
@@ -1152,7 +1151,7 @@ class ConfigBindingValidationTest {
             when(sibling.getPluginName()).thenReturn("SiblingModule");
             SimpleContainer goodContainer = containerWith(new LiteralOnlyBean(), new LiteralCooldownExecutor());
             assertDoesNotThrow(() -> assemble.invoke(pluginManager, goodContainer, sibling, ModuleFixture.class, loader));
-            assertTrue(goodContainer.getBeanNamesForType(CommandExecutor.class).length > 0);
+            assertTrue(goodContainer.getBeanNamesForType(BaseCommandExecutor.class).length > 0);
         }
     }
 
@@ -1314,8 +1313,8 @@ class ConfigBindingValidationTest {
             Command command = mock(Command.class);
             lenient().when(command.getName()).thenReturn("boundinherited");
 
-            proxy.onCommand(player, command, "boundinherited", new String[]{"go"});
-            proxy.onCommand(player, command, "boundinherited", new String[]{"go"});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(proxy, player, command, "boundinherited", new String[]{"go"});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(proxy, player, command, "boundinherited", new String[]{"go"});
 
             assertEquals(1, proxy.bodies.get(), "the bound 12-second cooldown must refuse the second dispatch");
             verify(player, never()).sendMessage(contains("never resolved"));

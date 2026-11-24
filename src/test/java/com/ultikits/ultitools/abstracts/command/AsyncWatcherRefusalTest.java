@@ -142,7 +142,7 @@ class AsyncWatcherRefusalTest {
         String key = SlowExecutor.class.getMethod("slow", CommandSender.class).toString();
 
         assertThrows(IllegalPluginAccessException.class,
-                () -> executor.onCommand(player, command, "slowcmd", new String[]{"slow"}));
+                () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "slowcmd", new String[]{"slow"}));
 
         assertEquals(1, asyncBodies.size(), "the body was accepted by the scheduler");
         assertEquals(0, counting.refusals.get(), "a submitted body is not a refused dispatch");

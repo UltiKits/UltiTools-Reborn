@@ -116,7 +116,7 @@ class CommandReplyLanguageTest {
         useLanguage("en");
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
 
-        new ThrowingExecutor().onCommand(sender, command, "replylang", new String[]{"boom"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new ThrowingExecutor(),sender, command, "replylang", new String[]{"boom"});
 
         List<String> messages = messagesTo(sender);
         assertThat(messages).anyMatch(m -> m.contains("Command execution failed") && m.contains("the real reason"));
@@ -129,7 +129,7 @@ class CommandReplyLanguageTest {
         useLanguage("zh");
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
 
-        new ThrowingExecutor().onCommand(sender, command, "replylang", new String[]{"boom"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new ThrowingExecutor(),sender, command, "replylang", new String[]{"boom"});
 
         assertThat(messagesTo(sender)).anyMatch(m -> m.contains("命令执行出错: the real reason"));
     }
@@ -140,7 +140,7 @@ class CommandReplyLanguageTest {
         useLanguage("en");
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
 
-        new ThrowingExecutor().onCommand(sender, command, "replylang", new String[]{"slow"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new ThrowingExecutor(),sender, command, "replylang", new String[]{"slow"});
 
         List<String> messages = messagesTo(sender);
         assertThat(messages).anyMatch(m -> m.contains("Processing..."));
@@ -153,7 +153,7 @@ class CommandReplyLanguageTest {
         useLanguage("zh");
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
 
-        new ThrowingExecutor().onCommand(sender, command, "replylang", new String[]{"slow"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new ThrowingExecutor(),sender, command, "replylang", new String[]{"slow"});
 
         assertThat(messagesTo(sender)).anyMatch(m -> m.contains("处理中..."));
     }

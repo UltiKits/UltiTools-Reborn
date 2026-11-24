@@ -99,7 +99,7 @@ class NestedCommandCurrentUserTest {
         public void outer(CommandSender sender) {
             observedBefore.set(AuditableDataEntity.getCurrentUser());
             // What Bukkit.dispatchCommand / Player#performCommand does on the primary thread.
-            inner.onCommand(nestedSender, command, "inner", new String[]{});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(inner, nestedSender, command, "inner", new String[]{});
             observedAfter.set(AuditableDataEntity.getCurrentUser());
         }
     }
@@ -183,7 +183,7 @@ class NestedCommandCurrentUserTest {
         InnerExecutor inner = new InnerExecutor();
         OuterExecutor outer = new OuterExecutor(inner, player(b), command);
 
-        outer.onCommand(player(a), command, "outer", new String[]{});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(outer, player(a), command, "outer", new String[]{});
 
         assertEquals(a, outer.observedBefore.get());
         assertEquals(b, inner.observed.get(), "the nested body observes its own sender");
@@ -200,7 +200,7 @@ class NestedCommandCurrentUserTest {
         InnerExecutor inner = new InnerExecutor();
         OuterExecutor outer = new OuterExecutor(inner, mock(ConsoleCommandSender.class), command);
 
-        outer.onCommand(player(a), command, "outer", new String[]{});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(outer, player(a), command, "outer", new String[]{});
 
         assertTrue(inner.ran.get());
         assertNull(inner.observed.get(),
@@ -219,7 +219,7 @@ class NestedCommandCurrentUserTest {
         inner.throwAfterObserving = true;
         OuterExecutor outer = new OuterExecutor(inner, player(b), command);
 
-        outer.onCommand(player(a), command, "outer", new String[]{});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(outer, player(a), command, "outer", new String[]{});
 
         assertEquals(b, inner.observed.get());
         assertEquals(a, outer.observedAfter.get());
@@ -234,7 +234,7 @@ class NestedCommandCurrentUserTest {
         InnerExecutor inner = new InnerExecutor();
         OuterExecutor outer = new OuterExecutor(inner, player(b), command);
 
-        outer.onCommand(mock(ConsoleCommandSender.class), command, "outer", new String[]{});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(outer, mock(ConsoleCommandSender.class), command, "outer", new String[]{});
 
         assertNull(outer.observedBefore.get());
         assertEquals(b, inner.observed.get());
@@ -251,7 +251,7 @@ class NestedCommandCurrentUserTest {
         AuditableDataEntity.setCurrentUser(caller);
         InnerExecutor inner = new InnerExecutor();
 
-        inner.onCommand(player(b), command, "inner", new String[]{});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(inner, player(b), command, "inner", new String[]{});
 
         assertEquals(b, inner.observed.get());
         assertEquals(caller, AuditableDataEntity.getCurrentUser(),

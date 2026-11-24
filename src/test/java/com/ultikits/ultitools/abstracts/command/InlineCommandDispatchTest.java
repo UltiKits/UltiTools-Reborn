@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -125,7 +126,7 @@ class InlineCommandDispatchTest {
     private void assertReplyInsideDispatch(CommandSender sender) {
         ReplyingExecutor executor = new ReplyingExecutor();
 
-        executor.onCommand(sender, command, "replyprobe", new String[]{});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, command, "replyprobe", new String[]{});
 
         assertEquals(1, executor.bodies.get(), "the body must have run before onCommand returned");
         verify(sender).sendMessage("module reply");
@@ -165,7 +166,7 @@ class InlineCommandDispatchTest {
         ReplyingExecutor executor = new ReplyingExecutor();
         BlockCommandSender block = mock(BlockCommandSender.class);
 
-        executor.onCommand(block, command, "replyprobe", new String[]{});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, block, command, "replyprobe", new String[]{});
 
         assertEquals(0, executor.bodies.get(), "the body must wait for the main thread");
         verify(scheduler, times(1)).runTask(any(Plugin.class), any(Runnable.class));
@@ -181,8 +182,8 @@ class InlineCommandDispatchTest {
         Player player = mock(Player.class);
         when(player.getUniqueId()).thenReturn(UUID.randomUUID());
 
-        executor.onCommand(player, command, "replyprobe", new String[]{"cooled"});
-        executor.onCommand(player, command, "replyprobe", new String[]{"cooled"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "replyprobe", new String[]{"cooled"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "replyprobe", new String[]{"cooled"});
         // Anything the dispatches deferred runs "on the next tick" -- after both have returned.
         new ArrayList<>(deferred).forEach(Runnable::run);
 
@@ -195,7 +196,7 @@ class InlineCommandDispatchTest {
     void asyncMappingKeepsTheAsyncPath() {
         ReplyingExecutor executor = new ReplyingExecutor();
 
-        executor.onCommand(mock(ConsoleCommandSender.class), command, "replyprobe", new String[]{"async"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mock(ConsoleCommandSender.class), command, "replyprobe", new String[]{"async"});
 
         assertEquals(0, executor.asyncBodies.get(), "an async body never runs on the dispatching thread");
         verify(scheduler, times(1)).runTaskAsynchronously(any(Plugin.class), any(Runnable.class));
@@ -203,13 +204,17 @@ class InlineCommandDispatchTest {
     }
 
     @Test
-    @DisplayName("running inline changes no gate: a command block without the permission is still refused")
-    void inlineDispatchStillRunsTheValidatorChain() {
+    @DisplayName("a command block without the root permission cannot enter an inline command")
+    void inlineDispatchCannotBypassRootVisibility() {
         PermissionedExecutor executor = new PermissionedExecutor();
         BlockCommandSender block = mock(BlockCommandSender.class);
         when(block.hasPermission("probe.use")).thenReturn(false);
 
-        executor.onCommand(block, command, "guarded", new String[]{});
+        var dispatcher = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatcher(executor, "guarded");
+        var source = mock(io.papermc.paper.command.brigadier.CommandSourceStack.class);
+        when(source.getSender()).thenReturn(block);
+        assertThrows(com.mojang.brigadier.exceptions.CommandSyntaxException.class,
+                () -> dispatcher.execute("guarded", source));
 
         assertEquals(0, executor.bodies.get(), "a refused sender's body must never run");
         assertTrue(deferred.isEmpty(), "nothing is scheduled for a refused dispatch");

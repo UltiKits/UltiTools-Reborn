@@ -5,6 +5,164 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Command engine (as of 7.0.0)
+
+Rebuild module command code against 7.0. Annotation commands are compiled into Brigadier trees;
+Paper receives them only during `LifecycleEvents.COMMANDS`. The framework no longer constructs
+`PluginCommand` reflectively or edits Bukkit's private command map.
+
+### Source and binary migration
+
+| Removed or changed API | 7.0 replacement |
+|---|---|
+| `BaseCommandExecutor implements TabExecutor`, `onCommand`, `onTabComplete` | Keep extending `BaseCommandExecutor`; the framework invokes typed mappings through Brigadier |
+| `matchMethod`, `parseParameters`, `validateParameterCount`, `parseParameterValue` | No replacement string matcher; use the compiled tree and its argument types |
+| Both old protected `suggest` overloads | `suggest(CommandSender sender, String label, String[] args)`; return `null` to retain native argument suggestions |
+| `CommandContext.getCommand()` and its builder field | `getCommandName()` and `commandName(String)` |
+| `CommandContext.getParsedParams(): Map<String, String[]>` | `Map<String, Object>` containing typed values; `buildMethodParams` reads those values |
+| `CommandContext.getParam(String): String[]`, `getParamValue(String): String` | Both return `Object`; cast to the declared parameter type (or the array component type for `getParamValue`) |
+| `CommandManager.register(... Class<? extends CommandExecutor> ...)` | The class parameter is `Class<? extends BaseCommandExecutor>` |
+| `registerCoreCommand(CommandExecutor)` | `registerCoreCommand(BaseCommandExecutor)` |
+| `CommandManager.unregister(String)` | Unregister the owning module or external plugin, not a global label |
+| `getPluginByCommand(Command)` | `getPluginByLabel(String)`; accepts primary, alias and namespaced spellings |
+| `AbstractCommand`, `AbstractTabExecutor`, `AbstractPlayerCommandExecutor`, `AbstractConsoleCommandExecutor` | `BaseCommandExecutor` or the new `BrigadierCommand` interface |
+| `CommandTabCompletionDispatch` | Brigadier suggestions connected to the existing completion-provider registry |
+| `TabCompletionManager.suggest(Player, Command, String[])`, `createContext(Player, Command, String[])`, `suggestFirstArgs` | Context-based provider calls; Brigadier supplies literal suggestions |
+| `TabCompletionContext.command` / `getCommand()` | `commandName` / `getCommandName()` |
+| `WorldParser`, `GameModeParser`, `LocationParser`, `EnchantmentParser` and implicit built-in registry entries | The argument mappings below; the registry keeps explicitly registered module `TypeParser` implementations |
+
+`getMappings`, custom validators, `handleHelp`, `getHelpCommand`, `createDefaultValidatorChain`,
+`executeCommand` and `buildMethodParams` remain. An executor without `@CmdExecutor` is refused;
+there is no legacy fallback registration. Existing three-argument suggestion methods may still
+receive a Bukkit `Command`, resolved by label through the public command map. The removed Bukkit
+completion entry point's `null`/online-player fallback convention does not apply to Brigadier:
+no candidates means an empty suggestions result for every sender kind.
+
+### Argument mapping
+
+| Java type | Argument and result |
+|---|---|
+| `String` | One whitespace-delimited token, including non-ASCII text; double-quoted strings are accepted |
+| `String` / `String[]` with `<name...>` | Remaining text / whitespace-split array; an omitted tail supplies an empty value |
+| `int` / `Integer`, `long` / `Long`, `double` / `Double`, `float` / `Float`, `boolean` / `Boolean` | Brigadier's corresponding typed argument |
+| `short` / `Short`, `byte` / `Byte` | Integer argument restricted to the Java type's range, then narrowed |
+| `Player` | Paper player selector resolved against the command source |
+| `OfflinePlayer` | Player-name token, resolved by Bukkit; online-player-name suggestions |
+| `World`, `GameMode`, `UUID` | Paper's native world, game-mode and UUID arguments |
+| `Enchantment` | Paper's enchantment registry-resource argument |
+| `Material` | Namespaced material key, checked with `Material.matchMaterial` |
+| `Location` | Paper fine position, resolved in the source's world: **`x y z`**, including relative coordinates, not the old `world,x,y,z` string |
+| Other explicitly registered `TypeParser<T>` types | One token parsed by that parser; its `TypeParseException` detail is retained |
+| Other arrays with `<name...>` | Remaining text parsed element by element using the component type's mapping |
+
+Competing parameter children at one position, duplicate normalized paths, non-terminal greedy
+parameters, unmapped types and unmatched `@CmdParam` names are compilation errors. A literal and
+an argument may share a parent. Named and method-based `@CmdParam(suggest=...)` providers remain;
+the executor fallback applies only when that parameter has no explicit provider. Native argument
+suggestions are used when neither supplies an override.
+
+Additional 6.x migration differences:
+
+- Boolean values accept only `true` and `false`. The old `Boolean.parseBoolean` conversion silently
+  converted other input, including `yes`, to `false`.
+- Material values use lower-case namespace keys, such as `minecraft:diamond`, rather than enum
+  spellings such as `DIAMOND`.
+- Double-quoted text such as `"a b"` is one String argument; an unterminated quote is a syntax error.
+- An array must use the terminal `<name...>` form; a non-greedy array is refused at compilation.
+- The 6.5.0 built-in Player parser used nullable `Bukkit.getPlayer` and did not supply a dedicated
+  localized “player offline / not found” reply. Paper selectors now reject a missing player rather
+  than passing null into a module method; native resolution failures use the framework usage reply.
+
+中文补充：布尔参数现在只接受 `true` / `false`，不再把 `yes` 等输入静默转成 `false`；
+物品参数使用 `minecraft:diamond` 这样的全小写命名空间键，不接受 `DIAMOND` 枚举写法。
+双引号中的 `"a b"` 算一个字符串参数；未闭合的引号是语法错误。数组必须放在末尾并使用
+`<name...>`，非贪婪数组在编译命令时被拒绝。`getParam` 与 `getParamValue` 均返回 `Object`，
+须按声明的参数类型或数组元素类型取值。6.5.0 的内置玩家解析器没有专用的“玩家不在线／不存在”
+提示，而是可能把 null 传给模块；新原生选择器会拒绝找不到的玩家，并由框架给出用法回复。
+
+### Replies, ownership and lifecycle
+
+- Unmatched input retains the framework's existing unknown-command / usage language keys.
+  Unknown first tokens retain the gated help fallthrough; deeper failures list usages from the
+  typed tree. Every intermediate node and non-greedy path has an `args` fallback (or `args_` if
+  that name is already used). Such fallbacks can make otherwise-invalid input appear valid to
+  the client. They have no custom suggestions and do not ask the server for completion.
+  An exact-case unavailable literal is rejected by Brigadier before a framework callback runs;
+  the framework handles that syntax event through the same reply path. Unavailable subcommands
+  behave as nonexistent for that sender, including when typed explicitly.
+  中文补充：没有权限或不允许该发送者使用的子命令，对该发送者表现为不存在；硬输入的回复也相同。
+- **Known limitation:** a command that has both a root-level catch-all argument and a
+  permission-gated subcommand answers a sender without that permission with the unknown-command
+  reply and help when they type the subcommand's name. Neither business mapping executes; other
+  words are still handled by the catch-all argument, so such a command does not fully hide that
+  the name is special. Module authors who need command-name secrecy should not put these two
+  forms at the same level.
+  中文补充：**已知限制：**同一层同时有根级任意文字参数与受权限限制的子命令时，无权限发送者
+  输入该子命令名会收到未知指令回复与帮助，两种业务都不执行；其他词仍由任意文字参数处理，
+  因而无法完全隐藏这个名称的特殊性。需要保密命令名的模块作者不要把这两种形式放在同一层。
+- Every literal position is case-insensitive, including literals following typed arguments.
+  An argument or fallback callback gives a same-position literal priority regardless of case,
+  then re-dispatches at most once through the same live binding and validator chain. Argument
+  spelling is not lower-cased. With `<player>` beside `accept`, `Accept` invokes `accept`;
+  a quoted `"Accept"` remains a String argument.
+- Recovery also normalizes repeated or trailing whitespace when a fallback callback is reached,
+  preserving quoted and greedy argument content. **Known limitation:** a native literal followed
+  by exactly one trailing space (for example `ul reload `) can fail before any callback runs.
+  6.5.0's Bukkit entry point ignored those spaces; trim console/panel input before dispatching.
+- Root permissions, operator requirements and sender targets hide unavailable commands in the
+  client tree. Exclusive mapping paths hide unavailable subcommands; shared prefixes remain.
+  Parameter providers and usage replies filter private mappings and do not invoke their providers.
+  **Known limitation:** a real suggesting argument beside a hidden literal can still cause the
+  server dispatcher to merge that literal into its completion response; provider-level filtering
+  cannot remove sibling literal results. Avoid that tree layout when command-name secrecy matters.
+  Execution still performs permission, sender-type, cooldown, lock, asynchronous-dispatch and
+  panel-refusal checks; a leaked name does not grant execution permission.
+- Modules and external plugins may supply container beans implementing `BrigadierCommand`.
+  `node()` is called once per registration; `aliases()` and nullable `description()` supply
+  metadata. Bean aliases are deduplicated by identity. These trees do not acquire annotation
+  validators, cooldowns or `@CmdParam` completion. Internal redirects point to owned proxies;
+  **redirect targets outside the supplied tree are not controlled by module unload**. Such external
+  targets are not rebound when a module instance is replaced; refresh the tree through the next
+  commands lifecycle event or restart.
+- Paper owns a fixed proxy shape; the binding table owns live module instances. Unregistering
+  a module hides its proxies and rejects execution. A genuinely registered replacement with the
+  same signature rebinds the existing shape. A different owner claiming the same root is refused
+  and logged with both owners/classes; the owner's other commands may continue registering.
+- **`/ul reload` only reloads configuration.** It does not recreate containers or executors,
+  rebind commands, or add/remove conditional commands. A changed conditional-registration key
+  still reports that a restart is required. Installing/updating module JARs still needs a restart:
+  Paper retains the registered argument-type instances, including a module's custom `TypeParser`.
+  Rebinding an executor does not replace those parsers and may retain the old module classes.
+- Permission changes while a player stays online do not automatically refresh their client command
+  tree. Reconnect or run `/minecraft:reload` to refresh it. Execution permissions are always checked
+  live, independently of that cached client tree.
+- A root first registered after the initial commands event, or a replacement with a different
+  signature, waits for the next `/minecraft:reload` or restart. The console names it in one
+  `Command /<label> from <owner> was registered after start-up; it becomes available after
+  /minecraft:reload or a restart.` warning. This applies to real registration/connection APIs,
+  not to toggling a conditional configuration value with `/ul reload`. The engine never triggers
+  a global data-pack reload automatically.
+- Paper rejects Bukkit plugin reload after a lifecycle handler is installed. This is distinct
+  from `/minecraft:reload`, which reloads data packs and delivers another commands event.
+
+中文迁移要点：7.0 保留注解作者模型，但删除 Bukkit 执行器入口、字符串匹配与反射注册。
+自定义类型解析器仍可显式注册；坐标改用 `x y z`。兜底可达时，输错输入继续得到框架提示，
+客户端也可能不再标红；大小写完全匹配但不可用的字面量由 Brigadier 直接拒绝。
+兜底参数名是 `args`（重名时追加下划线），不注册服务器补全；真实参数补全仍保留。
+所有字面位置忽略大小写并优先于同位置参数，最多重新分发一次，参数原样保留：
+`<player>` 旁有 `accept` 时，`Accept` 调用 `accept`，带引号的 `"Accept"` 仍是字符串参数。
+恢复回调可达时会规范化连续或行尾空白；纯字面量末尾只有一个空格时，Brigadier 可能在回调前
+拒绝（如 `ul reload `），这是与 6.5.0 不同的已知限制，控制台／面板应在分发前去掉行尾空格。
+权限与发送者条件过滤客户端命令树；参数提供者和用法回复只列可见映射。但真实补全参数旁若有
+隐藏字面量，服务器仍可能把该字面量合并进补全响应，参数提供者无法删除同级节点的结果。
+需要保密命令名时应避免这种树形布局；名称泄漏不赋予执行权限。
+解绑和同形重新绑定只随真实模块注册、
+注销、替换发生，`/ul reload` 不改变命令注册，条件开关变动仍要求重启。手写树的树外重定向
+目标不受模块卸载控制，也不会随模块实例替换而重新绑定。安装／更新模块 JAR 必须重启：Paper 保留
+已注册参数类型和模块自定义 `TypeParser` 实例，旧解析器和其类加载器可能继续被引用。
+玩家在线期间权限变化不会自动刷新客户端命令树，须重新登录或执行 `/minecraft:reload`；执行时仍实时检查权限。
+模块必须重新编译，不能只修改 `api-version`。
+
 ## Message catalogues and automatic fallback (as of 7.0.0)
 
 7.0 introduces namespace-bound `Messages` and `LocaleResolver`. Modules ship UTF-8

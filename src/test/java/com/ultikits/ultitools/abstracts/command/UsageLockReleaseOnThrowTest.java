@@ -220,13 +220,13 @@ class UsageLockReleaseOnThrowTest {
         GuardedExecutor executor = new GuardedExecutor(ValidatorChain.builder().add(lock).add(throwing).build());
 
         assertThrows(IllegalStateException.class,
-                () -> executor.onCommand(player, command, "guarded", new String[]{"go"}));
+                () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"go"}));
 
         assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "the server-wide lock must not stay held");
         throwing.armed = false;
         Player other = mock(Player.class);
         when(other.getUniqueId()).thenReturn(UUID.randomUUID());
-        executor.onCommand(other, command, "guarded", new String[]{"go"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, other, command, "guarded", new String[]{"go"});
         assertEquals(1, executor.bodies.get(), "another player's call runs");
     }
 
@@ -236,9 +236,9 @@ class UsageLockReleaseOnThrowTest {
         GuardedExecutor executor = new GuardedExecutor();
 
         assertThrows(IllegalArgumentException.class,
-                () -> executor.onCommand(player, command, "guarded", new String[]{"widget", "nope"}));
+                () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"widget", "nope"}));
 
-        executor.onCommand(player, command, "guarded", new String[]{"go"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"go"});
         assertEquals(1, executor.bodies.get(), "a later call of a lock-guarded mapping by anyone runs");
         assertFalse(executor.getLockValidator().isLocked(player.getUniqueId(), widgetKey()));
     }
@@ -251,7 +251,7 @@ class UsageLockReleaseOnThrowTest {
                 .add(new ThrowingHookValidator()).add(lock).add(new RefusingValidator()).build());
 
         assertThrows(IllegalStateException.class,
-                () -> executor.onCommand(player, command, "guarded", new String[]{"go"}));
+                () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"go"}));
 
         assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "the lock validator's hook must still run");
     }
@@ -277,19 +277,16 @@ class UsageLockReleaseOnThrowTest {
     }
 
     @Test
-    @DisplayName("a wrong argument count with a throwing refusal hook runs every refusal hook once, not twice")
-    void argumentCountRefusalRunsEachHookOnce() {
-        // Local Codex review of #570, run 1: the refusal for a wrong argument count ran inside the
-        // try whose catch notifies the validators again, so a hook that threw made every hook run twice
-        // (a second lock release could free a lock another dispatch had taken in between).
+    @DisplayName("missing typed arguments never enter validation or acquire a usage lock")
+    void argumentParsingRefusalDoesNotEnterTheValidatorChain() {
         CountingHookValidator counting = new CountingHookValidator();
         GuardedExecutor executor = new GuardedExecutor(ValidatorChain.builder()
                 .add(new ThrowingHookValidator()).add(counting).build());
 
-        assertThrows(IllegalStateException.class,
-                () -> executor.onCommand(player, command, "guarded", new String[]{"widget"}));
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"widget"}));
 
-        assertEquals(1, counting.refusals.get(), "each refusal hook runs exactly once");
+        assertEquals(0, counting.refusals.get(), "Brigadier refuses incomplete input before validation");
         assertEquals(0, executor.bodies.get());
     }
 
@@ -302,13 +299,13 @@ class UsageLockReleaseOnThrowTest {
                 ValidatorChain.builder().add(lock).add(applicability).build());
 
         assertThrows(IllegalStateException.class,
-                () -> executor.onCommand(player, command, "guarded", new String[]{"go"}));
+                () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"go"}));
 
         assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "the server-wide lock must not stay held");
         applicability.armed = false;
         Player other = mock(Player.class);
         when(other.getUniqueId()).thenReturn(UUID.randomUUID());
-        executor.onCommand(other, command, "guarded", new String[]{"go"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, other, command, "guarded", new String[]{"go"});
         assertEquals(1, executor.bodies.get(), "another player's call runs");
     }
 
@@ -321,7 +318,7 @@ class UsageLockReleaseOnThrowTest {
                 .add(new ThrowingHookValidator()).add(lock).add(applicability).build());
 
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
-                () -> executor.onCommand(player, command, "guarded", new String[]{"go"}));
+                () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"go"}));
 
         assertSame(applicability.lastThrown, thrown, "the original applicability exception propagates");
         assertEquals(1, thrown.getSuppressed().length, "the failing refusal hook is suppressed on it");
@@ -338,14 +335,14 @@ class UsageLockReleaseOnThrowTest {
                 ValidatorChain.builder().add(applicability).add(lock).build());
 
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
-                () -> executor.onCommand(player, command, "guarded", new String[]{"go"}));
+                () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"go"}));
 
         assertSame(applicability.lastThrown, thrown);
         assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "nothing was acquired");
         applicability.armed = false;
         Player other = mock(Player.class);
         when(other.getUniqueId()).thenReturn(UUID.randomUUID());
-        executor.onCommand(other, command, "guarded", new String[]{"go"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, other, command, "guarded", new String[]{"go"});
         assertEquals(1, executor.bodies.get(), "the next call runs");
     }
 

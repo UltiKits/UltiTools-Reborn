@@ -114,7 +114,7 @@ class CloudLoginRconDispatchTest {
     }
 
     private List<String> dispatchLogin() {
-        new CloudLoginCommand().onCommand(rcon, command, "ulticloud", new String[]{"login"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new CloudLoginCommand(),rcon, command, "ulticloud", new String[]{"login"});
         // Snapshot at the moment the dispatch returned: later lines arrive from the session executor.
         return new ArrayList<>(received);
     }

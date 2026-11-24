@@ -13,40 +13,18 @@ import java.lang.reflect.Method;
  * Validates that the command sender has the required permission.
  * Supports both class-level and method-level permission requirements.
  * <p>
- * <b>Which senders actually reach the class-level check (#383, corrected #413).</b> {@code
- * CommandManager.registerCommandDirect} calls {@code command.setPermission(permission)} with the
- * value from {@code @CmdExecutor}, so Paper filters the command out of the command tree of any
- * <em>player who lacks it</em> and answers with a parse error before {@code onCommand} is invoked
- * at all. Measured across 22 permission-gated commands on a real 1.21.4 server: a deop'd player
- * received {@code Unknown or incomplete command} every time and never this validator's message,
- * while an op'd player received real output for the same commands -- the control proving they
- * were registered and working.
+ * As of 7.0, the Brigadier tree uses {@code requires} for class-level permissions and operator
+ * requirements, and on exclusive mapping paths for method-level requirements. The tree hides
+ * nodes a sender cannot use; shared prefixes remain available to their public mappings. Framework
+ * usage replies omit unavailable mappings, including mappings ending at a shared node.
  * <p>
- * The class-level branch is therefore reached by:
- * <ul>
- *   <li>the <b>console</b>, which always satisfies the Bukkit-level check, and</li>
- *   <li>a <b>player who already holds the class-level permission</b> -- the Bukkit-level filter
- *       above only rejects a player who <em>lacks</em> the permission before {@code onCommand}
- *       ever runs; a player who holds it is not filtered, reaches {@code onCommand} normally, and
- *       is still evaluated by this branch, where it trivially passes.</li>
- * </ul>
- * A player lacking the class-level permission never reaches this branch at all -- not because
- * this validator would refuse them, but because the Bukkit-level filter above answers first. An
- * earlier revision of this javadoc said the console was the <em>only</em> sender that reached
- * this branch; that was wrong, and the error was easy to miss because a permitted player passing
- * trivially looks, from the outside, indistinguishable from a player who was never asked.
+ * Visibility is not a replacement for this validator. A reachable execution still checks its
+ * actual sender and current permissions here, including console and panel senders, redirected
+ * execution, shared nodes, and case-normalized re-dispatch. Both permission and operator checks
+ * remain live rather than being captured when the command tree is registered.
  * <p>
- * <b>Method-level</b> permissions declared on {@code @CmdMapping} are not registered with Bukkit,
- * so those branches run for every sender, players included, normally.
- * <p>
- * The Bukkit-level filter itself is deliberate and is not a defect to be fixed by deleting this
- * branch or by dropping the Bukkit registration. Hiding a command a player cannot use is standard
- * Minecraft behaviour and avoids disclosing that the command exists; the branch still governs the
- * console, and still governs any player who does hold the permission. What was wrong before 6.3.0
- * was only that nothing said a permitted player was among the senders reached here. Removing
- * {@code setPermission} so an unpermitted player could see the class-level branch's message too
- * would make every permission-gated command visible in every player's tab completion -- a product
- * decision, not a bug fix, and one for the maintainer rather than this class.
+ * In 6.x, visibility used Bukkit's {@code PluginCommand#setPermission}; that registration path
+ * and {@code BaseCommandExecutor.onCommand} no longer exist.
  *
  * @author wisdomme
  * @version 2.0.0

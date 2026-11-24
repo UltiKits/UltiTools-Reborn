@@ -17,7 +17,6 @@ import java.lang.reflect.Modifier;
 import java.util.Map;
 import java.util.UUID;
 
-import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -74,7 +73,7 @@ class CooldownValidatorExecutorKeyTest {
     private CommandContext contextFor(Object executor) {
         return CommandContext.builder()
                 .sender(player)
-                .command(mock(Command.class))
+                .commandName("test")
                 .alias("go")
                 .rawArgs(new String[]{})
                 .matchedMethod(mapping)

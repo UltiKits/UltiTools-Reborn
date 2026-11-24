@@ -133,14 +133,14 @@ class ValidatorOwnershipReleaseTest {
     }
 
     private void dispatch(BaseCommandExecutor executor, Player player) {
-        executor.onCommand(player, command, "guarded", new String[]{"go"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "guarded", new String[]{"go"});
     }
 
     /** A dispatch context for {@code executor}'s {@code go} mapping, as {@code onCommand} builds it. */
     private CommandContext goContext(BaseCommandExecutor executor, Player player) {
         return CommandContext.builder()
                 .sender(player)
-                .command(command)
+                .commandName(command.getName())
                 .alias("guarded")
                 .rawArgs(new String[]{"go"})
                 .executorClass(executor.getClass())

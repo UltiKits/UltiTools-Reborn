@@ -1,5 +1,6 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -60,7 +61,7 @@ public class ErrorReportAttributionTest {
                 BaseCommandExecutor executor = (BaseCommandExecutor) type.getDeclaredConstructor().newInstance();
                 Command command = mock(Command.class);
                 when(command.getName()).thenReturn("probe");
-                assertThat(executor.onCommand(mock(CommandSender.class), command, "probe", new String[0])).isTrue();
+                assertThat(CommandTestSupport.dispatch(executor, mock(CommandSender.class), command, "probe", new String[0])).isTrue();
                 assertModule(collector, "module-" + suffix.toLowerCase(java.util.Locale.ROOT));
             }
         }

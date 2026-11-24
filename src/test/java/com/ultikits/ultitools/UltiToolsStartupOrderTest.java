@@ -132,6 +132,24 @@ class UltiToolsStartupOrderTest {
                 .noneMatch(Event::isRegistryAssignment);
     }
 
+    @Test
+    @DisplayName("the command listener is installed once in enable before startup tasks can accept commands")
+    void commandListenerIsInstalledOnceDuringEnable() {
+        List<Event> walk = onEnableWalk();
+        List<Event> installations = walk.stream()
+                .filter(event -> "com/ultikits/ultitools/manager/CommandManager".equals(event.owner)
+                        && "registerInternalListeners".equals(event.name)).toList();
+
+        assertThat(installations).as("onEnable installs the command listener through the real manager").hasSize(1);
+        int installation = walk.indexOf(installations.getFirst());
+        int commands = indexOfCall(walk, "registerCommands");
+        int startupTasks = indexOfCall(walk, "scheduleStartupMessages");
+        assertThat(commands).as("the existing core command registration stays before listeners").isNotNegative();
+        assertThat(startupTasks).as("the existing startup task scheduling remains in enable").isNotNegative();
+        assertThat(installation).isGreaterThan(commands).isLessThan(startupTasks);
+        assertThat(installations.getFirst().method).isEqualTo("onEnable");
+    }
+
     // ---- compiled-class walk ----
 
     /** onEnable's events with each call to a method declared in UltiTools expanded one level deep. */

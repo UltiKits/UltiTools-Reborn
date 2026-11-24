@@ -16,7 +16,6 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -133,82 +132,12 @@ class BaseCommandExecutorTest {
             assertTrue(mappings.containsKey("action <param>"));
         }
         
-        @Test
-        @DisplayName("Should match method for valid arguments")
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void shouldMatchMethod() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method matchMethod = BaseCommandExecutor.class.getDeclaredMethod("matchMethod", String[].class);
-            matchMethod.setAccessible(true);
-            
-            Method result = (Method) matchMethod.invoke(executor, (Object) new String[]{"action", "test"});
-            assertNotNull(result);
-            assertEquals("doAction", result.getName());
-        }
+
         
-        @Test
-        @DisplayName("Should return null for no match")
-        void shouldReturnNullForNoMatch() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method matchMethod = BaseCommandExecutor.class.getDeclaredMethod("matchMethod", String[].class);
-            matchMethod.setAccessible(true);
-            
-            Method result = (Method) matchMethod.invoke(executor, (Object) new String[]{"unknown", "cmd"});
-            assertNull(result);
-        }
+
     }
 
-    @Nested
-    @DisplayName("Parameter Parsing Tests")
-    class ParameterParsingTests {
-        
-        @Test
-        @DisplayName("Should parse simple parameters")
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void shouldParseSimpleParameters() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod("parseParameters", String[].class, String.class);
-            parseMethod.setAccessible(true);
-            
-            @SuppressWarnings("unchecked")
-            Map<String, String[]> result = (Map<String, String[]>) parseMethod.invoke(
-                    executor, new String[]{"action", "value"}, "action <param>");
-            
-            assertNotNull(result);
-            assertTrue(result.containsKey("param"));
-            assertEquals("value", result.get("param")[0]);
-        }
-        
-        @Test
-        @DisplayName("Should parse varargs parameters")
-        void shouldParseVarargsParameters() throws Exception {
-            VarargsCommandExecutor executor = new VarargsCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod("parseParameters", String[].class, String.class);
-            parseMethod.setAccessible(true);
-            
-            @SuppressWarnings("unchecked")
-            Map<String, String[]> result = (Map<String, String[]>) parseMethod.invoke(
-                    executor, new String[]{"echo", "hello", "world", "test"}, "echo <message...>");
-            
-            assertNotNull(result);
-            assertTrue(result.containsKey("message"));
-            assertEquals(3, result.get("message").length);
-        }
-        
-        @Test
-        @DisplayName("Should handle empty parameters")
-        void shouldHandleEmptyParameters() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod("parseParameters", String[].class, String.class);
-            parseMethod.setAccessible(true);
-            
-            @SuppressWarnings("unchecked")
-            Map<String, String[]> result = (Map<String, String[]>) parseMethod.invoke(
-                    executor, new String[]{}, "");
-            
-            assertTrue(result.isEmpty());
-        }
-    }
+
 
     @Nested
     @DisplayName("Help Command Tests")
@@ -218,7 +147,7 @@ class BaseCommandExecutorTest {
         @DisplayName("Should handle help command")
         void shouldHandleHelpCommand() {
             TestCommandExecutor executor = new TestCommandExecutor();
-            boolean result = executor.onCommand(mockPlayer, mockCommand, "test", new String[]{"help"});
+            boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "test", new String[]{"help"});
             assertTrue(result);
             assertTrue(executor.helpCalled);
         }
@@ -267,7 +196,7 @@ class BaseCommandExecutorTest {
         void shouldReturnSuggestionsForFirstArg() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
-            List<String> suggestions = executor.onTabComplete(mockPlayer, mockCommand, "test", new String[]{"a"});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockPlayer, mockCommand, "test", new String[]{"a"});
             
             assertNotNull(suggestions);
             assertTrue(suggestions.contains("action"));
@@ -278,7 +207,7 @@ class BaseCommandExecutorTest {
         void shouldReturnMappedLiteralsForConsoleSender() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
-            List<String> suggestions = executor.onTabComplete(mockSender, mockCommand, "test", new String[]{"a"});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockSender, mockCommand, "test", new String[]{"a"});
             
             assertTrue(suggestions.contains("action"));
         }
@@ -288,7 +217,7 @@ class BaseCommandExecutorTest {
         void shouldReturnNoSuggestionsForConsoleOnlyCommand() {
             ConsoleOnlyExecutor executor = new ConsoleOnlyExecutor();
             
-            List<String> suggestions = executor.onTabComplete(mockPlayer, mockCommand, "consoleonly", new String[]{"r"});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockPlayer, mockCommand, "consoleonly", new String[]{"r"});
             
             assertTrue(suggestions.isEmpty());
         }
@@ -298,7 +227,7 @@ class BaseCommandExecutorTest {
         void shouldReturnEmptyForNonMatchingPrefix() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
-            List<String> suggestions = executor.onTabComplete(mockPlayer, mockCommand, "test", new String[]{"xyz"});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockPlayer, mockCommand, "test", new String[]{"xyz"});
             
             assertNotNull(suggestions);
             assertFalse(suggestions.contains("action"));
@@ -310,78 +239,13 @@ class BaseCommandExecutorTest {
             TestCommandExecutor executor = new TestCommandExecutor();
             
             // With empty prefix, should match action and multi
-            List<String> suggestions = executor.onTabComplete(mockPlayer, mockCommand, "test", new String[]{""});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockPlayer, mockCommand, "test", new String[]{""});
             
             assertNotNull(suggestions);
         }
     }
 
-    @Nested
-    @DisplayName("Calculate Match Score Tests")
-    class MatchScoreTests {
-        
-        @Test
-        @DisplayName("Should calculate higher score for exact match")
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void shouldCalculateHigherScoreForExactMatch() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method calcMethod = BaseCommandExecutor.class.getDeclaredMethod("calculateMatchScore", String[].class, String[].class);
-            calcMethod.setAccessible(true);
-            
-            int exactScore = (int) calcMethod.invoke(executor, new String[]{"action"}, new String[]{"action"});
-            int paramScore = (int) calcMethod.invoke(executor, new String[]{"<param>"}, new String[]{"action"});
-            
-            assertTrue(exactScore > paramScore);
-        }
-        
-        @Test
-        @DisplayName("Should return -1 for no match")
-        void shouldReturnNegativeForNoMatch() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method calcMethod = BaseCommandExecutor.class.getDeclaredMethod("calculateMatchScore", String[].class, String[].class);
-            calcMethod.setAccessible(true);
-            
-            int score = (int) calcMethod.invoke(executor, new String[]{"action"}, new String[]{"other"});
-            
-            assertEquals(-1, score);
-        }
-        
-        @Test
-        @DisplayName("Should handle empty arrays")
-        void shouldHandleEmptyArrays() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method calcMethod = BaseCommandExecutor.class.getDeclaredMethod("calculateMatchScore", String[].class, String[].class);
-            calcMethod.setAccessible(true);
-            
-            int score = (int) calcMethod.invoke(executor, new String[]{}, new String[]{});
-            
-            assertEquals(100, score);
-        }
-        
-        @Test
-        @DisplayName("Should handle varargs format")
-        void shouldHandleVarargsFormat() throws Exception {
-            VarargsCommandExecutor executor = new VarargsCommandExecutor();
-            Method calcMethod = BaseCommandExecutor.class.getDeclaredMethod("calculateMatchScore", String[].class, String[].class);
-            calcMethod.setAccessible(true);
-            
-            int score = (int) calcMethod.invoke(executor, new String[]{"echo", "<message...>"}, new String[]{"echo", "hello", "world"});
-            
-            assertTrue(score > 0);
-        }
-        
-        @Test
-        @DisplayName("Should return -1 when actual args longer than format without varargs")
-        void shouldReturnNegativeWhenActualLonger() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method calcMethod = BaseCommandExecutor.class.getDeclaredMethod("calculateMatchScore", String[].class, String[].class);
-            calcMethod.setAccessible(true);
-            
-            int score = (int) calcMethod.invoke(executor, new String[]{"action"}, new String[]{"action", "extra", "args"});
-            
-            assertEquals(-1, score);
-        }
-    }
+
     
     @Nested
     @DisplayName("onCommand Tests")
@@ -392,24 +256,14 @@ class BaseCommandExecutorTest {
         void shouldHandleUnknownCommand() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
-            boolean result = executor.onCommand(mockPlayer, mockCommand, "test", new String[]{"unknown", "cmd"});
+            boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "test", new String[]{"unknown", "cmd"});
             
             assertTrue(result);
-            assertTrue(executor.helpCalled); // Should show help for unknown command
+            assertTrue(executor.helpCalled);
+            verify(mockPlayer).sendMessage(contains("未知指令"));
         }
         
-        @Test
-        @DisplayName("Should match empty format for no args")
-        void shouldMatchEmptyFormatForNoArgs() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method matchMethod = BaseCommandExecutor.class.getDeclaredMethod("matchMethod", String[].class);
-            matchMethod.setAccessible(true);
-            
-            Method result = (Method) matchMethod.invoke(executor, (Object) new String[]{});
-            
-            assertNotNull(result);
-            assertEquals("doDefault", result.getName());
-        }
+
         
         @Test
         @DisplayName("Should return true when validation fails with error message")
@@ -424,7 +278,7 @@ class BaseCommandExecutorTest {
             ValidatorChain failChain = ValidatorChain.builder().add(failingValidator).build();
             FailValidationExecutor executor = new FailValidationExecutor(failChain);
             
-            boolean result = executor.onCommand(mockPlayer, mockCommand, "failvalidation", new String[]{"run"});
+            boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "failvalidation", new String[]{"run"});
             
             assertTrue(result);
             // The validation failure should have sent the error message to the player
@@ -443,72 +297,13 @@ class BaseCommandExecutorTest {
             ValidatorChain failChain = ValidatorChain.builder().add(failingValidator).build();
             FailValidationExecutor executor = new FailValidationExecutor(failChain);
             
-            boolean result = executor.onCommand(mockPlayer, mockCommand, "failvalidation", new String[]{"run"});
+            boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "failvalidation", new String[]{"run"});
             
             assertTrue(result);
         }
     }
     
-    @Nested
-    @DisplayName("Parameter Validation Tests")
-    class ParameterValidationTests {
-        
-        @Test
-        @DisplayName("Should validate parameter count correctly")
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void shouldValidateParameterCount() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method validateMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "validateParameterCount", String[].class, String.class, CommandSender.class, Command.class);
-            validateMethod.setAccessible(true);
-            
-            // Correct count
-            boolean correct = (boolean) validateMethod.invoke(executor, 
-                    new String[]{"action", "value"}, "action <param>", mockPlayer, mockCommand);
-            assertTrue(correct);
-        }
-        
-        @Test
-        @DisplayName("Should fail validation for wrong parameter count")
-        void shouldFailValidationForWrongCount() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method validateMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "validateParameterCount", String[].class, String.class, CommandSender.class, Command.class);
-            validateMethod.setAccessible(true);
-            
-            // Too few args
-            boolean tooFew = (boolean) validateMethod.invoke(executor, 
-                    new String[]{"action"}, "action <param>", mockPlayer, mockCommand);
-            assertFalse(tooFew);
-        }
-        
-        @Test
-        @DisplayName("Should pass validation for varargs")
-        void shouldPassValidationForVarargs() throws Exception {
-            VarargsCommandExecutor executor = new VarargsCommandExecutor();
-            Method validateMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "validateParameterCount", String[].class, String.class, CommandSender.class, Command.class);
-            validateMethod.setAccessible(true);
-            
-            boolean result = (boolean) validateMethod.invoke(executor, 
-                    new String[]{"echo", "hello", "world", "test"}, "echo <message...>", mockPlayer, mockCommand);
-            assertTrue(result);
-        }
-        
-        @Test
-        @DisplayName("Should fail validation for varargs with too few args")
-        void shouldFailValidationForVarargsWithTooFewArgs() throws Exception {
-            VarargsCommandExecutor executor = new VarargsCommandExecutor();
-            Method validateMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "validateParameterCount", String[].class, String.class, CommandSender.class, Command.class);
-            validateMethod.setAccessible(true);
-            
-            // No message at all (need at least "echo")
-            boolean result = (boolean) validateMethod.invoke(executor, 
-                    new String[]{}, "echo <message...>", mockPlayer, mockCommand);
-            assertFalse(result);
-        }
-    }
+
     
     @Nested
     @DisplayName("Build Method Params Tests")
@@ -526,7 +321,7 @@ class BaseCommandExecutorTest {
             Method targetMethod = TypedParamsExecutor.class.getDeclaredMethod("doNoParam");
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("types")
                     .rawArgs(new String[]{"noparam"})
                     .build();
@@ -548,7 +343,7 @@ class BaseCommandExecutorTest {
             Method targetMethod = TypedParamsExecutor.class.getDeclaredMethod("doSender", CommandSender.class);
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("types")
                     .rawArgs(new String[]{"sender"})
                     .build();
@@ -571,7 +366,7 @@ class BaseCommandExecutorTest {
             Method targetMethod = PlayerSenderExecutor.class.getDeclaredMethod("doPlayerSender", Player.class);
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("playersender")
                     .rawArgs(new String[]{"playersender"})
                     .build();
@@ -595,7 +390,7 @@ class BaseCommandExecutorTest {
             Method targetMethod = PlayerSenderExecutor.class.getDeclaredMethod("doPlayerSender", Player.class);
             CommandContext context = CommandContext.builder()
                     .sender(mockSender) // Not a Player
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("playersender")
                     .rawArgs(new String[]{"playersender"})
                     .build();
@@ -616,11 +411,11 @@ class BaseCommandExecutorTest {
             buildMethod.setAccessible(true);
             
             Method targetMethod = TestCommandExecutor.class.getDeclaredMethod("doAction", Player.class, String.class);
-            Map<String, String[]> params = new HashMap<>();
+            Map<String, Object> params = new HashMap<>();
             params.put("param", new String[]{"value"});
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{"action", "value"})
                     .build();
@@ -641,7 +436,7 @@ class BaseCommandExecutorTest {
             Method targetMethod = SenderNoAnnotationExecutor.class.getDeclaredMethod("doSenderNoAnnotation", CommandSender.class);
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("sendernoannot")
                     .rawArgs(new String[]{"sendernoannot"})
                     .build();
@@ -664,7 +459,7 @@ class BaseCommandExecutorTest {
             Method targetMethod = NoAnnotationParamExecutor.class.getDeclaredMethod("doNoAnnotation", String.class);
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("noannotparam")
                     .rawArgs(new String[]{"noannotation"})
                     .build();
@@ -677,241 +472,14 @@ class BaseCommandExecutorTest {
             assertNull(result[0]);
         }
         
-        @Test
-        @DisplayName("Should return null when TypeParseException is thrown")
-        void shouldReturnNullWhenTypeParseExceptionThrown() throws Exception {
-            UnsupportedTypeExecutor executor = new UnsupportedTypeExecutor();
-            Method buildMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "buildMethodParams", CommandContext.class, Method.class);
-            buildMethod.setAccessible(true);
-            
-            Method targetMethod = UnsupportedTypeExecutor.class.getDeclaredMethod("doProcess", Player.class, java.util.Date.class);
-            Map<String, String[]> params = new HashMap<>();
-            params.put("data", new String[]{"2024-01-01"});
-            CommandContext context = CommandContext.builder()
-                    .sender(mockPlayer)
-                    .command(mockCommand)
-                    .alias("unsupportedtype")
-                    .rawArgs(new String[]{"process", "2024-01-01"})
-                    .parsedParams(params)
-                    .build();
-            
-            Object[] result = (Object[]) buildMethod.invoke(executor, context, targetMethod);
-            
-            // Should return null due to TypeParseException for unsupported Date type
-            assertNull(result);
-        }
+
     }
     
-    @Nested
-    @DisplayName("Parse Parameter Value Tests")
-    class ParseParameterValueTests {
-        
-        @Test
-        @DisplayName("Should return empty string for null values")
-        void shouldReturnEmptyStringForNullValues() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameterValue", String[].class, Class.class);
-            parseMethod.setAccessible(true);
-            
-            String result = (String) parseMethod.invoke(executor, null, String.class);
-            
-            assertEquals("", result);
-        }
-        
-        @Test
-        @DisplayName("Should return null for non-String type with null values")
-        void shouldReturnNullForNonStringTypeWithNullValues() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameterValue", String[].class, Class.class);
-            parseMethod.setAccessible(true);
-            
-            Object result = parseMethod.invoke(executor, null, Integer.class);
-            
-            assertNull(result);
-        }
-        
-        @Test
-        @DisplayName("Should return null for empty array with non-String type")
-        void shouldReturnNullForEmptyArrayWithNonStringType() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameterValue", String[].class, Class.class);
-            parseMethod.setAccessible(true);
-            
-            Object result = parseMethod.invoke(executor, new String[]{}, Integer.class);
-            
-            assertNull(result);
-        }
-        
-        @Test
-        @DisplayName("Should parse single value")
-        void shouldParseSingleValue() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameterValue", String[].class, Class.class);
-            parseMethod.setAccessible(true);
-            
-            Object result = parseMethod.invoke(executor, new String[]{"hello"}, String.class);
-            
-            assertEquals("hello", result);
-        }
-        
-        @Test
-        @DisplayName("Should parse array type")
-        void shouldParseArrayType() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameterValue", String[].class, Class.class);
-            parseMethod.setAccessible(true);
-            
-            Object result = parseMethod.invoke(executor, new String[]{"a", "b", "c"}, String[].class);
-            
-            assertNotNull(result);
-            assertTrue(result instanceof String[]);
-            String[] array = (String[]) result;
-            assertEquals(3, array.length);
-        }
-        
-        @Test
-        @DisplayName("Should join multiple values for String type")
-        void shouldJoinMultipleValuesForStringType() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameterValue", String[].class, Class.class);
-            parseMethod.setAccessible(true);
-            
-            String result = (String) parseMethod.invoke(executor, new String[]{"hello", "world"}, String.class);
-            
-            assertEquals("hello world", result);
-        }
-    }
+
     
-    @Nested
-    @DisplayName("Extract Parameter Name Tests")
-    class ExtractParameterNameTests {
-        
-        @Test
-        @DisplayName("Should extract name from simple parameter")
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void shouldExtractSimpleName() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method extractMethod = BaseCommandExecutor.class.getDeclaredMethod("extractParameterName", String.class);
-            extractMethod.setAccessible(true);
-            
-            String name = (String) extractMethod.invoke(executor, "<param>");
-            
-            assertEquals("param", name);
-        }
-        
-        @Test
-        @DisplayName("Should extract name from varargs parameter")
-        void shouldExtractVarargsName() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method extractMethod = BaseCommandExecutor.class.getDeclaredMethod("extractParameterName", String.class);
-            extractMethod.setAccessible(true);
-            
-            String name = (String) extractMethod.invoke(executor, "<message...>");
-            
-            assertEquals("message", name);
-        }
-    }
+
     
-    @Nested
-    @DisplayName("Parse Parameters Tests")
-    class ParseParametersTests {
-        
-        @Test
-        @DisplayName("Should parse single parameter")
-        void shouldParseSingleParameter() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameters", String[].class, String.class);
-            parseMethod.setAccessible(true);
-            
-            @SuppressWarnings("unchecked")
-            Map<String, String[]> result = (Map<String, String[]>) parseMethod.invoke(
-                    executor, new String[]{"action", "myvalue"}, "action <param>");
-            
-            assertNotNull(result);
-            assertTrue(result.containsKey("param"));
-            assertEquals("myvalue", result.get("param")[0]);
-        }
-        
-        @Test
-        @DisplayName("Should parse multiple parameters")
-        void shouldParseMultipleParameters() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameters", String[].class, String.class);
-            parseMethod.setAccessible(true);
-            
-            @SuppressWarnings("unchecked")
-            Map<String, String[]> result = (Map<String, String[]>) parseMethod.invoke(
-                    executor, new String[]{"multi", "value1", "value2"}, "multi <a> <b>");
-            
-            assertNotNull(result);
-            assertTrue(result.containsKey("a"));
-            assertTrue(result.containsKey("b"));
-            assertEquals("value1", result.get("a")[0]);
-            assertEquals("value2", result.get("b")[0]);
-        }
-        
-        @Test
-        @DisplayName("Should return empty map for empty args")
-        void shouldReturnEmptyMapForEmptyArgs() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameters", String[].class, String.class);
-            parseMethod.setAccessible(true);
-            
-            @SuppressWarnings("unchecked")
-            Map<String, String[]> result = (Map<String, String[]>) parseMethod.invoke(
-                    executor, new String[]{}, "action <param>");
-            
-            assertNotNull(result);
-            assertTrue(result.isEmpty());
-        }
-        
-        @Test
-        @DisplayName("Should return empty map for null format")
-        void shouldReturnEmptyMapForNullFormat() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameters", String[].class, String.class);
-            parseMethod.setAccessible(true);
-            
-            @SuppressWarnings("unchecked")
-            Map<String, String[]> result = (Map<String, String[]>) parseMethod.invoke(
-                    executor, new String[]{"action"}, null);
-            
-            assertNotNull(result);
-            assertTrue(result.isEmpty());
-        }
-        
-        @Test
-        @DisplayName("Should parse varargs parameters")
-        void shouldParseVarargsParameters() throws Exception {
-            VarargsCommandExecutor executor = new VarargsCommandExecutor();
-            Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod(
-                    "parseParameters", String[].class, String.class);
-            parseMethod.setAccessible(true);
-            
-            @SuppressWarnings("unchecked")
-            Map<String, String[]> result = (Map<String, String[]>) parseMethod.invoke(
-                    executor, new String[]{"echo", "hello", "world", "test"}, "echo <message...>");
-            
-            assertNotNull(result);
-            assertTrue(result.containsKey("message"));
-            String[] messages = result.get("message");
-            assertEquals(3, messages.length);
-            assertEquals("hello", messages[0]);
-            assertEquals("world", messages[1]);
-            assertEquals("test", messages[2]);
-        }
-    }
+
     
     @Nested
     @DisplayName("Get Next Suggestions Tests")
@@ -922,54 +490,14 @@ class BaseCommandExecutorTest {
         void shouldReturnLiteralSuggestions() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
-            List<String> suggestions = executor.onTabComplete(mockPlayer, mockCommand, "test", new String[]{""});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockPlayer, mockCommand, "test", new String[]{""});
             
             assertNotNull(suggestions);
             assertTrue(suggestions.contains("action") || suggestions.contains("multi"));
         }
     }
     
-    @Nested
-    @DisplayName("Is Parameter Tests")
-    class IsParameterTests {
-        
-        @Test
-        @DisplayName("Should detect parameter placeholder")
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void shouldDetectParameter() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method isParamMethod = BaseCommandExecutor.class.getDeclaredMethod("isParameter", String.class);
-            isParamMethod.setAccessible(true);
-            
-            boolean result = (boolean) isParamMethod.invoke(executor, "<param>");
-            
-            assertTrue(result);
-        }
-        
-        @Test
-        @DisplayName("Should not detect literal as parameter")
-        void shouldNotDetectLiteralAsParameter() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method isParamMethod = BaseCommandExecutor.class.getDeclaredMethod("isParameter", String.class);
-            isParamMethod.setAccessible(true);
-            
-            boolean result = (boolean) isParamMethod.invoke(executor, "action");
-            
-            assertFalse(result);
-        }
-        
-        @Test
-        @DisplayName("Should detect varargs parameter")
-        void shouldDetectVarargsParameter() throws Exception {
-            TestCommandExecutor executor = new TestCommandExecutor();
-            Method isParamMethod = BaseCommandExecutor.class.getDeclaredMethod("isParameter", String.class);
-            isParamMethod.setAccessible(true);
-            
-            boolean result = (boolean) isParamMethod.invoke(executor, "<message...>");
-            
-            assertTrue(result);
-        }
-    }
+
     
     @Nested
     @DisplayName("Suggest Method Tests")
@@ -980,7 +508,7 @@ class BaseCommandExecutorTest {
         void shouldReturnSuggestionsForFirstArg() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
-            List<String> suggestions = executor.onTabComplete(mockPlayer, mockCommand, "test", new String[]{"a"});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockPlayer, mockCommand, "test", new String[]{"a"});
             
             assertNotNull(suggestions);
         }
@@ -990,7 +518,7 @@ class BaseCommandExecutorTest {
         void shouldReturnMappedLiteralsForConsoleSender() {
             TestCommandExecutor executor = new TestCommandExecutor();
             
-            List<String> suggestions = executor.onTabComplete(mockSender, mockCommand, "test", new String[]{"action"});
+            List<String> suggestions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, mockSender, mockCommand, "test", new String[]{"a"});
             
             assertTrue(suggestions.contains("action"));
         }
@@ -1032,8 +560,8 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubSyncScheduler(bukkit);
-                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
-                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "seam", new String[]{"ping"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "seam", new String[]{"ping"});
             }
 
             assertEquals(1, executor.pingCount,
@@ -1048,8 +576,8 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubSyncScheduler(bukkit);
-                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
-                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "seam", new String[]{"ping"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "seam", new String[]{"ping"});
             }
 
             assertEquals(2, executor.pingCount,
@@ -1073,7 +601,7 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubSyncScheduler(bukkit);
-                executor.onCommand(mockPlayer, mockCommand, "postaction", new String[]{"go"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "postaction", new String[]{"go"});
             }
 
             assertEquals(1, executor.invokeCount);
@@ -1093,7 +621,7 @@ class BaseCommandExecutorTest {
             ValidatorChain chain = ValidatorChain.builder().add(failing).add(second).build();
             PostActionOrderExecutor executor = new PostActionOrderExecutor(chain);
 
-            boolean result = executor.onCommand(mockPlayer, mockCommand, "postaction", new String[]{"go"});
+            boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "postaction", new String[]{"go"});
 
             assertTrue(result);
             assertEquals(0, executor.invokeCount, "the mapped method must not run when validation fails");
@@ -1111,7 +639,7 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubSyncScheduler(bukkit);
-                executor.onCommand(mockPlayer, mockCommand, "throwing", new String[]{"boom"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "throwing", new String[]{"boom"});
             }
 
             Method method = ThrowingCommandExecutor.class.getDeclaredMethod("doBoom", Player.class);
@@ -1127,7 +655,7 @@ class BaseCommandExecutorTest {
             ValidatorChain chain = ValidatorChain.builder().add(cooldown).add(refusing).build();
             ThrowingCommandExecutor executor = new ThrowingCommandExecutor(chain);
 
-            executor.onCommand(mockPlayer, mockCommand, "throwing", new String[]{"boom"});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "throwing", new String[]{"boom"});
 
             Method method = ThrowingCommandExecutor.class.getDeclaredMethod("doBoom", Player.class);
             assertEquals(0, cooldown.getRemainingCooldown(player1UUID, executor, method.toString()));
@@ -1143,7 +671,7 @@ class BaseCommandExecutorTest {
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubSyncScheduler(bukkit);
                 assertDoesNotThrow(() ->
-                        executor.onCommand(mockPlayer, mockCommand, "throwing", new String[]{"boom"}));
+                        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "throwing", new String[]{"boom"}));
             }
 
             assertEquals(1, recorder.completions.size());
@@ -1160,7 +688,7 @@ class BaseCommandExecutorTest {
         void shouldExecuteBareCommandBody() {
             BareCommandExecutor executor = new BareCommandExecutor();
 
-            boolean result = executor.onCommand(mockPlayer, mockCommand, "bare", new String[]{});
+            boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "bare", new String[]{});
 
             assertTrue(result);
             assertTrue(executor.bareCalled, "the body of the bare command should have been invoked");
@@ -1172,26 +700,14 @@ class BaseCommandExecutorTest {
         void shouldNotSendUsageForBareCommand() {
             BareCommandExecutor executor = new BareCommandExecutor();
 
-            executor.onCommand(mockPlayer, mockCommand, "bare", new String[]{});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "bare", new String[]{});
 
             verify(mockPlayer, never()).sendMessage(anyString());
         }
 
-        @Test
-        @DisplayName("Should accept an empty format when no arguments are given")
-        void shouldValidateEmptyFormatWithNoArgs() {
-            BareCommandExecutor executor = new BareCommandExecutor();
 
-            assertTrue(executor.validateParameterCount(new String[]{}, "", mockPlayer, mockCommand));
-        }
 
-        @Test
-        @DisplayName("Should reject an empty format when arguments are supplied")
-        void shouldRejectEmptyFormatWithArgs() {
-            BareCommandExecutor executor = new BareCommandExecutor();
 
-            assertFalse(executor.validateParameterCount(new String[]{"extra"}, "", mockPlayer, mockCommand));
-        }
     }
 
     /**
@@ -1301,7 +817,7 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
-                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"defaultTimeout"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "asynctest", new String[]{"defaultTimeout"});
                 // Run whatever the initial dispatch captured -- on the pre-fix build this is the
                 // outer wrapping runnable, and running it triggers a SECOND
                 // runTaskAsynchronously call from inside its own run() body.
@@ -1324,7 +840,7 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
-                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"noTimeout"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "asynctest", new String[]{"noTimeout"});
                 for (Runnable r : new ArrayList<>(asyncDispatches)) {
                     r.run();
                 }
@@ -1346,7 +862,7 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
-                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"slow"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "asynctest", new String[]{"slow"});
 
                 assertEquals(1, asyncDispatches.size(),
                         "the body must be scheduled exactly once even with an explicit timeout");
@@ -1394,7 +910,7 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
-                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"fast"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "asynctest", new String[]{"fast"});
 
                 assertEquals(1, asyncDispatches.size());
                 assertEquals(1, delayedDispatches.size());
@@ -1425,7 +941,7 @@ class BaseCommandExecutorTest {
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
-                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"slowThrow"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "asynctest", new String[]{"slowThrow"});
 
                 assertEquals(1, asyncDispatches.size());
                 assertEquals(1, delayedDispatches.size());
@@ -1469,7 +985,7 @@ class BaseCommandExecutorTest {
                 // #541: on the primary thread the body runs at dispatch; nothing is scheduled.
                 bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
 
-                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"sync"});
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "asynctest", new String[]{"sync"});
 
                 verify(scheduler, never()).runTask(any(Plugin.class), any(Runnable.class));
                 verify(scheduler, never()).runTaskAsynchronously(any(Plugin.class), any(Runnable.class));

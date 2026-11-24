@@ -64,14 +64,14 @@ class ValidationChainTest {
         
         playerContext = CommandContext.builder()
                 .sender(mockPlayer)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .build();
         
         consoleContext = CommandContext.builder()
                 .sender(mockConsole)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .build();

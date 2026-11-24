@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -30,6 +31,8 @@ import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 import org.mockito.MockedStatic;
 
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
@@ -158,7 +161,7 @@ class PluginInstallCommandsTest {
     void testHelp() {
         if (executor == null) return;
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"help"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"help"});
         server.getScheduler().performOneTick();
         
         assertThat(result).isTrue();
@@ -210,7 +213,7 @@ class PluginInstallCommandsTest {
         
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList());
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"list", "1"});
         
         // Wait for async task
         try {
@@ -243,7 +246,7 @@ class PluginInstallCommandsTest {
         
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList());
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"list"});
         
         try {
             Thread.sleep(100);
@@ -278,7 +281,7 @@ class PluginInstallCommandsTest {
         
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(installedPlugin));
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"list", "1"});
         
         try {
             Thread.sleep(100);
@@ -303,7 +306,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"install", "test-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
@@ -325,7 +328,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"install", "test-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
@@ -347,7 +350,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"install", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -369,7 +372,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"install", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -392,7 +395,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"versions", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -414,7 +417,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"versions", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -436,7 +439,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -458,7 +461,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -480,7 +483,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -496,7 +499,7 @@ class PluginInstallCommandsTest {
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
                 .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
 
-        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
 
         List<String> messages = drainMessages();
@@ -517,7 +520,7 @@ class PluginInstallCommandsTest {
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
                 .thenThrow(new java.nio.file.FileSystemException(jarPath, null, "Permission denied"));
 
-        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
 
         List<String> messages = drainMessages();
@@ -729,7 +732,7 @@ class PluginInstallCommandsTest {
         
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList());
         
-        boolean result = executor.onCommand(console, mockCommand, "upm", new String[]{"list"});
+        boolean result = CommandTestSupport.dispatch(executor, console, mockCommand, "upm", new String[]{"list"});
         
         try {
             Thread.sleep(100);
@@ -756,7 +759,7 @@ class PluginInstallCommandsTest {
             return;
         }
         
-        boolean result = executor.onCommand(console, mockCommand, "upm", 
+        boolean result = CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
             new String[]{"install", "test-plugin"});
         server.getScheduler().performOneTick();
         
@@ -784,7 +787,7 @@ class PluginInstallCommandsTest {
         
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList());
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "invalid"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"list", "invalid"});
         
         try {
             Thread.sleep(100);
@@ -814,7 +817,7 @@ class PluginInstallCommandsTest {
         
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList());
         
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"list", "1"});
         
         try {
             Thread.sleep(100);
@@ -827,18 +830,19 @@ class PluginInstallCommandsTest {
     }
 
     @Test
-    @DisplayName("Should handle command without OP permission")
+    @DisplayName("Should hide the command and reject dispatch without OP permission")
     void testNoOpPermission() {
-        if (executor == null) return;
-
+        assertThat(executor).isNotNull();
         player.setOp(false);
         player.addAttachment(UltiTools.getInstance(), "ultikits.tools.admin", false);
+        var dispatcher = CommandTestSupport.dispatcher(executor, "upm");
+        var source = CommandTestSupport.source(player);
 
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"help"});
+        assertThat(dispatcher.getRoot().getChild("upm").canUse(source)).isFalse();
+        assertThatThrownBy(() -> dispatcher.execute("upm help", source))
+                .isInstanceOf(CommandSyntaxException.class);
         server.getScheduler().performOneTick();
-
-        assertThat(result).isTrue();
-        // Command should still execute, just with limited functionality
+        assertThat(player.nextMessage()).as("a hidden root must not enter the help body").isNull();
     }
 
     @Test
@@ -851,7 +855,7 @@ class PluginInstallCommandsTest {
         when(mockUpdateManager.hasAnyUpdates()).thenReturn(false);
         when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
 
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"check"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"check"});
         server.getScheduler().performOneTick();
 
         assertThat(result).isTrue();
@@ -875,7 +879,7 @@ class PluginInstallCommandsTest {
         when(mockUpdateManager.getModuleUpdates()).thenReturn(new HashMap<>());
         when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
 
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"check"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"check"});
         server.getScheduler().performOneTick();
 
         assertThat(result).isTrue();
@@ -908,7 +912,7 @@ class PluginInstallCommandsTest {
         when(mockUpdateManager.getModuleUpdates()).thenReturn(updates);
         when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
 
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"check"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"check"});
         server.getScheduler().performOneTick();
 
         assertThat(result).isTrue();
@@ -945,7 +949,7 @@ class PluginInstallCommandsTest {
             return;
         }
 
-        boolean result = executor.onCommand(player, mockCommand, "upm",
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"update", "TestPlugin"});
 
         try {
@@ -968,7 +972,7 @@ class PluginInstallCommandsTest {
         when(mockUpdateManager.getModuleUpdates()).thenReturn(new HashMap<>());
         when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
 
-        boolean result = executor.onCommand(player, mockCommand, "upm",
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"update", "NonExistent"});
 
         try {
@@ -1013,7 +1017,7 @@ class PluginInstallCommandsTest {
             return;
         }
 
-        boolean result = executor.onCommand(player, mockCommand, "upm",
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
             new String[]{"update", "all"});
 
         try {
@@ -1031,7 +1035,7 @@ class PluginInstallCommandsTest {
     void testHelpContainsCheckAndUpdate() {
         if (executor == null) return;
 
-        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"help"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"help"});
         server.getScheduler().performOneTick();
 
         assertThat(result).isTrue();
@@ -1172,7 +1176,7 @@ class PluginInstallCommandsTest {
             }
             when(mockPluginManager.getPluginList()).thenReturn(new ArrayList<>());
 
-            boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+            boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"list", "1"});
             server.getScheduler().performTicks(20);
 
             assertThat(result).isTrue();
@@ -1199,7 +1203,7 @@ class PluginInstallCommandsTest {
             }
             when(mockPluginManager.getPluginList()).thenReturn(new ArrayList<>());
 
-            boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+            boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"list", "1"});
             server.getScheduler().performTicks(20);
 
             assertThat(result).isTrue();
@@ -1385,7 +1389,7 @@ class PluginInstallCommandsTest {
         }
 
         private String reply(String... args) {
-            executor.onCommand(player, mockCommand, "upm", args);
+            CommandTestSupport.dispatch(executor, player, mockCommand, "upm", args);
             server.getScheduler().performOneTick();
             return player.nextMessage();
         }

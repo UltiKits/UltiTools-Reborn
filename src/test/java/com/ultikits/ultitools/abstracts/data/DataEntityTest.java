@@ -503,7 +503,7 @@ public class DataEntityTest {
                 bukkitMock.when(Bukkit::isPrimaryThread).thenReturn(true);
                 UltiTools mockUltiTools = stubUltiTools();
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                executor.onCommand(sender, mockCommand, "probe", args);
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);
             }
         }
 
@@ -519,7 +519,7 @@ public class DataEntityTest {
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 UltiTools mockUltiTools = stubUltiTools();
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                executor.onCommand(sender, mockCommand, "probe", args);
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);
             }
         }
 
@@ -667,7 +667,7 @@ public class DataEntityTest {
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 UltiTools mockUltiTools = stubUltiTools();
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                executor.onCommand(sender, mockCommand, "probe", args);
+                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);
             }
         }
 
