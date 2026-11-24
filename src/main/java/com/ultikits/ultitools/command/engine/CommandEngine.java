@@ -18,6 +18,7 @@ public final class CommandEngine {
     private final CommandBindings bindings;
     private final CommandTreeCompiler compiler;
     private final LifecycleCommandInstaller installer;
+    private boolean listenerInstalled;
 
     /** Creates the Paper-backed engine. */
     public CommandEngine() {
@@ -43,7 +44,7 @@ public final class CommandEngine {
      */
     public boolean register(Object owner, String ownerName, BaseCommandExecutor executor, String description,
             String permission, boolean requireOp, List<String> aliases) {
-        installer.ensureInstalled();
+        ensureInstalled();
         List<String> labels = aliases;
         if (labels.isEmpty()) {
             CmdExecutor annotation = MergedAnnotationResolver.find(executor.getClass(), CmdExecutor.class);
@@ -57,7 +58,14 @@ public final class CommandEngine {
         var replies = new FrameworkReplies(executor, command.tree(),
                 (input, source) -> bindings.dispatch(command.label(), input, source));
         var decorated = new CompiledCommand(command.label(), command.aliases(), command.description(), replies.tree(), command.signature());
-        return bindings.bind(owner, ownerName, executor, decorated);
+        return bindings.bind(owner, ownerName, executor, decorated, replies);
+    }
+
+    private synchronized void ensureInstalled() {
+        installer.ensureInstalled();
+        if (!installer.isInstalled() || listenerInstalled) return;
+        Bukkit.getPluginManager().registerEvents(new HiddenCommandListener(bindings), UltiTools.getInstance());
+        listenerInstalled = true;
     }
 
     /**
@@ -68,7 +76,7 @@ public final class CommandEngine {
      * @return whether ownership accepted the command
      */
     public boolean register(Object owner, String ownerName, BrigadierCommand command) {
-        installer.ensureInstalled();
+        ensureInstalled();
         return bindings.bind(owner, ownerName, command, HandWrittenCommands.compile(command));
     }
 

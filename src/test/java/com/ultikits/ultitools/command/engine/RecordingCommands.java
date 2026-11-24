@@ -19,6 +19,11 @@ import io.papermc.paper.plugin.configuration.PluginMeta;
 public final class RecordingCommands implements Commands {
     private final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
     int registrations;
+    private final String namespace;
+
+    public RecordingCommands() { this(null); }
+    RecordingCommands(String namespace) { this.namespace = namespace; }
+
     @Override public CommandDispatcher<CommandSourceStack> getDispatcher() { return dispatcher; }
     @Override public Set<String> register(LiteralCommandNode<CommandSourceStack> node, String description,
             Collection<String> aliases) {
@@ -32,6 +37,14 @@ public final class RecordingCommands implements Commands {
             dispatcher.register(LiteralArgumentBuilder.<CommandSourceStack>literal(alias)
                     .requires(rebuilt.getRequirement()).redirect(rebuilt));
             registered.add(alias);
+        }
+        if (namespace != null) {
+            for (String label : Set.copyOf(registered)) {
+                String qualified = namespace + ":" + label;
+                dispatcher.register(LiteralArgumentBuilder.<CommandSourceStack>literal(qualified)
+                        .requires(rebuilt.getRequirement()).redirect(rebuilt));
+                registered.add(qualified);
+            }
         }
         return registered;
     }

@@ -87,7 +87,10 @@ Additional 6.x migration differences:
   typed tree. Every intermediate node and non-greedy path has an `args` fallback (or `args_` if
   that name is already used). Such fallbacks can make otherwise-invalid input appear valid to
   the client. They have no custom suggestions and do not ask the server for completion.
-  An exact-case unavailable literal is rejected by Brigadier before a framework callback runs.
+  An exact-case unavailable literal is rejected by Brigadier before a framework callback runs;
+  the framework handles that syntax event through the same reply path. Unavailable subcommands
+  behave as nonexistent for that sender, including when typed explicitly.
+  中文补充：没有权限或不允许该发送者使用的子命令，对该发送者表现为不存在；硬输入的回复也相同。
 - Every literal position is case-insensitive, including literals following typed arguments.
   An argument or fallback callback gives a same-position literal priority regardless of case,
   then re-dispatches at most once through the same live binding and validator chain. Argument

@@ -20,6 +20,7 @@ final class CommandBindings {
     private final Map<String, Binding> candidates = new LinkedHashMap<>();
     private final Map<String, Binding> active = new ConcurrentHashMap<>();
     private final Map<String, String> delivered = new LinkedHashMap<>();
+    private final Map<String, String> registeredLabels = new ConcurrentHashMap<>();
     private final Logger logger;
     private final Runnable updatePlayers;
     private boolean initialComplete;
@@ -30,6 +31,10 @@ final class CommandBindings {
     }
 
     synchronized boolean bind(Object owner, String ownerName, Object instance, CompiledCommand command) {
+        return bind(owner, ownerName, instance, command, null);
+    }
+
+    synchronized boolean bind(Object owner, String ownerName, Object instance, CompiledCommand command, FrameworkReplies replies) {
         for (String label : labels(command)) {
             for (Binding previous : candidates.values()) {
                 if (!Objects.equals(owner, previous.owner()) && labels(previous.command()).contains(label)) {
@@ -39,7 +44,7 @@ final class CommandBindings {
                 }
             }
         }
-        Binding binding = new Binding(owner, ownerName, instance, command);
+        Binding binding = new Binding(owner, ownerName, instance, command, replies);
         candidates.put(command.label(), binding);
         if (command.signature().equals(delivered.get(command.label()))) {
             active.put(command.label(), binding);
@@ -77,6 +82,12 @@ final class CommandBindings {
     }
 
     Binding find(String label) { return active.get(label); }
+
+    FrameworkReplies replies(String registeredLabel) {
+        String label = registeredLabels.get(registeredLabel);
+        Binding binding = label == null ? null : find(label);
+        return binding == null ? null : binding.replies();
+    }
 
     CommandNode<CommandSourceStack> node(String label, List<String> path) {
         Binding binding = find(label);
@@ -118,12 +129,14 @@ final class CommandBindings {
     synchronized void onCommands(Commands commands) {
         active.clear();
         delivered.clear();
+        registeredLabels.clear();
         ProxyTreeFactory proxies = new ProxyTreeFactory(this);
         for (Binding binding : new ArrayList<>(candidates.values())) {
             CompiledCommand command = binding.command();
             active.put(command.label(), binding);
             var registered = commands.register(proxies.create(command.label(), command.tree()),
                     command.description(), command.aliases());
+            registered.forEach(label -> registeredLabels.put(label, command.label()));
             List<String> labels = new ArrayList<>(command.aliases());
             labels.add(command.label());
             for (String label : labels) {
@@ -134,6 +147,6 @@ final class CommandBindings {
         }
         initialComplete = true;
     }
-    record Binding(Object owner, String ownerName, Object instance, CompiledCommand command) { }
+    record Binding(Object owner, String ownerName, Object instance, CompiledCommand command, FrameworkReplies replies) { }
 
 }

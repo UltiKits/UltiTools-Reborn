@@ -9,7 +9,9 @@ import java.util.logging.Logger;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import java.util.concurrent.atomic.AtomicReference;
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.PluginManager;
 import com.ultikits.ultitools.UltiTools;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
@@ -95,6 +97,9 @@ public final class CommandTestSupport {
                 new AtomicReference<>();
 
         private Lifecycle(UltiTools plugin) {
+            if (Bukkit.getPluginManager() == null) {
+                when(Bukkit.getPluginManager()).thenReturn(mock(PluginManager.class));
+            }
             PluginLifecycle manager = mock(PluginLifecycle.class);
             when(plugin.getLifecycleManager()).thenReturn(manager);
             doAnswer(call -> {
@@ -104,7 +109,11 @@ public final class CommandTestSupport {
         }
 
         public RecordingCommands fire() {
-            var commands = new RecordingCommands();
+            return fire(null);
+        }
+
+        RecordingCommands fire(String namespace) {
+            var commands = new RecordingCommands(namespace);
             CommandsEvent event = mock(CommandsEvent.class);
             when(event.registrar()).thenReturn(commands);
             assertThat(handler.get())

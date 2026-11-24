@@ -10,6 +10,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.context.CommandContextBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
@@ -23,7 +24,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 
-/** Framework replies implemented only through callbacks retained by Paper's node mirror. */
+/** Shared framework replies for Paper-retained callbacks and unavailable-literal syntax events. */
 final class FrameworkReplies {
     private final BaseCommandExecutor executor;
     private final LiteralCommandNode<CommandSourceStack> original;
@@ -137,20 +138,50 @@ final class FrameworkReplies {
         return Command.SINGLE_SUCCESS;
     }
 
+    int reply(String input, CommandSourceStack source) throws CommandSyntaxException {
+        return reply(new CommandContextBuilder<>(new CommandDispatcher<>(), source, original, 0).build(input));
+    }
+
     private int reply(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         if (new CommandInvocation(executor, original.getLiteral()).refused(context)) return Command.SINGLE_SUCCESS;
         Walk walk = walk(context.getInput(), context.getSource());
-        if (!walk.blocked() && !walk.canonical().equals(context.getInput()) && !Boolean.TRUE.equals(retrying.get())) {
+        if (!walk.canonical().equals(context.getInput()) && !Boolean.TRUE.equals(retrying.get())) {
             return redispatchCanonical(context, walk);
         }
         sendReply(context, walk);
         return Command.SINGLE_SUCCESS;
     }
 
+    /** A syntax failure is ours only when a usable prefix reaches an unavailable literal. */
+    boolean unavailableLiteral(String input, CommandSourceStack source) {
+        if (!original.canUse(source)) return false;
+        StringReader reader = new StringReader(input);
+        token(reader);
+        reader.skipWhitespace();
+        CommandNode<CommandSourceStack> parent = original;
+        try {
+            while (reader.canRead()) {
+                Step step = next(parent, reader, source);
+                if (step == null) return false;
+                if (!step.node().canUse(source)) return step.literal() != null;
+                parent = step.node();
+                reader.setCursor(step.end());
+                reader.skipWhitespace();
+            }
+        } catch (CommandSyntaxException failure) {
+            return false;
+        }
+        return false;
+    }
+
     private int redispatchCanonical(CommandContext<CommandSourceStack> context, Walk walk) throws CommandSyntaxException {
         retrying.set(true);
         try {
             return redispatch.run(walk.canonical(), context.getSource());
+        } catch (CommandSyntaxException failure) {
+            // A normalized prefix may expose the same unavailable exact literal before a callback.
+            sendReply(context, walk);
+            return Command.SINGLE_SUCCESS;
         } finally {
             retrying.remove();
         }
@@ -171,9 +202,7 @@ final class FrameworkReplies {
 
     private void sendUsages(CommandContext<CommandSourceStack> context, Walk walk, CommandSender sender) {
         Set<String> formats = new LinkedHashSet<>();
-        if (!walk.blocked() || !collectOwnUsage(walk.deepest(), context.getSource(), formats)) {
-            collectUsages(walk.deepest(), context.getSource(), formats);
-        }
+        collectUsages(walk.deepest(), context.getSource(), formats);
         if (formats.isEmpty() && walk.deepest().getName().equalsIgnoreCase(executor.helpCommand())) {
             formats.add(executor.helpCommand());
         }
@@ -194,20 +223,19 @@ final class FrameworkReplies {
             try {
                 step = next(deepest, reader, source);
             } catch (CommandSyntaxException failure) {
-                return new Walk(deepest, depth, input, failure.getRawMessage().getString(), false);
+                return new Walk(deepest, depth, input, failure.getRawMessage().getString());
             }
-            if (step == null) {
+            if (step == null || !step.node().canUse(source)) {
                 canonical.append(' ').append(input.substring(start));
                 break;
             }
-            if (!step.node().canUse(source)) return new Walk(deepest, depth + 1, input, null, true);
             canonical.append(' ').append(step.literal() == null ? input.substring(start, step.end()) : step.literal());
             deepest = step.node();
             reader.setCursor(step.end());
             reader.skipWhitespace();
             depth++;
         }
-        return new Walk(deepest, depth, canonical.toString(), null, false);
+        return new Walk(deepest, depth, canonical.toString(), null);
     }
 
     private static Step next(CommandNode<CommandSourceStack> parent, StringReader reader, CommandSourceStack source)
@@ -261,15 +289,13 @@ final class FrameworkReplies {
         node.getChildren().forEach(child -> collectUsages(child, source, usages));
     }
 
-    private boolean collectOwnUsage(CommandNode<CommandSourceStack> node, CommandSourceStack source, Set<String> usages) {
+    private void collectOwnUsage(CommandNode<CommandSourceStack> node, CommandSourceStack source, Set<String> usages) {
         if (node.getCommand() instanceof CommandTreeCompiler.MappingCommand mapping
                 && CommandAccess.suggestible(executor.getClass(), mapping.method(), source)) {
             usages.add(mapping.method().getAnnotation(CmdMapping.class).format());
-            return true;
         }
-        return false;
     }
 
-    private record Walk(CommandNode<CommandSourceStack> deepest, int depth, String canonical, String parseError, boolean blocked) { }
+    private record Walk(CommandNode<CommandSourceStack> deepest, int depth, String canonical, String parseError) { }
     private record Step(CommandNode<CommandSourceStack> node, int end, String literal) { }
 }
