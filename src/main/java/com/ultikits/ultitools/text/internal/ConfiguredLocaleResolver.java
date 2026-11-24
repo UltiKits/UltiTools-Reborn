@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.text.internal;
 
 import com.ultikits.ultitools.text.LocaleResolver;
+import java.time.ZoneId;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
@@ -9,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 import net.kyori.adventure.audience.Audience;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
@@ -16,17 +18,59 @@ import org.jetbrains.annotations.Nullable;
 /** Resolves current configuration strings without caching player preferences. */
 @ApiStatus.Internal
 public final class ConfiguredLocaleResolver implements LocaleResolver {
+    // Match tzdata IDs, including historical aliases, never an offset shared with unrelated regions.
+    private static final Set<String> CHINESE_TIME_ZONES = Set.of("Asia/Shanghai", "Asia/Urumqi", "Asia/Hong_Kong",
+            "Asia/Macau", "PRC", "Asia/Chongqing", "Asia/Chungking", "Asia/Harbin", "Asia/Kashgar", "Hongkong", "Asia/Macao");
+
     private final Supplier<String> language;
     private final Supplier<String> fallbackLanguage;
     private final Logger logger;
+    private final Supplier<ZoneId> timeZone;
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
     private volatile @Nullable Snapshot cached;
+    private @Nullable ZoneId automaticTimeZone;
 
     /** Creates a resolver whose suppliers are read on every operation. */
     public ConfiguredLocaleResolver(Supplier<String> language, Supplier<String> fallbackLanguage, Logger logger) {
+        this(language, fallbackLanguage, logger, ZoneId::systemDefault);
+    }
+
+    ConfiguredLocaleResolver(Supplier<String> language, Supplier<String> fallbackLanguage, Logger logger,
+            Supplier<ZoneId> timeZone) {
         this.language = Objects.requireNonNull(language, "language");
         this.fallbackLanguage = Objects.requireNonNull(fallbackLanguage, "fallbackLanguage");
         this.logger = Objects.requireNonNull(logger, "logger");
+        this.timeZone = Objects.requireNonNull(timeZone, "timeZone");
+    }
+
+    /** Re-evaluates the fallback once after a successful framework configuration reload. */
+    public synchronized void reload() {
+        cached = null;
+        automaticTimeZone = null;
+        snapshot();
+    }
+
+    /**
+     * Reads operator values without inheriting the newly shipped defaults for an existing configuration.
+     * This method never saves or otherwise changes the operator's configuration file.
+     * @param configuration the current configuration, replaced by Bukkit on reload
+     * @param logger the framework logger
+     * @return a resolver over explicit configuration values
+     */
+    public static ConfiguredLocaleResolver forConfig(Supplier<? extends ConfigurationSection> configuration,
+            Logger logger) {
+        return forConfig(configuration, logger, ZoneId::systemDefault);
+    }
+
+    static ConfiguredLocaleResolver forConfig(Supplier<? extends ConfigurationSection> configuration,
+            Logger logger, Supplier<ZoneId> timeZone) {
+        Objects.requireNonNull(configuration, "configuration");
+        return new ConfiguredLocaleResolver(() -> configuration.get().getString("language", null),
+                () -> configuration.get().getString("fallback-language", null), logger, timeZone);
+    }
+
+    Optional<ZoneId> automaticZone() {
+        return snapshot().selection().zone();
     }
 
     @Override
@@ -42,7 +86,7 @@ public final class ConfiguredLocaleResolver implements LocaleResolver {
     @Override
     public Optional<Locale> forced() { return snapshot().forced(); }
 
-    private Snapshot snapshot() {
+    private synchronized Snapshot snapshot() {
         String rawLanguage = language.get();
         String rawFallback = fallbackLanguage.get();
         Snapshot previous = cached;
@@ -54,14 +98,30 @@ public final class ConfiguredLocaleResolver implements LocaleResolver {
         if (forced.isEmpty() && !LocaleNames.isAutomatic(rawLanguage)) {
             warn("language", rawLanguage);
         }
-        Optional<Locale> fallback = LocaleNames.parse(rawFallback);
-        if (fallback.isEmpty() && rawFallback != null && !rawFallback.isBlank()) {
-            warn("fallback-language", rawFallback);
-        }
-        Snapshot current = new Snapshot(rawLanguage, rawFallback, forced,
-                fallback.orElseGet(() -> forced.orElse(Locale.ENGLISH)));
+        Fallback selection = selectFallback(rawFallback, forced);
+        Snapshot current = new Snapshot(rawLanguage, rawFallback, forced, selection);
         cached = current;
         return current;
+    }
+
+    private Fallback selectFallback(@Nullable String raw, Optional<Locale> forced) {
+        Optional<Locale> explicit = LocaleNames.parse(raw);
+        if (explicit.isPresent()) {
+            return new Fallback(explicit.orElseThrow(), Optional.empty());
+        }
+        if (!LocaleNames.isAutomatic(raw)) {
+            warn("fallback-language", raw);
+            return new Fallback(forced.orElse(Locale.ENGLISH), Optional.empty());
+        }
+        // A 6.x forced configuration with no fallback must not inherit a new bundled default.
+        if ((raw == null || raw.isBlank()) && forced.isPresent()) {
+            return new Fallback(forced.orElseThrow(), Optional.empty());
+        }
+        if (automaticTimeZone == null) {
+            automaticTimeZone = Objects.requireNonNull(timeZone.get(), "system time zone");
+        }
+        Locale locale = CHINESE_TIME_ZONES.contains(automaticTimeZone.getId()) ? Locale.CHINESE : Locale.ENGLISH;
+        return new Fallback(locale, Optional.of(automaticTimeZone));
     }
 
     private void warn(String key, String value) {
@@ -70,6 +130,10 @@ public final class ConfiguredLocaleResolver implements LocaleResolver {
         }
     }
 
+    private record Fallback(Locale locale, Optional<ZoneId> zone) { }
+
     private record Snapshot(@Nullable String rawLanguage, @Nullable String rawFallback,
-            Optional<Locale> forced, Locale fallback) { }
+            Optional<Locale> forced, Fallback selection) {
+        Locale fallback() { return selection.locale(); }
+    }
 }

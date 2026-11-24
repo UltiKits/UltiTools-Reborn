@@ -123,7 +123,7 @@ class UltiToolsPluginTextWiringTest {
         setUpModuleEnvironment();
         UltiToolsPlugin module = mock(UltiToolsPlugin.class, CALLS_REAL_METHODS);
         assertThat(module.getConfiguredLanguage()).isEqualTo("zh");
-        settings.set("fallback-language", null);
+        settings.set("fallback-language", "en");
         assertThat(module.getConfiguredLanguage()).isEqualTo("en");
         for (String value : List.of("zh", "en", "zh-myserver")) {
             settings.set("language", value);
@@ -207,8 +207,8 @@ class UltiToolsPluginTextWiringTest {
         initialize.invoke(core);
         assertThat(core.i18n(key)).as("auto must keep the configured Chinese fallback")
                 .isEqualTo("模块 '%s' 已重载。");
-        config.set("fallback-language", null);
+        config.set("fallback-language", "en");
         initialize.invoke(core);
-        assertThat(core.i18n(key)).as("auto without fallback uses English").isEqualTo(key);
+        assertThat(core.i18n(key)).as("auto also respects an explicit English fallback").isEqualTo(key);
     }
 }

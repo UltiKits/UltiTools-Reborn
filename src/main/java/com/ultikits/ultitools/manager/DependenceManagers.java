@@ -68,9 +68,7 @@ public class DependenceManagers {
         context.registerSingleton("inMemoryNotificationService", notificationService);
         context.registerSingleton(NotificationService.class.getName(), notificationService);
 
-        LocaleResolver localeResolver = new ConfiguredLocaleResolver(
-                () -> plugin.getConfig().getString("language"),
-                () -> plugin.getConfig().getString("fallback-language"), plugin.getLogger());
+        LocaleResolver localeResolver = ConfiguredLocaleResolver.forConfig(plugin::getConfig, plugin.getLogger());
         TextEngine textEngine = new TextEngine(localeResolver, plugin.getLogger(),
                 UltiTools.class.getProtectionDomain().getCodeSource().getLocation(),
                 plugin.getDataFolder().toPath().resolve("messages"));

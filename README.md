@@ -71,6 +71,43 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 - **Modules**: use module builds compatible with the framework under test. Historical 6.x support for older servers does not extend the 7.0 baseline; see [the support matrix](COMPATIBILITY.md#support-matrix) and [the historical 6.4.0 compatibility notes](COMPATIBILITY.md#supporting-servers-below-121-as-of-v640).
 - **UltiTools Plugin**: Install on your server
 
+### Languages and message catalogues (as of 7.0)
+
+New installations use `language: auto` and `fallback-language: auto`. Players follow their current
+Minecraft client language; a concrete `language`, such as `en` or `zh`, forces all players instead.
+Console output and messages without a translation use the fallback. Automatic fallback uses the
+system time-zone **ID**, not its UTC offset: `Asia/Shanghai`, `Asia/Urumqi`, `Asia/Hong_Kong`,
+`Asia/Macau`, `PRC`, `Asia/Chongqing`, `Asia/Chungking`, `Asia/Harbin`, `Asia/Kashgar`, `Hongkong`
+and `Asia/Macao` select `zh`; every other ID selects `en`. The result is resolved at startup and
+on a full `/ul reload`, not on each message. Startup reports the selected language and time-zone ID.
+
+Cloud hosts and containers commonly use UTC, so a new installation there uses **English**, unlike
+6.x's shipped Chinese default. To choose Chinese explicitly, set `fallback-language: zh` in
+`plugins/UltiTools/config.yml` and run `/ul reload`. This does not change players whose client has
+a translation. Explicit fallback codes always win. Existing files are not rewritten: an existing
+`language: zh` or `language: en` without a fallback keeps that language, including console output;
+automatic mode without a fallback uses the time-zone rule above.
+
+Modules ship UTF-8 `messages/<locale>.yml` catalogues with stable dotted keys and MiniMessage values,
+and may declare `source-language: en` in their `plugin.yml` (English if omitted). Inject `Messages`
+to render or send text per recipient; use `shared()` for shared objects. Lookup tries the requested
+language, configured fallback, module source language, then the key. Put only operator changes in
+`plugins/UltiTools/pluginConfig/<module>/messages/<locale>.yml`; framework overrides belong in
+`plugins/UltiTools/messages/<locale>.yml`. Generated `messages/reference/` files are framework-owned
+examples, overwritten at startup; edit the parent override file, not the reference. A module reload
+re-reads its overrides; framework catalogue overrides currently require a restart. **6.x language
+files and custom language names are not migrated.** Legacy `§` / `&` colour codes are not interpreted
+in new catalogues; use MiniMessage tags.
+
+中文补充：7.0 新装默认两个语言设置均为 `auto`；玩家按客户端语言显示，后备语言仅按上列系统时区
+ID 选择中文，其余使用英文（不是按 UTC 偏移判断）。云主机、容器常为 UTC，因而默认英文，与 6.x
+出厂中文不同。想要中文，在 `plugins/UltiTools/config.yml` 写 `fallback-language: zh` 并执行完整
+`/ul reload`；显式语言优先，已有 `language: zh/en` 且未写后备语言的配置不会被新默认覆盖，配置文件
+也不会自动改写。时区选择只在启动和配置重载时解析，玩家运行中改客户端语言仍立即生效。
+模块随包使用 `messages/<语言>.yml`，服主在上级覆盖文件里只写需要修改的条目；`reference/` 是每次
+启动重写的只读参考，不要修改。模块重载会重读模块覆盖，框架覆盖暂需重启。6.x 语言文件与自定义
+名称不自动迁移；新目录的 `§`、`&` 不解释为颜色码。
+
 ### Add the Dependency
 
 **Maven**

@@ -2424,9 +2424,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         UltiTools framework = UltiTools.getInstance();
         String configured = framework.getConfig().getString("language");
         if (LocaleNames.isAutomatic(configured)) {
-            return new ConfiguredLocaleResolver(() -> framework.getConfig().getString("language"),
-                    () -> framework.getConfig().getString("fallback-language"), framework.getLogger())
-                    .fallback().getLanguage();
+            TextEngine engine = textEngine;
+            if (engine == null && framework.getDependenceManagers() != null
+                    && framework.getDependenceManagers().getContext() != null) {
+                engine = framework.getDependenceManagers().getContext().getBean(TextEngine.class);
+            }
+            return engine != null ? engine.fallback().getLanguage()
+                    : ConfiguredLocaleResolver.forConfig(framework::getConfig, framework.getLogger())
+                            .fallback().getLanguage();
         }
         return configured;
     }

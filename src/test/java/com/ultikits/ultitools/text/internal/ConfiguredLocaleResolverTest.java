@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.text.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -15,7 +16,8 @@ class ConfiguredLocaleResolverTest {
     void defaultsAndConfigChanges_areVisibleOnNextCall() {
         AtomicReference<String> language = new AtomicReference<>();
         AtomicReference<String> fallback = new AtomicReference<>();
-        var resolver = new ConfiguredLocaleResolver(language::get, fallback::get, Logger.getAnonymousLogger());
+        var resolver = new ConfiguredLocaleResolver(language::get, fallback::get,
+                Logger.getAnonymousLogger(), () -> ZoneId.of("UTC"));
         assertThat(resolver.forced()).isEmpty();
         assertThat(resolver.fallback()).isEqualTo(Locale.ENGLISH);
         language.set("zh");
@@ -44,7 +46,7 @@ class ConfiguredLocaleResolverTest {
         });
         AtomicReference<String> language = new AtomicReference<>("zh-myserver");
         AtomicReference<String> fallback = new AtomicReference<>("not-a-locale");
-        var resolver = new ConfiguredLocaleResolver(language::get, fallback::get, logger);
+        var resolver = new ConfiguredLocaleResolver(language::get, fallback::get, logger, () -> ZoneId.of("UTC"));
         for (int i = 0; i < 3; i++) {
             assertThat(resolver.forced()).isEmpty();
             assertThat(resolver.fallback()).isEqualTo(Locale.ENGLISH);
@@ -57,7 +59,7 @@ class ConfiguredLocaleResolverTest {
         language.set("zh");
         assertThat(resolver.fallback()).isEqualTo(Locale.CHINESE);
         fallback.set("auto");
-        assertThat(resolver.fallback()).isEqualTo(Locale.CHINESE);
-        assertThat(records).hasSize(4);
+        assertThat(resolver.fallback()).isEqualTo(Locale.ENGLISH);
+        assertThat(records).hasSize(3);
     }
 }

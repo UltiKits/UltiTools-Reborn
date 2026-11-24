@@ -5,6 +5,57 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Message catalogues and automatic fallback (as of 7.0.0)
+
+7.0 introduces namespace-bound `Messages` and `LocaleResolver`. Modules ship UTF-8
+`messages/<locale>.yml` files containing stable dotted keys and MiniMessage values, optionally
+with `source-language` in their own `plugin.yml` (default `en`). Nested mappings and dotted keys
+are equivalent. Values must be strings; quote YAML boolean-like key segments such as `"yes"`
+and `"no"`. `§` and `&` colour codes are not interpreted in these new catalogues.
+
+- **New installations:** `language: auto` follows each player's current client locale.
+  `fallback-language: auto` chooses `zh` for the system time-zone IDs `Asia/Shanghai`,
+  `Asia/Urumqi`, `Asia/Hong_Kong`, `Asia/Macau` and their listed aliases `PRC`, `Asia/Chongqing`,
+  `Asia/Chungking`, `Asia/Harbin`, `Asia/Kashgar`, `Hongkong`, `Asia/Macao`; all other IDs choose
+  `en`. UTC offset is deliberately irrelevant: `Asia/Singapore` and `Etc/GMT-8` still choose `en`.
+  Startup and a successful full `/ul reload` resolve this once and report the selected language
+  and reason. Player locale is never cached.
+- **Explicit choices:** `fallback-language: en`, `zh` or another locale bypasses time-zone
+  detection. A concrete `language` still forces that locale for players; console uses the
+  fallback. To choose Chinese on UTC-based hosts or containers, set `fallback-language: zh`
+  in `plugins/UltiTools/config.yml` and execute `/ul reload`.
+- **Existing configurations:** operator files are not rewritten. An existing concrete
+  `language: zh` or `en` with no fallback keeps that language as its fallback, rather than
+  inheriting the newly shipped default through Bukkit defaults. In automatic player mode,
+  a missing fallback uses automatic time-zone selection. This means a new UTC installation
+  defaults to English, unlike 6.x's shipped Chinese default; Chinese clients still receive
+  Chinese whenever their catalogue supplies it.
+- **Lookup:** requested locale → fallback locale → module source locale → namespaced key;
+  regional locales also try their language-only catalogue. Parameters use the requested
+  rendering locale, even if the message text came from a fallback catalogue. Missing keys
+  warn once per key and requested locale.
+- **Operator translations:** put only overrides in
+  `plugins/UltiTools/pluginConfig/<module>/messages/<locale>.yml`, or
+  `plugins/UltiTools/messages/<locale>.yml` for framework messages. New locale files add
+  languages. The framework reads these files but never writes them. It rewrites its own
+  `messages/reference/` examples from shipped bytes at startup; editing those examples has no
+  effect. `/ul reload <module>` reloads module overrides. **Known limitation:** framework
+  catalogue overrides currently reload only on restart, not `/ul reload`; locale configuration
+  itself does reload. A later text-migration change supplies the catalogue-reload hook.
+- **Migration:** 6.x language files, sentence keys, custom language names and operator edits
+  are not automatically converted to the new catalogues. Re-create the required overrides
+  with dotted keys and MiniMessage syntax. The old `i18n` path remains temporarily while its
+  callers migrate; its eventual removal is a separate change, not part of this engine addition.
+
+中文补充：7.0 的新装 `language` 与 `fallback-language` 均默认 `auto`。玩家跟随客户端语言；后备
+语言只按上述 11 个系统时区 ID 选 `zh`，其他选 `en`，不按时差猜测。云主机和容器常用 UTC，因此
+新装默认英文，与 6.x 出厂中文不同；想要中文只需写 `fallback-language: zh` 并执行完整 `/ul reload`。
+显式后备语言不探测时区，具体 `language` 仍全服强制，已有 `language: zh/en` 且没有后备键的配置
+继续沿用原语言，绝不改写服主文件。时区在启动和配置重载时解析，玩家语言每次投递时读取。
+翻译顺序为请求语言、后备语言、模块源语言、键本身；参数仍按请求语言格式化。服主只改上级覆盖
+文件，`reference/` 是框架每次启动重写的只读参考；模块覆盖可重载，框架覆盖暂需重启。6.x 的语言
+文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
+
 ## Native item and sound APIs (as of 7.0.0)
 
 UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads

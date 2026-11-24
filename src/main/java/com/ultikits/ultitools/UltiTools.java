@@ -460,11 +460,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
         List<String> shipped = Arrays.asList(SHIPPED_LANGUAGES);
         List<File[]> restored = OfficialLanguageFiles.syncFrameworkFiles(getDataFolder(), shipped,
                 getClass().getClassLoader(), getLogger());
+        String fallback = initializeTextFallback();
         String configured = getConfig().getString("language");
-        if (configured != null && "auto".equalsIgnoreCase(configured.trim())) {
-            configured = new com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver(
-                    () -> getConfig().getString("language"),
-                    () -> getConfig().getString("fallback-language"), getLogger()).fallback().getLanguage();
+        if (com.ultikits.ultitools.text.internal.LocaleNames.isAutomatic(configured)) {
+            configured = fallback;
         }
         String official = Localized.officialLanguageOf(configured, shipped);
         String baseCode = official != null ? official : "en";
@@ -491,6 +490,20 @@ public final class UltiTools extends JavaPlugin implements Localized {
             getLogger().warning(String.format(i18n(OfficialLanguageFiles.RESTORED_LOG_KEY),
                     pair[0].getPath(), "UltiTools", pair[1].getPath()));
         }
+    }
+
+    /** Refreshes only the text configuration, at the existing startup and full-reload seam. */
+    private String initializeTextFallback() {
+        DependenceManagers managers = getDependenceManagers();
+        if (managers != null && managers.getContext() != null) {
+            var engine = managers.getContext().getBean(com.ultikits.ultitools.text.internal.TextEngine.class);
+            if (engine != null) {
+                engine.reloadLocaleConfiguration();
+                return engine.fallback().getLanguage();
+            }
+        }
+        return com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver
+                .forConfig(this::getConfig, getLogger()).fallback().getLanguage();
     }
 
     /**

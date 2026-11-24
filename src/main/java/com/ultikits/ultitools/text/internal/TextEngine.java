@@ -3,9 +3,11 @@ package com.ultikits.ultitools.text.internal;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.text.LocaleResolver;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.Text;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -15,6 +17,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Logger;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.kyori.adventure.translation.GlobalTranslator;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
@@ -61,6 +64,19 @@ public final class TextEngine implements AutoCloseable {
 
     /** Returns the current fallback locale for the retained legacy-language seam. */
     public Locale fallback() { return resolver.fallback(); }
+
+    /** Refreshes the startup/configuration snapshot and reports why its fallback was chosen. */
+    public void reloadLocaleConfiguration() {
+        if (resolver instanceof ConfiguredLocaleResolver configured) {
+            configured.reload();
+            Locale fallback = configured.fallback();
+            Text selection = configured.automaticZone().<Text>map(zone -> Text.of(FrameworkKeys.FALLBACK_TIME_ZONE,
+                    Arg.string("language", fallback.toLanguageTag()), Arg.string("zone", zone.getId())))
+                    .orElseGet(() -> Text.of(FrameworkKeys.FALLBACK_CONFIGURED,
+                            Arg.string("language", fallback.toLanguageTag())));
+            logger.info(PlainTextComponentSerializer.plainText().serialize(renderer.render(selection, fallback)));
+        }
+    }
 
     /** Returns a namespace-bound view; lookups always use the latest published snapshot. */
     public Messages messagesFor(String namespace) {
