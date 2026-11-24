@@ -13,6 +13,7 @@ import com.ultikits.ultitools.ui.UiBackend;
 import com.ultikits.ultitools.ui.UiIntent;
 import com.ultikits.ultitools.ui.UiSession;
 import com.ultikits.ultitools.ui.runtime.BoundSlotRenderer;
+import com.ultikits.ultitools.ui.runtime.UiRuntime;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -25,12 +26,14 @@ import org.jetbrains.annotations.ApiStatus;
 /** The framework's grid-only backend. All screen items are copies, never the source of real item moves. */
 @ApiStatus.Internal
 public final class ChestBackend implements UiBackend, BoundSlotRenderer {
+    private final UiRuntime runtime;
     private final ItemRenderer items;
     private final Messages messages;
     private final Scheduler scheduler;
     private final Map<UiSession<?>, ChestScreen> screens = new IdentityHashMap<>();
 
-    public ChestBackend(ItemRenderer items, Messages messages, Scheduler scheduler) {
+    public ChestBackend(UiRuntime runtime, ItemRenderer items, Messages messages, Scheduler scheduler) {
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.items = Objects.requireNonNull(items, "items");
         this.messages = Objects.requireNonNull(messages, "messages");
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
@@ -44,7 +47,7 @@ public final class ChestBackend implements UiBackend, BoundSlotRenderer {
         if (!(session instanceof GridSession gridSession)) {
             throw new IllegalArgumentException("The chest backend only supports grid sessions");
         }
-        Grid grid = gridSession.current();
+        Grid grid = runtime.rendered(gridSession);
         ChestScreen screen = new ChestScreen(gridSession, callbacks, scheduler, grid,
                 messages.render(grid.title(), session.viewer()));
         screens.put(session, screen);

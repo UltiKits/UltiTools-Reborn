@@ -7,6 +7,7 @@ import com.ultikits.ultitools.text.FixedLocaleResolver;
 import com.ultikits.ultitools.text.InMemoryMessages;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.chest.ChestBackend;
+import com.ultikits.ultitools.ui.runtime.ContainerRuntime;
 import com.ultikits.ultitools.ui.runtime.UiRuntime;
 import io.papermc.paper.datacomponent.DataComponentTypes;
 import java.util.ArrayList;
@@ -44,8 +45,8 @@ abstract class ChestTestFixture {
         clock = new ManualScheduler.Engine();
         scheduler = new RecordingScheduler(clock.scheduler("UiRuntime"));
         messages = new InMemoryMessages("test", new FixedLocaleResolver(Locale.ENGLISH, Optional.empty()));
-        runtime = new UiRuntime(scheduler, new InMemoryContainerRuntime(), Logger.getAnonymousLogger(), Thread.currentThread());
-        backend = new ChestBackend(new MinimalItemRenderer(messages), messages, scheduler);
+        runtime = new UiRuntime(scheduler, createContainerRuntime(), Logger.getAnonymousLogger(), Thread.currentThread());
+        backend = new ChestBackend(runtime, new MinimalItemRenderer(messages), messages, scheduler);
         runtime.register(backend);
         service = runtime.service("chest-test");
     }
@@ -56,6 +57,8 @@ abstract class ChestTestFixture {
             if (clock != null) { clock.close(); }
         } finally { MockBukkit.unmock(); }
     }
+
+    ContainerRuntime createContainerRuntime() { return new InMemoryContainerRuntime(); }
 
     GridSession open(Grid grid) {
         GridSession session = service.show(player, grid);

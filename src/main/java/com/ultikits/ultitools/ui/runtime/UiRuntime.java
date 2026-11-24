@@ -215,6 +215,12 @@ public final class UiRuntime implements AutoCloseable {
         return containers.engine().apply(rendered, grid.viewer(), side, gesture);
     }
 
+    /** Returns the immutable grid snapshot used for gestures and the last backend notification. */
+    public Grid rendered(GridSession session) {
+        RuntimeGridSession grid = ownGrid(session);
+        synchronized (lock) { return grid.renderedLocked(); }
+    }
+
     /** Returns defensive copies of the last drawn bound slots. */
     public Map<GridSlot, ItemStack> picture(GridSession session) { return ownGrid(session).pictureCopy(); }
 

@@ -123,6 +123,27 @@ class UiRuntimeTest {
         return copy.getNow(null);
     }
 
+    @Test void renderedReturnsTheImmutableLastNotifiedGridAndValidatesRuntimeOwnership() {
+        backend();
+        Grid initial = Grid.builder(TITLE, 1).build();
+        Grid next = Grid.builder(Text.plain("Next"), 1).build();
+        GridSession session = service.show(viewer, initial);
+        settle();
+        session.update(next);
+        assertThat(session.current()).isSameAs(next);
+        assertThat(runtime.rendered(session)).isSameAs(initial);
+        settle();
+        assertThat(runtime.rendered(session)).isSameAs(next);
+        assertThatThrownBy(() -> runtime.rendered(session).bindings().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> runtime.rendered(mock(GridSession.class)))
+                .isInstanceOf(IllegalArgumentException.class);
+        try (UiRuntime other = new UiRuntime(scheduler, new NoContainerRuntime(), logger, Thread.currentThread())) {
+            assertThatThrownBy(() -> other.rendered(session)).isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> runtime.rendered(null)).isInstanceOf(NullPointerException.class);
+    }
+
     @Test void supportsThrows_warnsAndCompletesUnsupportedExactlyOnce() {
         UiBackend backend = backend();
         IllegalStateException failure = new IllegalStateException("supports");
