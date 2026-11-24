@@ -5,6 +5,102 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Command engine (as of 7.0.0)
+
+Rebuild module command code against 7.0. Annotation commands are compiled into Brigadier trees;
+Paper receives them only during `LifecycleEvents.COMMANDS`. The framework no longer constructs
+`PluginCommand` reflectively or edits Bukkit's private command map.
+
+### Source and binary migration
+
+| Removed or changed API | 7.0 replacement |
+|---|---|
+| `BaseCommandExecutor implements TabExecutor`, `onCommand`, `onTabComplete` | Keep extending `BaseCommandExecutor`; the framework invokes typed mappings through Brigadier |
+| `matchMethod`, `parseParameters`, `validateParameterCount`, `parseParameterValue` | No replacement string matcher; use the compiled tree and its argument types |
+| Both old protected `suggest` overloads | `suggest(CommandSender sender, String label, String[] args)`; return `null` to retain native argument suggestions |
+| `CommandContext.getCommand()` and its builder field | `getCommandName()` and `commandName(String)` |
+| `CommandContext.getParsedParams(): Map<String, String[]>` | `Map<String, Object>` containing typed values; `buildMethodParams` reads those values |
+| `CommandManager.register(... Class<? extends CommandExecutor> ...)` | The class parameter is `Class<? extends BaseCommandExecutor>` |
+| `registerCoreCommand(CommandExecutor)` | `registerCoreCommand(BaseCommandExecutor)` |
+| `CommandManager.unregister(String)` | Unregister the owning module or external plugin, not a global label |
+| `getPluginByCommand(Command)` | `getPluginByLabel(String)`; accepts primary, alias and namespaced spellings |
+| `AbstractCommand`, `AbstractTabExecutor`, `AbstractPlayerCommandExecutor`, `AbstractConsoleCommandExecutor` | `BaseCommandExecutor` or the new `BrigadierCommand` interface |
+| `CommandTabCompletionDispatch` | Brigadier suggestions connected to the existing completion-provider registry |
+| `TabCompletionManager.suggest(Player, Command, String[])`, `createContext(Player, Command, String[])`, `suggestFirstArgs` | Context-based provider calls; Brigadier supplies literal suggestions |
+| `TabCompletionContext.command` / `getCommand()` | `commandName` / `getCommandName()` |
+| `WorldParser`, `GameModeParser`, `LocationParser`, `EnchantmentParser` and implicit built-in registry entries | The argument mappings below; the registry keeps explicitly registered module `TypeParser` implementations |
+
+`getMappings`, custom validators, `handleHelp`, `getHelpCommand`, `createDefaultValidatorChain`,
+`executeCommand` and `buildMethodParams` remain. An executor without `@CmdExecutor` is refused;
+there is no legacy fallback registration. Existing three-argument suggestion methods may still
+receive a Bukkit `Command`, resolved by label through the public command map. The removed Bukkit
+completion entry point's `null`/online-player fallback convention does not apply to Brigadier:
+no candidates means an empty suggestions result for every sender kind.
+
+### Argument mapping
+
+| Java type | Argument and result |
+|---|---|
+| `String` | One whitespace-delimited token, including non-ASCII text; double-quoted strings are accepted |
+| `String` / `String[]` with `<name...>` | Remaining text / whitespace-split array; an omitted tail supplies an empty value |
+| `int` / `Integer`, `long` / `Long`, `double` / `Double`, `float` / `Float`, `boolean` / `Boolean` | Brigadier's corresponding typed argument |
+| `short` / `Short`, `byte` / `Byte` | Integer argument restricted to the Java type's range, then narrowed |
+| `Player` | Paper player selector resolved against the command source |
+| `OfflinePlayer` | Player-name token, resolved by Bukkit; online-player-name suggestions |
+| `World`, `GameMode`, `UUID` | Paper's native world, game-mode and UUID arguments |
+| `Enchantment` | Paper's enchantment registry-resource argument |
+| `Material` | Namespaced material key, checked with `Material.matchMaterial` |
+| `Location` | Paper fine position, resolved in the source's world: **`x y z`**, including relative coordinates, not the old `world,x,y,z` string |
+| Other explicitly registered `TypeParser<T>` types | One token parsed by that parser; its `TypeParseException` detail is retained |
+| Other arrays with `<name...>` | Remaining text parsed element by element using the component type's mapping |
+
+Competing parameter children at one position, duplicate normalized paths, non-terminal greedy
+parameters, unmapped types and unmatched `@CmdParam` names are compilation errors. A literal and
+an argument may share a parent. Named and method-based `@CmdParam(suggest=...)` providers remain;
+the executor fallback applies only when that parameter has no explicit provider. Native argument
+suggestions are used when neither supplies an override.
+
+### Replies, ownership and lifecycle
+
+- Unmatched input retains the framework's existing unknown-command / usage language keys.
+  Unknown first tokens retain the gated help fallthrough; deeper failures list usages from the
+  typed tree. Every intermediate node and non-greedy path has a fallback. Consequently, **invalid
+  input is not marked red by the client**. The fallback contributes no invented candidates and
+  forwards suggestions from the real tree when Brigadier chooses it as the completion context.
+- Every literal position is case-insensitive, including literals following typed arguments.
+  The fallback normalizes literals only and re-dispatches at most once through the same live
+  binding and validator chain. Argument spelling is not lower-cased.
+- Root permissions and operator requirements hide unavailable commands. Exclusive mapping paths
+  hide unavailable subcommands; shared prefixes remain. Suggestions and usage replies do not
+  expose private mappings or invoke their providers. Execution still performs permission,
+  sender-type, cooldown, lock, asynchronous-dispatch and panel-refusal checks.
+- Modules and external plugins may supply container beans implementing `BrigadierCommand`.
+  `node()` is called once per registration; `aliases()` and nullable `description()` supply
+  metadata. Bean aliases are deduplicated by identity. These trees do not acquire annotation
+  validators, cooldowns or `@CmdParam` completion. Internal redirects point to owned proxies;
+  **redirect targets outside the supplied tree are not controlled by module unload**.
+- Paper owns a fixed proxy shape; the binding table owns live module instances. Unregistering
+  a module hides its proxies and rejects execution. A genuinely registered replacement with the
+  same signature rebinds the existing shape. A different owner claiming the same root is refused
+  and logged with both owners/classes; the owner's other commands may continue registering.
+- **`/ul reload` only reloads configuration.** It does not recreate containers or executors,
+  rebind commands, or add/remove conditional commands. A changed conditional-registration key
+  still reports that a restart is required. Installing/updating module JARs still needs a restart.
+- A root first registered after the initial commands event, or a replacement with a different
+  signature, waits for the next `/minecraft:reload` or restart. The console names it in one
+  `Command /<label> from <owner> was registered after start-up; it becomes available after
+  /minecraft:reload or a restart.` warning. This applies to real registration/connection APIs,
+  not to toggling a conditional configuration value with `/ul reload`. The engine never triggers
+  a global data-pack reload automatically.
+- Paper rejects Bukkit plugin reload after a lifecycle handler is installed. This is distinct
+  from `/minecraft:reload`, which reloads data packs and delivers another commands event.
+
+中文迁移要点：7.0 保留注解作者模型，但删除 Bukkit 执行器入口、字符串匹配与反射注册。
+自定义类型解析器仍可显式注册；坐标改用 `x y z`。输错输入继续得到框架提示，代价是客户端
+不再标红；真实补全仍保留，所有字面位置忽略大小写。解绑和同形重新绑定只随真实模块注册、
+注销、替换发生，`/ul reload` 不改变命令注册，条件开关变动仍要求重启。手写树的树外重定向
+目标不受模块卸载控制。模块必须重新编译，不能只修改 `api-version`。
+
 ## Native item and sound APIs (as of 7.0.0)
 
 UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads
