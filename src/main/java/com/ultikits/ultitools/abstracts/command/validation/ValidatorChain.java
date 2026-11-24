@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.abstracts.command.validation;
 
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.text.Text;
+import javax.annotation.Nullable;
 
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -397,10 +399,29 @@ public final class ValidatorChain {
         }
 
         /**
+         * Returns deferred text from the first failure, or null for success or a legacy string failure.
+         * @return the first failure's deferred text
+         * @since 7.0.0
+         */
+        @Nullable
+        public Text getErrorText() {
+            if (failedResult != null) {
+                return failedResult.getErrorText();
+            }
+            for (CommandValidator.ValidationResult result : allResults) {
+                if (!result.isValid()) {
+                    return result.getErrorText();
+                }
+            }
+            return null;
+        }
+
+        /**
          * Gets the error message from the first failure.
          *
-         * @return the error message, or null if valid
+         * @return the legacy string, or null if valid or the first failure carries deferred text
          */
+        @Nullable
         public String getErrorMessage() {
             if (failedResult != null) {
                 return failedResult.getErrorMessage();
