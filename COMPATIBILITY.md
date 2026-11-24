@@ -414,21 +414,39 @@ records the audit's behaviour in that release, not its availability in 7.0.0.
 implementation depended on deprecated, version-unstable server internals, and message text
 containing quotes could break its generated JSON. Use `sendTitleNotification`,
 `sendActionBarNotification` or chat instead. Rebuild callers against 7.0 after migrating.
-NotificationService signatures change separately in 7.0; see the follow-up section.
+The remaining `NotificationService` signatures will be adjusted separately in subsequent 7.0
+changes and documented in this file when those changes land.
 
 `widgets.Hologram`, which spawned an invisible armour stand for each text line, is also removed.
 Use Paper's native `TextDisplay` API instead; a single display can contain multiple lines.
-The following example uses the framework's `Messages` service for shared text and disables
-entity persistence. The caller owns the display and removes it when no longer needed.
+The following example uses the module's injected `Messages` service (`messages`) for shared text
+and disables entity persistence. Call `World#spawn` on the thread that owns the location, switching
+with the module's injected `Scheduler` first; `Location#getWorld()` can return null, so check it
+before spawning. The caller owns the display and removes it when no longer needed.
 
 ```java
-TextDisplay display = location.getWorld().spawn(location, TextDisplay.class, d -> {
+World world = location.getWorld();
+if (world == null) {
+    throw new IllegalArgumentException("The display location must have a world");
+}
+TextDisplay display = world.spawn(location, TextDisplay.class, d -> {
     d.text(messages.shared(Text.of(messages.key("hologram.welcome"))));
     d.setBillboard(Display.Billboard.CENTER);
     d.setPersistent(false);
 });
 // later: display.remove();
 ```
+
+中文补充：7.0.0 删除 `widgets.Toast` 和 `NotificationService#sendToastNotification`，旧实现依赖已弃用、
+跨版本不稳定的服务端内部接口，消息中的引号还可能破坏生成的 JSON。请改用 `sendTitleNotification`、
+`sendActionBarNotification` 或聊天，并在迁移后针对 7.0 重新构建调用方。`NotificationService` 的其余
+方法签名将在 7.0 后续改动中另行调整，届时在本文件单独记录。
+
+`widgets.Hologram` 也被删除，旧实现为每行文字生成一个隐形盔甲架；请改用 Paper 原生 `TextDisplay`，
+单个显示实体即可包含多行文字。示例中的 `messages` 是模块注入的 `Messages` 服务，用于生成共享文本；
+`World#spawn` 必须在拥有目标位置的线程上调用，请先通过模块注入的 `Scheduler` 切换线程，
+并在生成实体前检查可能为 null 的 `Location#getWorld()`。示例关闭实体持久化，调用方负责管理实体，
+不再需要时调用 `display.remove()`。
 
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 

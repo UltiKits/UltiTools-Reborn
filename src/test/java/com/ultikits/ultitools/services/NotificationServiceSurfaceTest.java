@@ -7,6 +7,8 @@ import java.lang.reflect.Method;
 
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.ultitools.services.impl.InMemoryNotificationService;
+
 class NotificationServiceSurfaceTest {
 
     @Test
@@ -27,6 +29,15 @@ class NotificationServiceSurfaceTest {
     void notificationServiceHasNoToastMethod() {
         assertThat(NotificationService.class.getMethods())
                 .extracting(Method::getName)
+                .contains("sendActionBarNotification")
+                .doesNotContain("sendToastNotification");
+    }
+
+    @Test
+    void inMemoryNotificationServiceHasNoToastMethod() {
+        assertThat(InMemoryNotificationService.class.getMethods())
+                .extracting(Method::getName)
+                .contains("sendActionBarNotification")
                 .doesNotContain("sendToastNotification");
     }
 
