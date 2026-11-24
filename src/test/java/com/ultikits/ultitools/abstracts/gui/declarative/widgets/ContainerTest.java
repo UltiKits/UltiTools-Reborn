@@ -5,7 +5,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Element;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
 import org.bukkit.Material;
-import org.bukkit.inventory.ItemStack;
+import com.ultikits.ultitools.item.ItemSpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,8 +39,8 @@ public class ContainerTest {
 
     @Test
     void testContainerWithChildren() {
-        ItemStack item1 = new ItemStack(Material.DIAMOND);
-        ItemStack item2 = new ItemStack(Material.GOLD_INGOT);
+        ItemSpec item1 = ItemSpec.builder(Material.DIAMOND).build();
+        ItemSpec item2 = ItemSpec.builder(Material.GOLD_INGOT).build();
 
         Container container = Container.builder()
                 .child(ItemDisplay.builder(item1).build())
@@ -52,9 +52,9 @@ public class ContainerTest {
 
     @Test
     void testContainerWithMultipleChildrenMethods() {
-        Widget child1 = ItemDisplay.builder(new ItemStack(Material.STONE)).build();
-        Widget child2 = ItemDisplay.builder(new ItemStack(Material.DIRT)).build();
-        Widget child3 = ItemDisplay.builder(new ItemStack(Material.GRASS_BLOCK)).build();
+        Widget child1 = ItemDisplay.builder(ItemSpec.builder(Material.STONE).build()).build();
+        Widget child2 = ItemDisplay.builder(ItemSpec.builder(Material.DIRT).build()).build();
+        Widget child3 = ItemDisplay.builder(ItemSpec.builder(Material.GRASS_BLOCK).build()).build();
 
         Container container = Container.builder()
                 .child(child1)
@@ -77,7 +77,7 @@ public class ContainerTest {
     @Test
     void testContainerCreatesElement() {
         Container container = Container.builder()
-                .child(ItemDisplay.builder(new ItemStack(Material.DIAMOND)).build())
+                .child(ItemDisplay.builder(ItemSpec.builder(Material.DIAMOND).build()).build())
                 .build();
 
         Element element = container.createElement();
@@ -87,12 +87,12 @@ public class ContainerTest {
     @Test
     void testContainerChildrenAreImmutable() {
         Container container = Container.builder()
-                .child(ItemDisplay.builder(new ItemStack(Material.STONE)).build())
+                .child(ItemDisplay.builder(ItemSpec.builder(Material.STONE).build()).build())
                 .build();
 
         // getChildren 返回的列表不应该能被修改
         assertThrows(UnsupportedOperationException.class, () -> {
-            container.getChildren().add(ItemDisplay.builder(new ItemStack(Material.DIRT)).build());
+            container.getChildren().add(ItemDisplay.builder(ItemSpec.builder(Material.DIRT).build()).build());
         });
     }
 }

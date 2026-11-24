@@ -1,160 +1,75 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.widgets;
 
-import com.ultikits.ultitools.abstracts.gui.declarative.core.*;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectElement;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectWidget;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.SlotKey;
 import com.ultikits.ultitools.abstracts.gui.declarative.util.WidgetBuilder;
-import org.bukkit.event.inventory.InventoryClickEvent;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.ui.GridAction;
+import java.util.List;
+import java.util.Objects;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.function.Consumer;
-
-/**
- * TextButton is a button Widget that displays text.
- * <p>
- * It uses a colored glass pane as the button background, with the text overlaid.
- *
- * <p><strong>Usage example:</strong></p>
- * <pre>{@code
- * TextButton.builder()
- *     .text("Confirm")
- *     .color(Colors.GREEN)
- *     .slot(13)
- *     .onClick(() -> {
- *         player.sendMessage("Confirmed!");
- *         player.closeInventory();
- *     })
- *     .build();
- * }</pre>
- *
- * @author UltiTools Team
- * @version 1.0.0
- * @since 6.2.0
- */
+/** A coloured glass-pane button with deferred text and an optional grid action. @since 6.2.0 */
 public class TextButton extends RenderObjectWidget {
-
-    @NotNull
-    private final String text;
-    @NotNull
+    private final Text text;
     private final String color;
     private final int slot;
-    @Nullable
-    private final String[] lore;
-    @Nullable
-    private final Consumer<InventoryClickEvent> clickHandler;
+    private final List<Text> lore;
+    private final @Nullable GridAction clickHandler;
 
-    private TextButton(@NotNull Builder builder) {
+    private TextButton(Builder builder) {
         super(builder.key);
-        this.text = builder.text;
-        this.color = builder.color;
-        this.slot = builder.slot;
-        this.lore = builder.lore;
-        this.clickHandler = builder.clickHandler;
+        text = builder.text;
+        color = builder.color;
+        slot = builder.slot;
+        lore = builder.lore;
+        clickHandler = builder.clickHandler;
     }
 
-    /**
-     * Creates a Builder.
-     *
-     * @return the Builder
-     */
-    @NotNull
-    public static Builder builder() {
-        return new Builder();
-    }
+    /** @return a new builder */
+    public static Builder builder() { return new Builder(); }
+    /** @return the deferred button label */
+    public Text getText() { return text; }
+    /** @return the glass colour name */
+    public String getColor() { return color; }
+    /** @return the zero-based grid slot */
+    public int getSlot() { return slot; }
+    /** @return unmodifiable deferred lore */
+    public List<Text> getLore() { return lore; }
+    /** @return the optional grid action */
+    public @Nullable GridAction getClickHandler() { return clickHandler; }
+    @Override public @NotNull RenderObjectElement createElement() { return new TextButtonElement(this); }
 
-    @NotNull
-    public String getText() {
-        return text;
-    }
-
-    @NotNull
-    public String getColor() {
-        return color;
-    }
-
-    public int getSlot() {
-        return slot;
-    }
-
-    @Nullable
-    public String[] getLore() {
-        return lore;
-    }
-
-    @Nullable
-    public Consumer<InventoryClickEvent> getClickHandler() {
-        return clickHandler;
-    }
-
-    @Override
-    @NotNull
-    public RenderObjectElement createElement() {
-        return new TextButtonElement(this);
-    }
-
-    /**
-     * Builder for TextButton.
-     */
+    /** A reusable builder; text and lore remain immutable after building. */
     public static class Builder implements WidgetBuilder<TextButton> {
-        @NotNull
-        private String text = "";
-        @NotNull
+        private Text text = Text.plain("");
         private String color = "WHITE";
-        private int slot = 0;
-        @Nullable
-        private String[] lore;
-        @Nullable
-        private Consumer<InventoryClickEvent> clickHandler;
-        @Nullable
-        private SlotKey key;
+        private int slot;
+        private List<Text> lore = List.of();
+        private @Nullable GridAction clickHandler;
+        private @Nullable SlotKey key;
 
-        public Builder text(@NotNull String text) {
-            this.text = text;
-            return this;
-        }
-
-        public Builder color(@NotNull String color) {
-            this.color = color;
-            return this;
-        }
-
-        public Builder slot(int slot) {
-            this.slot = slot;
-            return this;
-        }
-
-        public Builder lore(@Nullable String... lore) {
-            this.lore = lore;
-            return this;
-        }
-
-        public Builder onClick(@Nullable Consumer<InventoryClickEvent> handler) {
-            this.clickHandler = handler;
-            return this;
-        }
-
+        /** @param text the deferred label @return this builder */
+        public Builder text(Text text) { this.text = Objects.requireNonNull(text, "text"); return this; }
+        /** @param color a colour name; unknown names render plain glass @return this builder */
+        public Builder color(String color) { this.color = Objects.requireNonNull(color, "color"); return this; }
+        /** @param slot the grid index @return this builder */
+        public Builder slot(int slot) { this.slot = slot; return this; }
+        /** @param lore deferred lore lines @return this builder */
+        public Builder lore(List<Text> lore) { this.lore = List.copyOf(lore); return this; }
+        /** @param handler the grid action, or null to remove it @return this builder */
+        public Builder onClick(@Nullable GridAction handler) { clickHandler = handler; return this; }
+        /** @param action a parameterless action, or null to remove it @return this builder */
         public Builder onClick(@Nullable Runnable action) {
-            if (action != null) {
-                this.clickHandler = e -> action.run();
-            } else {
-                this.clickHandler = null;
-            }
+            clickHandler = action == null ? null : click -> action.run();
             return this;
         }
-
-        public Builder key(@Nullable SlotKey key) {
-            this.key = key;
-            return this;
-        }
-
-        public Builder key(@NotNull String key) {
-            this.key = SlotKey.of(key);
-            return this;
-        }
-
-        @Override
-        @NotNull
-        public TextButton build() {
-            return new TextButton(this);
-        }
+        /** @param key the reconciliation key @return this builder */
+        public Builder key(@Nullable SlotKey key) { this.key = key; return this; }
+        /** @param key the reconciliation key @return this builder */
+        public Builder key(String key) { this.key = SlotKey.of(key); return this; }
+        @Override public @NotNull TextButton build() { return new TextButton(this); }
     }
 }

@@ -1,157 +1,64 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.widgets;
 
-import com.ultikits.ultitools.abstracts.gui.declarative.core.*;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectElement;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectWidget;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.SlotKey;
 import com.ultikits.ultitools.abstracts.gui.declarative.util.WidgetBuilder;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.inventory.ItemStack;
+import com.ultikits.ultitools.item.ItemSpec;
+import com.ultikits.ultitools.ui.GridAction;
+import java.util.Objects;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.function.Consumer;
-
 /**
- * ItemDisplay is a Widget that displays an item.
- * <p>
- * It is the most basic render Widget, showing a single ItemStack at a given slot.
- *
- * <p><strong>Usage example:</strong></p>
- * <pre>{@code
- * ItemDisplay.builder(itemStack)
- *     .slot(10)
- *     .key("my-item")
- *     .onClick(event -> player.sendMessage("Clicked!"))
- *     .build();
- * }</pre>
- *
- * @author UltiTools Team
- * @version 1.0.0
+ * An immutable item description displayed at a grid slot; its icon is never takeable.
+ * Names and lore belong to the {@link ItemSpec} and are rendered for the viewer by the UI backend.
  * @since 6.2.0
  */
 public class ItemDisplay extends RenderObjectWidget {
-
-    @NotNull
-    private final ItemStack itemStack;
+    private final ItemSpec icon;
     private final int slot;
-    @Nullable
-    private final String displayName;
-    @Nullable
-    private final String[] lore;
-    @Nullable
-    private final Consumer<InventoryClickEvent> clickHandler;
+    private final @Nullable GridAction clickHandler;
 
-    private ItemDisplay(@NotNull Builder builder) {
+    private ItemDisplay(Builder builder) {
         super(builder.key);
-        this.itemStack = builder.itemStack.clone();
-        this.slot = builder.slot;
-        this.displayName = builder.displayName;
-        this.lore = builder.lore;
-        this.clickHandler = builder.clickHandler;
+        icon = builder.icon;
+        slot = builder.slot;
+        clickHandler = builder.clickHandler;
     }
 
-    /**
-     * Creates a Builder.
-     *
-     * @param itemStack the item
-     * @return the Builder
-     */
-    @NotNull
-    public static Builder builder(@NotNull ItemStack itemStack) {
-        return new Builder(itemStack);
-    }
+    /** @param icon the immutable item description @return a new builder */
+    public static Builder builder(ItemSpec icon) { return new Builder(icon); }
+    /** @return the immutable item description */
+    public ItemSpec getIcon() { return icon; }
+    /** @return the zero-based grid slot */
+    public int getSlot() { return slot; }
+    /** @return the optional action, independent of inventory events */
+    public @Nullable GridAction getClickHandler() { return clickHandler; }
 
-    @NotNull
-    public ItemStack getItemStack() {
-        return itemStack;
-    }
+    @Override public @NotNull RenderObjectElement createElement() { return new ItemDisplayElement(this); }
 
-    public int getSlot() {
-        return slot;
-    }
-
-    @Nullable
-    public String getDisplayName() {
-        return displayName;
-    }
-
-    @Nullable
-    public String[] getLore() {
-        return lore;
-    }
-
-    @Nullable
-    public Consumer<InventoryClickEvent> getClickHandler() {
-        return clickHandler;
-    }
-
-    @Override
-    @NotNull
-    public RenderObjectElement createElement() {
-        return new ItemDisplayElement(this);
-    }
-
-    /**
-     * Builder for ItemDisplay.
-     */
+    /** A reusable builder for an item display. */
     public static class Builder implements WidgetBuilder<ItemDisplay> {
-        @NotNull
-        private final ItemStack itemStack;
-        private int slot = 0;
-        @Nullable
-        private String displayName;
-        @Nullable
-        private String[] lore;
-        @Nullable
-        private Consumer<InventoryClickEvent> clickHandler;
-        @Nullable
-        private SlotKey key;
+        private final ItemSpec icon;
+        private int slot;
+        private @Nullable GridAction clickHandler;
+        private @Nullable SlotKey key;
 
-        Builder(@NotNull ItemStack itemStack) {
-            this.itemStack = itemStack;
-        }
-
-        public Builder slot(int slot) {
-            this.slot = slot;
-            return this;
-        }
-
-        public Builder name(@Nullable String name) {
-            this.displayName = name;
-            return this;
-        }
-
-        public Builder lore(@Nullable String... lore) {
-            this.lore = lore;
-            return this;
-        }
-
-        public Builder onClick(@Nullable Consumer<InventoryClickEvent> handler) {
-            this.clickHandler = handler;
-            return this;
-        }
-
+        Builder(ItemSpec icon) { this.icon = Objects.requireNonNull(icon, "icon"); }
+        /** @param slot the grid index @return this builder */
+        public Builder slot(int slot) { this.slot = slot; return this; }
+        /** @param handler the action, or null to remove it @return this builder */
+        public Builder onClick(@Nullable GridAction handler) { clickHandler = handler; return this; }
+        /** @param action a parameterless action, or null to remove it @return this builder */
         public Builder onClick(@Nullable Runnable action) {
-            if (action != null) {
-                this.clickHandler = e -> action.run();
-            } else {
-                this.clickHandler = null;
-            }
+            clickHandler = action == null ? null : click -> action.run();
             return this;
         }
-
-        public Builder key(@Nullable SlotKey key) {
-            this.key = key;
-            return this;
-        }
-
-        public Builder key(@NotNull String key) {
-            this.key = SlotKey.of(key);
-            return this;
-        }
-
-        @Override
-        @NotNull
-        public ItemDisplay build() {
-            return new ItemDisplay(this);
-        }
+        /** @param key the reconciliation key @return this builder */
+        public Builder key(@Nullable SlotKey key) { this.key = key; return this; }
+        /** @param key the reconciliation key @return this builder */
+        public Builder key(String key) { this.key = SlotKey.of(key); return this; }
+        @Override public @NotNull ItemDisplay build() { return new ItemDisplay(this); }
     }
 }

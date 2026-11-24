@@ -1,5 +1,5 @@
 /**
- * The rendering engine and GUI base classes: build, diff, schedule.
+ * The rendering engine and GUI base classes: build grid snapshots, show sessions, schedule entity frames.
  * <p>
  * See the parent package for status and stability: the three rendering seams are fixed as of
  * 6.3.0, but {@code @ApiStatus.Experimental} is retained pending real-server feedback.
