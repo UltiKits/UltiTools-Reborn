@@ -85,6 +85,10 @@ public class CommandManager {
      */
     public void unregisterAll(UltiToolsPlugin plugin) { engine.unregister(plugin); }
 
+    /** Installs command event recovery beside the framework's other enable-time listeners. */
+    @ApiStatus.Internal
+    public void registerInternalListeners() { engine.registerInternalListeners(); }
+
     /** Releases all live command bindings. */
     public void close() { engine.close(); }
 

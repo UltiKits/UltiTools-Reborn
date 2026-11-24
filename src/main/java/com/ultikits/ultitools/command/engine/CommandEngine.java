@@ -44,7 +44,7 @@ public final class CommandEngine {
      */
     public boolean register(Object owner, String ownerName, BaseCommandExecutor executor, String description,
             String permission, boolean requireOp, List<String> aliases) {
-        ensureInstalled();
+        installer.ensureInstalled();
         List<String> labels = aliases;
         if (labels.isEmpty()) {
             CmdExecutor annotation = MergedAnnotationResolver.find(executor.getClass(), CmdExecutor.class);
@@ -61,9 +61,9 @@ public final class CommandEngine {
         return bindings.bind(owner, ownerName, executor, decorated, replies);
     }
 
-    private synchronized void ensureInstalled() {
-        installer.ensureInstalled();
-        if (!installer.isInstalled() || listenerInstalled) return;
+    /** Installs the framework listener once during enable, independently of command registration. */
+    public synchronized void registerInternalListeners() {
+        if (listenerInstalled) return;
         Bukkit.getPluginManager().registerEvents(new HiddenCommandListener(bindings), UltiTools.getInstance());
         listenerInstalled = true;
     }
@@ -76,7 +76,7 @@ public final class CommandEngine {
      * @return whether ownership accepted the command
      */
     public boolean register(Object owner, String ownerName, BrigadierCommand command) {
-        ensureInstalled();
+        installer.ensureInstalled();
         return bindings.bind(owner, ownerName, command, HandWrittenCommands.compile(command));
     }
 

@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -26,6 +27,7 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.manager.CommandManager;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -99,6 +101,11 @@ class HiddenCommandRepliesTest {
         engine = new CommandEngine(new StringNativeArgumentTypes(), Logger.getAnonymousLogger());
         engine.register(executor, "fixture", executor, "fixture", "", false, List.of("hidden", "alternate"));
         engine.register(executor, "fixture", new Locked(), "locked", "fixture.root", false, List.of("locked"));
+        verify(plugins, never()).registerEvents(any(HiddenCommandListener.class), eq(plugin));
+        var manager = new CommandManager(engine);
+        manager.registerInternalListeners();
+        manager.registerInternalListeners();
+        verify(plugins).registerEvents(any(HiddenCommandListener.class), eq(plugin));
         eventDispatcher = lifecycle.fire("ultitools").getDispatcher();
         eventDispatcher.register(LiteralArgumentBuilder.<CommandSourceStack>literal("foreign")
                 .then(LiteralArgumentBuilder.<CommandSourceStack>literal("secret").requires(stack -> false)));
