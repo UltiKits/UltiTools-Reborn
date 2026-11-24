@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.LongSupplier;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -46,7 +47,8 @@ public final class UiRuntime implements AutoCloseable {
     private final Map<UUID, ViewerLane> lanes = new HashMap<>();
     private boolean closed;
     private final long unloadWaitNanos;
-    private @Nullable Long shutdownDeadlineNanos;
+    private final LongSupplier nanoTime;
+    private @Nullable Long shutdownBudgetNanos;
 
     /** Creates the runtime with framework-owned scheduling and the server thread. */
     public UiRuntime(Scheduler scheduler, ContainerRuntime containers, Logger logger, Thread serverThread) {
@@ -54,7 +56,13 @@ public final class UiRuntime implements AutoCloseable {
     }
 
     UiRuntime(Scheduler scheduler, ContainerRuntime containers, Logger logger, Thread serverThread, Duration unloadWait) {
+        this(scheduler, containers, logger, serverThread, unloadWait, System::nanoTime);
+    }
+
+    UiRuntime(Scheduler scheduler, ContainerRuntime containers, Logger logger, Thread serverThread, Duration unloadWait,
+              LongSupplier nanoTime) {
         unloadWaitNanos = unloadWait.toNanos();
+        this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
         this.containers = Objects.requireNonNull(containers, "containers");
         this.logger = Objects.requireNonNull(logger, "logger");
@@ -195,7 +203,8 @@ public final class UiRuntime implements AutoCloseable {
             service.unloadingThread = Thread.currentThread();
             closing = sessions.stream().filter(session -> session.service.equals(service)).toList();
         }
-        long deadline = shutdownDeadlineNanos == null ? System.nanoTime() + unloadWaitNanos : shutdownDeadlineNanos;
+        long started = nanoTime.getAsLong();
+        long deadline = started + (shutdownBudgetNanos == null ? unloadWaitNanos : shutdownBudgetNanos);
         RuntimeCleanup cleanup = new RuntimeCleanup(this, service.owner());
         try {
             cleanup.run("Container prepare unload failed", () -> containers.prepareUnload(service.ownerIdentity, deadline));
@@ -209,6 +218,11 @@ public final class UiRuntime implements AutoCloseable {
             }
             cleanup.run("Container finish unload failed", () -> containers.finishUnload(service.ownerIdentity, deadline));
         } finally {
+            if (shutdownBudgetNanos != null) {
+                // Subtract elapsed monotonic time, not absolute deadlines, so clock wrap cannot replenish the budget.
+                long elapsed = Math.max(0, nanoTime.getAsLong() - started);
+                shutdownBudgetNanos = Math.max(0, shutdownBudgetNanos - elapsed);
+            }
             synchronized (lock) {
                 service.unloaded = true;
                 service.unloading = false;
@@ -276,7 +290,7 @@ public final class UiRuntime implements AutoCloseable {
     /** Starts one shared storage-wait budget for the complete server stop; repeated calls never extend it. */
     public void beginShutdown() {
         checkThread();
-        if (shutdownDeadlineNanos == null) { shutdownDeadlineNanos = System.nanoTime() + unloadWaitNanos; }
+        if (shutdownBudgetNanos == null) { shutdownBudgetNanos = unloadWaitNanos; }
     }
 
     @Override public void close() {

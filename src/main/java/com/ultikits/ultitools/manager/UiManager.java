@@ -20,7 +20,10 @@ import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.ApiStatus;
 
-/** Framework-owned assembly and per-module-copy UI lifetime. */
+/**
+ * Framework-owned assembly and per-module-copy UI lifetime.
+ * All methods must be called on the server thread.
+ */
 @ApiStatus.Internal
 public final class UiManager implements AutoCloseable {
     private final UiRuntime runtime;
@@ -66,7 +69,7 @@ public final class UiManager implements AutoCloseable {
 
     UiRuntime runtime() { return runtime; }
 
-    /** Starts the common stop deadline before the framework unloads its first module. */
+    /** Starts the common storage-wait budget before the framework unloads its first module. */
     public void beginShutdown() { runtime.beginShutdown(); }
 
     /** Explicitly closed before root-container destruction retires the framework scheduler. */

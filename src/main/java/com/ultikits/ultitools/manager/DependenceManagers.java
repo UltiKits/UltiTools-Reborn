@@ -51,7 +51,16 @@ public class DependenceManagers {
         initScheduling(plugin);
         initInventoryAPI(plugin);
         initCoreServices(plugin);
-        initUi(plugin);
+        try {
+            initUi(plugin);
+        } catch (Throwable failure) {
+            try {
+                closeContext();
+            } catch (Throwable cleanup) {
+                if (!failure.equals(cleanup)) { failure.addSuppressed(cleanup); }
+            }
+            throw failure;
+        }
     }
 
     /** Installs the framework owner before any core service can schedule work. */
@@ -162,9 +171,23 @@ public class DependenceManagers {
      * Close context.
      */
     public void closeContext() {
-        if (uiManager != null) { uiManager.close(); }
-        if (context != null) {
-            context.close();
+        Throwable uiFailure = null;
+        try {
+            if (uiManager != null) { uiManager.close(); }
+        } catch (Throwable failure) {
+            uiFailure = failure;
+            throw failure;
+        } finally {
+            closeRootContext(uiFailure);
+        }
+    }
+
+    private void closeRootContext(Throwable uiFailure) {
+        try {
+            if (context != null) { context.close(); }
+        } catch (Throwable failure) {
+            if (uiFailure == null) { throw failure; }
+            if (!uiFailure.equals(failure)) { uiFailure.addSuppressed(failure); }
         }
     }
 }

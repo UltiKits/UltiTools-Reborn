@@ -1,12 +1,15 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.item.ItemRenderer;
 import com.ultikits.ultitools.item.ItemSpec;
 import com.ultikits.ultitools.item.impl.PaperItemRenderer;
 import com.ultikits.ultitools.scheduling.ManualScheduler;
+import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.internal.FrameworkSchedulerBean;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.text.Text;
@@ -36,15 +39,20 @@ import com.ultikits.ultitools.ui.dialog.DialogPresenter;
 import com.ultikits.ultitools.ui.dialog.DialogTicket;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import io.papermc.paper.datacomponent.DataComponentTypes;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
+import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryAction;
@@ -58,16 +66,20 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -75,9 +87,12 @@ import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -92,7 +107,6 @@ class UiManagerWiringTest {
     private UiService service;
     private Messages messages;
     private TextEngine textEngine;
-    private ItemRenderer items;
     private final List<DialogModel> dialogs = new ArrayList<>();
     private final List<ItemStack> renderedItems = new ArrayList<>();
 
@@ -111,7 +125,7 @@ class UiManagerWiringTest {
         textEngine.publish(new Catalogue.Builder("ui-wiring", Locale.ENGLISH)
                 .put(Locale.ENGLISH, "icon", "Diamond").put(Locale.CHINESE, "icon", "钻石").build(), this);
         messages = textEngine.messagesFor("ui-wiring");
-        items = spy(new PaperItemRenderer(messages, locales));
+        ItemRenderer items = spy(new PaperItemRenderer(messages, locales));
         doAnswer(call -> {
             ItemStack rendered = (ItemStack) call.callRealMethod();
             renderedItems.add(rendered);
@@ -240,13 +254,15 @@ class UiManagerWiringTest {
         tick();
         observed.setItemOnCursor(new ItemStack(Material.DIRT, 3));
         clearInvocations(observed);
+        AtomicReference<ItemStack> cursorAtClose = new AtomicReference<>();
         doAnswer(call -> {
-            assertThat(observed.getItemOnCursor()).isEqualTo(new ItemStack(Material.DIRT, 3));
+            cursorAtClose.set(observed.getItemOnCursor().clone());
             return call.callRealMethod();
         }).when(observed).closeInventory();
         session.close();
         tick();
         verify(observed).closeInventory();
+        assertThat(cursorAtClose.get()).isEqualTo(new ItemStack(Material.DIRT, 3));
         // MockBukkit clears the cursor on close; real-server return to storage is covered by UAT.
         assertThat(session.result().toCompletableFuture()).isDone();
     }
@@ -270,6 +286,60 @@ class UiManagerWiringTest {
         assertThat(rejected.result().toCompletableFuture()).isCompletedWithValue(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
         manager.close();
         assertThat(order).containsExactly("ui", "scheduler");
+    }
+
+    @ParameterizedTest
+    @MethodSource("closeFailures")
+    void closeContextRetiresTheFrameworkSchedulerEvenWhenUiCloseThrows(Throwable failure) {
+        SimpleContainer context = new SimpleContainer();
+        PaperSchedulerEngine engine = mock(PaperSchedulerEngine.class);
+        context.registerSingleton("frameworkScheduler", new FrameworkSchedulerBean(engine, scheduler));
+        UiManager failing = mock(UiManager.class);
+        doThrow(failure).when(failing).close();
+        DependenceManagers dependencies = mock(DependenceManagers.class, CALLS_REAL_METHODS);
+        ReflectionUtil.setFieldValue(dependencies, "context", context);
+        ReflectionUtil.setFieldValue(dependencies, "uiManager", failing);
+        try {
+            assertThatThrownBy(dependencies::closeContext).isSameAs(failure);
+            verify(engine).retire(scheduler);
+        } finally {
+            context.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void initUiFailureRetiresTheSchedulerAndClosesAnyPartialUiManager(boolean created, @TempDir Path data) {
+        UltiTools plugin = mock(UltiTools.class);
+        when(plugin.getLogger()).thenReturn(Logger.getAnonymousLogger());
+        when(plugin.getDataFolder()).thenReturn(data.toFile());
+        when(plugin.getConfig()).thenReturn(new YamlConfiguration());
+        UiManager partial = mock(UiManager.class);
+        IllegalStateException failure = new IllegalStateException("UI initialization failed");
+        doThrow(failure).when(partial).registerListeners(plugin);
+        try (MockedConstruction<PaperSchedulerEngine> engines = mockConstruction(PaperSchedulerEngine.class,
+                     (engine, creation) -> when(engine.newOwner("UltiTools")).thenReturn(scheduler));
+             MockedConstruction<InventoryAPI> inventories = mockConstruction(InventoryAPI.class);
+             MockedStatic<UiManager> factory = mockStatic(UiManager.class)) {
+            factory.when(() -> UiManager.create(any(Scheduler.class), any(Messages.class), any(ItemRenderer.class),
+                    any(Logger.class), any(Thread.class), any(DialogPresenter.class))).thenAnswer(call -> {
+                        if (!created) { throw failure; }
+                        return partial;
+                    });
+            assertThatThrownBy(() -> new DependenceManagers(plugin, getClass().getClassLoader())).isSameAs(failure);
+            assertThat(inventories.constructed()).hasSize(1);
+            assertThat(engines.constructed()).hasSize(1);
+            verify(engines.constructed().getFirst()).retire(scheduler);
+            verify(partial, times(created ? 1 : 0)).close();
+            assertThatThrownBy(FrameworkScheduling::scheduler).isInstanceOf(IllegalStateException.class);
+        } finally {
+            FrameworkScheduling.uninstall(scheduler);
+        }
+    }
+
+    private static Stream<Throwable> closeFailures() {
+        return Stream.of(new IllegalStateException("UI close"), new AssertionError("UI close"),
+                new StackOverflowError("UI close"));
     }
 
     private void tick() { clock.advanceTicks(1); }
