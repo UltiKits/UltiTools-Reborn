@@ -212,6 +212,7 @@
                                  catch an undeclared slf4j-api use (FOUND-05); that declaration and
                                  the framework's slf4j use were later removed in 6.3.0. -->
                             <ignoredUsedUndeclaredDependencies>
+                                <ignoredUsedUndeclaredDependency>com.mojang:brigadier</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>net.md-5:bungeecord-chat</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>org.yaml:snakeyaml</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>net.kyori:adventure-text-serializer-legacy</ignoredUsedUndeclaredDependency>
