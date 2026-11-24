@@ -39,8 +39,11 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
@@ -99,7 +102,7 @@ class UiRuntimeFailureTest {
         }
     }
     private void settle() { clock.advanceTicks(4); }
-    private static void closed(UiSession<?> session, CloseReason reason) {
+    private static void assertClosed(UiSession<?> session, CloseReason reason) {
         assertThat(session.result().toCompletableFuture()).isCompletedWithValue(new UiResult.Closed<>(reason));
     }
     private SlotContainer container() {
@@ -130,7 +133,7 @@ class UiRuntimeFailureTest {
         UiSession<Boolean> second = service.show(MockBukkit.getMock().addPlayer(), Confirm.builder(TITLE).build());
         settle();
         assertThatCode(() -> runtime.unload(service)).doesNotThrowAnyException();
-        closed(first, CloseReason.OWNER_UNLOADED); closed(second, CloseReason.OWNER_UNLOADED);
+        assertClosed(first, CloseReason.OWNER_UNLOADED); assertClosed(second, CloseReason.OWNER_UNLOADED);
         verify(containers).finishUnload(eq(owner), anyLong());
         assertThat(warnings).anySatisfy(record -> assertThat(record.getThrown()).isSameAs(failure));
     }
@@ -142,7 +145,7 @@ class UiRuntimeFailureTest {
         UiSession<Boolean> second = other.show(MockBukkit.getMock().addPlayer(), Confirm.builder(TITLE).build());
         settle();
         assertThatCode(() -> runtime.close()).doesNotThrowAnyException();
-        closed(first, CloseReason.OWNER_UNLOADED); closed(second, CloseReason.OWNER_UNLOADED);
+        assertClosed(first, CloseReason.OWNER_UNLOADED); assertClosed(second, CloseReason.OWNER_UNLOADED);
         assertThat(warnings).hasSize(2);
     }
     @ParameterizedTest @ValueSource(booleans = {true, false})
@@ -153,7 +156,7 @@ class UiRuntimeFailureTest {
         else { when(second.get(0)).thenThrow(failure); }
         GridSession session = service.show(viewer, grid(first, second));
         settle();
-        closed(session, CloseReason.UNSUPPORTED);
+        assertClosed(session, CloseReason.UNSUPPORTED);
         verify(containers).detach(second, session);
         assertThat(warnings).anySatisfy(record -> assertThat(record.getThrown()).isSameAs(failure));
     }
@@ -171,7 +174,7 @@ class UiRuntimeFailureTest {
         }).when(containers).attach(any(), eq(session));
         if (!attachFailure) { when(second.get(0)).thenThrow(failure); }
         session.update(grid(first, second)); settle();
-        closed(session, CloseReason.UNSUPPORTED);
+        assertClosed(session, CloseReason.UNSUPPORTED);
         verify(containers).detach(previous, session);
         for (SlotContainer attempted : attempts) { verify(containers).detach(attempted, session); }
         assertThat(warnings).anySatisfy(record -> assertThat(record.getThrown()).isSameAs(failure));
@@ -182,7 +185,7 @@ class UiRuntimeFailureTest {
         AssertionError failure = new AssertionError("redraw read");
         when(container.get(0)).thenThrow(failure);
         runtime.redraw(container); settle();
-        closed(session, CloseReason.UNSUPPORTED);
+        assertClosed(session, CloseReason.UNSUPPORTED);
         verify(containers).detach(container, session);
     }
     @Test void detachError_doesNotSkipAnotherContainerOrResult() {
@@ -190,13 +193,14 @@ class UiRuntimeFailureTest {
         GridSession session = service.show(viewer, grid(first, second)); settle();
         doThrow(new AssertionError("detach")).when(containers).detach(first, session);
         session.close(); settle();
-        closed(session, CloseReason.CLOSED_BY_CODE);
+        assertClosed(session, CloseReason.CLOSED_BY_CODE);
         verify(containers).detach(second, session);
     }
     @Test void timeoutCancellationError_doesNotLoseChosenResult() {
         runtime.close();
         TaskContext global = spy(scheduler.global());
         TaskHandle timeout = mock(TaskHandle.class);
+        when(timeout.completion()).thenReturn(new CompletableFuture<Void>().minimalCompletionStage());
         doReturn(timeout).when(global).runLater(any(Duration.class), any(Runnable.class));
         doThrow(new AssertionError("cancel timeout")).when(timeout).cancel();
         Scheduler unreliable = spy(scheduler);
@@ -204,7 +208,38 @@ class UiRuntimeFailureTest {
         startRuntime(unreliable);
         UiSession<Boolean> session = service.show(viewer, Confirm.builder(TITLE).build()); settle();
         assertThatCode(session::close).doesNotThrowAnyException(); settle();
-        closed(session, CloseReason.CLOSED_BY_CODE);
+        assertClosed(session, CloseReason.CLOSED_BY_CODE);
+    }
+    @ParameterizedTest @ValueSource(strings = {"throw", "failed", "cancelled", "late"})
+    void timeoutSchedulingFailure_hasAccurateWarningAndCompletes(String mode) {
+        runtime.close();
+        TaskContext global = spy(scheduler.global());
+        Throwable failure = mode.equals("cancelled") ? new CancellationException("timeout cancelled")
+                : new RejectedExecutionException("timeout unavailable");
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        if (mode.equals("throw")) {
+            doThrow(failure).when(global).runLater(any(Duration.class), any(Runnable.class));
+        } else {
+            TaskHandle timeout = mock(TaskHandle.class);
+            when(timeout.completion()).thenReturn(completion.minimalCompletionStage());
+            doReturn(timeout).when(global).runLater(any(Duration.class), any(Runnable.class));
+            if (!mode.equals("late")) { completion.completeExceptionally(failure); }
+        }
+        Scheduler unreliable = spy(scheduler);
+        doReturn(global).when(unreliable).global();
+        startRuntime(unreliable);
+        UiSession<Boolean> session = service.show(viewer, Confirm.builder(TITLE).build()); settle();
+        if (mode.equals("late")) {
+            assertThat(session.isOpen()).isTrue();
+            completion.completeExceptionally(failure); settle();
+        }
+        assertClosed(session, CloseReason.UNSUPPORTED);
+        verify(backend).open(eq(session), any());
+        verify(backend).close(session);
+        assertThat(warnings).singleElement().satisfies(record -> {
+            assertThat(record.getMessage()).contains("timeout", "TestModule").doesNotContain("Backend open failed");
+            assertThat(record.getThrown()).isSameAs(failure);
+        });
     }
     @Test void deliveryError_completesBeforeUnloadAndDoesNotSkipNextDelivery() {
         Player broken = mock(Player.class);
@@ -227,7 +262,7 @@ class UiRuntimeFailureTest {
                 Confirm.builder(TITLE).build());
         settle();
         assertThatThrownBy(runtime::close).isSameAs(failure);
-        closed(first, CloseReason.OWNER_UNLOADED); closed(second, CloseReason.OWNER_UNLOADED);
+        assertClosed(first, CloseReason.OWNER_UNLOADED); assertClosed(second, CloseReason.OWNER_UNLOADED);
     }
     @Test void pumpCancellationError_stillReleasesViewerLanes() {
         runtime.close();
@@ -252,25 +287,25 @@ class UiRuntimeFailureTest {
         GridSession session = service.show(viewer, grid()); settle();
         assertThat(session.isOpen()).isTrue();
         session.close(); settle();
-        closed(session, CloseReason.CLOSED_BY_CODE);
+        assertClosed(session, CloseReason.CLOSED_BY_CODE);
         assertThat(warnings).anySatisfy(record -> assertThat(record.getThrown()).isSameAs(failure));
     }
     @Test void backendOpenError_completesUnsupported() {
         doThrow(new NoClassDefFoundError("backend linkage")).when(backend).open(any(), any());
         UiSession<Boolean> session = service.show(viewer, Confirm.builder(TITLE).build()); settle();
-        closed(session, CloseReason.UNSUPPORTED);
+        assertClosed(session, CloseReason.UNSUPPORTED);
     }
     @Test void backendSupportsError_completesUnsupported() {
         when(backend.supports(any(UiIntent.class), any())).thenThrow(new ExceptionInInitializerError("backend init"));
         UiSession<Boolean> session = service.show(viewer, Confirm.builder(TITLE).build()); settle();
-        closed(session, CloseReason.UNSUPPORTED);
+        assertClosed(session, CloseReason.UNSUPPORTED);
     }
     @Test void backendUpdateError_completesAndDetaches() {
         SlotContainer container = container();
         GridSession session = service.show(viewer, grid(container)); settle();
         doThrow(new AssertionError("backend update")).when(backend).update(any(), any(), any());
         session.update(grid()); settle();
-        closed(session, CloseReason.UNSUPPORTED);
+        assertClosed(session, CloseReason.UNSUPPORTED);
         verify(containers).detach(container, session);
     }
 }

@@ -6,16 +6,16 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CancellationException;
-import com.ultikits.ultitools.scheduling.TaskHandle;
 import com.ultikits.ultitools.scheduling.ManualScheduler;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
 import com.ultikits.ultitools.ui.RecordingScheduler;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
@@ -99,9 +99,9 @@ class ViewerLaneTest {
         clock.advanceTicks(1);
         assertThat(seen).containsExactly(1, 2);
     }
-    @Test void failedDrain_retriesOnEntityContext() { retryDrain(new AssertionError("scheduler wrapper")); }
-    @Test void cancelledDrain_retriesOnEntityContext() { retryDrain(new CancellationException()); }
-    private void retryDrain(Throwable failure) {
+    @Test void failedDrain_retriesOnEntityContext() { assertDrainRetries(new AssertionError("scheduler wrapper")); }
+    @Test void cancelledDrain_retriesOnEntityContext() { assertDrainRetries(new CancellationException()); }
+    private void assertDrainRetries(Throwable failure) {
         CompletableFuture<Void> completion = new CompletableFuture<>();
         TaskHandle failed = mock(TaskHandle.class);
         when(failed.completion()).thenReturn(completion.minimalCompletionStage());

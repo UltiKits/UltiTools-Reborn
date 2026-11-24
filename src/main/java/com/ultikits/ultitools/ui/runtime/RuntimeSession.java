@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
@@ -118,9 +119,14 @@ class RuntimeSession<R> implements UiSession<R> {
             if (!runtime.activate(this, selected)) { return; }
             selected.open(this, callbacks());
             if (this instanceof RuntimeGridSession grid) { grid.renderPicture(); }
-            scheduleTimeout(options);
         } catch (Throwable failure) {
-            runtime.warn(service.owner(), "Backend open failed", failure);
+            runtime.warn(service.owner(), "UI open failed", failure);
+            requestClose(CloseReason.UNSUPPORTED);
+            UiRuntime.rethrowFatal(failure);
+            return;
+        }
+        try { scheduleTimeout(options); } catch (Throwable failure) {
+            runtime.warn(service.owner(), "UI timeout scheduling failed", failure);
             requestClose(CloseReason.UNSUPPORTED);
             UiRuntime.rethrowFatal(failure);
         }
@@ -141,6 +147,14 @@ class RuntimeSession<R> implements UiSession<R> {
             if (!cancel) { timeout = handle; }
         }
         if (cancel) { cancelTimeout(handle); }
+        handle.completion().whenComplete((ignored, failure) -> {
+            if (failure != null && isOpen()) {
+                Throwable cause = failure instanceof CompletionException wrapped
+                        && wrapped.getCause() != null ? wrapped.getCause() : failure;
+                runtime.warn(service.owner(), "UI timeout task failed", cause);
+                requestClose(CloseReason.UNSUPPORTED);
+            }
+        });
     }
 
     private void cancelTimeout(TaskHandle handle) {
