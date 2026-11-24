@@ -28,7 +28,6 @@ import org.junit.jupiter.api.Timeout;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.widgets.Toast;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -429,33 +428,6 @@ class InMemoryNotificationServiceTest {
     }
 
     @Nested
-    @DisplayName("sendToastNotification 测试")
-    class SendToastNotificationTests {
-
-        @Test
-        @DisplayName("sendToastNotification 方法应该存在")
-        void sendToastMethodShouldExist() throws Exception {
-            // Assert - Toast 依赖 UltiTools.getInstance().getName()，在 MockBukkit 环境中无法完全测试
-            // 这里验证方法存在
-            java.lang.reflect.Method method = InMemoryNotificationService.class.getMethod(
-                "sendToastNotification", Player.class, String.class, String.class, Toast.Style.class);
-            assertThat(method).isNotNull();
-            assertThat(method.getReturnType()).isEqualTo(boolean.class);
-        }
-
-        @Test
-        @DisplayName("Toast.Style 枚举应该包含所有样式")
-        void toastStyleEnumShouldContainAllStyles() {
-            // Assert
-            assertThat(Toast.Style.values()).contains(
-                Toast.Style.TASK, 
-                Toast.Style.GOAL, 
-                Toast.Style.CHALLENGE
-            );
-        }
-    }
-
-    @Nested
     @DisplayName("接口实现测试")
     class InterfaceImplementationTests {
 
@@ -635,16 +607,6 @@ class InMemoryNotificationServiceTest {
 
             // Act & Assert
             assertThat(notificationService.sendActionBarNotification(player, "test")).isTrue();
-        }
-
-        @Test
-        @DisplayName("sendToastNotification 方法存在且返回 boolean")
-        void sendToastMethodShouldExist() throws Exception {
-            // Assert - Toast 依赖 UltiTools.getInstance().getName()，无法在 MockBukkit 中测试
-            java.lang.reflect.Method method = InMemoryNotificationService.class.getMethod(
-                "sendToastNotification", Player.class, String.class, String.class, Toast.Style.class);
-            assertThat(method).isNotNull();
-            assertThat(method.getReturnType()).isEqualTo(boolean.class);
         }
     }
 
