@@ -41,7 +41,10 @@ class ConsoleTabCompletionTest {
     void setUp() {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
-        command = mock(Command.class);
+        command = new Command("fixture") {
+            @Override public boolean execute(CommandSender sender, String label, String[] args) { return true; }
+        };
+        server.getCommandMap().register("fixture", command);
     }
 
     @AfterEach
@@ -83,7 +86,7 @@ class ConsoleTabCompletionTest {
     @ValueSource(strings = {"player", "playerstring", "playerargs"})
     void playerProvidersAreSkippedForConsoleAndPreservedForPlayers(String mapping) {
         SenderExecutor executor = new SenderExecutor();
-        assertThat(complete(executor, server.getConsoleSender(), mapping, "")).isNull();
+        assertThat(complete(executor, server.getConsoleSender(), mapping, "")).isEmpty();
         assertThat(executor.playerCalls).isZero();
         assertThat(complete(executor, server.addPlayer("player"), mapping, "")).containsExactly("playerResult");
         assertThat(executor.playerCalls).isEqualTo(1);
@@ -107,7 +110,7 @@ class ConsoleTabCompletionTest {
         Player player = server.addPlayer("player");
         assertThat(complete(executor, console, "")).contains("consoleonly").doesNotContain("playeronly");
         assertThat(complete(executor, player, "")).contains("playeronly").doesNotContain("consoleonly");
-        assertThat(complete(executor, console, "playeronly", "")).isNull();
+        assertThat(complete(executor, console, "playeronly", "")).isEmpty();
         assertThat(complete(executor, player, "consoleonly", "")).isEmpty();
     }
 
@@ -115,7 +118,7 @@ class ConsoleTabCompletionTest {
     void classTargetsAreRespected() {
         CommandSender console = server.getConsoleSender();
         Player player = server.addPlayer("player");
-        assertThat(complete(new PlayerExecutor(), console, "")).isNull();
+        assertThat(complete(new PlayerExecutor(), console, "")).isEmpty();
         assertThat(complete(new ConsoleExecutor(), player, "")).isEmpty();
         assertThat(complete(new ConsoleExecutor(), console, "senderstring", "sp")).containsExactly("spawn");
         assertThat(complete(new PlayerExecutor(), player, "senderstring", "sp")).containsExactly("spawn");
@@ -127,8 +130,8 @@ class ConsoleTabCompletionTest {
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
         assertThat(complete(executor, sender, "")).doesNotContain("secret", "oponly");
         executor.receivedSender = null;
-        assertThat(complete(executor, sender, "secret", "")).isNull();
-        assertThat(complete(executor, sender, "oponly", "")).isNull();
+        assertThat(complete(executor, sender, "secret", "")).isEmpty();
+        assertThat(complete(executor, sender, "oponly", "")).isEmpty();
         assertThat(executor.receivedSender).isNull();
         when(sender.hasPermission("fixture.secret")).thenReturn(true);
         when(sender.isOp()).thenReturn(true);
@@ -140,9 +143,9 @@ class ConsoleTabCompletionTest {
     void classPermissionAndOpAreRespectedWithoutRunningValidators() {
         ClassGatedExecutor executor = new ClassGatedExecutor();
         CommandSender sender = mock(CommandSender.class);
-        assertThat(complete(executor, sender, "")).isNull();
+        assertThat(complete(executor, sender, "")).isEmpty();
         when(sender.hasPermission("fixture.class")).thenReturn(true);
-        assertThat(complete(executor, sender, "")).isNull();
+        assertThat(complete(executor, sender, "")).isEmpty();
         when(sender.isOp()).thenReturn(true);
         assertThat(complete(executor, sender, "senderstring", "sp")).containsExactly("spawn");
     }
@@ -163,51 +166,44 @@ class ConsoleTabCompletionTest {
     }
 
     @Test
-    void legacyProtectedPlayerOverrideIsStillUsed() {
+    void explicitParameterProvidersTakePrecedenceOverTheExecutorFallback() {
         LegacyOverrideExecutor executor = new LegacyOverrideExecutor();
-        assertThat(complete(executor, server.addPlayer("player"), "")).containsExactly("overrideResult");
+        assertThat(complete(executor, server.addPlayer("player"), "")).contains("spawn").doesNotContain("overrideResult");
         assertThat(complete(executor, server.getConsoleSender(), "senderstring", "sp")).containsExactly("spawn");
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"", "later", "empty", "null", "filtered", "literal", "missing", "tooMany"})
-    void nonPlayerEmptyResultsKeepBukkitFallbackAtEveryTokenPath(String path) {
+    void executorFallbackIsSenderAwareAndCannotReplaceExplicitProvidersOrInventPaths(String path) {
         LegacyFallbackExecutor executor = new LegacyFallbackExecutor();
         String[] args;
-        if (path.isEmpty()) {
-            args = new String[]{"name"};
-        } else if ("filtered".equals(path)) {
-            args = new String[]{path, "z"};
-        } else if ("literal".equals(path)) {
-            args = new String[]{"noMatch"};
-        } else if ("tooMany".equals(path)) {
-            args = new String[]{"later", "name", "extra"};
-        } else {
-            args = new String[]{path, ""};
-        }
-        for (CommandSender sender : Arrays.asList(server.getConsoleSender(),
+        if (path.isEmpty()) args = new String[]{"name"};
+        else if ("filtered".equals(path)) args = new String[]{path, "z"};
+        else if ("literal".equals(path)) args = new String[]{"noMatch"};
+        else if ("tooMany".equals(path)) args = new String[]{"later", "name", "extra"};
+        else args = new String[]{path, ""};
+        for (CommandSender sender : Arrays.asList(server.getConsoleSender(), server.addPlayer(),
                 mock(RemoteConsoleCommandSender.class), mock(CommandSender.class))) {
-            assertThat(complete(executor, sender, args)).as(path).isNull();
+            List<String> suggestions = complete(executor, sender, args);
+            if ("later".equals(path)) assertThat(suggestions).containsExactly("overrideResult");
+            else assertThat(suggestions).as(path).isEmpty();
         }
-        assertThat(complete(executor, server.addPlayer("player"), args))
-                .containsExactly("overrideResult");
     }
 
     @Test
-    void nonPlayerEmptyArgumentVectorsKeepBukkitFallback() {
+    void emptyArgumentVectorsRequestRootSuggestionsForEverySenderKind() {
         SenderExecutor executor = new SenderExecutor();
-        assertThat(complete(executor, server.getConsoleSender(), new String[0])).isNull();
-        assertThat(complete(executor, server.getConsoleSender(), (String[]) null)).isNull();
-        assertThat(complete(executor, server.addPlayer("player"), new String[0])).isEmpty();
+        assertThat(complete(executor, server.getConsoleSender(), new String[0])).contains("sender");
+        assertThat(complete(executor, server.addPlayer("player"), new String[0])).contains("sender");
     }
 
     @Test
-    void emptyCustomCompleterKeepsNonPlayerFallbackButPlayerEmptyList() {
+    void emptyCustomCompleterProducesNoSuggestionsForEitherSenderKind() {
         TabCompletionManager manager = TabCompletionManager.getInstance();
         manager.register("@consoleFixture", context -> java.util.Collections.emptyList());
         try {
             SenderExecutor executor = new SenderExecutor();
-            assertThat(complete(executor, server.getConsoleSender(), "custom", "")).isNull();
+            assertThat(complete(executor, server.getConsoleSender(), "custom", "")).isEmpty();
             assertThat(complete(executor, server.addPlayer("player"), "custom", "")).isEmpty();
         } finally {
             manager.unregister("@consoleFixture");
@@ -228,7 +224,7 @@ class ConsoleTabCompletionTest {
     @Test
     void deniedTargetDoesNotTouchSenderOrProvider() {
         CommandSender sender = mock(CommandSender.class);
-        assertThat(complete(new PlayerExecutor(), sender, "senderstring", "")).isNull();
+        assertThat(complete(new PlayerExecutor(), sender, "senderstring", "")).isEmpty();
         verifyNoInteractions(sender);
     }
 

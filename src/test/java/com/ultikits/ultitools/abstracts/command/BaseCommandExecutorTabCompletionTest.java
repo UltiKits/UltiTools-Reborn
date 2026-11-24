@@ -138,7 +138,7 @@ class BaseCommandExecutorTabCompletionTest {
 
             List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
-            assertThat(completions).isEmpty();
+            assertThat(completions).containsExactly("help");
         }
 
         @Test
@@ -313,7 +313,7 @@ class BaseCommandExecutorTabCompletionTest {
 
             List<String> completions = com.ultikits.ultitools.command.engine.CommandTestSupport.suggest(executor, player, mockCommand, "fixture", new String[]{""});
 
-            assertThat(completions).containsExactly("give", "mode", "teleport");
+            assertThat(completions).containsExactly("give", "help", "mode", "teleport");
         }
 
         @Test

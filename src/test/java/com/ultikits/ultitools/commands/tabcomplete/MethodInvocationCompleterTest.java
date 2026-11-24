@@ -5,6 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.mock;
+import org.bukkit.Bukkit;
+import org.bukkit.Server;
+import org.bukkit.command.CommandMap;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
@@ -524,22 +528,26 @@ class MethodInvocationCompleterTest {
             ThreeParamExecutor executor = new ThreeParamExecutor();
             when(mockPlayer.getName()).thenReturn("TestPlayer");
             
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .player(mockPlayer)
-                    .commandName(mockCommand.getName())
-                    .args(new String[]{"3"})  // start with "3" to match "3param-result"
-                    .currentArgIndex(0)
-                    .matchedMethod(method)
-                    .parameterName("param")
-                    .executorInstance(executor)
-                    .build();
-            
-            List<String> suggestions = completer.complete(context);
-            
-            // The method signature expects exactly (Player, Command, String[])
-            // and return type must be List<String>
-            assertEquals(1, suggestions.size());
-            assertEquals("3param-result", suggestions.get(0));
+            try (var bukkit = mockStatic(Bukkit.class)) {
+                Server server = mock(Server.class);
+                CommandMap commandMap = mock(CommandMap.class);
+                bukkit.when(Bukkit::getServer).thenReturn(server);
+                when(server.getCommandMap()).thenReturn(commandMap);
+                when(commandMap.getCommand("fixture")).thenReturn(mockCommand);
+                TabCompletionContext context = TabCompletionContext.builder()
+                        .player(mockPlayer)
+                        .commandName("fixture")
+                        .args(new String[]{"3"})  // start with "3" to match "3param-result"
+                        .currentArgIndex(0)
+                        .matchedMethod(method)
+                        .parameterName("param")
+                        .executorInstance(executor)
+                        .build();
+                List<String> suggestions = completer.complete(context);
+                // The legacy provider receives the Command from the public lookup, not the typed context.
+                assertEquals(1, suggestions.size());
+                assertEquals("3param-result", suggestions.get(0));
+            }
         }
     }
 

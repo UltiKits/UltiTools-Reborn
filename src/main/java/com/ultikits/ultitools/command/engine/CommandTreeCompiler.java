@@ -24,6 +24,10 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.utils.ReflectionUtil;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import java.util.concurrent.CompletableFuture;
 
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 
@@ -60,22 +64,23 @@ final class CommandTreeCompiler {
             if (mapping != null) add(root, executor.getClass(), method, mapping.format());
         }
         StringBuilder signature = new StringBuilder(labels.toString());
-        signature.append('|').append(permission).append(':').append(requireOp);
+        signature.append('|').append(permission).append(':').append(requireOp)
+                .append(':').append(CommandAccess.classTarget(executor.getClass()));
         appendSignature(root, signature);
-        LiteralCommandNode<CommandSourceStack> tree = (LiteralCommandNode<CommandSourceStack>)
-                build(root, invocation, help, new SuggestionBridge(executor), List.of());
-        if (tree.getCommand() == null) tree = copyRootWithHelp(tree, help);
         String helpLiteral = executor.helpCommand().toLowerCase(Locale.ROOT);
-        if (tree.getChild(helpLiteral) == null) tree.addChild(LiteralArgumentBuilder.<CommandSourceStack>literal(helpLiteral).executes(help).build());
+        signature.append("|help:").append(helpLiteral);
+        LiteralCommandNode<CommandSourceStack> tree = (LiteralCommandNode<CommandSourceStack>)
+                build(root, invocation, new SuggestionBridge(executor), executor.getClass(), List.of());
+        var rootBuilder = tree.createBuilder().requires(source ->
+                CommandAccess.root(permission, requireOp, source));
+        if (tree.getCommand() == null) rootBuilder.executes(help);
+        var guardedRoot = rootBuilder.build();
+        tree.getChildren().forEach(guardedRoot::addChild);
+        tree = visibleLiteral(guardedRoot, source -> CommandAccess.classVisible(executor.getClass(), source));
+        if (tree.getChild(helpLiteral) == null) tree.addChild(visibleLiteral(
+                LiteralArgumentBuilder.<CommandSourceStack>literal(helpLiteral).executes(help).build(),
+                source -> CommandAccess.classVisible(executor.getClass(), source)));
         return new CompiledCommand(labels.getFirst(), labels.subList(1, labels.size()), description, tree, signature.toString());
-    }
-
-    private static LiteralCommandNode<CommandSourceStack> copyRootWithHelp(
-            LiteralCommandNode<CommandSourceStack> root, Command<CommandSourceStack> help) {
-        LiteralCommandNode<CommandSourceStack> copy = LiteralArgumentBuilder.<CommandSourceStack>literal(root.getLiteral())
-                .executes(help).build();
-        root.getChildren().forEach(copy::addChild);
-        return copy;
     }
 
     private static void rejectDuplicateFormats(BaseCommandExecutor executor) {
@@ -149,16 +154,18 @@ final class CommandTreeCompiler {
     }
 
     private CommandNode<CommandSourceStack> build(Spec spec, Invocation invocation,
-            Command<CommandSourceStack> help, SuggestionBridge suggestions, List<Spec> ancestors) {
+            SuggestionBridge suggestions, Class<?> owner, List<Spec> ancestors) {
         List<Spec> path = new ArrayList<>(ancestors);
         if (spec.argument != null) path.add(spec);
+        List<Method> uses = methods(spec);
         ArgumentBuilder<CommandSourceStack, ?> builder = spec.argument == null
                 ? LiteralArgumentBuilder.<CommandSourceStack>literal(spec.name)
                 : RequiredArgumentBuilder.<CommandSourceStack, Object>argument(spec.name, cast(spec.argument.type()))
-                        .suggests(suggestions.provider(spec.firstMethod, spec.name, spec.argument.type()));
+                        .suggests(suggestions.provider(uses, spec.name, spec.argument.type()));
+        if (uses.size() == 1) builder.requires(source -> CommandAccess.mapping(uses.getFirst(), source));
         if (spec.method != null) builder.executes(new MappingCommand(spec.method, path, null, invocation));
         for (Spec child : spec.children.values()) {
-            builder.then(build(child, invocation, help, suggestions, path));
+            builder.then(build(child, invocation, suggestions, owner, path));
             if (child.argument != null && child.argument.greedy()) {
                 if (spec.method != null) throw invalid(spec.method.getDeclaringClass(), child.firstMethod,
                         child.format, "duplicate executable path for empty greedy arguments with " + spec.method.getName());
@@ -167,7 +174,31 @@ final class CommandTreeCompiler {
                 builder.executes(new MappingCommand(child.method, greedyPath, child.name, invocation));
             }
         }
-        return builder.build();
+        CommandNode<CommandSourceStack> result = builder.build();
+        return result instanceof LiteralCommandNode<CommandSourceStack> literal
+                ? visibleLiteral(literal, source -> uses.stream().anyMatch(method -> CommandAccess.suggestible(owner, method, source)))
+                : result;
+    }
+
+    private static List<Method> methods(Spec spec) {
+        List<Method> methods = new ArrayList<>();
+        if (spec.method != null) methods.add(spec.method);
+        spec.children.values().forEach(child -> methods.addAll(methods(child)));
+        return List.copyOf(methods);
+    }
+
+    private static LiteralCommandNode<CommandSourceStack> visibleLiteral(LiteralCommandNode<CommandSourceStack> node,
+            java.util.function.Predicate<CommandSourceStack> visible) {
+        var filtered = new LiteralCommandNode<CommandSourceStack>(node.getLiteral(), node.getCommand(),
+                node.getRequirement(), node.getRedirect(), node.getRedirectModifier(), node.isFork()) {
+            @Override public CompletableFuture<Suggestions> listSuggestions(CommandContext<CommandSourceStack> context,
+                    SuggestionsBuilder builder) {
+                return canUse(context.getSource()) && visible.test(context.getSource())
+                        ? super.listSuggestions(context, builder) : builder.buildFuture();
+            }
+        };
+        node.getChildren().forEach(filtered::addChild);
+        return filtered;
     }
 
     @SuppressWarnings("unchecked")
@@ -186,7 +217,9 @@ final class CommandTreeCompiler {
         out.append('(').append(spec.name).append(':').append(spec.argument == null ? "literal" : spec.argument.signature());
         if (spec.method != null) {
             CmdMapping mapping = spec.method.getAnnotation(CmdMapping.class);
-            out.append("|exec:").append(mapping.permission()).append(':').append(mapping.requireOp());
+            out.append("|exec:").append(mapping.permission()).append(':').append(mapping.requireOp())
+                    .append(':').append(spec.method.isAnnotationPresent(CmdTarget.class)
+                            ? spec.method.getAnnotation(CmdTarget.class).value() : "inherited");
         }
         spec.children.values().forEach(child -> appendSignature(child, out));
         out.append(')');

@@ -10,7 +10,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -529,7 +528,7 @@ class PermissionValidatorTest {
 
         /**
          * #413: a player who already holds the class-level permission is NOT filtered by the
-         * Bukkit-level check below, reaches {@code onCommand} normally, and is therefore still
+         * Brigadier visibility check, reaches typed dispatch normally, and is therefore still
          * evaluated by this validator's class-level branch -- where it trivially passes. An
          * earlier revision of this class's javadoc denied this (claiming the console was the
          * ONLY sender reaching this branch); this test pins the corrected, permitted-player path.
@@ -549,58 +548,24 @@ class PermissionValidatorTest {
         }
 
         /**
-         * The mechanism that makes the same branch unreachable for players, pinned so that
-         * removing it is a deliberate act rather than an accident.
-         * <p>
-         * {@code CommandManager.registerCommandDirect} calls {@code command.setPermission(...)}
-         * with {@code @CmdExecutor}'s value, so Paper filters the command out of an unpermitted
-         * player's command tree and answers with a parse error before {@code onCommand} runs.
-         * Measured across 22 permission-gated commands on a real 1.21.4 server: a deop'd player
-         * got {@code Unknown or incomplete command} every time and never this validator's message.
-         * <p>
-         * Deleting that {@code setPermission} call would make players see the message -- and would
-         * also make every permission-gated command visible in every player's tab completion. That
-         * is a product decision, not a bug fix. This assertion is here so the decision cannot be
-         * made by accident while "fixing" a validator that looks broken.
+         * In 7.0, root visibility is registered with Brigadier requires rather than the removed
+         * reflective PluginCommand registration. Runtime validation remains independent: a parsed
+         * invocation still checks its live permission. CommandVisibilityTest provides the positive
+         * and negative dispatcher controls; this test pins the compiler's separate registration.
+         * The old setPermission observation on Paper 1.21.4 is historical, not 26.3 UAT evidence.
          */
         @Test
-        @DisplayName("CommandManager still registers the class-level permission with Bukkit")
-        void bukkitLevelRegistrationStillHappens() throws Exception {
-            Method register = CommandManager.class
-                    .getDeclaredMethod("registerCommandDirect",
-                            org.bukkit.command.CommandExecutor.class, String.class, String.class,
-                            String[].class);
-
-            assertNotNull(register,
-                    "registerCommandDirect is what sets the Bukkit-level permission; if it has "
-                            + "been renamed or removed, re-read PermissionValidator's javadoc "
-                            + "before assuming players now reach the class-level check");
-
-            // Assert against the compiled class rather than its source text. A class file's
-            // constant pool records the name of every method the class references, so this
-            // survives the reformatting and comment edits a source grep breaks on, and it
-            // constructs no path -- which is what the earlier source read kept being flagged for.
+        @DisplayName("the 7.0 compiler retains a separate Brigadier visibility gate")
+        void brigadierVisibilityRegistrationStillHappens() throws Exception {
             byte[] bytecode;
-            try (InputStream in = CommandManager.class.getResourceAsStream("CommandManager.class")) {
-                assertNotNull(in, "CommandManager.class is not readable from the classpath");
-                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                byte[] chunk = new byte[8192];
-                int read;
-                while ((read = in.read(chunk)) != -1) {
-                    buffer.write(chunk, 0, read);
-                }
-                bytecode = buffer.toByteArray();
+            try (InputStream in = CommandManager.class.getResourceAsStream(
+                    "/com/ultikits/ultitools/command/engine/CommandTreeCompiler.class")) {
+                assertNotNull(in, "the compiler must be present; a missing resource is not a negative result");
+                bytecode = in.readAllBytes();
             }
-
-            // ISO-8859-1 is the one charset that maps each byte to exactly one char, so the
-            // pool's UTF-8 entries survive decoding intact and a plain substring search finds them.
             String constantPool = new String(bytecode, StandardCharsets.ISO_8859_1);
-            assertTrue(constantPool.contains("setPermission"),
-                    "CommandManager no longer references PluginCommand#setPermission, whose only "
-                            + "call site is registerCommandDirect -- the Bukkit-level permission "
-                            + "registration is gone, players now reach PermissionValidator's "
-                            + "class-level branch, and its javadoc plus issue #383 no longer "
-                            + "describe reality");
+            assertTrue(constantPool.contains("CommandAccess"));
+            assertTrue(constantPool.contains("requires"), "visibility is registered in addition to runtime validation");
         }
     }
 }

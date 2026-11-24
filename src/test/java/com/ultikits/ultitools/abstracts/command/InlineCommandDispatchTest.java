@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -203,13 +204,17 @@ class InlineCommandDispatchTest {
     }
 
     @Test
-    @DisplayName("running inline changes no gate: a command block without the permission is still refused")
-    void inlineDispatchStillRunsTheValidatorChain() {
+    @DisplayName("a command block without the root permission cannot enter an inline command")
+    void inlineDispatchCannotBypassRootVisibility() {
         PermissionedExecutor executor = new PermissionedExecutor();
         BlockCommandSender block = mock(BlockCommandSender.class);
         when(block.hasPermission("probe.use")).thenReturn(false);
 
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, block, command, "guarded", new String[]{});
+        var dispatcher = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatcher(executor, "guarded");
+        var source = mock(io.papermc.paper.command.brigadier.CommandSourceStack.class);
+        when(source.getSender()).thenReturn(block);
+        assertThrows(com.mojang.brigadier.exceptions.CommandSyntaxException.class,
+                () -> dispatcher.execute("guarded", source));
 
         assertEquals(0, executor.bodies.get(), "a refused sender's body must never run");
         assertTrue(deferred.isEmpty(), "nothing is scheduled for a refused dispatch");
