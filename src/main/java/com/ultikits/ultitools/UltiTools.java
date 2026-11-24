@@ -74,6 +74,9 @@ import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
+import com.ultikits.ultitools.text.internal.LocaleNames;
+import com.ultikits.ultitools.text.internal.TextEngine;
 import com.ultikits.ultitools.utils.CloudOutboxListener;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.CloudAuthManager;
@@ -475,7 +478,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
         List<String> shipped = Arrays.asList(SHIPPED_LANGUAGES);
         List<File[]> restored = OfficialLanguageFiles.syncFrameworkFiles(getDataFolder(), shipped,
                 getClass().getClassLoader(), getLogger());
+        String fallback = initializeTextFallback();
         String configured = getConfig().getString("language");
+        if (LocaleNames.isAutomatic(configured)) {
+            configured = fallback;
+        }
         String official = Localized.officialLanguageOf(configured, shipped);
         String baseCode = official != null ? official : "en";
         Language bundled = readBundledLanguage(baseCode);
@@ -501,6 +508,24 @@ public final class UltiTools extends JavaPlugin implements Localized {
             getLogger().warning(String.format(i18n(OfficialLanguageFiles.RESTORED_LOG_KEY),
                     pair[0].getPath(), "UltiTools", pair[1].getPath()));
         }
+    }
+
+    /** Refreshes only the text configuration, at the existing startup and full-reload seam. */
+    private String initializeTextFallback() {
+        DependenceManagers managers = getDependenceManagers();
+        if (managers != null && managers.getContext() != null) {
+            var engine = managers.getContext().getBean(TextEngine.class);
+            if (engine != null) {
+                engine.reloadLocaleConfiguration();
+                return engine.fallback().getLanguage();
+            }
+        }
+        String configured = getConfig().getString("language");
+        if (!LocaleNames.isAutomatic(configured)) {
+            return configured;
+        }
+        return ConfiguredLocaleResolver
+                .forConfig(this::getConfig, getLogger()).fallback().getLanguage();
     }
 
     /**

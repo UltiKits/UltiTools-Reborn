@@ -51,6 +51,9 @@ public interface Messages {
      * Expands a forwarding audience with {@link Audience#forEachAudience(java.util.function.Consumer)}
      * and invokes the action once per leaf recipient with text rendered in that recipient's locale.
      * Never invokes the action for the forwarding audience itself.
+     * Expanding the server audience is safe from any thread: Paper iterates a copy-on-write snapshot
+     * of the online players, so a player who joins during the call may be skipped and one who quits
+     * during the call may still be passed to the action, where sending is a no-op.
      */
     void forEachRecipient(Audience audience, Text text, BiConsumer<? super Audience, ? super Component> action);
 
