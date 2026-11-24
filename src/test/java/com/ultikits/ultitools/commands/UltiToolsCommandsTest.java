@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.ConsoleCommandSender;
@@ -53,6 +54,7 @@ class UltiToolsCommandsTest {
         MockBukkit.createMockPlugin();
         
         player = server.addPlayer("testplayer");
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         player.setOp(true);
         
         mockCommand = mock(Command.class);

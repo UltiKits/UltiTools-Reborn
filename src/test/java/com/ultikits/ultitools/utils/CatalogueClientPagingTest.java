@@ -54,6 +54,12 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import org.junit.jupiter.api.extension.ExtendWith;
+import static org.mockito.Mockito.spy;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.UpdateManager;
@@ -62,6 +68,7 @@ import com.ultikits.ultitools.stub.StubCatalogue;
 
 /** Real loopback HTTP pagination, including the unchanged public and command consumers. */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class CatalogueClientPagingTest {
     private static final String MODULE = "demo";
     private static final String MODULE_ROUTE = "/v1/catalogue/modules/" + MODULE;
@@ -181,12 +188,17 @@ class CatalogueClientPagingTest {
         when(updates.getModuleUpdates()).thenReturn(Collections.singletonMap("Demo", info));
         when(updates.getUnconfirmed()).thenReturn(Collections.emptyList());
         when(instance.getUpdateManager()).thenReturn(updates);
-        PluginInstallCommands command = mock(PluginInstallCommands.class, CALLS_REAL_METHODS);
+        PluginInstallCommands command = spy(new PluginInstallCommands());
         try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
              MockedStatic<CatalogueHttp> http = recordingHttp(networkThreads);
              MockedStatic<PluginInstallUtils> utils = stagingThroughRealCatalogue()) {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            TaskContext async = CommandRuntime.scheduler().async();
+            doAnswer(invocation -> {
+                asyncTasks.add(invocation.getArgument(0, Runnable.class));
+                return mock(TaskHandle.class);
+            }).when(async).run(any(Runnable.class));
             dispatchCatalogueCommand(action, sender, command);
             assertThat(networkThreads).as("dispatch must not perform catalogue I/O").isEmpty();
             assertThat(asyncTasks).hasSize(1);

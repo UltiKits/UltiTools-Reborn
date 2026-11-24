@@ -83,7 +83,7 @@ class I18nKeyContractTest {
         assertThat(keys)
                 .as("positive control: the scan must find a known key. An empty result means the "
                         + "scan is not reading %s, not that the codebase is clean.", SOURCE_ROOT)
-                .containsKey("指令正确用法");
+                .containsKey("模块 %s 已重载");
 
         List<String> untranslated = keys.entrySet().stream()
                 .filter(e -> !en.containsKey(e.getKey()))
