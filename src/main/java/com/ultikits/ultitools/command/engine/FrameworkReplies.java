@@ -21,6 +21,7 @@ import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.bukkit.ChatColor;
+import org.bukkit.command.CommandSender;
 
 /** Framework replies implemented only through callbacks retained by Paper's node mirror. */
 final class FrameworkReplies {
@@ -140,13 +141,22 @@ final class FrameworkReplies {
         if (new CommandInvocation(executor, original.getLiteral()).refused(context)) return Command.SINGLE_SUCCESS;
         Walk walk = walk(context.getInput(), context.getSource());
         if (!walk.blocked() && !walk.canonical().equals(context.getInput()) && !Boolean.TRUE.equals(retrying.get())) {
-            retrying.set(true);
-            try {
-                return redispatch.run(walk.canonical(), context.getSource());
-            } finally {
-                retrying.remove();
-            }
+            return redispatchCanonical(context, walk);
         }
+        sendReply(context, walk);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int redispatchCanonical(CommandContext<CommandSourceStack> context, Walk walk) throws CommandSyntaxException {
+        retrying.set(true);
+        try {
+            return redispatch.run(walk.canonical(), context.getSource());
+        } finally {
+            retrying.remove();
+        }
+    }
+
+    private void sendReply(CommandContext<CommandSourceStack> context, Walk walk) {
         var sender = context.getSource().getSender();
         if (walk.parseError() != null) {
             sender.sendMessage(ChatColor.RED + walk.parseError());
@@ -155,17 +165,20 @@ final class FrameworkReplies {
                     original.getLiteral(), executor.helpCommand()));
             executor.handleGatedHelp(new CommandInvocation(executor, original.getLiteral()).context(context));
         } else {
-            Set<String> formats = new LinkedHashSet<>();
-            if (!walk.blocked() || !collectOwnUsage(walk.deepest(), context.getSource(), formats)) {
-                collectUsages(walk.deepest(), context.getSource(), formats);
-            }
-            if (formats.isEmpty() && walk.deepest().getName().equalsIgnoreCase(executor.helpCommand())) {
-                formats.add(executor.helpCommand());
-            }
-            for (String format : formats) sender.sendMessage(String.format(UltiTools.getInstance().i18n("指令正确用法"),
-                    original.getLiteral(), format));
+            sendUsages(context, walk, sender);
         }
-        return Command.SINGLE_SUCCESS;
+    }
+
+    private void sendUsages(CommandContext<CommandSourceStack> context, Walk walk, CommandSender sender) {
+        Set<String> formats = new LinkedHashSet<>();
+        if (!walk.blocked() || !collectOwnUsage(walk.deepest(), context.getSource(), formats)) {
+            collectUsages(walk.deepest(), context.getSource(), formats);
+        }
+        if (formats.isEmpty() && walk.deepest().getName().equalsIgnoreCase(executor.helpCommand())) {
+            formats.add(executor.helpCommand());
+        }
+        for (String format : formats) sender.sendMessage(String.format(UltiTools.getInstance().i18n("指令正确用法"),
+                original.getLiteral(), format));
     }
 
     /** The recovery walk uses the compiled tree's argument parsers and preserves quoted/greedy argument contents. */
