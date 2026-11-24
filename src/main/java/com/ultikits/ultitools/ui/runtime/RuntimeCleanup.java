@@ -15,9 +15,11 @@ final class RuntimeCleanup {
         this.owner = owner;
     }
     void run(String step, Runnable action) {
-        try { action.run(); } catch (Throwable failure) {
+        try { action.run(); } catch (VirtualMachineError failure) {
             runtime.warn(owner, step, failure);
-            if (failure instanceof VirtualMachineError vm && fatal == null) { fatal = vm; }
+            if (fatal == null) { fatal = failure; }
+        } catch (Throwable failure) {
+            runtime.warn(owner, step, failure);
         }
     }
     void finish() {

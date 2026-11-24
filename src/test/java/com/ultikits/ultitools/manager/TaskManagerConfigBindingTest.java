@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.spy;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -16,12 +18,18 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.time.Duration;
+import java.util.function.Consumer;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.Ticks;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -29,10 +37,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -227,14 +232,19 @@ class TaskManagerConfigBindingTest {
         assertEquals(tick, Bukkit.getCurrentTick());
     }
 
-    private Set<Integer> pendingTaskIds() {
-        Set<Integer> ids = new TreeSet<>();
-        for (BukkitTask task : Bukkit.getScheduler().getPendingTasks()) {
-            if (!task.isCancelled()) {
-                ids.add(task.getTaskId());
-            }
-        }
-        return ids;
+    private Set<TaskHandle> pendingTaskIds() {
+        return TaskManagerTestAccess.activeHandles(taskManager);
+    }
+
+    private TaskContext mockContext() {
+        TaskContext context = mock(TaskContext.class);
+        Scheduler scheduler = mock(Scheduler.class);
+        when(scheduler.global()).thenReturn(context);
+        when(scheduler.async()).thenReturn(context);
+        PaperSchedulerEngine engine = mock(PaperSchedulerEngine.class);
+        when(engine.newOwner(any())).thenReturn(scheduler);
+        taskManager = new TaskManager(engine);
+        return context;
     }
 
     private List<String> messagesAt(Level level) {
@@ -330,32 +340,30 @@ class TaskManagerConfigBindingTest {
         }
 
         @Test
-        @DisplayName("literal tasks reach the scheduler through the same calls with the same ticks")
+        @DisplayName("literal tasks retain timing values on their own global and async contexts")
         void literalTasksUseTheSameSchedulerCalls() {
-            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.literal"));
-                BukkitTask task = mock(BukkitTask.class);
-                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
-                        .thenReturn(task);
-                when(scheduler.runTaskLater(any(Plugin.class), any(Runnable.class), anyLong())).thenReturn(task);
-                when(scheduler.runTaskLaterAsynchronously(any(Plugin.class), any(Runnable.class), anyLong()))
-                        .thenReturn(task);
-                when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
-                        anyLong())).thenReturn(task);
-
-                taskManager.registerScheduledMethods(module, new LiteralBean());
-                taskManager.registerScheduledMethods(module, new LiteralOneShotBean());
-                taskManager.registerScheduledMethods(module, new LiteralAsyncBean());
-                taskManager.registerScheduledMethods(module, new LiteralAsyncOneShotBean());
-
-                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(7L), eq(20L));
-                verify(scheduler).runTaskLater(eq(host), any(Runnable.class), eq(100L));
-                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(0L), eq(40L));
-                verify(scheduler).runTaskLaterAsynchronously(eq(host), any(Runnable.class), eq(11L));
-                assertEquals(4, taskManager.getTaskCount(module));
-            }
+            TaskContext global = mock(TaskContext.class);
+            TaskContext async = mock(TaskContext.class);
+            Scheduler scheduler = mock(Scheduler.class);
+            when(scheduler.global()).thenReturn(global);
+            when(scheduler.async()).thenReturn(async);
+            PaperSchedulerEngine engine = mock(PaperSchedulerEngine.class);
+            when(engine.newOwner(any())).thenReturn(scheduler);
+            taskManager = new TaskManager(engine);
+            TaskHandle task = mock(TaskHandle.class);
+            when(global.runRepeating(any(), any(), any())).thenReturn(task);
+            when(global.runLater(any(), any())).thenReturn(task);
+            when(async.runRepeating(any(), any(), any())).thenReturn(task);
+            when(async.runLater(any(), any())).thenReturn(task);
+            taskManager.registerScheduledMethods(module, new LiteralBean());
+            taskManager.registerScheduledMethods(module, new LiteralOneShotBean());
+            taskManager.registerScheduledMethods(module, new LiteralAsyncBean());
+            taskManager.registerScheduledMethods(module, new LiteralAsyncOneShotBean());
+            verify(global).runRepeating(eq(Ticks.of(7)), eq(Ticks.of(20)), any());
+            verify(global).runLater(eq(Ticks.of(100)), any());
+            verify(async).runRepeating(eq(Duration.ZERO), eq(Ticks.of(40)), any());
+            verify(async).runLater(eq(Ticks.of(11)), any());
+            assertEquals(4, taskManager.getTaskCount(module));
         }
 
         @Test
@@ -371,7 +379,7 @@ class TaskManagerConfigBindingTest {
         @DisplayName("a reload leaves a literal task alone")
         void reloadLeavesALiteralTaskAlone() {
             taskManager.registerScheduledMethods(module, new LiteralBean());
-            Set<Integer> before = pendingTaskIds();
+            Set<TaskHandle> before = pendingTaskIds();
 
             advanceTo(30);
             taskManager.rescheduleBound(module);
@@ -394,7 +402,7 @@ class TaskManagerConfigBindingTest {
             BoundPeriodBean bean = new BoundPeriodBean();
             taskManager.registerScheduledMethods(module, bean);
             advanceTo(30);
-            Set<Integer> before = pendingTaskIds();
+            Set<TaskHandle> before = pendingTaskIds();
             int infoBefore = messagesAt(Level.INFO).size();
 
             taskManager.rescheduleBound(module);
@@ -546,11 +554,10 @@ class TaskManagerConfigBindingTest {
         void aReloadOffTheMainThreadIsRefusedBeforeAnyTaskIsTouched() {
             config.setPeriodSeconds(5);
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                TaskContext scheduler = mockContext();
                 bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.thread"));
-                BukkitTask first = mock(BukkitTask.class);
-                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                TaskHandle first = mock(TaskHandle.class);
+                when(scheduler.runRepeating(any(), any(), any()))
                         .thenReturn(first);
                 taskManager.registerScheduledMethods(module, new BoundPeriodBean());
 
@@ -562,8 +569,8 @@ class TaskManagerConfigBindingTest {
 
                 assertTrue(refused.getMessage().contains("main thread"), refused.getMessage());
                 verify(first, never()).cancel();
-                verify(scheduler, never()).runTask(any(Plugin.class), any(Runnable.class));
-                verify(scheduler).runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+                verify(scheduler, never()).run(any());
+                verify(scheduler).runRepeating(any(), any(), any());
             }
         }
 
@@ -577,13 +584,12 @@ class TaskManagerConfigBindingTest {
         void rescheduleBeforeTheFirstRunAcrossTheWraparound() {
             config.setPeriodSeconds(10);
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                TaskContext scheduler = mockContext();
                 bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.wrapArm"));
                 bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 50);
-                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
-                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                when(scheduler.runRepeating(any(), any(), any()))
+                        .thenReturn(mock(TaskHandle.class), mock(TaskHandle.class));
                 taskManager.registerScheduledMethods(module, new BoundDelayAndPeriodBean());
 
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MIN_VALUE + 50); // 101 ticks later
@@ -591,7 +597,7 @@ class TaskManagerConfigBindingTest {
                 taskManager.rescheduleBound(module);
 
                 // arm tick + 400 is 299 ticks after "now"
-                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(299L), eq(400L));
+                verify(scheduler).runRepeating(eq(Ticks.of(299)), eq(Ticks.of(400)), any());
             }
         }
 
@@ -600,26 +606,25 @@ class TaskManagerConfigBindingTest {
         void rescheduleAfterARunAcrossTheWraparound() {
             config.setPeriodSeconds(5);
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                TaskContext scheduler = mockContext();
                 bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.wrapRun"));
                 bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 100);
-                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
-                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                when(scheduler.runRepeating(any(), any(), any()))
+                        .thenReturn(mock(TaskHandle.class), mock(TaskHandle.class));
                 taskManager.registerScheduledMethods(module, new BoundPeriodBean());
-                org.mockito.ArgumentCaptor<Runnable> armed = org.mockito.ArgumentCaptor.forClass(Runnable.class);
-                verify(scheduler).runTaskTimer(eq(host), armed.capture(), anyLong(), anyLong());
+                org.mockito.ArgumentCaptor<Consumer<TaskHandle>> armed = org.mockito.ArgumentCaptor.forClass(Consumer.class);
+                verify(scheduler).runRepeating(any(), any(), armed.capture());
 
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 10);
-                armed.getValue().run(); // the last run, stamped just before the wrap
+                armed.getValue().accept(mock(TaskHandle.class)); // the last run, stamped just before the wrap
 
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MIN_VALUE + 20); // 31 ticks later
                 config.setPeriodSeconds(10);
                 taskManager.rescheduleBound(module);
 
                 // last run + 200 is 169 ticks after "now"
-                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(169L), eq(200L));
+                verify(scheduler).runRepeating(eq(Ticks.of(169)), eq(Ticks.of(200)), any());
             }
         }
 
@@ -633,17 +638,16 @@ class TaskManagerConfigBindingTest {
         void aOneShotThatRanAtTheMinimumTickIsNotRescheduled() {
             config.setPeriodSeconds(5);
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                TaskContext scheduler = mockContext();
                 bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.minTick"));
                 bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 99);
-                when(scheduler.runTaskLater(any(Plugin.class), any(Runnable.class), anyLong()))
-                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                when(scheduler.runLater(any(), any()))
+                        .thenReturn(mock(TaskHandle.class), mock(TaskHandle.class));
                 BoundDelayOnlyBean bean = new BoundDelayOnlyBean();
                 taskManager.registerScheduledMethods(module, bean);
                 org.mockito.ArgumentCaptor<Runnable> armed = org.mockito.ArgumentCaptor.forClass(Runnable.class);
-                verify(scheduler).runTaskLater(eq(host), armed.capture(), eq(100L));
+                verify(scheduler).runLater(eq(Ticks.of(100)), armed.capture());
 
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MIN_VALUE); // 100 ticks later, wrapped
                 armed.getValue().run();
@@ -652,8 +656,7 @@ class TaskManagerConfigBindingTest {
                 config.setPeriodSeconds(10);
                 taskManager.rescheduleBound(module);
 
-                verify(scheduler, org.mockito.Mockito.times(1)).runTaskLater(any(Plugin.class), any(Runnable.class),
-                        anyLong());
+                verify(scheduler, org.mockito.Mockito.times(1)).runLater(any(), any());
             }
         }
 
@@ -667,16 +670,15 @@ class TaskManagerConfigBindingTest {
         void theLongestAllowedWaitBeforeTheFirstRunAcrossTheWraparound() {
             config.setPeriodSeconds(5);
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                TaskContext scheduler = mockContext();
                 bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.ceilArm"));
                 bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
                 int armTick = Integer.MAX_VALUE - 10;
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(armTick);
-                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
-                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                when(scheduler.runRepeating(any(), any(), any()))
+                        .thenReturn(mock(TaskHandle.class), mock(TaskHandle.class));
                 taskManager.registerScheduledMethods(module, new CeilingDelayBean());
-                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(2147483640L), eq(100L));
+                verify(scheduler).runRepeating(eq(Ticks.of(2147483640)), eq(Ticks.of(100)), any());
 
                 int oneTickBeforeDue = (int) ((long) armTick + 2147483640L - 1L); // wraps negative
                 assertTrue(oneTickBeforeDue < 0, "the reload tick must be past the wraparound");
@@ -684,7 +686,7 @@ class TaskManagerConfigBindingTest {
                 config.setPeriodSeconds(10);
                 taskManager.rescheduleBound(module);
 
-                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(1L), eq(200L));
+                verify(scheduler).runRepeating(eq(Ticks.of(1)), eq(Ticks.of(200)), any());
             }
         }
 
@@ -693,20 +695,19 @@ class TaskManagerConfigBindingTest {
         void aCeilingPeriodAfterARunAcrossTheWraparoundKeepsItsPhase() {
             config.setPeriodSeconds(107374182); // Integer.MAX_VALUE / 20 seconds = 2147483640 ticks
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                TaskContext scheduler = mockContext();
                 bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.ceilRun"));
                 bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 100);
-                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
-                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                when(scheduler.runRepeating(any(), any(), any()))
+                        .thenReturn(mock(TaskHandle.class), mock(TaskHandle.class));
                 taskManager.registerScheduledMethods(module, new BoundPeriodBean());
-                org.mockito.ArgumentCaptor<Runnable> armed = org.mockito.ArgumentCaptor.forClass(Runnable.class);
-                verify(scheduler).runTaskTimer(eq(host), armed.capture(), eq(0L), eq(2147483640L));
+                org.mockito.ArgumentCaptor<Consumer<TaskHandle>> armed = org.mockito.ArgumentCaptor.forClass(Consumer.class);
+                verify(scheduler).runRepeating(eq(Ticks.of(0)), eq(Ticks.of(2147483640)), armed.capture());
 
                 int lastRun = Integer.MAX_VALUE - 5;
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(lastRun);
-                armed.getValue().run();
+                armed.getValue().accept(mock(TaskHandle.class));
 
                 int now = (int) ((long) lastRun + 2147483640L - 30L); // 2147483610 ticks later, wrapped
                 bukkit.when(Bukkit::getCurrentTick).thenReturn(now);
@@ -714,7 +715,7 @@ class TaskManagerConfigBindingTest {
                 taskManager.rescheduleBound(module);
 
                 // last run + 2147483620 is 10 ticks after "now"
-                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(10L), eq(2147483620L));
+                verify(scheduler).runRepeating(eq(Ticks.of(10)), eq(Ticks.of(2147483620)), any());
             }
         }
 
@@ -725,7 +726,7 @@ class TaskManagerConfigBindingTest {
             BoundPeriodBean bean = new BoundPeriodBean();
             taskManager.registerScheduledMethods(module, bean);
             advanceTo(50);
-            Set<Integer> before = pendingTaskIds();
+            Set<TaskHandle> before = pendingTaskIds();
 
             config.setPeriodSeconds(Integer.MAX_VALUE / 20 + 1);
             taskManager.rescheduleBound(module);
@@ -809,7 +810,7 @@ class TaskManagerConfigBindingTest {
             BoundPeriodBean bean = new BoundPeriodBean();
             taskManager.registerScheduledMethods(module, bean);
             advanceTo(50);
-            Set<Integer> before = pendingTaskIds();
+            Set<TaskHandle> before = pendingTaskIds();
 
             config.setPeriodSeconds(0);
             taskManager.rescheduleBound(module);
@@ -888,21 +889,27 @@ class TaskManagerConfigBindingTest {
         @Test
         @DisplayName("a bound async @Scheduled with both keys registers one synchronous trigger (#535)")
         void aBoundAsyncMethodRegistersOneSyncTrigger() {
+            PaperBackend backend = spy(PaperBackend.live(host));
+            taskManager = new TaskManager(new PaperSchedulerEngine(host, host.getLogger(), backend));
             taskManager.registerScheduledMethods(module, new BoundAsyncBean());
 
             assertEquals(1, taskManager.getTaskCount(module));
             assertEquals(1, pendingTaskIds().size());
-            assertTrue(Bukkit.getScheduler().getPendingTasks().stream().allMatch(BukkitTask::isSync));
+            verify(backend).global(any(), anyLong());
+            verify(backend, never()).async(any(), anyLong());
         }
 
         @Test
         @DisplayName("a bound async @Scheduled with only periodKey also registers one sync trigger (#535)")
         void aBoundAsyncPeriodOnlyMethodRegistersOneSyncTrigger() {
+            PaperBackend backend = spy(PaperBackend.live(host));
+            taskManager = new TaskManager(new PaperSchedulerEngine(host, host.getLogger(), backend));
             taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean());
 
             assertEquals(1, taskManager.getTaskCount(module));
             assertEquals(1, pendingTaskIds().size());
-            assertTrue(Bukkit.getScheduler().getPendingTasks().stream().allMatch(BukkitTask::isSync));
+            verify(backend).global(any(), anyLong());
+            verify(backend, never()).async(any(), anyLong());
         }
 
         @Test

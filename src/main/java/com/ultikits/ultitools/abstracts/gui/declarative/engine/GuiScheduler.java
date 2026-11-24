@@ -4,350 +4,238 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderDepthExceededException;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
-import org.bukkit.Bukkit;
-import org.bukkit.plugin.Plugin;
-import org.jetbrains.annotations.NotNull;
-
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.bukkit.entity.Player;
+import org.jetbrains.annotations.NotNull;
 
 /**
- * GuiScheduler is responsible for ensuring every GUI operation runs on the Bukkit main thread.
- * <p>
- * It provides:
- * <ul>
- *   <li>a check for whether the current thread is the main thread</li>
- *   <li>scheduling a task to run on the main thread</li>
- *   <li>frame scheduling: coalescing multiple update requests within a short window</li>
- *   <li>prevention of duplicate scheduling</li>
- * </ul>
- * <p>
- * <b>Thread-safety contract:</b> {@code State.setState(...)} and {@code Element.markNeedsBuild()}
- * are safe to call from any thread -- a call made off the main thread is marshalled onto it, and
- * multiple calls that land within the same frame window are coalesced via this scheduler's
- * {@link java.util.concurrent.atomic.AtomicBoolean} compare-and-set guard, at a nominal 16ms frame
- * interval (floored to one Bukkit tick when scheduling has to wait for one). {@link #flush()}, by
- * contrast, throws {@link IllegalStateException} when called off the main thread -- it runs
- * pending work synchronously rather than marshalling it.
- *
- * <p><strong>Per-frame task budget:</strong> one frame runs only the tasks that were already
- * queued when it started. A task queued while the frame is running -- for example the follow-up
- * rebuild a failing build replays from its {@code finally} -- runs on a later frame, which
- * {@link #scheduleFrame} schedules on the Bukkit scheduler (never inline inside the running
- * frame). This bounds the main-thread time one frame can take: a widget whose
- * {@code State.initState} requests a rebuild and then throws is retried once per frame while its
- * page is open, instead of keeping the server thread inside a single frame forever. No queued
- * task is dropped; it only waits for the next frame.
- *
- * <p><strong>Frame scheduling:</strong></p>
- * <pre>
- * Timeline:
- * |----16ms----|----16ms----|----16ms----|
- *    ↑ ↑           ↑
- *   setState     rebuild actually runs
- *    ↑
- *   setState (coalesced into the same frame)
- * </pre>
- *
- * @author UltiTools Team
- * @version 1.0.0
+ * Marshals GUI work onto the viewer's entity context using the framework scheduler.
+ * A frame is always deferred to the next tick. Repeated requests for the same Runnable are coalesced;
+ * distinct tasks share that frame. Tasks queued during a drain run on a later frame, bounding the work
+ * of even a widget whose initState requests a rebuild and then throws.
  * @since 6.2.0
  */
 public class GuiScheduler {
+    private final TaskContext context;
+    // This monitor also protects submitted handles, scheduling flags and the cancellation generation.
+    private final Set<Runnable> pendingTasks = new LinkedHashSet<>();
+    private final Set<TaskHandle> submitted = Collections.newSetFromMap(new IdentityHashMap<>());
+    private TaskHandle frameHandle;
+    private boolean frameScheduled;
+    private boolean flushing;
+    private long generation;
 
     /**
-     * The default frame interval, in milliseconds.
-     * Minecraft's default tick is 50ms, but GUI updates can run more frequently.
+     * @param scheduler the module's own injected scheduler
+     * @param viewer the entity whose screen is being built
      */
-    private static final long DEFAULT_FRAME_INTERVAL_MS = 16; // ~60 FPS
-
-    private final Plugin plugin;
-    private final long frameIntervalMs;
-    private final AtomicBoolean isScheduled = new AtomicBoolean(false);
-    private final ConcurrentLinkedQueue<Runnable> pendingTasks = new ConcurrentLinkedQueue<>();
-
-    private long lastFrameTime = 0;
-
-    /**
-     * True while {@link #executeFrame()} is draining on the main thread. A frame requested during
-     * that drain is always handed to the Bukkit scheduler rather than run inline, so a slow frame
-     * (one that outlasts the frame interval) cannot start a nested frame from inside itself.
-     */
-    private volatile boolean frameRunning;
-
-    /**
-     * Creates a GuiScheduler using the default plugin instance.
-     */
-    public GuiScheduler() {
-        this(UltiTools.getInstance());
+    public GuiScheduler(@NotNull Scheduler scheduler, @NotNull Player viewer) {
+        context = Objects.requireNonNull(scheduler, "scheduler").entity(Objects.requireNonNull(viewer, "viewer"));
     }
 
-    /**
-     * Creates a GuiScheduler.
-     *
-     * @param plugin the plugin instance
-     */
-    public GuiScheduler(@NotNull Plugin plugin) {
-        this(plugin, DEFAULT_FRAME_INTERVAL_MS);
-    }
+    /** @return whether the caller currently owns the viewer's entity context */
+    public boolean isOnMainThread() { return context.isCurrentThread(); }
 
     /**
-     * Creates a GuiScheduler with the given frame interval.
-     *
-     * @param plugin          the plugin instance
-     * @param frameIntervalMs the frame interval, in milliseconds
-     */
-    public GuiScheduler(@NotNull Plugin plugin, long frameIntervalMs) {
-        this.plugin = plugin;
-        this.frameIntervalMs = frameIntervalMs;
-    }
-
-    /**
-     * Checks whether the current thread is the main thread.
-     *
-     * @return true if on the main thread
-     */
-    public boolean isOnMainThread() {
-        return Bukkit.isPrimaryThread();
-    }
-
-    /**
-     * Ensures the task runs on the main thread.
-     * <p>
-     * If already on the main thread, runs immediately.
-     * Otherwise, schedules it to run on the main thread.
-     * <p>
-     * <b>Gate-2 Codex finding, PR #478 round 1:</b> this is the path {@link GuiRenderer#initialize}
-     * drives the FIRST build through, and {@link GuiRenderer#performBuild}'s own off-main-thread
-     * re-entrant guard -- neither passes through {@link #executeFrame()}'s try/catch, which is
-     * where {@link RenderDepthExceededException} reporting (WR-01) lived until now. Since
-     * mounting is where the depth guard (CR-01) actually fires, and mounting happens on the very
-     * first build, that build's own trip is the MORE common case to miss, not an edge case. Both
-     * branches below now report it; only the already-on-main-thread branch re-throws afterward
-     * (preserving the existing "the caller of {@code runOnMainThread()} sees the exception
-     * synchronously" contract {@link GuiRenderer#initialize} and every CR-01 test depend on) --
-     * the off-thread branch's caller could never observe the deferred task's exception anyway
-     * (Bukkit's own scheduler runs it later), so there is nothing to preserve there beyond adding
-     * the report.
-     *
-     * @param task the task to run
+     * Runs synchronously on the owning thread, otherwise submits tracked work there.
+     * A synchronous depth failure is reported and rethrown. Deferred failures are logged;
+     * JVM Errors are then rethrown unchanged to the scheduling engine.
+     * @param task the work to execute
      */
     public void runOnMainThread(@NotNull Runnable task) {
+        Objects.requireNonNull(task, "task");
         if (isOnMainThread()) {
-            try {
-                task.run();
-            } catch (RenderDepthExceededException e) {
-                reportRenderDepthExceeded(e);
-                throw e;
-            }
+            runSynchronous(task);
         } else {
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                try {
-                    task.run();
-                } catch (RenderDepthExceededException e) {
-                    // Gate-2 Codex finding (round 2, PR #478): before catching this here to
-                    // report it, the exception escaped this deferred Runnable and Bukkit's OWN
-                    // scheduler logged it to console automatically -- catching it silently would
-                    // have made the failure invisible on console whenever the collector is
-                    // unavailable or disabled. logFrameTaskError() keeps that console diagnostic.
-                    logFrameTaskError(e);
-                    reportRenderDepthExceeded(e);
-                    // Deliberately not re-thrown: this runs on Bukkit's own scheduler thread,
-                    // asynchronously from whoever called runOnMainThread() -- there is no
-                    // caller left to propagate to, exactly as before this fix.
-                }
-            });
+            synchronized (pendingTasks) {
+                submit(() -> runDeferred(task));
+            }
         }
     }
 
-    /**
-     * Schedules a frame task.
-     * <p>
-     * This method implements the frame-coalescing mechanism: multiple calls within the same
-     * frame window trigger only one actual execution. A call made while a frame is running
-     * queues its task for a later frame (see the class javadoc's per-frame task budget).
-     *
-     * @param frameTask the frame task
-     */
+    /** @param frameTask the stable frame callback to enqueue, at most once per pending frame */
     public void scheduleFrame(@NotNull Runnable frameTask) {
-        pendingTasks.offer(frameTask);
-
-        if (isScheduled.compareAndSet(false, true)) {
-            long currentTime = System.currentTimeMillis();
-            long timeSinceLastFrame = currentTime - lastFrameTime;
-            long delay = Math.max(0, frameIntervalMs - timeSinceLastFrame);
-
-            if (delay == 0 && !frameRunning && isOnMainThread()) {
-                // Can run immediately
-                executeFrame();
-            } else {
-                // Schedule for the next frame
-                Bukkit.getScheduler().runTaskLater(plugin, this::executeFrame, 
-                        Math.max(1, delay / 50)); // Convert to ticks
-            }
+        synchronized (pendingTasks) {
+            pendingTasks.add(Objects.requireNonNull(frameTask, "frameTask"));
+            schedulePendingFrame();
         }
     }
 
-    /**
-     * Runs the frame tasks that were pending when this frame started.
-     * <p>
-     * The budget is the queue size read before the first task runs. A task queued during the
-     * drain stays queued for a later frame: {@link #isScheduled} is cleared before the drain, so
-     * the first {@link #scheduleFrame} call made during it schedules that later frame, and
-     * {@link #frameRunning} makes sure it is scheduled on the Bukkit scheduler rather than run
-     * inline from inside this one.
-     */
-    private void executeFrame() {
-        isScheduled.set(false);
-        lastFrameTime = System.currentTimeMillis();
-        frameRunning = true;
+    private void schedulePendingFrame() {
+        if (frameScheduled || flushing || pendingTasks.isEmpty()) {
+            return;
+        }
+        frameScheduled = true;
         try {
-            drainFrameBudget(pendingTasks.size());
-        } finally {
-            frameRunning = false;
+            frameHandle = submit(this::executeFrame);
+        } catch (RuntimeException failure) {
+            frameScheduled = false;
+            throw failure;
         }
     }
 
-    /**
-     * Runs at most {@code budget} queued tasks, catching and reporting each task's failure.
-     *
-     * @param budget the number of tasks this frame may run
-     */
-    private void drainFrameBudget(int budget) {
-        int remaining = budget;
-        Runnable task;
-        while (remaining > 0 && (task = pendingTasks.poll()) != null) {
-            remaining--;
-            try {
-                if (isOnMainThread()) {
-                    task.run();
-                } else {
-                    // Not on the main thread -- reschedule. Self-swept sibling of the
-                    // runOnMainThread() off-thread gap (rounds 1-3 above): this hands the SAME
-                    // task to Bukkit's own scheduler for later, so it needs the identical
-                    // wrapping -- a raw, unwrapped hand-off here would silently lose both the
-                    // console diagnostic and the ErrorReportCollector report for a task that
-                    // throws when Bukkit actually runs it.
-                    Runnable capturedTask = task;
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        try {
-                            capturedTask.run();
-                        } catch (RenderDepthExceededException e) {
-                            logFrameTaskError(e);
-                            reportRenderDepthExceeded(e);
-                        } catch (Exception e) {
-                            logFrameTaskError(e);
-                        }
-                    });
-                    break; // Handle only one; the rest are handled on the next tick
+    /** Called with the queue monitor held; TaskContext.run never runs inline. */
+    private TaskHandle submit(Runnable task) {
+        long submittedGeneration = generation;
+        TaskHandle handle = context.run(() -> {
+            synchronized (pendingTasks) {
+                if (submittedGeneration != generation) {
+                    return;
                 }
-            } catch (RenderDepthExceededException e) {
-                // WR-01: route a depth-guard trip into ErrorReportCollector so it reaches the
-                // panel's error dashboard, not only the server console -- consistent with every
-                // other exception-reporting path this framework documents. A dedicated catch
-                // clause (rather than an instanceof check inside the generic one below) also
-                // keeps this scoped to exactly this one exception type: a blanket "report every
-                // GUI frame exception" change is a wider behaviour change than this fix's own
-                // finding asked for.
-                logFrameTaskError(e);
-                reportRenderDepthExceeded(e);
-            } catch (Exception e) {
-                logFrameTaskError(e);
             }
+            task.run();
+        });
+        submitted.add(handle);
+        handle.completion().whenComplete((ignored, failure) -> {
+            synchronized (pendingTasks) {
+                submitted.remove(handle);
+            }
+        });
+        return handle;
+    }
+
+    private void executeFrame() {
+        if (!isOnMainThread()) {
+            runOnMainThread(this::executeFrame);
+            return;
+        }
+        List<Runnable> budget;
+        long frameGeneration;
+        synchronized (pendingTasks) {
+            frameScheduled = false;
+            frameHandle = null;
+            frameGeneration = generation;
+            budget = new ArrayList<>(pendingTasks);
+            pendingTasks.clear();
+        }
+        for (Runnable task : budget) {
+            synchronized (pendingTasks) {
+                if (generation != frameGeneration) {
+                    return;
+                }
+            }
+            runDeferred(task);
         }
     }
 
-    /**
-     * The console-visible half of a GUI frame task's failure -- one warning with the original
-     * exception attached for its full stack trace. Shared by every catch clause in
-     * {@link #drainFrameBudget(int)}, including those that do additional reporting
-     * ({@link RenderDepthExceededException}). Logging failure must not interrupt the frame or
-     * prevent that additional reporting; no fallback re-enters the failed logging path.
-     *
-     * @param e the failure to log
-     */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // A logger handler may throw any runtime exception.
-    private void logFrameTaskError(Exception e) {
+    private void runSynchronous(Runnable task) {
         try {
-            Logger logger = plugin.getLogger();
+            task.run();
+        } catch (RenderDepthExceededException failure) {
+            reportRenderDepthExceeded(failure);
+            throw failure;
+        }
+    }
+
+    private void runDeferred(Runnable task) {
+        try {
+            task.run();
+        } catch (RenderDepthExceededException failure) {
+            logFrameTaskError(failure);
+            reportRenderDepthExceeded(failure);
+        } catch (Error failure) {
+            logFrameTaskError(failure);
+            throw failure;
+        } catch (Throwable failure) {
+            logFrameTaskError(failure);
+        }
+    }
+
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // A logger handler may throw any runtime exception.
+    private void logFrameTaskError(Throwable failure) {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            Logger logger = instance == null ? Logger.getLogger(GuiScheduler.class.getName()) : instance.getLogger();
             if (logger != null) {
-                logger.log(Level.WARNING, "Error executing GUI frame task: " + e.getMessage(), e);
+                Level level = failure instanceof Error ? Level.SEVERE : Level.WARNING;
+                logger.log(level, "Error executing GUI frame task: " + failure.getMessage(), failure);
             }
         } catch (RuntimeException ignored) {
-            // Never retry via stderr: Paper re-logs it through the same logging infrastructure.
+            // Paper re-logs stderr through the same handlers; never retry a failed logger there.
         }
     }
 
-    /**
-     * Reports a {@link RenderDepthExceededException} to {@link ErrorReportCollector}.
-     * <p>
-     * No new per-GUI "failed/closed" bookkeeping is added here: the exception is always thrown
-     * from the same guard site with a stable top stack frame (the guard name and depth vary in
-     * the message, not in the class/method/line the stack trace records), so
-     * {@code ErrorReportCollector}'s own fingerprint-based dedup already coalesces repeated
-     * occurrences -- e.g. the same over-deep tree being rebuilt on every {@code setState()} call
-     * -- into ONE report with an incrementing count, rather than one report per frame.
-     *
-     * @param e the depth-guard trip to report
-     */
-    private void reportRenderDepthExceeded(RenderDepthExceededException e) {
+    private void reportRenderDepthExceeded(RenderDepthExceededException failure) {
         try {
             UltiTools instance = UltiTools.getInstance();
             if (instance == null) {
                 return;
             }
-            ErrorReportCollector erc = instance.getErrorReportCollector();
-            if (erc == null) {
-                return;
+            ErrorReportCollector collector = instance.getErrorReportCollector();
+            if (collector != null) {
+                collector.reportError(failure, null, TriggerContext.uncaught("GUI render frame: " + failure.getMessage()));
             }
-            erc.reportError(e, null, TriggerContext.uncaught("GUI render frame: " + e.getMessage()));
         } catch (Exception ignored) {
-            // Never re-enter logging from error reporting.
+            // Reporting is best-effort and must never re-enter logging.
         }
     }
 
     /**
-     * Runs every pending task immediately (blocking until complete).
-     * <p>
-     * It drains the whole queue, ignores the per-frame task budget, and is intended for tests
-     * only.
-     * <p>
-     * <b>Note:</b> this method may only be called on the main thread.
-     * <p>
-     * <b>Gate-2 Codex finding, PR #478 round 3:</b> a {@link RenderDepthExceededException} from a
-     * queued task now reaches {@link ErrorReportCollector} here too, matching
-     * {@link #executeFrame()} and {@link #runOnMainThread}'s on-main-thread branch -- neither of
-     * those catches ran for a task drained through this method. Still re-thrown immediately
-     * afterward, preserving this method's own documented synchronous-drain contract (and,
-     * unchanged from before this fix, still skipping the {@code isScheduled.set(false)} below on
-     * that path -- not a new gap this fix introduces or is scoped to close).
-     *
-     * @throws IllegalStateException if not on the main thread
+     * Drains pending frame work synchronously, ignoring the normal per-frame budget (for tests).
+     * @throws IllegalStateException if the caller does not own the viewer's context
      */
     public void flush() {
         if (!isOnMainThread()) {
             throw new IllegalStateException("flush() must be called on main thread");
         }
-
-        Runnable task;
-        while ((task = pendingTasks.poll()) != null) {
-            try {
-                task.run();
-            } catch (RenderDepthExceededException e) {
-                reportRenderDepthExceeded(e);
-                throw e;
+        synchronized (pendingTasks) {
+            flushing = true;
+            cancelFrame();
+        }
+        try {
+            Runnable task;
+            while ((task = pollPending()) != null) {
+                runSynchronous(task);
+            }
+        } finally {
+            synchronized (pendingTasks) {
+                flushing = false;
+                schedulePendingFrame();
             }
         }
-        isScheduled.set(false);
     }
 
-    /**
-     * Cancels every pending task.
-     */
+    private Runnable pollPending() {
+        synchronized (pendingTasks) {
+            if (pendingTasks.isEmpty()) {
+                return null;
+            }
+            Runnable first = pendingTasks.iterator().next();
+            pendingTasks.remove(first);
+            return first;
+        }
+    }
+
+    private void cancelFrame() {
+        if (frameHandle != null) {
+            frameHandle.cancel();
+            frameHandle = null;
+        }
+        frameScheduled = false;
+    }
+
+    /** Cancels every submitted handle as well as pending frames; the scheduler may be reused afterwards. */
     public void cancelAll() {
-        pendingTasks.clear();
-        isScheduled.set(false);
+        synchronized (pendingTasks) {
+            generation++;
+            pendingTasks.clear();
+            for (TaskHandle handle : new ArrayList<>(submitted)) {
+                handle.cancel();
+            }
+            submitted.clear();
+            frameHandle = null;
+            frameScheduled = false;
+        }
     }
 }

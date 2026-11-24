@@ -8,11 +8,10 @@ import com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.TextButton;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 
-import mc.obliviate.inventory.Gui;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness.SnapshotProbe;
+import com.ultikits.ultitools.text.Text;
 
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,30 +47,27 @@ class GuiSchedulerFrameBudgetTest {
     /** Creations after which a probe stops misbehaving; reaching it means the drain was unbounded. */
     private static final int CAP = 50;
 
-    /** Default production frame interval, so the test drives the same timing path as a real page. */
-    private static final long FRAME_INTERVAL_MS = 16L;
-
-    private ServerMock server;
-    private Plugin mockPlugin;
+    private GuiTestHarness harness;
     private Player player;
 
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
-        mockPlugin = MockBukkit.createMockPlugin();
+        ServerMock server = MockBukkit.mock();
         player = server.addPlayer();
+        harness = new GuiTestHarness();
     }
 
     @AfterEach
     void tearDown() {
+        harness.close();
         MockBukkitHelper.safeUnmock();
     }
 
     @Test
     @DisplayName("A task that schedules a new frame task while running runs once per frame")
     void taskQueuedDuringDrainRunsOnLaterFrame() {
-        GuiScheduler scheduler = new GuiScheduler(mockPlugin, FRAME_INTERVAL_MS);
+        GuiScheduler scheduler = new GuiScheduler(harness.scheduler(), player);
         AtomicInteger runs = new AtomicInteger();
         AtomicBoolean capHit = new AtomicBoolean();
         Runnable[] self = new Runnable[1];
@@ -85,12 +81,12 @@ class GuiSchedulerFrameBudgetTest {
 
         scheduler.scheduleFrame(self[0]);
         int afterSchedule = runs.get();
-        server.getScheduler().performOneTick();
+        harness.tick();
         int afterTick1 = runs.get();
-        server.getScheduler().performOneTick();
+        harness.tick();
         int afterTick2 = runs.get();
 
-        assertEquals("afterSchedule=1, afterTick1=2, afterTick2=3, capHit=false",
+        assertEquals("afterSchedule=0, afterTick1=1, afterTick2=2, capHit=false",
                 "afterSchedule=" + afterSchedule + ", afterTick1=" + afterTick1
                         + ", afterTick2=" + afterTick2 + ", capHit=" + capHit.get(),
                 "a task queued while a frame drains must wait for the next frame, not extend "
@@ -98,9 +94,9 @@ class GuiSchedulerFrameBudgetTest {
     }
 
     @Test
-    @DisplayName("With a zero frame interval, a frame requested during a drain never runs on the same stack")
-    void taskQueuedDuringDrainRunsOnLaterFrameWithZeroInterval() {
-        GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
+    @DisplayName("Repeated requests during a drain coalesce and never run on the same stack")
+    void repeatedRequestsDuringDrainStayDeferred() {
+        GuiScheduler scheduler = new GuiScheduler(harness.scheduler(), player);
         AtomicInteger runs = new AtomicInteger();
         AtomicBoolean capHit = new AtomicBoolean();
         Runnable[] self = new Runnable[1];
@@ -110,28 +106,28 @@ class GuiSchedulerFrameBudgetTest {
                 return;
             }
             scheduler.scheduleFrame(self[0]);
+            scheduler.scheduleFrame(self[0]);
         };
 
         scheduler.scheduleFrame(self[0]);
         int afterSchedule = runs.get();
-        server.getScheduler().performOneTick();
+        harness.tick();
         int afterTick1 = runs.get();
-        server.getScheduler().performOneTick();
+        harness.tick();
         int afterTick2 = runs.get();
 
-        assertEquals("afterSchedule=1, afterTick1=2, afterTick2=3, capHit=false",
+        assertEquals("afterSchedule=0, afterTick1=1, afterTick2=2, capHit=false",
                 "afterSchedule=" + afterSchedule + ", afterTick1=" + afterTick1
                         + ", afterTick2=" + afterTick2 + ", capHit=" + capHit.get(),
-                "with no frame interval to defer on, only the frameRunning check keeps a frame "
-                        + "requested during a drain off the current stack");
+                "repeated requests raised during a drain must coalesce into one next-tick task "
+                        + "without extending the current stack");
     }
 
     @Test
     @DisplayName("A widget whose initState calls setState and throws is retried once per frame, not in a tight loop")
     void throwingInitStateWithSetStateDoesNotLoopInsideOneFrame() {
-        TestGui gui = new TestGui(player, "frame-budget-gui", "Test", 1);
-        gui.setInventory(Bukkit.createInventory(gui, 9));
-        GuiRenderer renderer = new GuiRenderer(gui, player, new GuiScheduler(mockPlugin, FRAME_INTERVAL_MS));
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiRenderer renderer = new GuiRenderer(Text.plain("Test"), 1, new GuiScheduler(harness.scheduler(), player), gui);
         AtomicInteger creations = new AtomicInteger();
         AtomicBoolean capHit = new AtomicBoolean();
         Supplier<Widget> supplier = () -> Container.builder()
@@ -146,13 +142,13 @@ class GuiSchedulerFrameBudgetTest {
             initializeOutcome = "threw widget failure";
         }
         int afterInitialize = creations.get();
-        server.getScheduler().performOneTick();
+        harness.tick();
         int afterTick1 = creations.get();
-        server.getScheduler().performOneTick();
+        harness.tick();
         int afterTick2 = creations.get();
         renderer.dispose();
 
-        assertEquals("initialize=threw widget failure, afterInitialize=2, afterTick1=3, afterTick2=4, capHit=false",
+        assertEquals("initialize=threw widget failure, afterInitialize=1, afterTick1=2, afterTick2=3, capHit=false",
                 "initialize=" + initializeOutcome + ", afterInitialize=" + afterInitialize
                         + ", afterTick1=" + afterTick1 + ", afterTick2=" + afterTick2
                         + ", capHit=" + capHit.get(),
@@ -160,12 +156,6 @@ class GuiSchedulerFrameBudgetTest {
                         + "leave the frame instead of rebuilding it in a loop");
     }
 
-    /** Minimal concrete {@link Gui}; {@code Gui} is abstract only to force subclassing. */
-    private static final class TestGui extends Gui {
-        TestGui(Player player, String id, String title, int rows) {
-            super(player, id, title, rows);
-        }
-    }
 
     /** The module programming error under test. */
     private static final class BrokenInitStateException extends RuntimeException {
@@ -209,7 +199,7 @@ class GuiSchedulerFrameBudgetTest {
 
         @Override
         public Widget build(BuildContext context) {
-            return TextButton.builder().text(requested ? "requested" : "pending").slot(0).build();
+            return TextButton.builder().text(Text.plain(requested ? "requested" : "pending")).slot(0).build();
         }
     }
 
@@ -217,7 +207,7 @@ class GuiSchedulerFrameBudgetTest {
     private static final class HealthyState extends State<BrokenWidget> {
         @Override
         public Widget build(BuildContext context) {
-            return TextButton.builder().text("cap").slot(0).build();
+            return TextButton.builder().text(Text.plain("cap")).slot(0).build();
         }
     }
 }
