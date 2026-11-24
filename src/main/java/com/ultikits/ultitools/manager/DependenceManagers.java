@@ -3,6 +3,8 @@ package com.ultikits.ultitools.manager;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.item.impl.ItemServices;
+import com.ultikits.ultitools.item.ItemRenderer;
+import com.ultikits.ultitools.ui.dialog.PaperDialogPresenter;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.internal.FrameworkSchedulerBean;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
@@ -38,6 +40,8 @@ import org.jetbrains.annotations.ApiStatus;
 public class DependenceManagers {
     @Getter
     private SimpleContainer context;
+    @Getter
+    private UiManager uiManager;
 
     public DependenceManagers(UltiTools plugin, ClassLoader classLoader) {
         this.context = new SimpleContainer();
@@ -47,6 +51,7 @@ public class DependenceManagers {
         initScheduling(plugin);
         initInventoryAPI(plugin);
         initCoreServices(plugin);
+        initUi(plugin);
     }
 
     /** Installs the framework owner before any core service can schedule work. */
@@ -134,6 +139,16 @@ public class DependenceManagers {
         ItemServices.register(context);
     }
 
+    /** Installs listeners eagerly: scheduling, text and item services are all registered at this point. */
+    private void initUi(UltiTools plugin) {
+        // Unlike lazy core services, these listeners must exist before any module can open a screen.
+        uiManager = UiManager.create(context.getBean(Scheduler.class), context.getBean(Messages.class),
+                context.getBean(ItemRenderer.class), plugin.getLogger(), Thread.currentThread(), new PaperDialogPresenter());
+        uiManager.registerListeners(plugin);
+        context.registerSingleton(UiManager.class.getName(), uiManager);
+        context.registerType(UiManager.class, uiManager);
+    }
+
     /**
      * Get version comparator.
      *
@@ -147,6 +162,7 @@ public class DependenceManagers {
      * Close context.
      */
     public void closeContext() {
+        if (uiManager != null) { uiManager.close(); }
         if (context != null) {
             context.close();
         }
