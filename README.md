@@ -158,9 +158,12 @@ compileOnly 'com.ultikits:UltiTools-API:6.3.0'
 > shade and relocate it itself; Paper `libraries:` is not available to UltiTools modules.
 
 ```java
-ItemStack item = ItemStackBuilder.of(Material.STONE).build();
+// Inject ItemRenderer with @Autowired in the consuming bean.
+ItemStack item = itemRenderer.render(ItemSpec.builder(Material.STONE).build(), player);
 player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
-ItemStack enchanted = ItemStackBuilder.of(Material.FISHING_ROD).enchant(Enchantment.LUCK_OF_THE_SEA, 1).build();
+ItemStack enchanted = itemRenderer.render(ItemSpec.builder(Material.FISHING_ROD)
+        .data(DataComponentTypes.ENCHANTMENTS, ItemEnchantments.itemEnchantments()
+                .add(Enchantment.LUCK_OF_THE_SEA, 1).build()).build(), player);
 player.sendActionBar(Component.text("Ready"));
 ```
 

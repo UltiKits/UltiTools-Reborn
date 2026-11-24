@@ -13,7 +13,8 @@ public interface ItemRenderer {
      * then persistent-data markers. Text uses the framework's Messages lookup order. Air is rejected at
      * build time. {@code TOOLTIP_DISPLAY} is written only when {@link ItemSpec#tooltipHidden()} is true
      * or {@link ItemSpec#hiddenInTooltip()} is nonempty.
-     * @throws IllegalArgumentException if the item type is not an item in the running server's registry
+     * @throws IllegalArgumentException if the item type is not an item in the running server's registry,
+     *         or if Paper rejects the rendered components (for example more lore lines than Paper allows)
      */
     ItemStack render(ItemSpec spec, Locale locale);
 
