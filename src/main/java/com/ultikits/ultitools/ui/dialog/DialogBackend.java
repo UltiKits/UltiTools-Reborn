@@ -60,7 +60,7 @@ public final class DialogBackend implements UiBackend {
 
     /**
      * Bounds the float spacing at the largest absolute endpoint, including negative and zero-crossing ranges.
-     * Requiring ULP <= step / 2 bounds nearest-float rounding error by step / 4, leaving a margin before
+     * Requiring {@code ULP <= step / 2} bounds nearest-float rounding error by step / 4, leaving a margin before
      * the contract's half-step snap boundary. Equality is accepted; a larger ULP rejects the whole range
      * even when its endpoints and initial value happen to be exactly representable. Endpoint and initial
      * casts are also checked explicitly, and a non-finite or zero float step remains unsupported.
