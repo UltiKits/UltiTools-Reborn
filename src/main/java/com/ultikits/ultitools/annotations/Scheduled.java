@@ -12,8 +12,8 @@ import java.lang.annotation.Target;
  * <p>
  * The annotated method must be {@code void} and take no parameters.
  * It must be inside a {@code @Service} or other managed bean.
- * Tasks are automatically cancelled when the owning plugin is unloaded.
- * {@link com.ultikits.ultitools.manager.TaskManager} walks the class hierarchy when scanning for
+ * {@link com.ultikits.ultitools.manager.TaskManager} runs tasks on the module's own Scheduler;
+ * tasks end when the module unloads. It walks the class hierarchy when scanning for
  * {@code @Scheduled} methods, so an annotated method is still found on a ByteBuddy AOP proxy of
  * the declaring bean, and a method declared on a superclass of the bean -- an abstract base
  * service -- is scheduled too (as of 6.3.0, #532; before, only the bean class's own declared
@@ -34,6 +34,7 @@ import java.lang.annotation.Target;
  * {@code async = true} runs the method body off the main thread. For config-bound timings, a
  * synchronous trigger observes each fire before dispatching the async body; see the binding
  * contract below (#535). Literal async tasks retain their direct async scheduling behavior.
+ * As of 7.0, literal async periods are wall-clock durations (50 ms per tick), not server tick time.
  *
  * <h2>Binding the timing to a config key (6.3.0)</h2>
  * Instead of a literal, {@link #periodKey()} and {@link #delayKey()} can name a
