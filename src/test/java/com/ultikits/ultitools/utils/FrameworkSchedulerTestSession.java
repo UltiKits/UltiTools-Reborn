@@ -8,15 +8,19 @@ import org.bukkit.plugin.Plugin;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 /** Explicitly supplies the framework lifecycle normally installed by the root container. */
-final class FrameworkSchedulerTestSession implements AutoCloseable {
+public final class FrameworkSchedulerTestSession implements AutoCloseable {
     private final PaperSchedulerEngine engine;
     private final Scheduler scheduler;
 
-    FrameworkSchedulerTestSession() {
+    public FrameworkSchedulerTestSession() {
         Plugin host = MockBukkit.createMockPlugin();
         engine = new PaperSchedulerEngine(host, host.getLogger(), PaperBackend.live(host));
         scheduler = engine.newOwner("UltiTools");
         FrameworkScheduling.install(scheduler);
+    }
+
+    public Scheduler scheduler() {
+        return scheduler;
     }
 
     @Override

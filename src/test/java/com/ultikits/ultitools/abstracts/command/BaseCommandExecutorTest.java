@@ -37,7 +37,9 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitScheduler;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -545,10 +547,10 @@ class BaseCommandExecutorTest {
          * {@code GuiSchedulerTest#testRunOnMainThread_WhenNotOnMainThread}.
          */
         private void stubSyncScheduler(MockedStatic<Bukkit> bukkit) {
-            BukkitScheduler scheduler = mock(BukkitScheduler.class);
-            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-            lenient().when(scheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
-                Runnable task = invocation.getArgument(1);
+            Scheduler scheduler = CommandRuntime.scheduler();
+
+            lenient().when(scheduler.global().run(any(Runnable.class))).thenAnswer(invocation -> {
+                Runnable task = invocation.getArgument(0);
                 task.run();
                 return null;
             });
@@ -791,20 +793,20 @@ class BaseCommandExecutorTest {
         private void stubCapturingAsyncScheduler(MockedStatic<Bukkit> bukkit,
                                                   List<Runnable> asyncDispatches,
                                                   List<Runnable> delayedAsyncDispatches) {
-            BukkitScheduler scheduler = mock(BukkitScheduler.class);
-            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-            lenient().when(scheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class)))
+            Scheduler scheduler = CommandRuntime.scheduler();
+
+            lenient().when(scheduler.async().run(any(Runnable.class)))
                     .thenAnswer(invocation -> {
-                        asyncDispatches.add(invocation.getArgument(1));
+                        asyncDispatches.add(invocation.getArgument(0));
                         return null;
                     });
-            lenient().when(scheduler.runTaskLaterAsynchronously(any(Plugin.class), any(Runnable.class), anyLong()))
+            lenient().when(scheduler.entity(mockPlayer).runLater(any(Duration.class), any(Runnable.class)))
                     .thenAnswer(invocation -> {
                         delayedAsyncDispatches.add(invocation.getArgument(1));
                         return null;
                     });
-            lenient().when(scheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
-                Runnable task = invocation.getArgument(1);
+            lenient().when(scheduler.global().run(any(Runnable.class))).thenAnswer(invocation -> {
+                Runnable task = invocation.getArgument(0);
                 task.run();
                 return null;
             });
@@ -982,17 +984,16 @@ class BaseCommandExecutorTest {
             AsyncCommandExecutor executor = new AsyncCommandExecutor();
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                Scheduler scheduler = CommandRuntime.scheduler();
+
                 // #541: on the primary thread the body runs at dispatch; nothing is scheduled.
-                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                lenient().when(CommandRuntime.scheduler().global().isCurrentThread()).thenReturn(true);
 
                 com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mockPlayer, mockCommand, "asynctest", new String[]{"sync"});
 
-                verify(scheduler, never()).runTask(any(Plugin.class), any(Runnable.class));
-                verify(scheduler, never()).runTaskAsynchronously(any(Plugin.class), any(Runnable.class));
-                verify(scheduler, never()).runTaskLaterAsynchronously(
-                        any(Plugin.class), any(Runnable.class), anyLong());
+                verify(scheduler.global(), never()).run(any(Runnable.class));
+                verify(scheduler.async(), never()).run(any(Runnable.class));
+                verify(scheduler.entity(mockPlayer), never()).runLater(any(Duration.class), any(Runnable.class));
             }
 
             assertEquals(1, executor.syncInvocations.get());

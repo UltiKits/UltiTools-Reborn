@@ -19,9 +19,12 @@ import java.util.logging.Logger;
 
 import javax.annotation.Nullable;
 
-import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
-import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.entity.Player;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
@@ -430,7 +433,7 @@ public abstract class BaseCommandExecutor {
      * <p>
      * A synchronous body runs at once, inside the dispatch, when this is called on the server's
      * primary thread -- which is where Bukkit dispatches every command a player, the console, a
-     * command block or the panel sends -- and is handed to {@code runTask} only when it is not
+     * command block or the panel sends -- and is handed to {@code global().run} only when it is not
      * (as of 6.3.0, #541; before, every synchronous body was deferred one tick). An
      * {@code @AsyncCommand}/{@code @RunAsync} body always runs asynchronously.
      *
@@ -467,21 +470,18 @@ public abstract class BaseCommandExecutor {
         // WIRE-12/D-13: shared between the command body's own completion and the timeout
         // watcher armed below. Whichever side wins the CAS is the ONLY side that reports to
         // the sender -- the loser is a no-op. Read/set from two different threads (the async
-        // worker running the body and the delayed async watcher task), so this MUST be an
+        // worker running the body and the delayed sender-context watcher task), so this MUST be an
         // atomic, not a plain boolean. Harmless when timeout() <= 0: no watcher is armed, so
         // nothing else ever touches this flag and the body's own CAS below is a pure no-op.
         final AtomicBoolean reported = new AtomicBoolean(false);
 
-        BukkitRunnable runnable = new BukkitRunnable() {
-            @Override
-            public void run() {
-                invokeCommandBody(context, method, params, ranValidators, triggerCtx, reported);
-            }
-        };
+        final AtomicReference<TaskHandle> timeoutWatcher = new AtomicReference<>();
+        Runnable runnable = () -> invokeCommandBody(context, method, params, ranValidators,
+                triggerCtx, reported, timeoutWatcher);
 
         if (isAsync) {
-            dispatchAsyncCommand(context, asyncCommand, runnable, reported, ranValidators);
-        } else if (Bukkit.isPrimaryThread()) {
+            dispatchAsyncCommand(context, asyncCommand, runnable, reported, timeoutWatcher, ranValidators);
+        } else if (CommandRuntime.scheduler().global().isCurrentThread()) {
             // #541 (maintainer's answer of 2026-09-29): on the server thread the body runs now,
             // inside the dispatch, as Bukkit's own commands do -- so a command block, a command
             // minecart, the panel's remote command and RCON receive its replies while their
@@ -491,7 +491,7 @@ public abstract class BaseCommandExecutor {
         } else {
             // Off the server thread the body must not touch the Bukkit API directly, so it is
             // handed to the main thread, exactly as before 6.3.0.
-            dispatchScheduled(context, ranValidators, () -> runnable.runTask(UltiTools.getInstance()));
+            dispatchScheduled(context, ranValidators, () -> CommandRuntime.scheduler().global().run(runnable));
         }
     }
 
@@ -517,7 +517,7 @@ public abstract class BaseCommandExecutor {
     /**
      * Runs the matched command method plus its surrounding bookkeeping (audit-user context,
      * post-action validator hooks, error reporting, the WIRE-12 completion flag) -- the body of
-     * the {@link BukkitRunnable} {@link #executeCommand} schedules.
+     * the {@link Runnable} {@link #executeCommand} schedules.
      * <p>
      * Split out of {@code executeCommand} purely to bring the enclosing method's
      * NPathComplexity back under threshold; the control flow below, and therefore the runtime
@@ -528,12 +528,12 @@ public abstract class BaseCommandExecutor {
      */
     private void invokeCommandBody(CommandContext context, Method method, Object[] params,
                                     List<CommandValidator> ranValidators, TriggerContext triggerCtx,
-                                    AtomicBoolean reported) {
+                                    AtomicBoolean reported, AtomicReference<TaskHandle> timeoutWatcher) {
         try {
             // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
             // AuditableDataEntity's audit columns is set and restored HERE, inside the
             // runnable that actually invokes the matched method -- not around the
-            // runTask()/runTaskAsynchronously() call that may schedule this runnable. An
+            // global/async submission call that may schedule this runnable. An
             // off-primary-thread sync body and every @AsyncCommand/@RunAsync body run on
             // another thread; a ThreadLocal write made on the scheduling thread would be
             // invisible on whichever thread actually executes this run() (T-02-REP-4).
@@ -572,6 +572,7 @@ public abstract class BaseCommandExecutor {
             // The body is NEVER interrupted to make this deadline; it always runs this
             // finally exactly once, win or lose the race.
             reported.compareAndSet(false, true);
+            cancelTimeoutWatcher(timeoutWatcher);
         }
     }
 
@@ -732,7 +733,8 @@ public abstract class BaseCommandExecutor {
      * @since 6.3.0
      */
     private void dispatchAsyncCommand(CommandContext context, AsyncCommand asyncCommand,
-                                       BukkitRunnable runnable, AtomicBoolean reported,
+                                       Runnable runnable, AtomicBoolean reported,
+                                       AtomicReference<TaskHandle> timeoutWatcher,
                                        List<CommandValidator> ranValidators) {
         // The refusal hooks (#568) cover only what happens before the body is accepted: the
         // processing notice and the body's submission. Once the scheduler has accepted the body,
@@ -750,11 +752,11 @@ public abstract class BaseCommandExecutor {
             // this runnable in another one -- that "wrap and re-dispatch" shape is what
             // produced the double async dispatch this replaces, on the DEFAULT path of every
             // @AsyncCommand (timeout()'s default is 30).
-            runnable.runTaskAsynchronously(UltiTools.getInstance());
+            CommandRuntime.scheduler().async().run(runnable);
         });
 
         if (asyncCommand != null && asyncCommand.timeout() > 0) {
-            armTimeoutWatcher(context, asyncCommand, reported);
+            armTimeoutWatcher(context, asyncCommand, reported, timeoutWatcher);
         }
     }
 
@@ -765,25 +767,31 @@ public abstract class BaseCommandExecutor {
      *
      * @since 6.3.0
      */
-    private void armTimeoutWatcher(CommandContext context, AsyncCommand asyncCommand, AtomicBoolean reported) {
-        // The watcher does NOT touch, cancel, or interrupt the body's task -- Bukkit's
-        // async scheduler pool is shared, and interrupting a pooled thread is unsafe
-        // (it can affect unrelated tasks). It only stops WAITING and reports, once,
-        // via the CAS above; the body keeps running to completion regardless and its
-        // result (success or exception) is discarded from the watcher's perspective.
-        BukkitRunnable watcher = new BukkitRunnable() {
-            @Override
-            public void run() {
-                if (reported.compareAndSet(false, true)) {
-                    // Paper's AsyncCatcher governs what may be touched off the main
-                    // thread; hop back through it to send the message, same mechanism
-                    // CommandExecutionManager already uses for this purpose.
-                    Bukkit.getScheduler().runTask(UltiTools.getInstance(), () ->
-                            CommandRuntime.messages().send(context.getSender(), Text.of(CommandKeys.TIMEOUT)));
-                }
+    private static void armTimeoutWatcher(CommandContext context, AsyncCommand asyncCommand,
+                                          AtomicBoolean reported, AtomicReference<TaskHandle> timeoutWatcher) {
+        // A tick-affine watcher only stops waiting. It never cancels or interrupts the command body.
+        TaskHandle watcher = replyContext(context.getSender()).runLater(Duration.ofSeconds(asyncCommand.timeout()), () -> {
+            if (reported.compareAndSet(false, true)) {
+                CommandRuntime.messages().send(context.getSender(), Text.of(CommandKeys.TIMEOUT));
             }
-        };
-        watcher.runTaskLaterAsynchronously(UltiTools.getInstance(), asyncCommand.timeout() * 20L);
+        });
+        timeoutWatcher.set(watcher);
+        // The async body can finish before submission of this watcher returns.
+        if (reported.get()) {
+            cancelTimeoutWatcher(timeoutWatcher);
+        }
+    }
+
+    private static TaskContext replyContext(CommandSender sender) {
+        return sender instanceof Player player
+                ? CommandRuntime.scheduler().entity(player) : CommandRuntime.scheduler().global();
+    }
+
+    private static void cancelTimeoutWatcher(AtomicReference<TaskHandle> timeoutWatcher) {
+        TaskHandle watcher = timeoutWatcher.getAndSet(null);
+        if (watcher != null) {
+            watcher.cancel();
+        }
     }
 
 

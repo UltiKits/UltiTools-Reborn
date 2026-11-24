@@ -22,9 +22,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.plugin.IllegalPluginAccessException;
+import java.util.concurrent.RejectedExecutionException;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitScheduler;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -113,20 +115,20 @@ class AsyncWatcherRefusalTest {
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(ultiTools);
         bukkitMock = mockStatic(Bukkit.class);
-        bukkitMock.when(Bukkit::isPrimaryThread).thenReturn(true);
-        BukkitScheduler scheduler = mock(BukkitScheduler.class);
-        bukkitMock.when(Bukkit::getScheduler).thenReturn(scheduler);
-        lenient().when(scheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class)))
+        lenient().when(CommandRuntime.scheduler().global().isCurrentThread()).thenReturn(true);
+        Scheduler scheduler = CommandRuntime.scheduler();
+
+        lenient().when(scheduler.async().run(any(Runnable.class)))
                 .thenAnswer(invocation -> {
-                    asyncBodies.add(invocation.getArgument(1));
+                    asyncBodies.add(invocation.getArgument(0));
                     return null;
                 });
-        lenient().when(scheduler.runTaskLaterAsynchronously(any(Plugin.class), any(Runnable.class), anyLong()))
-                .thenThrow(new IllegalPluginAccessException("Plugin attempted to register task while disabled"));
         command = mock(Command.class);
         lenient().when(command.getName()).thenReturn("slowcmd");
         player = mock(Player.class);
         when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        lenient().when(scheduler.entity(player).runLater(any(Duration.class), any(Runnable.class)))
+                .thenThrow(new RejectedExecutionException("Plugin attempted to register task while disabled"));
     }
 
     @AfterEach
@@ -143,7 +145,7 @@ class AsyncWatcherRefusalTest {
         SlowExecutor executor = new SlowExecutor(ValidatorChain.builder().add(lock).add(counting).build());
         String key = SlowExecutor.class.getMethod("slow", CommandSender.class).toString();
 
-        assertThrows(IllegalPluginAccessException.class,
+        assertThrows(RejectedExecutionException.class,
                 () -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "slowcmd", new String[]{"slow"}));
 
         assertEquals(1, asyncBodies.size(), "the body was accepted by the scheduler");
