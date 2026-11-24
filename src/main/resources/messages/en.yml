@@ -1,1 +1,10 @@
-# Framework message keys are added by the text migration plans.
+# Framework messages use stable dotted keys and MiniMessage values.
+ui:
+  ok: "OK"
+  "yes": "Yes"
+  "no": "No"
+  submit: "Submit"
+text:
+  fallback:
+    time_zone: "Fallback language: <language> (system time zone <zone>; set fallback-language in config.yml to override)"
+    configured: "Fallback language: <language> (configuration; set fallback-language in config.yml to override)"
