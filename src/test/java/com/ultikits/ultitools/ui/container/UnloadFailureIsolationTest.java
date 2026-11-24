@@ -165,6 +165,7 @@ class UnloadFailureIsolationTest extends FrameworkContainerTestSupport {
                 case PREPARE -> doThrow(failure).when(container).prepareUnload(anyLong());
                 case START -> doThrow(failure).when(container).startUnloadCommit();
                 case FINISH -> doThrow(failure).when(container).unload();
+                default -> throw new IllegalStateException("Unknown unload step " + this);
             }
         }
     }
