@@ -61,20 +61,24 @@ public class RenderNodeTest {
     }
     @Test void testClearChildren() {
         RenderNode parent = new RenderNode(null, -1);
-        RenderNode a = new RenderNode(null, 1), b = new RenderNode(null, 2);
+        RenderNode a = new RenderNode(null, 1);
+        RenderNode b = new RenderNode(null, 2);
         parent.addChild(a); parent.addChild(b); parent.clearChildren();
         assertThat(parent.getChildren()).isEmpty();
         assertThat(a.getParent()).isNull();
         assertThat(b.getParent()).isNull();
     }
     @Test void testGetAllLeaves() {
-        RenderNode root = new RenderNode(null, -1), branch = new RenderNode(null, -1);
-        RenderNode a = new RenderNode(SlotKey.of("a"), 1), b = new RenderNode(SlotKey.of("b"), 2);
+        RenderNode root = new RenderNode(null, -1);
+        RenderNode branch = new RenderNode(null, -1);
+        RenderNode a = new RenderNode(SlotKey.of("a"), 1);
+        RenderNode b = new RenderNode(SlotKey.of("b"), 2);
         root.addChild(a); root.addChild(branch); branch.addChild(b);
         assertThat(root.getAllLeaves()).containsExactly(a, b);
     }
     @Test void testCalculateSlotCount() {
-        RenderNode root = new RenderNode(null, -1), bound = new RenderNode(null, 2);
+        RenderNode root = new RenderNode(null, -1);
+        RenderNode bound = new RenderNode(null, 2);
         bound.setBinding(binding());
         root.addChild(new RenderNode(null, 0, item("stone")));
         root.addChild(new RenderNode(null, 1)); root.addChild(bound);
@@ -128,7 +132,9 @@ public class RenderNodeTest {
     }
     @Test void testEquality() {
         SlotKey key = SlotKey.of("same");
-        RenderNode a = new RenderNode(key, 1), b = new RenderNode(key, 2), c = new RenderNode(null, 1);
+        RenderNode a = new RenderNode(key, 1);
+        RenderNode b = new RenderNode(key, 2);
+        RenderNode c = new RenderNode(null, 1);
         assertThat(a).isEqualTo(b).isEqualTo(c).isEqualTo(a).isNotEqualTo(null).isNotEqualTo("node");
         assertThat(a.hashCode()).isEqualTo(b.hashCode());
         assertThat(c.hashCode()).isEqualTo(1);

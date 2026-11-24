@@ -144,11 +144,11 @@ public class GuiScheduler {
         } catch (RenderDepthExceededException failure) {
             logFrameTaskError(failure);
             reportRenderDepthExceeded(failure);
+        } catch (Error failure) {
+            logFrameTaskError(failure);
+            throw failure;
         } catch (Throwable failure) {
             logFrameTaskError(failure);
-            if (failure instanceof Error error) {
-                throw error;
-            }
         }
     }
 

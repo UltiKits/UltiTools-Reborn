@@ -105,7 +105,8 @@ class GuiSchedulerTest {
         assertThat(frames).hasValue(1);
     }
     @Test void testScheduleFrame_MergesMultipleCalls() {
-        AtomicInteger a = new AtomicInteger(), b = new AtomicInteger();
+        AtomicInteger a = new AtomicInteger();
+        AtomicInteger b = new AtomicInteger();
         scheduler.scheduleFrame(a::incrementAndGet); scheduler.scheduleFrame(b::incrementAndGet);
         assertThat(queued).hasSize(1);
         runNext();
