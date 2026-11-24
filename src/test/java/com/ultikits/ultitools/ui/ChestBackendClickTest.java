@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.bukkit.Material;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -30,10 +31,11 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 
 class ChestBackendClickTest extends ChestTestFixture {
     private Plugin plugin;
+    private final AtomicLong monotonic = new AtomicLong();
 
     @BeforeEach void registerListener() {
         plugin = MockBukkit.createMockPlugin();
-        server.getPluginManager().registerEvents(new ChestListener(runtime), plugin);
+        server.getPluginManager().registerEvents(new ChestListener(runtime, monotonic::get), plugin);
     }
 
     @Test void topPickupIsCancelledBeforeModuleListenersAndUsesTheGestureEntryPoint() {
@@ -117,9 +119,40 @@ class ChestBackendClickTest extends ChestTestFixture {
         open(Grid.builder(Text.plain("Double"), 1).set(0, 0, ItemSpec.builder(Material.DIAMOND).build(),
                 event -> clicks.add(event.kind())).build());
         assertThat(click(0, ClickType.LEFT, InventoryAction.PICKUP_ALL).isCancelled()).isTrue();
+        assertThat(click(0, ClickType.LEFT, InventoryAction.PICKUP_ALL).isCancelled()).isTrue();
         assertThat(click(0, ClickType.DOUBLE_CLICK, InventoryAction.COLLECT_TO_CURSOR).isCancelled()).isTrue();
         tick();
         assertThat(clicks).containsExactly(ClickKind.LEFT);
+    }
+
+    @Test void slowLeftClicksAreIndependentAndOtherSlotsAndRightClicksAreNotDebounced() {
+        List<String> clicks = new ArrayList<>();
+        open(Grid.builder(Text.plain("Timing"), 1)
+                .set(0, 0, ItemSpec.builder(Material.DIAMOND).build(), event -> clicks.add("0:" + event.kind()))
+                .set(0, 1, ItemSpec.builder(Material.STONE).build(), event -> clicks.add("1:" + event.kind())).build());
+        assertThat(click(0, ClickType.LEFT, InventoryAction.PICKUP_ALL).isCancelled()).isTrue();
+        monotonic.set(249_999_999L);
+        click(0, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        click(1, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        click(0, ClickType.RIGHT, InventoryAction.PICKUP_HALF);
+        click(0, ClickType.RIGHT, InventoryAction.PICKUP_HALF);
+        monotonic.set(250_000_000L);
+        click(0, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        tick();
+        assertThat(clicks).containsExactly("0:LEFT", "1:LEFT", "0:RIGHT", "0:RIGHT", "0:LEFT");
+    }
+
+    @Test void alreadyCancelledIconInputDoesNotRunModuleCode() {
+        List<ClickKind> clicks = new ArrayList<>();
+        open(Grid.builder(Text.plain("Cancelled"), 1).set(0, 0, ItemSpec.builder(Material.DIAMOND).build(),
+                event -> clicks.add(event.kind())).build());
+        InventoryClickEvent event = new InventoryClickEvent(player.getOpenInventory(), InventoryType.SlotType.CONTAINER,
+                0, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        event.setCancelled(true);
+        server.getPluginManager().callEvent(event);
+        tick();
+        assertThat(event.isCancelled()).isTrue();
+        assertThat(clicks).isEmpty();
     }
 
     @Test void bottomWhitelistAndOutsideDropsStayAllowedButCollectAndBundleAreBlocked() {
@@ -137,14 +170,15 @@ class ChestBackendClickTest extends ChestTestFixture {
         assertThat(cancelled.isCancelled()).isTrue();
     }
 
-    @Test void cancelledInputStillReachesOurLowestPriorityListener() {
+    @Test void alreadyCancelledInputRemainsCancelledWithoutMovingItems() {
         SlotContainer box = container(1, List.of(stack(Material.STONE, 8)));
         open(grid(box, BindingMode.EDITABLE));
         InventoryClickEvent event = new InventoryClickEvent(player.getOpenInventory(), InventoryType.SlotType.CONTAINER,
                 0, ClickType.LEFT, InventoryAction.PICKUP_ALL);
         event.setCancelled(true);
         server.getPluginManager().callEvent(event);
-        assertThat(box.get(0).isEmpty()).isTrue();
+        assertThat(box.get(0)).isEqualTo(stack(Material.STONE, 8));
+        assertThat(player.getItemOnCursor().isEmpty()).isTrue();
         assertThat(event.isCancelled()).isTrue();
     }
 
@@ -154,18 +188,21 @@ class ChestBackendClickTest extends ChestTestFixture {
         player.setItemOnCursor(stack(Material.STONE, 9));
         InventoryDragEvent spread = drag(false, Map.of(0, stack(Material.STONE, 3), 1, stack(Material.STONE, 3), 2, stack(Material.STONE, 3)));
         assertThat(spread.isCancelled()).isTrue();
+        tick();
         assertThat(box.contents()).containsExactly(stack(Material.STONE, 3), stack(Material.STONE, 3), stack(Material.STONE, 3));
         assertThat(player.getItemOnCursor().isEmpty()).isTrue();
         player.setItemOnCursor(stack(Material.DIRT, 3));
         assertThat(drag(true, Map.of(3, stack(Material.DIRT, 1))).isCancelled()).isTrue();
         assertThat(drag(false, Map.of(0, stack(Material.DIRT, 1), 9, stack(Material.DIRT, 1))).isCancelled()).isTrue();
         assertThat(drag(false, Map.of(9, stack(Material.DIRT, 3))).isCancelled()).isFalse();
-        assertThat(player.getItemOnCursor()).isEqualTo(stack(Material.DIRT, 3));
+        assertThat(player.getItemOnCursor().isEmpty()).isTrue();
+        assertThat(player.getInventory().getItem(9)).isEqualTo(stack(Material.DIRT, 3));
         player.setItemOnCursor(stack(Material.STONE, 3));
         assertThat(drag(true, Map.of(0, stack(Material.STONE, 4))).isCancelled()).isTrue();
-        assertThat(box.get(0)).isEqualTo(stack(Material.STONE, 4));
         tick();
-        assertThat(player.syncScopes).hasSize(1);
+        assertThat(box.get(0)).isEqualTo(stack(Material.STONE, 4));
+        assertThat(player.getItemOnCursor()).isEqualTo(stack(Material.STONE, 2));
+        assertThat(player.syncScopes).hasSize(2);
     }
 
     @Test void terminalSessionCannotMoveOrReportThroughClickOrDrag() {
@@ -230,6 +267,19 @@ class ChestBackendClickTest extends ChestTestFixture {
                 .isEqualTo(new UiResult.Closed<Ack>(CloseReason.CLOSED_BY_CODE));
     }
 
+    @Test void anotherViewersCloseDoesNotEndTheOwnersSession() {
+        SlotContainer box = container(1, List.of(stack(Material.STONE, 8)));
+        GridSession session = open(grid(box, BindingMode.EDITABLE));
+        SyncPlayer bob = new SyncPlayer(server, "Bob");
+        server.addPlayer(bob);
+        bob.openInventory(top());
+        server.getPluginManager().callEvent(new InventoryCloseEvent(bob.getOpenInventory(), InventoryCloseEvent.Reason.PLAYER));
+        tick();
+        assertThat(session.isOpen()).isTrue();
+        assertThat(session.result().toCompletableFuture()).isNotDone();
+        assertThat(box.get(0)).isEqualTo(stack(Material.STONE, 8));
+    }
+
     @Test void aForeignHolderIsNotTouchedByOurListeners() {
         player.openInventory(server.createInventory(null, 9));
         assertThat(click(0, ClickType.LEFT, InventoryAction.PICKUP_ALL).isCancelled()).isFalse();
@@ -244,9 +294,23 @@ class ChestBackendClickTest extends ChestTestFixture {
 
     private InventoryDragEvent drag(boolean single, Map<Integer, ItemStack> targets) {
         InventoryView view = player.getOpenInventory();
-        InventoryDragEvent event = new InventoryDragEvent(view, ItemStack.empty(), player.getItemOnCursor(), single,
+        ItemStack oldCursor = view.getCursor().clone();
+        int moved = targets.entrySet().stream().mapToInt(entry -> {
+            ItemStack before = view.getInventory(entry.getKey()).getItem(view.convertSlot(entry.getKey()));
+            int amount = before == null || before.isEmpty() ? 0 : before.getAmount();
+            return Math.max(0, entry.getValue().getAmount() - amount);
+        }).sum();
+        ItemStack remainder = oldCursor.clone();
+        remainder.setAmount(Math.max(0, oldCursor.getAmount() - moved));
+        view.setCursor(remainder);
+        InventoryDragEvent event = new InventoryDragEvent(view, remainder, oldCursor, single,
                 new LinkedHashMap<>(targets));
         server.getPluginManager().callEvent(event);
+        if (event.isCancelled()) { view.setCursor(oldCursor); }
+        else {
+            targets.forEach((raw, item) -> view.getInventory(raw).setItem(view.convertSlot(raw), item));
+            view.setCursor(event.getCursor());
+        }
         return event;
     }
 

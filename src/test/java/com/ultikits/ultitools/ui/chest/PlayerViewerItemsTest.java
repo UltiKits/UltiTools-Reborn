@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.ui.chest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.bukkit.Material;
@@ -38,6 +39,19 @@ class PlayerViewerItemsTest {
         assertThat(player.getInventory().getItemInOffHand().getType()).isEqualTo(Material.SHIELD);
         assertThatThrownBy(() -> items.slot(36)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> items.slot(-1, ItemStack.empty())).isInstanceOf(IndexOutOfBoundsException.class);
+    }
+
+    @Test void validWritesRemainAvailableWithoutExceptionsAfterTheViewerDisconnects() {
+        player.disconnect();
+        assertThatCode(() -> {
+            items.cursor(new ItemStack(Material.STONE, 9));
+            items.slot(0, new ItemStack(Material.DIRT, 3));
+            items.slot(35, ItemStack.empty());
+        }).doesNotThrowAnyException();
+        assertThat(player.isOnline()).isFalse();
+        assertThat(items.cursor()).isEqualTo(new ItemStack(Material.STONE, 9));
+        assertThat(items.slot(0)).isEqualTo(new ItemStack(Material.DIRT, 3));
+        assertThat(items.slot(35).isEmpty()).isTrue();
     }
 
     @Test void viewCursorAndPlayerCursorAreTheSameLogicalStackWithDefensiveCopies() {
