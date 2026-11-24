@@ -17,7 +17,6 @@ import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.services.NotificationService;
-import com.ultikits.ultitools.widgets.Toast;
 
 import net.kyori.adventure.text.Component;
 
@@ -240,12 +239,6 @@ public class InMemoryNotificationService implements NotificationService {
     @Override
     public boolean sendActionBarNotification(Player player, String message) {
         player.sendActionBar(Component.text(message));
-        return true;
-    }
-
-    @Override
-    public boolean sendToastNotification(Player player, String icon, String message, Toast.Style style) {
-        Toast.displayTo(player, icon, message, style);
         return true;
     }
 }
