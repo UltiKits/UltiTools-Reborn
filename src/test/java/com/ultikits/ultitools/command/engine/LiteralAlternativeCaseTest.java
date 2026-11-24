@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doAnswer;
 import java.util.ArrayList;
@@ -14,6 +16,11 @@ import java.util.List;
 import java.util.logging.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
+import org.bukkit.event.command.UnknownCommandEvent;
+import org.bukkit.plugin.PluginManager;
+import org.mockito.ArgumentCaptor;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.manager.CommandManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -78,9 +85,53 @@ class LiteralAlternativeCaseTest {
     }
     @Test void anUnavailableLiteralDoesNotFallThroughToTheRootGreedyBody() throws Exception {
         assertThat(dispatcher.execute("test SECRET", source)).isEqualTo(1);
-        assertThat(executor.route).isNull();
-        assertThat(executor.bodies).isZero();
-        assertThat(replies).containsExactly("指令正确用法");
+        assertThat(executor.secretBodies).isZero();
+        assertThat(executor.greedyBodies).isZero();
+        List<String> hiddenReplies = List.copyOf(replies);
+        assertThat(hiddenReplies).isNotEmpty();
+        replies.clear();
+
+        assertThat(hiddenReplies).containsExactlyElementsOf(unknownRepliesWithoutRootGreedy());
+        assertThat(executor.secretBodies).isZero();
+        assertThat(executor.greedyBodies).isZero();
+
+        when(source.getSender().hasPermission("probe.secret")).thenReturn(true);
+        assertThat(dispatcher.execute("test SECRET", source)).isEqualTo(1);
+        assertThat(executor.secretBodies).isEqualTo(1);
+        assertThat(executor.greedyBodies).isZero();
+        assertThat(replies).isEmpty();
+
+        when(source.getSender().hasPermission("probe.secret")).thenReturn(false);
+        assertThat(dispatcher.execute("test MISSING", source)).isEqualTo(1);
+        assertThat(executor.route).isEqualTo("words:MISSING");
+        assertThat(executor.secretBodies).isEqualTo(1);
+        assertThat(executor.greedyBodies).isEqualTo(1);
+        assertThat(replies).isEmpty();
+    }
+    @Test void anUnavailableExactLiteralWithRootGreedyUsesTheRegisteredListener() throws Exception {
+        List<String> expected = unknownRepliesWithoutRootGreedy();
+        assertThat(expected).isNotEmpty();
+        var plugin = UltiTools.getInstance();
+        var plugins = mock(PluginManager.class);
+        bukkit.when(Bukkit::getPluginManager).thenReturn(plugins);
+        var lifecycle = CommandTestSupport.lifecycle(plugin);
+        var engine = new CommandEngine(new StringNativeArgumentTypes(), Logger.getAnonymousLogger());
+        assertThat(engine.register(executor, "fixture", executor, "fixture", "", false, List.of("test"))).isTrue();
+        new CommandManager(engine).registerInternalListeners();
+        var registeredListener = ArgumentCaptor.forClass(HiddenCommandListener.class);
+        verify(plugins).registerEvents(registeredListener.capture(), eq(plugin));
+        var registeredDispatcher = lifecycle.fire().getDispatcher();
+
+        assertThatThrownBy(() -> registeredDispatcher.execute("test secret", source))
+                .isInstanceOf(CommandSyntaxException.class);
+        assertThat(replies).isEmpty();
+        var event = new UnknownCommandEvent(source, "test secret", Component.text("vanilla syntax error"));
+        registeredListener.getValue().onUnknownCommand(event);
+
+        assertThat(event.message()).isNull();
+        assertThat(replies).containsExactlyElementsOf(expected);
+        assertThat(executor.secretBodies).isZero();
+        assertThat(executor.greedyBodies).isZero();
     }
     @Test void anUnavailableExactLiteralIsRejectedByBrigadierBeforeAnyCallback() {
         assertThatThrownBy(() -> dispatcher.execute("test secret", source)).isInstanceOf(CommandSyntaxException.class);
@@ -124,6 +175,29 @@ class LiteralAlternativeCaseTest {
         assertThat(commands.getDispatcher().execute("raw all", source)).isEqualTo(11);
     }
 
+    private List<String> unknownRepliesWithoutRootGreedy() throws Exception {
+        var invocation = new CommandInvocation(executor, "control");
+        var compiled = new CommandTreeCompiler(new StringNativeArgumentTypes()).compile(executor, "fixture",
+                List.of("control"), "", false, invocation::run, invocation::help);
+        assertThat(compiled.tree().getChild("words")).isNotNull();
+        var builder = compiled.tree().createBuilder();
+        compiled.tree().getChildren().stream().filter(child -> !"words".equals(child.getName())).forEach(builder::then);
+        var controlTree = builder.build();
+        assertThat(controlTree.getChildren()).hasSize(compiled.tree().getChildren().size() - 1);
+        var bindings = new CommandBindings(Logger.getAnonymousLogger(), () -> { /* No client synchronization. */ });
+        var frameworkReplies = new FrameworkReplies(executor, controlTree,
+                (input, stack) -> bindings.dispatch("control", input, stack));
+        bindings.bind(executor, "fixture", executor,
+                new CompiledCommand("control", List.of(), "fixture", frameworkReplies.tree(), compiled.signature()),
+                frameworkReplies);
+        var commands = new RecordingCommands();
+        bindings.onCommands(commands);
+        assertThat(commands.getDispatcher().execute("control MISSING", source)).isEqualTo(1);
+        List<String> expected = replies.stream().map(message -> message.replace("/control ", "/test ")).toList();
+        replies.clear();
+        return expected;
+    }
+
     @CmdExecutor(alias = "trade") static class Trade extends BaseCommandExecutor {
         String route;
         int calls;
@@ -142,10 +216,13 @@ class LiteralAlternativeCaseTest {
     @CmdExecutor(alias = "test") static class Fixture extends BaseCommandExecutor {
         String route;
         int bodies;
+        int secretBodies;
+        int greedyBodies;
         Fixture() { super(ValidatorChain.builder().build()); }
         @CmdMapping(format = "info all") public void all() { route = "all";
             bodies++; }
         @CmdMapping(format = "secret", permission = "probe.secret") public void secret() { route = "secret";
+            secretBodies++;
             bodies++; }
         @CmdMapping(format = "info <text>") public void argument(@CmdParam("text") String text) {
             route = "argument:" + text;
@@ -160,6 +237,7 @@ class LiteralAlternativeCaseTest {
             bodies++; }
         @CmdMapping(format = "<words...>") public void words(@CmdParam("words") String[] words) {
             route = "words:" + String.join(" ", words);
+            greedyBodies++;
             bodies++;
         }
         @Override protected void handleHelp(CommandSender sender) { route = "help";
