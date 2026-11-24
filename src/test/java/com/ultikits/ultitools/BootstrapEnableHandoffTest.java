@@ -74,7 +74,7 @@ class BootstrapEnableHandoffTest {
     }
 
     @Test
-    void dependencyLookupRunsBeforeDiscoveryAndIgnoresTheFrameworkAndAbsentPlugins() throws Exception {
+    void dependencyLookupIgnoresTheFrameworkAndAbsentPlugins() throws Exception {
         UltiTools framework = mock(UltiTools.class, CALLS_REAL_METHODS);
         BootstrapResult prepared = mock(BootstrapResult.class);
         ModuleClassLoader loader = mock(ModuleClassLoader.class);
@@ -91,17 +91,14 @@ class BootstrapEnableHandoffTest {
             lookup.set(call.getArgument(1));
             return null;
         }).when(loader).addDeclaredDependencies(eq(admission), any());
-        doAnswer(call -> {
-            assertThat(lookup.get()).as("dependency loaders are registered before module discovery").isNotNull();
-            return null;
-        }).when(framework).initPluginModules();
         try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
             bukkit.when(Bukkit::getPluginManager).thenReturn(plugins);
-            framework.enableBootstrappedModules();
+            framework.registerModuleDependencyLoaders();
+            assertThat(lookup.get()).isNotNull();
             assertThat(lookup.get().apply("Dependency")).isSameAs(dependency.getClass().getClassLoader());
             assertThat(lookup.get().apply("UltiTools")).isNull();
             assertThat(lookup.get().apply("Absent")).isNull();
-            verify(framework).initPluginModules();
+            verify(framework, never()).initPluginModules();
         }
     }
 

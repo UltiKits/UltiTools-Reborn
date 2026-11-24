@@ -397,7 +397,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         initPanelResponderRegistry();
         // Plan 22-21 (S-60): the player-link API exists before the modules that set its handler load.
         cloudFeatures = CloudFeatures.start(this);
-        enableBootstrappedModules();
+        registerModuleDependencyLoaders();
+        initPluginModules();
         migrateCapabilitiesConfig();
         initWebSocketManagers();
         startMetrics(this, 8652, getLogger());
@@ -555,13 +556,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         panelResponderRegistry = new PanelResponderRegistry();
     }
 
-    // Kept together so dependency visibility is installed before any module is discovered.
-    void enableBootstrappedModules() {
-        registerModuleDependencyLoaders();
-        initPluginModules();
-    }
-
-    private void registerModuleDependencyLoaders() {
+    // Package-private seam for dependency lookup; onEnable keeps the startup steps explicit.
+    void registerModuleDependencyLoaders() {
         bootstrap.classLoader().addDeclaredDependencies(moduleJarAdmission, name -> {
             Plugin dependency = Bukkit.getPluginManager().getPlugin(name);
             return dependency == null || dependency.equals(this) ? null : dependency.getClass().getClassLoader();
