@@ -2,6 +2,7 @@ package com.ultikits.ultitools.ui;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.clearInvocations;
@@ -25,6 +26,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
@@ -61,6 +63,53 @@ class ChestBackendRenderTest extends ChestTestFixture {
             verify(inventory).setItem(eq(0), any(ItemStack.class));
             verify(inventory).setItem(eq(1), any(ItemStack.class));
             assertThat(inventory.isEmpty()).isTrue();
+        }
+    }
+
+    @Test void replacingOnlyTheActionDoesNotRewriteSlotsOrTouchTheCursorAndOpenView() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class, CALLS_REAL_METHODS)) {
+            bukkit.when(() -> Bukkit.createInventory(any(InventoryHolder.class), eq(9), any(Component.class)))
+                    .thenAnswer(call -> spy(server.createInventory(call.getArgument(0), 9, (Component) call.getArgument(2))));
+            SlotContainer box = container(1, List.of(stack(Material.STONE, 8)));
+            AtomicInteger firstClicks = new AtomicInteger();
+            AtomicInteger nextClicks = new AtomicInteger();
+            Grid first = Grid.builder(Text.plain("Actions"), 1)
+                    .set(0, 0, ItemSpec.builder(Material.DIAMOND).build(), event -> firstClicks.incrementAndGet())
+                    .bind(GridSlot.ofIndex(1), box, 0, BindingMode.EDITABLE).build();
+            Grid next = Grid.builder(first.title(), 1)
+                    .set(0, 0, ItemSpec.builder(Material.DIAMOND).build(), event -> nextClicks.incrementAndGet())
+                    .bind(GridSlot.ofIndex(1), box, 0, BindingMode.EDITABLE).build();
+            GridSlot icon = GridSlot.ofIndex(0);
+            assertThat(first.items().get(icon).icon()).isEqualTo(next.items().get(icon).icon());
+            assertThat(first.items().get(icon)).isNotEqualTo(next.items().get(icon));
+            GridSession session = open(first);
+            Inventory inventory = top();
+            InventoryView view = player.getOpenInventory();
+            player.setItemOnCursor(stack(Material.DIRT, 3));
+            player.getInventory().setItem(0, stack(Material.STONE, 4));
+            ItemStack[] storage = player.getInventory().getStorageContents();
+            clearInvocations(inventory);
+
+            session.update(next);
+            tick();
+            tick();
+
+            verify(inventory, never()).setItem(anyInt(), any(ItemStack.class));
+            verify(inventory, never()).setContents(any(ItemStack[].class));
+            bukkit.verify(() -> Bukkit.createInventory(any(InventoryHolder.class), eq(9), any(Component.class)), times(1));
+            assertThat(player.getOpenInventory()).isSameAs(view);
+            assertThat(top()).isSameAs(inventory);
+            assertThat(player.getItemOnCursor()).isEqualTo(stack(Material.DIRT, 3));
+            assertThat(player.getInventory().getStorageContents()).containsExactly(storage);
+            assertThat(inventory.getItem(0)).isEqualTo(stack(Material.DIAMOND, 1));
+            assertThat(inventory.getItem(1)).isEqualTo(stack(Material.STONE, 8));
+            assertThat(session.current()).isSameAs(next);
+            assertThat(session.current().items().get(icon).action()).isEqualTo(next.items().get(icon).action());
+            assertThat(session.result().toCompletableFuture()).isNotDone();
+            assertThat(session.isOpen()).isTrue();
+            assertThat(player.syncScopes).isEmpty();
+            assertThat(firstClicks).hasValue(0);
+            assertThat(nextClicks).hasValue(0);
         }
     }
 
