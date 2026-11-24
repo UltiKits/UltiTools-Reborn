@@ -87,7 +87,10 @@ public class PermissionValidator implements CommandValidator {
             );
         }
         
-        // Check method-level permission
+        return validateMethodPermission(context, method);
+    }
+
+    private static ValidationResult validateMethodPermission(CommandContext context, Method method) {
         if (method != null && method.isAnnotationPresent(CmdMapping.class)) {
             CmdMapping mapping = method.getAnnotation(CmdMapping.class);
             String methodPermission = mapping.permission();

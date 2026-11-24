@@ -7,8 +7,8 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import com.mojang.brigadier.CommandDispatcher;
-import com.mojang.brigadier.LiteralMessage;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
@@ -87,8 +87,7 @@ class FrameworkRepliesMessagesTest {
     }
 
     private static CommandDispatcher<CommandSourceStack> repliesWithParserError() throws TypeParseException {
-        TypeParser<Value> parser = mock(TypeParser.class);
-        when(parser.parse("bad")).thenThrow(TypeParseException.invalidFormat("bad", Value.class));
+        TypeParser<Value> parser = new ValueParser();
         var tree = LiteralArgumentBuilder.<CommandSourceStack>literal("probe")
                 .then(LiteralArgumentBuilder.<CommandSourceStack>literal("invoke").executes(context -> {
                     throw new TypeParserArgumentType.ParserFailure("literal <red>").create();
@@ -102,6 +101,21 @@ class FrameworkRepliesMessagesTest {
     }
 
     static class Value { }
+
+    private static final class ValueParser implements TypeParser<Value> {
+        @Override
+        public Class<Value> getPrimaryType() {
+            return Value.class;
+        }
+        @Override
+        public List<Class<?>> getSupportedTypes() {
+            return List.of(Value.class);
+        }
+        @Override
+        public Value parse(String value) throws TypeParseException {
+            throw TypeParseException.invalidFormat(value, Value.class);
+        }
+    }
 
     static class Fixture extends BaseCommandExecutor {
         int helpCalls;

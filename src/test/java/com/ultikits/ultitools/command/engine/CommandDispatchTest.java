@@ -4,7 +4,6 @@ import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;

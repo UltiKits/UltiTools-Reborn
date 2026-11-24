@@ -1,9 +1,7 @@
 package com.ultikits.ultitools.abstracts.command;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -25,12 +23,9 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
-import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
-import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mockito;
 
 @ExtendWith(CommandTestExtension.class)
 class CommandFeedbackSendingTest {
@@ -50,12 +45,9 @@ class CommandFeedbackSendingTest {
     @Test
     void throwingBodySendsTheUnwrappedReasonAsALiteralArgument() {
         var sender = mock(CommandSender.class);
-        try (var bukkit = mockStatic(Bukkit.class)) {
-            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
-            assertThat(CommandTestSupport.dispatch(new Fixture(), sender, null, "probe", new String[] {"throwing"})).isTrue();
-            verify(CommandRuntime.messages()).send(sender, Text.of(CommandKeys.EXECUTION_FAILED,
-                    Arg.string("error", "reason <red>")));
-        }
+        assertThat(CommandTestSupport.dispatch(new Fixture(), sender, null, "probe", new String[] {"throwing"})).isTrue();
+        verify(CommandRuntime.messages()).send(sender, Text.of(CommandKeys.EXECUTION_FAILED,
+                Arg.string("error", "reason <red>")));
     }
 
     @Test
@@ -64,8 +56,7 @@ class CommandFeedbackSendingTest {
         Logger logger = Logger.getAnonymousLogger();
         var messages = spy(new InMemoryMessages("ultitools", new ConfiguredLocaleResolver(() -> "auto", () -> "en", logger)));
         messages.put(MessageKey.of("probe", "busy"), Locale.ENGLISH, "<blue>Working");
-        try (var runtime = CommandRuntime.override(messages, CommandRuntime.scheduler()); var bukkit = mockStatic(Bukkit.class)) {
-            bukkit.when(Bukkit::getScheduler).thenReturn(mock(BukkitScheduler.class));
+        try (var runtime = CommandRuntime.override(messages, CommandRuntime.scheduler())) {
             var executor = new Fixture();
             assertThat(CommandTestSupport.dispatch(executor, sender, null, "probe", new String[] {"processing"})).isTrue();
             assertThat(CommandTestSupport.dispatch(executor, sender, null, "probe", new String[] {"custom"})).isTrue();
@@ -87,8 +78,7 @@ class CommandFeedbackSendingTest {
         };
         logger.addHandler(handler);
         var sender = mock(CommandSender.class);
-        try (var bukkit = mockStatic(Bukkit.class)) {
-            bukkit.when(Bukkit::getScheduler).thenReturn(mock(BukkitScheduler.class));
+        try {
             var executor = new Fixture();
             assertThat(CommandTestSupport.dispatch(executor, sender, null, "probe", new String[] {"invalid"})).isTrue();
             assertThat(CommandTestSupport.dispatch(executor, sender, null, "probe", new String[] {"invalid"})).isTrue();
@@ -107,14 +97,19 @@ class CommandFeedbackSendingTest {
         int bodies;
         Fixture() { super(ValidatorChain.builder().build()); }
         Fixture(ValidatorChain chain) { super(chain); }
-        @CmdMapping(format = "body") public void body() { bodies++; }
-        @CmdMapping(format = "throwing") public void throwing() { throw new IllegalStateException("reason <red>"); }
+        @CmdMapping(format = "body")
+        public void body() { bodies++; }
+        @CmdMapping(format = "throwing")
+        public void throwing() { throw new IllegalStateException("reason <red>"); }
         @AsyncCommand(timeout = 0)
-        @CmdMapping(format = "processing") public void processing() { bodies++; }
+        @CmdMapping(format = "processing")
+        public void processing() { bodies++; }
         @AsyncCommand(timeout = 0, processingMessageKey = "probe:busy")
-        @CmdMapping(format = "custom") public void custom() { bodies++; }
+        @CmdMapping(format = "custom")
+        public void custom() { bodies++; }
         @AsyncCommand(timeout = 0, processingMessageKey = "not namespaced")
-        @CmdMapping(format = "invalid") public void invalid() { bodies++; }
+        @CmdMapping(format = "invalid")
+        public void invalid() { bodies++; }
         @Override protected void handleHelp(CommandSender sender) { /* Not exercised. */ }
     }
 }
