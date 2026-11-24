@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -36,6 +38,7 @@ import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
+@ExtendWith(CommandTestExtension.class)
 class CommandCompilationIsolationTest {
     @BeforeEach void setUp() {
         MockBukkitHelper.ensureCleanState();

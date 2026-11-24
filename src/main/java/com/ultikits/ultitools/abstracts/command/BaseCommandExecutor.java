@@ -20,7 +20,6 @@ import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.scheduler.BukkitRunnable;
 
@@ -44,8 +43,11 @@ import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
-import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.ReflectionUtil;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.MessageKey;
+import java.util.concurrent.ConcurrentHashMap;
 
 import lombok.Getter;
 
@@ -78,6 +80,7 @@ import lombok.Getter;
 public abstract class BaseCommandExecutor {
     
     private final BiMap<String, Method> mappings = HashBiMap.create();
+    private final Set<String> invalidProcessingKeys = ConcurrentHashMap.newKeySet();
     
     @Getter
     private final ValidatorChain validatorChain;
@@ -358,7 +361,7 @@ public abstract class BaseCommandExecutor {
         joinDispatchedExecutors();
         ValidatorChain.ChainValidationResult validationResult = validatorChain.validate(context);
         if (!validationResult.isValid()) {
-            if (validationResult.getErrorMessage() != null) context.getSender().sendMessage(validationResult.getErrorMessage());
+            sendValidationFailure(context.getSender(), validationResult.getErrorText(), validationResult.getErrorMessage());
             notifyRefused(context, validationResult);
             return true;
         }
@@ -637,9 +640,7 @@ public abstract class BaseCommandExecutor {
             }
             CommandValidator.ValidationResult result = validator.validate(context);
             if (!result.isValid()) {
-                if (result.getErrorMessage() != null) {
-                    context.getSender().sendMessage(result.getErrorMessage());
-                }
+                sendValidationFailure(context.getSender(), result.getErrorText(), result.getErrorMessage());
                 return true;
             }
         }
@@ -657,7 +658,8 @@ public abstract class BaseCommandExecutor {
     private void reportCommandExecutionError(CommandContext context, Method method, Exception e,
                                               TriggerContext triggerCtx) {
         Throwable cause = e.getCause() != null ? e.getCause() : e;
-        context.getSender().sendMessage(ChatColor.RED + FrameworkText.format("命令执行出错: %s", describe(cause)));
+        CommandRuntime.messages().send(context.getSender(), Text.of(CommandKeys.EXECUTION_FAILED,
+                Arg.string("error", describe(cause))));
         Logger.getLogger(BaseCommandExecutor.class.getName())
                 .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
         // Report to error collector
@@ -668,6 +670,30 @@ public abstract class BaseCommandExecutor {
             }
         } catch (Exception ignored) {
             // Never re-enter logging from error reporting
+        }
+    }
+
+    static void sendValidationFailure(CommandSender sender, @Nullable Text text, @Nullable String legacyMessage) {
+        if (text != null) {
+            CommandRuntime.messages().send(sender, text);
+        } else if (legacyMessage != null) {
+            sender.sendMessage(legacyMessage);
+        }
+    }
+
+    private Text processingText(String key) {
+        if (key.isEmpty()) {
+            return Text.of(CommandKeys.PROCESSING);
+        }
+        try {
+            return Text.of(MessageKey.parse(key));
+        } catch (IllegalArgumentException invalid) {
+            if (invalidProcessingKeys.add(key)) {
+                Logger.getLogger(BaseCommandExecutor.class.getName()).log(Level.WARNING,
+                        "Invalid processingMessageKey on {0}: {1}; using the default processing message",
+                        new Object[] {getClass().getName(), key});
+            }
+            return Text.of(CommandKeys.PROCESSING);
         }
     }
 
@@ -716,11 +742,7 @@ public abstract class BaseCommandExecutor {
         dispatchScheduled(context, ranValidators, () -> {
             // Show processing message if enabled
             if (asyncCommand != null && asyncCommand.showProcessing()) {
-                String processingKey = asyncCommand.processingMessageKey();
-                String processingMsg = processingKey.isEmpty()
-                        ? FrameworkText.text("处理中...")
-                        : UltiTools.getInstance().i18n(processingKey);
-                context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
+                CommandRuntime.messages().send(context.getSender(), processingText(asyncCommand.processingMessageKey()));
             }
 
             // WIRE-12/D-13: schedule the command body asynchronously EXACTLY ONCE. A timeout
@@ -757,8 +779,7 @@ public abstract class BaseCommandExecutor {
                     // thread; hop back through it to send the message, same mechanism
                     // CommandExecutionManager already uses for this purpose.
                     Bukkit.getScheduler().runTask(UltiTools.getInstance(), () ->
-                            context.getSender().sendMessage(ChatColor.RED + UltiTools.getInstance()
-                                    .i18n("命令执行超时，已停止等待，命令仍在后台继续执行")));
+                            CommandRuntime.messages().send(context.getSender(), Text.of(CommandKeys.TIMEOUT)));
                 }
             }
         };

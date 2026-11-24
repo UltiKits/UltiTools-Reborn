@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -54,6 +55,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
  * {@code onCommand} returned" is observable directly.
  */
 @DisplayName("Command bodies run at dispatch on the primary thread (#541)")
+@ExtendWith(CommandTestExtension.class)
 class InlineCommandDispatchTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;

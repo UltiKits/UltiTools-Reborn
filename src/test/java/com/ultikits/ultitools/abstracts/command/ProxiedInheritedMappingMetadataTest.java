@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import com.ultikits.ultitools.text.Text;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.command.engine.CommandTestSupport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -59,6 +61,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * cannot declare static nested classes.
  */
 @DisplayName("A proxied inherited mapping keeps its base class's class-level metadata (case 36)")
+@ExtendWith(CommandTestExtension.class)
 class ProxiedInheritedMappingMetadataTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;
@@ -276,7 +279,7 @@ class ProxiedInheritedMappingMetadataTest {
             executor.invokeTyped(CommandContext.builder().sender(console).commandName("inherited").alias("inherited")
                     .rawArgs(new String[]{"p"}).executorClass(executor.getClass()).executor(executor).build()
                     .withMatchedMethod(executor.getMappings().get("p"), "p").withParsedParams(Map.of()));
-            verify(console).sendMessage("只有游戏内可以执行这个指令！");
+            verify(CommandRuntime.messages()).send(console, Text.of(CommandKeys.PLAYER_ONLY));
             assertEquals(0, executor.bodies.get(), "a console must not run the inherited PLAYER mapping");
 
             CommandTestSupport.dispatch(executor, player(), command, "inherited", new String[]{"p"});

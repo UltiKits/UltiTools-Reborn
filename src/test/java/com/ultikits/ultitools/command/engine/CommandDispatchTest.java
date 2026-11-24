@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -27,6 +29,7 @@ import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 
+@ExtendWith(CommandTestExtension.class)
 class CommandDispatchTest {
     @Test void passesTypedValuesAndTheActualSenderThroughTheDispatcher() throws Exception {
         try (var bukkit = mockStatic(Bukkit.class)) {

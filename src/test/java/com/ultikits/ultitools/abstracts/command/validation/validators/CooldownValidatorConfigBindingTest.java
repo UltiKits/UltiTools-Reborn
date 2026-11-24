@@ -1,5 +1,11 @@
 package com.ultikits.ultitools.abstracts.command.validation.validators;
 
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.any;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,6 +58,7 @@ import com.ultikits.ultitools.testutil.BindingTimingConfig;
  * {@code value()} read.
  */
 @DisplayName("CooldownValidator config-bound @CmdCD (#531)")
+@ExtendWith(CommandTestExtension.class)
 class CooldownValidatorConfigBindingTest {
 
     private MockedStatic<UltiTools> mockedUltiTools;
@@ -182,7 +189,7 @@ class CooldownValidatorConfigBindingTest {
             CommandValidator.ValidationResult result = assertDoesNotThrow(() -> validator.validate(contextFor(method)));
 
             assertFalse(result.isValid(), "an unresolved binding must fail closed, not mean no cooldown");
-            assertTrue(result.getErrorMessage() != null && !result.getErrorMessage().isEmpty());
+            assertTrue(result.getErrorText() != null);
             assertTrue(records.stream().anyMatch(r -> Level.SEVERE.equals(r.getLevel())
                     && r.getMessage().contains("cooldown.wild")), String.valueOf(records));
         } finally {
@@ -219,7 +226,7 @@ class CooldownValidatorConfigBindingTest {
 
         assertTrue(handled);
         assertEquals(0, executor.runs, "the mapped method must not run");
-        verify(player, atLeastOnce()).sendMessage(anyString());
+        verify(player, atLeastOnce()).sendMessage(any(Component.class));
     }
 
     /**
@@ -250,7 +257,7 @@ class CooldownValidatorConfigBindingTest {
 
         assertTrue(handled);
         assertEquals(0, executor.runs, "the running cooldown refuses the command");
-        verify(player).sendMessage(org.mockito.ArgumentMatchers.contains("操作频繁"));
+        verify(player).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("操作频繁")));
     }
 
     @Test

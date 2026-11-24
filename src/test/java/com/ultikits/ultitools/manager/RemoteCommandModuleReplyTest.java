@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -46,6 +48,7 @@ import net.kyori.adventure.text.Component;
  */
 @DisplayName("The panel's remote command runs a module command's body inside the dispatch (#541)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class RemoteCommandModuleReplyTest {
 
     private ServerMock server;

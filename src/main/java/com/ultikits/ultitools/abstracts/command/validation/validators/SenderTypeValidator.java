@@ -1,7 +1,8 @@
 package com.ultikits.ultitools.abstracts.command.validation.validators;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
@@ -47,14 +48,14 @@ public class SenderTypeValidator implements CommandValidator {
         
         if (effectiveType == CmdTarget.CmdTargetType.PLAYER && !context.isPlayer()) {
             return ValidationResult.failure(
-                    UltiTools.getInstance().i18n("只有游戏内可以执行这个指令！"),
+                    Text.of(CommandKeys.PLAYER_ONLY),
                     "command.error.player_only"
             );
         }
         
         if (effectiveType == CmdTarget.CmdTargetType.CONSOLE && context.isPlayer()) {
             return ValidationResult.failure(
-                    UltiTools.getInstance().i18n("只可以在后台执行这个指令！"),
+                    Text.of(CommandKeys.CONSOLE_ONLY),
                     "command.error.console_only"
             );
         }

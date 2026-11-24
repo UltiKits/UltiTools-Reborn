@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -80,6 +82,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
  */
 @DisplayName("Config-bound @Scheduled/@CmdCD validation and reload (#531)")
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // publishes/clears the UltiTools singleton and reaches private assembly
+@ExtendWith(CommandTestExtension.class)
 class ConfigBindingValidationTest {
 
     private ConfigManager configManager;

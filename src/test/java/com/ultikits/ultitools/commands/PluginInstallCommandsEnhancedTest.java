@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.commands;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -47,6 +49,7 @@ import net.kyori.adventure.text.event.ClickEvent;
 
 @DisplayName("PluginInstallCommands Enhanced Coverage Tests")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class PluginInstallCommandsEnhancedTest {
 
     private ServerMock server;

@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import static org.mockito.ArgumentMatchers.argThat;
+import net.kyori.adventure.text.Component;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -9,7 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -41,7 +43,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -65,6 +66,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("BaseCommandExecutor Tests")
+@ExtendWith(CommandTestExtension.class)
 class BaseCommandExecutorTest {
 
     @Mock
@@ -260,7 +262,7 @@ class BaseCommandExecutorTest {
             
             assertTrue(result);
             assertTrue(executor.helpCalled);
-            verify(mockPlayer).sendMessage(contains("未知指令"));
+            verify(mockPlayer).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("未知指令")));
         }
         
 
@@ -885,7 +887,7 @@ class BaseCommandExecutorTest {
             // Match on the timeout-specific message content rather than "any string" -- the
             // default @AsyncCommand also sends a "processing" message before dispatch, which is
             // expected and orthogonal to the timeout report being asserted here.
-            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
+            verify(mockPlayer, times(1)).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("命令执行超时")));
 
             // Release the body and confirm it is NOT interrupted and runs to completion.
             executor.bodyContinue.countDown();
@@ -898,7 +900,7 @@ class BaseCommandExecutorTest {
 
             // Test 5 (first half): completing after the timeout must not produce a SECOND
             // timeout report.
-            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
+            verify(mockPlayer, times(1)).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("命令执行超时")));
         }
 
         @Test
@@ -926,7 +928,7 @@ class BaseCommandExecutorTest {
             assertEquals(1, executor.fastInvocations.get());
             // The default @AsyncCommand still sends its "processing" message; only the
             // TIMEOUT-specific report must be absent.
-            verify(mockPlayer, never()).sendMessage(contains("命令执行超时"));
+            verify(mockPlayer, never()).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("命令执行超时")));
         }
 
         @Test
@@ -959,7 +961,7 @@ class BaseCommandExecutorTest {
                 delayedDispatches.get(0).run();
             }
 
-            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
+            verify(mockPlayer, times(1)).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("命令执行超时")));
 
             executor.bodyContinue.countDown();
             bodyThread.join(5000);
@@ -971,7 +973,7 @@ class BaseCommandExecutorTest {
             // "command execution failed" handler (unrelated to this task) may additionally
             // message the sender for the thrown exception itself, so this asserts no SECOND
             // timeout-shaped report rather than a total message count.
-            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
+            verify(mockPlayer, times(1)).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("命令执行超时")));
         }
 
         @Test

@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -41,6 +42,7 @@ import com.ultikits.ultitools.annotations.command.UsageLimit;
  * command".
  */
 @DisplayName("A refused dispatch releases the @UsageLimit lock it acquired (#568)")
+@ExtendWith(CommandTestExtension.class)
 class UsageLockReleaseOnRefusalTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;

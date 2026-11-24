@@ -27,6 +27,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 
@@ -189,7 +191,7 @@ class SenderTypeValidatorTest {
             CommandValidator.ValidationResult result = validator.validate(context);
             assertFalse(result.isValid());
             assertEquals("command.error.player_only", result.getErrorKey());
-            assertTrue(result.getErrorMessage().contains("游戏内"));
+            assertEquals(Text.of(CommandKeys.PLAYER_ONLY), result.getErrorText());
         }
     }
 
@@ -218,7 +220,7 @@ class SenderTypeValidatorTest {
             CommandValidator.ValidationResult result = validator.validate(context);
             assertFalse(result.isValid());
             assertEquals("command.error.console_only", result.getErrorKey());
-            assertTrue(result.getErrorMessage().contains("后台"));
+            assertEquals(Text.of(CommandKeys.CONSOLE_ONLY), result.getErrorText());
         }
     }
 
@@ -467,8 +469,8 @@ class SenderTypeValidatorTest {
 
             CommandValidator.ValidationResult result = validator.validate(context);
             assertFalse(result.isValid());
-            assertNotNull(result.getErrorMessage());
-            assertTrue(result.getErrorMessage().length() > 0);
+            assertNotNull(result.getErrorText());
+            assertTrue(result.getErrorText() instanceof Text.Translated);
         }
 
         @Test
@@ -480,8 +482,8 @@ class SenderTypeValidatorTest {
 
             CommandValidator.ValidationResult result = validator.validate(context);
             assertFalse(result.isValid());
-            assertNotNull(result.getErrorMessage());
-            assertTrue(result.getErrorMessage().length() > 0);
+            assertNotNull(result.getErrorText());
+            assertTrue(result.getErrorText() instanceof Text.Translated);
         }
     }
 }

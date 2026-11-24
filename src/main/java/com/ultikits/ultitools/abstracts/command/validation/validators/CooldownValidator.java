@@ -4,6 +4,9 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.PlayerCache;
@@ -12,9 +15,7 @@ import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
-import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.ReflectionUtil;
-import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -141,10 +142,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             if (endTime != null && System.currentTimeMillis() < endTime) {
                 long remainingSeconds = TimeUnit.MILLISECONDS.toSeconds(endTime - System.currentTimeMillis()) + 1;
                 return ValidationResult.failure(
-                        ChatColor.RED + String.format(
-                                UltiTools.getInstance().i18n("操作频繁，请 %d 秒后再试"),
-                                remainingSeconds
-                        ),
+                        Text.of(CommandKeys.COOLDOWN, Arg.number("seconds", remainingSeconds)),
                         "command.error.cooldown"
                 );
             }
@@ -510,7 +508,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
                 + "loads, so a validator added later cannot enforce one");
         LOGGER.log(Level.SEVERE, cause.getMessage(), cause);
         reportUnresolvedBinding(context, cause);
-        return ValidationResult.failure(ChatColor.RED + FrameworkText.format("命令执行出错: %s", cause.getMessage()),
+        return ValidationResult.failure(Text.of(CommandKeys.EXECUTION_FAILED, Arg.string("error", cause.getMessage())),
                 "command.error.cooldown-unresolved");
     }
 

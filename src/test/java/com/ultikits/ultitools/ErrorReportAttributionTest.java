@@ -1,5 +1,7 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.command.engine.CommandTestSupport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -40,6 +42,7 @@ import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PluginManager;
 
 /** Real JAR provenance, including one loader and overlapping packages (#887). */
+@ExtendWith(CommandTestExtension.class)
 public class ErrorReportAttributionTest {
     private static final String PACKAGE = "org.example.errorfixture.shared";
 

@@ -2,159 +2,164 @@ package com.ultikits.ultitools.abstracts.command;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import java.io.File;
-import java.util.List;
-
-import org.bukkit.Bukkit;
-import org.bukkit.command.Command;
-import org.bukkit.command.CommandSender;
-import org.bukkit.command.ConsoleCommandSender;
-import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.mockito.MockedStatic;
-
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.command.AsyncCommand;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
-import com.ultikits.ultitools.annotations.command.CmdTarget;
-import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.Text;
+import java.util.List;
+import java.util.Locale;
+import java.util.stream.Stream;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import org.bukkit.Bukkit;
+import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitScheduler;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
 
-/**
- * #556: the reply every sender gets when a command body throws, and the default processing notice of
- * an async command, follow the server's {@code language}. Before the fix both were Chinese literals
- * that never went through the catalogue, so an English server answered in Chinese.
- * <p>
- * The {@code UltiTools} mock resolves {@code i18n} against the real {@code lang/*.json} shipped in
- * the jar, exactly as the running framework does.
- */
-@DisplayName("Command failure reply and processing notice follow the language (#556)")
+/** The existing failure/processing language regression, now exercised against the real text engine. */
 class CommandReplyLanguageTest {
-
-    private MockedStatic<UltiTools> ultiToolsMock;
-    private MockedStatic<Bukkit> bukkitMock;
-    private Command command;
-
-    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
-    @CmdExecutor(alias = {"replylang"})
-    static class ThrowingExecutor extends BaseCommandExecutor {
-        @Override
-        protected void handleHelp(CommandSender sender) {
-            // Not exercised.
-        }
-
-        @CmdMapping(format = "boom")
-        public void boom(CommandSender sender) {
-            throw new IllegalStateException("the real reason");
-        }
-
-        @AsyncCommand(showProcessing = true, timeout = 0)
-        @CmdMapping(format = "slow")
-        public void slow(CommandSender sender) {
-            // The body never runs here: the scheduler below captures tasks and runs none of them.
-        }
-    }
+    private CommandMessageTestSupport services;
+    private AutoCloseable runtime;
+    private MockedStatic<Bukkit> bukkit;
 
     private void useLanguage(String code) {
-        Language language = new Language(new File("src/main/resources/lang/" + code + ".json"));
-        UltiTools ultiTools = mock(UltiTools.class);
-        lenient().when(ultiTools.i18n(anyString()))
-                .thenAnswer(inv -> language.getLocalizedText(inv.getArgument(0)));
-        ultiToolsMock = mockStatic(UltiTools.class);
-        ultiToolsMock.when(UltiTools::getInstance).thenReturn(ultiTools);
-
-        BukkitScheduler scheduler = mock(BukkitScheduler.class);
-        lenient().when(scheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class))).thenReturn(null);
-        bukkitMock = mockStatic(Bukkit.class);
-        bukkitMock.when(Bukkit::getScheduler).thenReturn(scheduler);
-        bukkitMock.when(Bukkit::isPrimaryThread).thenReturn(true);
-        command = mock(Command.class);
-        lenient().when(command.getName()).thenReturn("replylang");
-    }
-
-    @BeforeEach
-    void noStaticsYet() {
-        ultiToolsMock = null;
-        bukkitMock = null;
+        services = new CommandMessageTestSupport(code);
+        Scheduler scheduler = mock(Scheduler.class);
+        TaskContext global = mock(TaskContext.class);
+        TaskContext async = mock(TaskContext.class);
+        when(scheduler.global()).thenReturn(global);
+        when(scheduler.async()).thenReturn(async);
+        when(global.isCurrentThread()).thenReturn(true);
+        runtime = CommandRuntime.override(services.messages(), scheduler);
+        BukkitScheduler legacyScheduler = mock(BukkitScheduler.class);
+        when(legacyScheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class))).thenReturn(null);
+        bukkit = mockStatic(Bukkit.class);
+        bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+        bukkit.when(Bukkit::getScheduler).thenReturn(legacyScheduler);
     }
 
     @AfterEach
-    void tearDown() {
-        if (bukkitMock != null) {
-            bukkitMock.close();
-        }
-        if (ultiToolsMock != null) {
-            ultiToolsMock.close();
+    void tearDown() throws Exception {
+        if (runtime != null) {
+            runtime.close();
+            services.close();
+            bukkit.close();
         }
     }
 
-    private List<String> messagesTo(CommandSender sender) {
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+    private static List<Component> componentsTo(CommandSender sender) {
+        var captor = ArgumentCaptor.forClass(Component.class);
         verify(sender, atLeastOnce()).sendMessage(captor.capture());
         return captor.getAllValues();
     }
 
-    private static boolean hasCjk(String text) {
-        return text.codePoints().anyMatch(cp -> Character.UnicodeScript.HAN.equals(Character.UnicodeScript.of(cp)));
+    private static List<String> messagesTo(CommandSender sender) {
+        return componentsTo(sender).stream().map(CommandMessageTestSupport::plain).toList();
     }
 
     @Test
-    @DisplayName("language: en -- a throwing command body is answered in English, carrying the real reason")
     void englishFailureReply() {
         useLanguage("en");
-        ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
-
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new ThrowingExecutor(),sender, command, "replylang", new String[]{"boom"});
-
-        List<String> messages = messagesTo(sender);
-        assertThat(messages).anyMatch(m -> m.contains("Command execution failed") && m.contains("the real reason"));
-        assertThat(messages).noneMatch(CommandReplyLanguageTest::hasCjk);
+        var sender = mock(ConsoleCommandSender.class);
+        CommandTestSupport.dispatch(new ThrowingExecutor(), sender, null, "replylang", new String[] {"boom"});
+        assertThat(messagesTo(sender)).containsExactly("Command execution failed: the real reason");
     }
 
     @Test
-    @DisplayName("language: zh -- the reply is the existing Chinese text, unchanged")
     void chineseFailureReply() {
         useLanguage("zh");
-        ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
-
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new ThrowingExecutor(),sender, command, "replylang", new String[]{"boom"});
-
-        assertThat(messagesTo(sender)).anyMatch(m -> m.contains("命令执行出错: the real reason"));
+        var sender = mock(ConsoleCommandSender.class);
+        CommandTestSupport.dispatch(new ThrowingExecutor(), sender, null, "replylang", new String[] {"boom"});
+        assertThat(messagesTo(sender)).containsExactly("命令执行出错: the real reason");
     }
 
     @Test
-    @DisplayName("language: en -- the async processing notice is English")
     void englishProcessingNotice() {
         useLanguage("en");
-        ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
-
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new ThrowingExecutor(),sender, command, "replylang", new String[]{"slow"});
-
-        List<String> messages = messagesTo(sender);
-        assertThat(messages).anyMatch(m -> m.contains("Processing..."));
-        assertThat(messages).noneMatch(CommandReplyLanguageTest::hasCjk);
+        var sender = mock(ConsoleCommandSender.class);
+        CommandTestSupport.dispatch(new ThrowingExecutor(), sender, null, "replylang", new String[] {"slow"});
+        assertThat(messagesTo(sender)).containsExactly("Processing...");
     }
 
     @Test
-    @DisplayName("language: zh -- the async processing notice is the existing Chinese text")
     void chineseProcessingNotice() {
         useLanguage("zh");
-        ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
+        var sender = mock(ConsoleCommandSender.class);
+        CommandTestSupport.dispatch(new ThrowingExecutor(), sender, null, "replylang", new String[] {"slow"});
+        assertThat(messagesTo(sender)).containsExactly("处理中...");
+    }
 
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new ThrowingExecutor(),sender, command, "replylang", new String[]{"slow"});
+    static Stream<Arguments> feedback() {
+        return Stream.of(
+                Arguments.of(Text.of(CommandKeys.COOLDOWN, Arg.number("seconds", 5L)),
+                        "操作频繁，请 5 秒后再试", "Frequent operations, please try again in 5 seconds"),
+                Arguments.of(Text.of(CommandKeys.USAGE, Arg.string("label", "cmdprobe"), Arg.string("format", "count <n>")),
+                        "正确用法: /cmdprobe count <n>", "Correct Usage: /cmdprobe count <n>"),
+                Arguments.of(Text.of(CommandKeys.UNKNOWN, Arg.string("label", "cmdprobe"), Arg.string("help", "help")),
+                        "未知指令，请使用/cmdprobe help获取帮助", "Unknown command, please enter /cmdprobe help for help"),
+                Arguments.of(Text.of(CommandKeys.TIMEOUT), "命令执行超时，已停止等待，命令仍在后台继续执行",
+                        "Command execution timed out; no longer waiting. The command continues running in the background."));
+    }
 
-        assertThat(messagesTo(sender)).anyMatch(m -> m.contains("处理中..."));
+    @ParameterizedTest
+    @MethodSource("feedback")
+    void sameRejectionUsesEachRecipientsLanguage(Text text, String chinese, String english) {
+        useLanguage("en");
+        var zh = mock(Player.class);
+        var en = mock(Player.class);
+        var console = mock(ConsoleCommandSender.class);
+        when(zh.locale()).thenReturn(Locale.SIMPLIFIED_CHINESE);
+        when(en.locale()).thenReturn(Locale.US);
+        services.messages().send(zh, text);
+        services.messages().send(en, text);
+        services.messages().send(console, text);
+        assertThat(messagesTo(zh)).containsExactly(chinese);
+        assertThat(messagesTo(en)).containsExactly(english);
+        assertThat(messagesTo(console)).containsExactly(english);
+    }
+
+    @Test
+    void argumentContentsAreLiteralAndKeepTheOriginalMessageColors() {
+        useLanguage("en");
+        for (String format : List.of("give <target>", "say <words...>")) {
+            var component = services.messages().render(Text.of(CommandKeys.USAGE, Arg.string("label", "probe"),
+                    Arg.string("format", format)), Locale.ENGLISH);
+            assertThat(CommandMessageTestSupport.plain(component)).isEqualTo("Correct Usage: /probe " + format);
+            assertThat(component.color()).isEqualTo(NamedTextColor.YELLOW);
+        }
+        var failure = services.messages().render(Text.of(CommandKeys.EXECUTION_FAILED,
+                Arg.string("error", "literal <red> and <green>")), Locale.ENGLISH);
+        assertThat(CommandMessageTestSupport.plain(failure)).isEqualTo("Command execution failed: literal <red> and <green>");
+        assertThat(failure.color()).isEqualTo(NamedTextColor.RED);
+        assertThat(failure).isEqualTo(Component.text("Command execution failed: literal <red> and <green>", NamedTextColor.RED));
+    }
+
+    @CmdExecutor(alias = "replylang")
+    static class ThrowingExecutor extends BaseCommandExecutor {
+        @Override protected void handleHelp(CommandSender sender) { /* Not exercised. */ }
+        @CmdMapping(format = "boom")
+        public void boom() { throw new IllegalStateException("the real reason"); }
+        @AsyncCommand(showProcessing = true, timeout = 0)
+        @CmdMapping(format = "slow")
+        public void slow() { /* The capturing scheduler leaves this body pending. */ }
     }
 }

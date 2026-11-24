@@ -1,7 +1,12 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -28,6 +33,7 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 
+@ExtendWith(CommandTestExtension.class)
 class CommandEdgeCasesTest {
     @Test void bareRootGreedyMappingRunsWithAnEmptyArrayInsteadOfHelp() throws Exception {
         try (var bukkit = mockStatic(Bukkit.class)) {
@@ -54,10 +60,11 @@ class CommandEdgeCasesTest {
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             CommandSender sender = mock(CommandSender.class);
             List<String> replies = new ArrayList<>();
-            doAnswer(call -> replies.add(call.getArgument(0))).when(sender).sendMessage(anyString());
+            doAnswer(call -> replies.add(CommandMessageTestSupport.plain(call.getArgument(0))))
+                    .when(sender).sendMessage(any(Component.class));
             var dispatcher = CommandTestSupport.dispatcher(new Custom(), "test");
             assertThat(dispatcher.execute("test " + arguments, CommandDispatchTest.source(sender))).isEqualTo(1);
-            assertThat(replies).containsExactly(org.bukkit.ChatColor.RED + "custom failure detail");
+            assertThat(replies).containsExactly("custom failure detail");
         } finally {
             registry.unregister(parser);
         }
@@ -102,11 +109,12 @@ class CommandEdgeCasesTest {
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             var sender = mock(ConsoleCommandSender.class);
             List<String> replies = new ArrayList<>();
-            doAnswer(call -> replies.add(call.getArgument(0))).when(sender).sendMessage(anyString());
+            doAnswer(call -> replies.add(CommandMessageTestSupport.plain(call.getArgument(0))))
+                    .when(sender).sendMessage(any(Component.class));
             var executor = new Guarded(ValidatorChain.builder().build());
             assertThat(CommandTestSupport.dispatcher(executor, "test")
                     .execute("test help extra", CommandDispatchTest.source(sender))).isEqualTo(1);
-            assertThat(replies).containsExactly("usage /test help");
+            assertThat(replies).containsExactly("正确用法: /test help");
         }
     }
 

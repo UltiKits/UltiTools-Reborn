@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doAnswer;
@@ -80,6 +82,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  * report, so {@code /ul reload <module>} and a module's own reload command replied plain success.
  */
 @DisplayName("Refused config-bound values are reported in the reload report (#595)")
+@ExtendWith(CommandTestExtension.class)
 class ConfigBindingReloadReportTest {
 
     private BindingTimingConfig config;

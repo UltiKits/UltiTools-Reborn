@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -85,6 +87,7 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  */
 @DisplayName("Unloading a module whose unload hook throws an undeclared checked exception still releases it")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class PluginManagerUnloadHookCheckedFailureTest {
 
     private static final String FALLBACK_PREFIX = "ultitools";

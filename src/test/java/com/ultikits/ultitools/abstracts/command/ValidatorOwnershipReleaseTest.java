@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -50,6 +51,7 @@ import com.ultikits.ultitools.manager.PluginManager;
  * {@code PluginManager} hands out a fresh, real {@link PlayerCacheManager} per test.
  */
 @DisplayName("Unload releases the validators of the chain an executor actually used (case 48)")
+@ExtendWith(CommandTestExtension.class)
 class ValidatorOwnershipReleaseTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;

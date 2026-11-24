@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -41,6 +42,7 @@ import com.ultikits.ultitools.aop.ProxyFactory;
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 @DisplayName("Literal completion keeps the typed prefix (case 61)")
+@ExtendWith(CommandTestExtension.class)
 class LiteralCompletionPrefixTest {
 
     private Player player;

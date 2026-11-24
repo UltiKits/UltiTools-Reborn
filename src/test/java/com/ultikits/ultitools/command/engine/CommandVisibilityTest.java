@@ -1,7 +1,12 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -23,6 +28,7 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 
+@ExtendWith(CommandTestExtension.class)
 class CommandVisibilityTest {
     @Test void rootPermissionAndOpAreBothRequired() {
         var invocation = new CommandInvocation(new Root());
@@ -48,7 +54,8 @@ class CommandVisibilityTest {
             var dispatcher = dispatcher(executor);
             CommandSender sender = mock(CommandSender.class);
             List<String> replies = new ArrayList<>();
-            doAnswer(call -> replies.add(call.getArgument(0))).when(sender).sendMessage(anyString());
+            doAnswer(call -> replies.add(CommandMessageTestSupport.plain(call.getArgument(0))))
+                    .when(sender).sendMessage(any(Component.class));
             var source = CommandDispatchTest.source(sender);
             var shared = dispatcher.getRoot().getChild("test").getChild("shared");
             assertThat(shared.canUse(source)).isTrue();

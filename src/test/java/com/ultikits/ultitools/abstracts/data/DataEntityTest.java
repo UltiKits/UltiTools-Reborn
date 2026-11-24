@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts.data;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -54,6 +56,7 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * Unit tests for BaseDataEntity and AuditableDataEntity.
  */
 @DisplayName("Data Entity Tests")
+@ExtendWith(CommandTestExtension.class)
 public class DataEntityTest {
 
     @AfterEach

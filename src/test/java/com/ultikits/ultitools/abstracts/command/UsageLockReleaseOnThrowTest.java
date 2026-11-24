@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -45,6 +46,7 @@ import com.ultikits.ultitools.annotations.command.UsageLimit;
  * (the lock release) from running.
  */
 @DisplayName("A dispatch that fails by an exception releases the @UsageLimit lock (#568, gate 1)")
+@ExtendWith(CommandTestExtension.class)
 class UsageLockReleaseOnThrowTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;

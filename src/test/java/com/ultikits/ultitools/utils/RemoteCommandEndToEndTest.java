@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
@@ -60,6 +62,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 @Timeout(30)
+@ExtendWith(CommandTestExtension.class)
 class RemoteCommandEndToEndTest {
     private ServerMock server;
     private FrameworkSchedulerTestSession frameworkScheduler;

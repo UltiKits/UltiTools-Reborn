@@ -31,6 +31,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
@@ -278,7 +281,7 @@ class CooldownValidatorTest {
             // Now validation should fail
             CommandValidator.ValidationResult result = validator.validate(context);
             assertFalse(result.isValid());
-            assertNotNull(result.getErrorMessage());
+            assertNotNull(result.getErrorText());
             assertEquals("command.error.cooldown", result.getErrorKey());
         }
 
@@ -292,8 +295,12 @@ class CooldownValidatorTest {
 
             CommandValidator.ValidationResult result = validator.validate(context);
             assertFalse(result.isValid());
-            // Message format contains %d for remaining seconds
-            assertTrue(result.getErrorMessage().contains("操作频繁"));
+            // Deferred text keeps the numeric countdown until the recipient is known.
+            Text.Translated text = (Text.Translated) result.getErrorText();
+            assertEquals(CommandKeys.COOLDOWN, text.key());
+            assertEquals("seconds", text.args().getFirst().name());
+            long seconds = ((Arg.Numeric) text.args().getFirst()).value().longValue();
+            assertTrue(seconds > 0);
         }
     }
 

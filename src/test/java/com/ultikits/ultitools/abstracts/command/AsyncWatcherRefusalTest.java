@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -48,6 +49,7 @@ import com.ultikits.ultitools.annotations.command.UsageLimit;
  * still holds, and the body's completion would then release it a second time.
  */
 @DisplayName("A refused timeout watcher does not refuse an async body already submitted (#568, Codex run 2)")
+@ExtendWith(CommandTestExtension.class)
 class AsyncWatcherRefusalTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;

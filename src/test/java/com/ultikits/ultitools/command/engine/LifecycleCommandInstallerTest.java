@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import io.papermc.paper.plugin.lifecycle.event.handler.LifecycleEventHandler;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 
+@ExtendWith(CommandTestExtension.class)
 class LifecycleCommandInstallerTest {
     @Test void installationIsIdempotent() {
         CommandTestSupport.PluginLifecycle manager = mock(CommandTestSupport.PluginLifecycle.class);
