@@ -2678,6 +2678,7 @@ public class PluginManager {
      * than once and for a copy that superseded nothing.
      */
     private void restoreSupersededRegistrations(UltiToolsPlugin incoming) {
+        incoming.rollbackMessagePublication();
         runUnregisterStep(incoming, "release the failed copy's tab-completion completers",
                 () -> releaseCompleters(incoming, true));
         runUnregisterStep(incoming, "release the failed copy's EventBus handlers",

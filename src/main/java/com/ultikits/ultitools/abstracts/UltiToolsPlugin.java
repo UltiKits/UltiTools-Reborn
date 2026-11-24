@@ -18,6 +18,11 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.security.CodeSource;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
+import com.ultikits.ultitools.text.internal.LocaleNames;
+import com.ultikits.ultitools.text.internal.TextEngine;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -222,6 +227,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private static final Type ARITY_MAP_TYPE = new TypeToken<Map<String, String>>() { }.getType();
 
     private Language language;
+    private TextEngine textEngine;
+    private TextEngine.Prepared preparedMessages;
     /** The language catalogues the module's jar ships, read once on first use (see {@link #shippedCatalogueTexts}). */
     private volatile List<Language> shippedCatalogues;
     /**
@@ -299,6 +306,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         identifyString = pluginConfig.getString("identify-string", null);
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
+        if (UltiTools.getInstance().getDependenceManagers() != null) {
+            textEngine = UltiTools.getInstance().getDependenceManagers().getContext().getBean(TextEngine.class);
+            if (textEngine != null) {
+                CodeSource source = getClass().getProtectionDomain().getCodeSource();
+                preparedMessages = textEngine.prepare(MessageKey.namespaceFor(pluginName), pluginName,
+                        source == null ? null : source.getLocation(),
+                        new File(resourceFolderPath, "messages").toPath(), pluginConfig.getString("source-language"));
+            }
+        }
         prepareConfigConverters();
         // #540: extract the bundled resources first, then resolve the language. Resolving first
         // picked whatever catalogue was on disk before extraction -- a stale lang/<code>.yml when
@@ -362,6 +378,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         saveResources(true);
         migrateBundledLanguageFiles();
         language = createLanguageFromPath(resourceFolderPath);
+        if (textEngine != null && preparedMessages != null) {
+            textEngine.publish(preparedMessages, this);
+        }
+    }
+
+    /** Restores the prior message catalogue when an accepted candidate subsequently fails to load. */
+    @ApiStatus.Internal
+    public final void rollbackMessagePublication() {
+        if (textEngine != null && preparedMessages != null) {
+            textEngine.rollback(preparedMessages.loaded().catalogue().namespace(), this);
+        }
     }
 
     /**
@@ -1999,6 +2026,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @ApiStatus.Internal
     public void setContext(SimpleContainer context) {
         this.context = context;
+        if (textEngine != null) {
+            context.registerSingleton(Messages.class.getName(),
+                    textEngine.messagesFor(MessageKey.namespaceFor(pluginName)));
+        }
     }
 
     /**
@@ -2392,13 +2423,27 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * with it: an official code such as {@code zh}, or the name of an operator's custom language
      * file such as {@code zh-myserver}. Messages come from {@code lang/<name>.*} in this module's
      * folder when that file exists, and from the official language {@link #getLanguageCode()}
-     * returns for every key the file lacks.
+     * returns for every key the file lacks. When the setting is {@code auto}, blank or missing,
+     * this legacy-language seam returns the resolved fallback's base language code instead.
+     * A concrete configured name, including an operator's custom name, is returned unchanged.
      *
-     * @return the configured language name, or {@code null} if none is configured
+     * @return the configured language name, or the resolved fallback's base language code in automatic mode
      * @since 6.3.0
      */
     public final String getConfiguredLanguage() {
-        return UltiTools.getInstance().getConfig().getString("language");
+        UltiTools framework = UltiTools.getInstance();
+        String configured = framework.getConfig().getString("language");
+        if (LocaleNames.isAutomatic(configured)) {
+            TextEngine engine = textEngine;
+            if (engine == null && framework.getDependenceManagers() != null
+                    && framework.getDependenceManagers().getContext() != null) {
+                engine = framework.getDependenceManagers().getContext().getBean(TextEngine.class);
+            }
+            return engine != null ? engine.fallback().getLanguage()
+                    : ConfiguredLocaleResolver.forConfig(framework::getConfig, framework.getLogger())
+                            .fallback().getLanguage();
+        }
+        return configured;
     }
 
     /**
@@ -2487,6 +2532,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         Throwable failure = runUnregisterStep(null, this::onUnregister);
         failure = runUnregisterStep(failure, () -> getCommandManager().unregisterAll(this));
         failure = runUnregisterStep(failure, () -> getListenerManager().unregisterAll(this));
+        failure = runUnregisterStep(failure, () -> {
+            if (textEngine != null) {
+                textEngine.withdraw(MessageKey.namespaceFor(pluginName), this);
+            }
+        });
         if (failure instanceof RuntimeException) {
             throw (RuntimeException) failure;
         } else if (failure instanceof Error) {
@@ -2696,6 +2746,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // module. It records the change instead, so the operator is told a full /ul reload
         // applies it (#502).
         language = createLanguageFromPath(resourceFolderPath);
+        if (textEngine != null) {
+            textEngine.reloadOverrides(MessageKey.namespaceFor(pluginName));
+        }
         // #594: the configs were read above with the old catalogue; now that the language is rebuilt, the framework's
         // own comment lines follow it - comment lines only, through the config write gate, before the module's hook.
         getConfigManager().refreshFrameworkComments(this);
