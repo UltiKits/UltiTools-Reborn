@@ -13,8 +13,9 @@ import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.configuration.PluginMeta;
 
 /** Exercises the real dispatcher without pretending MockBukkit fires lifecycle events. */
-final class RecordingCommands implements Commands {
+public final class RecordingCommands implements Commands {
     private final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+    public RecordingCommands() { /* Test registrar with its own real Brigadier dispatcher. */ }
     int registrations;
     @Override public CommandDispatcher<CommandSourceStack> getDispatcher() { return dispatcher; }
     @Override public Set<String> register(LiteralCommandNode<CommandSourceStack> node, String description,

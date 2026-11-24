@@ -11,8 +11,10 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
+import com.ultikits.ultitools.command.BrigadierCommand;
 import com.ultikits.ultitools.command.engine.CommandEngine;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
+import com.ultikits.ultitools.context.SimpleContainer;
 
 /** Owns annotation command registrations without reflecting into Bukkit internals. */
 public class CommandManager {
@@ -59,13 +61,7 @@ public class CommandManager {
      * @param plugin the owning module
      */
     public void registerAll(UltiToolsPlugin plugin) {
-        Set<BaseCommandExecutor> handled = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (String name : plugin.getContext().getBeanNamesForType(BaseCommandExecutor.class)) {
-            BaseCommandExecutor executor = plugin.getContext().getBean(name, BaseCommandExecutor.class);
-            if (executor == null || !handled.add(executor)) continue;
-            CmdExecutor annotation = annotation(executor);
-            if (annotation != null && !annotation.manualRegister()) registerExecutor(plugin, plugin.getPluginName(), executor, plugin);
-        }
+        registerBeans(plugin, plugin.getPluginName(), plugin.getContext(), plugin);
     }
 
     /**
@@ -99,13 +95,24 @@ public class CommandManager {
      * @param adapter the external plugin adapter
      */
     public void registerAllExternal(ExternalPluginAdapter adapter) {
-        if (adapter.getContext() == null) return;
-        Set<BaseCommandExecutor> handled = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (String name : adapter.getContext().getBeanNamesForType(BaseCommandExecutor.class)) {
-            BaseCommandExecutor executor = adapter.getContext().getBean(name, BaseCommandExecutor.class);
-            if (executor == null || !handled.add(executor)) continue;
-            CmdExecutor annotation = annotation(executor);
-            if (annotation != null && !annotation.manualRegister()) registerExecutor(adapter.getPluginName(), adapter.getPluginName(), executor, null);
+        if (adapter.getContext() != null) {
+            registerBeans(adapter.getPluginName(), adapter.getPluginName(), adapter.getContext(), null);
+        }
+    }
+
+    private void registerBeans(Object owner, String ownerName, SimpleContainer context, UltiToolsPlugin module) {
+        Set<Object> handled = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Class<?> type : new Class<?>[]{BaseCommandExecutor.class, BrigadierCommand.class}) {
+            for (String name : context.getBeanNamesForType(type)) {
+                Object bean = context.getBean(name, Object.class);
+                if (bean == null || !handled.add(bean)) continue;
+                if (bean instanceof BaseCommandExecutor executor) {
+                    CmdExecutor annotation = annotation(executor);
+                    if (annotation != null && !annotation.manualRegister()) registerExecutor(owner, ownerName, executor, module);
+                } else if (bean instanceof BrigadierCommand command) {
+                    engine.register(owner, ownerName, command);
+                }
+            }
         }
     }
 

@@ -22,7 +22,7 @@ final class LifecycleCommandInstaller {
     synchronized void ensureInstalled() {
         if (installed) return;
         try {
-            lifecycle.get().registerEventHandler(LifecycleEvents.COMMANDS.newHandler(event -> bindings.onCommands(event.registrar())));
+            lifecycle.get().registerEventHandler(LifecycleEvents.COMMANDS, event -> bindings.onCommands(event.registrar()));
             installed = true;
         } catch (IllegalStateException exception) {
             logger.severe("Cannot install command lifecycle handler: " + exception.getMessage());
