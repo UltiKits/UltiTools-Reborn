@@ -4,6 +4,7 @@ import com.ultikits.ultitools.text.InMemoryMessages;
 import com.ultikits.ultitools.text.LocaleResolver;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.internal.TextEngine;
 import com.ultikits.ultitools.ui.Choice;
 import com.ultikits.ultitools.ui.ChoiceInput;
 import com.ultikits.ultitools.ui.ChoiceOption;
@@ -18,6 +19,7 @@ import com.ultikits.ultitools.ui.TextInput;
 import com.ultikits.ultitools.ui.ToggleInput;
 import com.ultikits.ultitools.ui.UiResult;
 import io.papermc.paper.dialog.DialogResponseView;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -26,6 +28,7 @@ import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -140,6 +143,32 @@ class DialogMapperTest {
             DialogModel choice = mapper.map(Choice.<Integer>builder(translated)
                     .option(new ChoiceOption<>(1, translated, translated)).build(), viewer, true);
             assertThat(choice.buttons().getFirst().tooltip()).isEqualTo(expected);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void defaultButtons_renderBundledFrameworkCatalogues(String language, @TempDir Path temporary) {
+        when(locales.resolve(viewer)).thenReturn(Locale.forLanguageTag(language));
+        try (TextEngine engine = new TextEngine(locales, Logger.getAnonymousLogger(),
+                TextEngine.class.getProtectionDomain().getCodeSource().getLocation(), temporary.resolve("messages"))) {
+            DialogMapper bundledMapper = new DialogMapper(engine.messagesFor(MessageKey.FRAMEWORK_NAMESPACE));
+            DialogModel notice = bundledMapper.map(Notice.builder(Text.plain("Notice")).build(), viewer, false);
+            DialogModel confirm = bundledMapper.map(Confirm.builder(Text.plain("Confirm")).build(), viewer, false);
+            DialogModel form = bundledMapper.map(Form.builder(Text.plain("Form"))
+                    .input(ToggleInput.of("flag", Text.plain("Flag"), false)).build(), viewer, false);
+            List<Component> expected = language.equals("en")
+                    ? List.of(Component.text("OK"), Component.text("Yes"), Component.text("No"),
+                            Component.text("Submit"), Component.text("Cancel"))
+                    : List.of(Component.text("\u786e\u5b9a"), Component.text("\u662f"), Component.text("\u5426"),
+                            Component.text("\u63d0\u4ea4"), Component.text("\u53d6\u6d88"));
+            assertThat(List.of(notice.buttons().getFirst().label(), confirm.buttons().getFirst().label(),
+                    confirm.buttons().get(1).label(), form.buttons().getFirst().label(), form.buttons().get(1).label()))
+                    .containsExactlyElementsOf(expected);
+            DialogModel choice = bundledMapper.map(Choice.<Integer>builder(Text.plain("Choice"))
+                    .option(1, Text.plain("One")).build(), viewer, false);
+            assertThat(choice.exit()).isNotNull();
+            assertThat(choice.exit().label()).isEqualTo(expected.getLast());
         }
     }
 
