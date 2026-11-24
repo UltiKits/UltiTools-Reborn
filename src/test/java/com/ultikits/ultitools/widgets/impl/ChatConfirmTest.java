@@ -1,11 +1,11 @@
 package com.ultikits.ultitools.widgets.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,6 +16,8 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -30,11 +32,17 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.manager.ChatCallbackManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.widgets.Confirm;
 
+import net.kyori.adventure.audience.Audience;
+import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
+import net.kyori.adventure.text.event.ClickCallback;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.format.TextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 
 /**
  * Unit tests for {@link ChatConfirm}.
@@ -272,87 +280,127 @@ class ChatConfirmTest {
         }
     }
     
-    // ========== Mock 测试：show 方法 ==========
-    
     @Nested
-    @DisplayName("show 方法 Mock 测试")
+    @DisplayName("show 方法与回调测试")
     class ShowMethodMockTests {
-        
-        @Test
-        @DisplayName("show 方法应该发送三条消息")
-        void showShouldSendThreeMessages() {
-            try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
-                 MockedStatic<MessageUtils> messageUtilsMock = mockStatic(MessageUtils.class);
-                 MockedStatic<ChatCallbackManager> callbackMock = mockStatic(ChatCallbackManager.class)) {
-                
-                ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                lenient().when(mockUltiTools.i18n("OK")).thenReturn("OK");
-                lenient().when(mockUltiTools.i18n("取消")).thenReturn("Cancel");
-                
-                callbackMock.when(() -> ChatCallbackManager.registerCallback(any()))
-                    .thenReturn(UUID.randomUUID());
-                
-                ChatConfirm confirm = new ChatConfirm(mockPlayer, "Test Title", "Test Desc",
-                    mockOnConfirm, mockOnCancel);
-                
-                confirm.show();
 
-                // 验证发送了 3 条消息：标题、描述、按钮
-                messageUtilsMock.verify(() -> MessageUtils.sendMessage(eq(mockPlayer), any(net.kyori.adventure.text.TextComponent.class)), times(3));
-                assertThat(confirm).isNotNull();
+        @Test
+        @DisplayName("三个消息和按钮样式保持不变，两个按钮均使用一次性回调")
+        void showShouldSendOneUseCallbackButtons() {
+            List<TextComponent> messages = new ArrayList<>();
+            List<ClickCallback<Audience>> callbacks = new ArrayList<>();
+            List<ClickCallback.Options> options = new ArrayList<>();
+            try (MockedStatic<MessageUtils> delivery = captureMessages(messages);
+                 MockedStatic<ClickEvent> clicks = captureCallbacks(callbacks, options)) {
+                new ChatConfirm(mockPlayer, "Title", "Description", "Yes", "No",
+                        mockOnConfirm, mockOnCancel).show();
+
+                assertThat(messages).hasSize(3);
+                assertThat(messages.get(0).content()).isEqualTo("Title");
+                assertThat(messages.get(0).color()).isEqualTo(TextColor.color(255, 222, 55));
+                assertThat(messages.get(0).decoration(TextDecoration.BOLD))
+                        .isEqualTo(TextDecoration.State.TRUE);
+                assertThat(messages.get(1)).isEqualTo(Component.text("Description"));
+                List<Component> buttons = messages.get(2).children();
+                assertThat(buttons).hasSize(3);
+                assertThat(buttons.get(0)).isEqualTo(Component.text("[ Yes ]")
+                        .color(TextColor.color(0, 255, 0))
+                        .clickEvent(ClickEvent.custom(Key.key("test", "callback-0"))));
+                assertThat(buttons.get(1)).isEqualTo(Component.text("     "));
+                assertThat(buttons.get(2)).isEqualTo(Component.text("[ No ]")
+                        .color(TextColor.color(255, 0, 0))
+                        .clickEvent(ClickEvent.custom(Key.key("test", "callback-1"))));
+                assertThat(buttons.get(0).clickEvent().action()).isEqualTo(ClickEvent.Action.CUSTOM);
+                assertThat(buttons.get(2).clickEvent().action()).isEqualTo(ClickEvent.Action.CUSTOM);
+                assertThat(callbacks).hasSize(2);
+                assertThat(options).hasSize(2).allSatisfy(option -> assertThat(option.uses()).isEqualTo(1));
             }
         }
-        
+
         @Test
-        @DisplayName("show 方法应该注册两个回调")
-        void showShouldRegisterTwoCallbacks() { // NOPMD - uses Mockito verify()
-            try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
-                 MockedStatic<MessageUtils> messageUtilsMock = mockStatic(MessageUtils.class);
-                 MockedStatic<ChatCallbackManager> callbackMock = mockStatic(ChatCallbackManager.class)) {
-                
-                ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                lenient().when(mockUltiTools.i18n("OK")).thenReturn("OK");
-                lenient().when(mockUltiTools.i18n("取消")).thenReturn("Cancel");
-                
-                callbackMock.when(() -> ChatCallbackManager.registerCallback(any()))
-                    .thenReturn(UUID.randomUUID());
-                
-                ChatConfirm confirm = new ChatConfirm(mockPlayer, "Title", "Desc",
-                    mockOnConfirm, mockOnCancel);
-                
-                confirm.show();
-                
-                // 验证注册了两个回调（confirm 和 cancel）
-                callbackMock.verify(() -> ChatCallbackManager.registerCallback(mockOnConfirm));
-                callbackMock.verify(() -> ChatCallbackManager.registerCallback(mockOnCancel));
+        @DisplayName("确认回调按 UUID 接受目标玩家，拒绝其他玩家和非玩家")
+        void confirmCallbackOnlyAcceptsTargetUuid() {
+            assertTargetCallback(0, mockOnConfirm, mockOnCancel);
+        }
+
+        @Test
+        @DisplayName("取消回调按 UUID 接受目标玩家，拒绝其他玩家和非玩家")
+        void cancelCallbackOnlyAcceptsTargetUuid() {
+            assertTargetCallback(1, mockOnCancel, mockOnConfirm);
+        }
+
+        private void assertTargetCallback(int index, Runnable expected, Runnable other) {
+            UUID targetId = UUID.randomUUID();
+            when(mockPlayer.getUniqueId()).thenReturn(targetId);
+            Player sameTarget = mock(Player.class);
+            when(sameTarget.getUniqueId()).thenReturn(targetId);
+            Player otherPlayer = mock(Player.class);
+            when(otherPlayer.getUniqueId()).thenReturn(UUID.randomUUID());
+
+            assertCallbackForAudience(index, otherPlayer, expected, other, 0);
+            assertCallbackForAudience(index, Audience.empty(), expected, other, 0);
+            assertCallbackForAudience(index, sameTarget, expected, other, 1);
+        }
+
+        private void assertCallbackForAudience(int index, Audience audience, Runnable expected,
+                                               Runnable other, int expectedRuns) {
+            List<ClickCallback<Audience>> callbacks = new ArrayList<>();
+            List<ClickCallback.Options> options = new ArrayList<>();
+            try (MockedStatic<MessageUtils> delivery = mockStatic(MessageUtils.class);
+                 MockedStatic<ClickEvent> clicks = captureCallbacks(callbacks, options)) {
+                // Paper consumes the use before the UUID guard, so each audience needs a fresh prompt.
+                new ChatConfirm(mockPlayer, "Title", "Description", "Yes", "No",
+                        mockOnConfirm, mockOnCancel).show();
+                assertThat(callbacks).hasSize(2);
+                callbacks.get(index).accept(audience);
+                verify(expected, times(expectedRuns)).run();
+                verify(other, never()).run();
             }
         }
-        
-        @Test
-        @DisplayName("使用自定义按钮文本的 show 方法")
-        void showWithCustomButtonText() {
-            try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
-                 MockedStatic<MessageUtils> messageUtilsMock = mockStatic(MessageUtils.class);
-                 MockedStatic<ChatCallbackManager> callbackMock = mockStatic(ChatCallbackManager.class)) {
-                
-                ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                // i18n 不应该被调用因为使用了自定义文本
-                
-                callbackMock.when(() -> ChatCallbackManager.registerCallback(any()))
-                    .thenReturn(UUID.randomUUID());
-                
-                ChatConfirm confirm = new ChatConfirm(mockPlayer, "Title", "Desc",
-                    "Yes", "No", mockOnConfirm, mockOnCancel);
-                
-                confirm.show();
 
-                // 验证消息发送
-                messageUtilsMock.verify(() -> MessageUtils.sendMessage(eq(mockPlayer), any(net.kyori.adventure.text.TextComponent.class)), times(3));
-                assertNotNull(confirm);
+        @Test
+        @DisplayName("默认按钮文字仍取自 i18n")
+        void showShouldUseTranslatedButtonText() {
+            List<TextComponent> messages = new ArrayList<>();
+            try (MockedStatic<UltiTools> tools = mockStatic(UltiTools.class);
+                 MockedStatic<MessageUtils> delivery = captureMessages(messages);
+                 MockedStatic<ClickEvent> clicks = captureCallbacks(new ArrayList<>(), new ArrayList<>())) {
+                tools.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+                when(mockUltiTools.i18n("OK")).thenReturn("确定");
+                when(mockUltiTools.i18n("取消")).thenReturn("取消");
+                new ChatConfirm(mockPlayer, "Title", "Description", mockOnConfirm, mockOnCancel).show();
+                assertThat(messages).hasSize(3);
+                assertThat(((TextComponent) messages.get(2).children().get(0)).content()).isEqualTo("[ 确定 ]");
+                assertThat(((TextComponent) messages.get(2).children().get(2)).content()).isEqualTo("[ 取消 ]");
             }
         }
     }
-    
+
+    MockedStatic<MessageUtils> captureMessages(List<TextComponent> messages) {
+        MockedStatic<MessageUtils> delivery = mockStatic(MessageUtils.class);
+        delivery.when(() -> MessageUtils.sendMessage(eq(mockPlayer), any(TextComponent.class)))
+                .thenAnswer(invocation -> {
+                    messages.add(invocation.getArgument(1));
+                    return null;
+                });
+        return delivery;
+    }
+
+    // MockBukkit has no ClickCallback.Provider. Capture the actual callbacks and options passed
+    // to Adventure; the returned CUSTOM event mirrors Paper's provider, not a real client click.
+    MockedStatic<ClickEvent> captureCallbacks(List<ClickCallback<Audience>> callbacks,
+                                                     List<ClickCallback.Options> options) {
+        MockedStatic<ClickEvent> clicks = mockStatic(ClickEvent.class, CALLS_REAL_METHODS);
+        clicks.when(() -> ClickEvent.callback(any(), any(ClickCallback.Options.class)))
+                .thenAnswer(invocation -> {
+                    ClickEvent<?> event = ClickEvent.custom(Key.key("test", "callback-" + callbacks.size()));
+                    callbacks.add(invocation.getArgument(0));
+                    options.add(invocation.getArgument(1));
+                    return event;
+                });
+        return clicks;
+    }
+
     // ========== getConfirmText/getCancelText Mock 测试 ==========
     
     @Nested
@@ -468,60 +516,5 @@ class ChatConfirmTest {
             assertThat(red.blue()).isEqualTo(0);
         }
         
-        @Test
-        @DisplayName("按钮应该有 ClickEvent")
-        void buttonsShouldHaveClickEvent() {
-            String callbackId = UUID.randomUUID().toString();
-            net.kyori.adventure.text.event.ClickEvent clickEvent = 
-                net.kyori.adventure.text.event.ClickEvent.runCommand("/ultitools_callback " + callbackId);
-            
-            assertThat(clickEvent.action())
-                .isEqualTo(net.kyori.adventure.text.event.ClickEvent.Action.RUN_COMMAND);
-            String command = ((net.kyori.adventure.text.event.ClickEvent.Payload.Text)
-                clickEvent.payload()).value();
-            assertThat(command).contains("/ultitools_callback");
-            assertThat(command).contains(callbackId);
-        }
-    }
-    
-    // ========== 集成场景测试 ==========
-    
-    @Nested
-    @DisplayName("集成场景测试")
-    class IntegrationScenarioTests {
-        
-        @Test
-        @DisplayName("完整的确认对话框流程")
-        void completeConfirmDialogFlow() {
-            try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
-                 MockedStatic<MessageUtils> messageUtilsMock = mockStatic(MessageUtils.class);
-                 MockedStatic<ChatCallbackManager> callbackMock = mockStatic(ChatCallbackManager.class)) {
-                
-                ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                when(mockUltiTools.i18n("OK")).thenReturn("确定");
-                when(mockUltiTools.i18n("取消")).thenReturn("取消");
-                
-                UUID confirmCallbackId = UUID.randomUUID();
-                UUID cancelCallbackId = UUID.randomUUID();
-                
-                callbackMock.when(() -> ChatCallbackManager.registerCallback(mockOnConfirm))
-                    .thenReturn(confirmCallbackId);
-                callbackMock.when(() -> ChatCallbackManager.registerCallback(mockOnCancel))
-                    .thenReturn(cancelCallbackId);
-                
-                ChatConfirm confirm = new ChatConfirm(mockPlayer, "删除确认", "确定要删除这个物品吗？",
-                    mockOnConfirm, mockOnCancel);
-                
-                // 获取按钮文本
-                assertThat(confirm.getConfirmText()).isEqualTo("确定");
-                assertThat(confirm.getCancelText()).isEqualTo("取消");
-                
-                // 显示对话框
-                confirm.show();
-                
-                // 验证交互
-                messageUtilsMock.verify(() -> MessageUtils.sendMessage(eq(mockPlayer), any(net.kyori.adventure.text.TextComponent.class)), times(3));
-            }
-        }
     }
 }
