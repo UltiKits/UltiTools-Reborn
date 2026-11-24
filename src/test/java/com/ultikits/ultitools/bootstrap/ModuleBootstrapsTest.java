@@ -7,7 +7,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.net.URL;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.Test;
@@ -152,6 +156,41 @@ class ModuleBootstrapsTest {
             assertThat(run.failures).containsOnlyKeys(bad);
             assertThat(run.attempted).isEqualTo(2);
             assertThat(loader.loadClass("fixture.Good").getField("context").get(null)).isNotNull();
+        }
+    }
+
+    @Test
+    void initializerError_reportsItsClassAndCauseWithoutNullOrRemovalAdvice() throws Exception {
+        Path module = jar(temporary.resolve("initializer.jar"), descriptor("Initializer", "fixture.InitializerFailure"),
+                Collections.singletonMap("fixture.InitializerFailure", BootstrapFixtures.initializerFailureHook("fixture.InitializerFailure")));
+        List<LogRecord> logs = new ArrayList<>();
+        Logger capture = Logger.getAnonymousLogger();
+        capture.setUseParentHandlers(false);
+        capture.addHandler(new Handler() {
+            @Override public void publish(LogRecord record) { logs.add(record); }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No owned resource. */ }
+        });
+        try (ModuleClassLoader loader = loader(module)) {
+            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(module), loader, capture);
+            assertThat(run.failures.get(module)).isInstanceOf(ExceptionInInitializerError.class);
+            assertThat(logs).singleElement().satisfies(record -> assertThat(record.getMessage())
+                    .contains("java.lang.ExceptionInInitializerError", "java.lang.IllegalStateException", "initialization cause")
+                    .doesNotContain(": null", "Fix or remove")
+                    .contains("Update rollback is checked during enable"));
+        }
+    }
+
+    @Test
+    void virtualMachineErrorsPropagateButRestoreTheThreadContextLoader() throws Exception {
+        Path module = jar(temporary.resolve("fatal.jar"), descriptor("Fatal", "fixture.Fatal"),
+                Collections.singletonMap("fixture.Fatal", hook("fixture.Fatal", "java/lang/InternalError")));
+        ClassLoader previous = Thread.currentThread().getContextClassLoader();
+        try (ModuleClassLoader loader = loader(module)) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> ModuleBootstraps.runAll(admission(module), loader, logger))
+                    .isInstanceOf(InternalError.class).hasMessage("fixture failure");
+            assertThat(Thread.currentThread().getContextClassLoader()).isSameAs(previous);
         }
     }
 

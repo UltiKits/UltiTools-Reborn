@@ -99,7 +99,7 @@ class UltiToolsBootstrapTest {
                         .singleElement().satisfies(record -> {
                             assertThat(record.getMessage()).isEqualTo("[UltiTools] Module 'bad.jar' failed in its bootstrap phase "
                                     + "(fixture.Bad): java.lang.NoClassDefFoundError: fixture failure -- the module is not loaded "
-                                    + "at this start. Fix or remove the module and restart the server.");
+                                    + "at this start. Update rollback is checked during enable; check the enable log before changing any module JARs.");
                             assertThat(record.getThrown()).isInstanceOf(NoClassDefFoundError.class);
                         });
             }

@@ -70,8 +70,9 @@ public final class ModuleClassLoader extends URLClassLoader {
                     // This dependency does not supply the class; try the next declared dependency.
                 }
             }
-            throw new ClassNotFoundException(name + " is not available to modules. Declare the providing plugin in "
-                    + "the module's plugin.yml depend or softdepend; visibility of undeclared plugins is not guaranteed.", missing);
+            throw new ClassNotFoundException(name + " is not available to modules. If this class belongs to another server plugin, "
+                    + "declare the providing plugin in the module's plugin.yml depend or softdepend; "
+                    + "visibility of undeclared plugins is not guaranteed.", missing);
         }
     }
 

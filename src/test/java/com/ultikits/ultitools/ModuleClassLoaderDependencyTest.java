@@ -53,7 +53,7 @@ class ModuleClassLoaderDependencyTest {
             });
             assertThatThrownBy(() -> loader.loadClass("fixture.ProbeMain").getMethod("dependency").invoke(null))
                     .cause().isInstanceOf(ClassNotFoundException.class)
-                    .hasMessageContaining("Declare the providing plugin").hasMessageContaining("depend or softdepend")
+                    .hasMessageContaining("If this class belongs to another server plugin, declare the providing plugin").hasMessageContaining("depend or softdepend")
                     .hasMessageContaining("not guaranteed");
             assertThat(requested).doesNotContain("DepTarget");
         }
@@ -107,6 +107,15 @@ class ModuleClassLoaderDependencyTest {
             assertThat(requested).containsExactlyElementsOf(Arrays.asList("PlaceholderAPI", "TargetA", "TargetZ", "Vault"));
             assertThatThrownBy(() -> loader.loadClass("missing.Dep")).isInstanceOf(ClassNotFoundException.class);
             verify(provider, times(1)).loadClass("missing.Dep");
+        }
+    }
+
+    @Test
+    void missingOwnMain_hasOnlyConditionalDependencyAdvice() throws Exception {
+        try (ModuleClassLoader loader = ModuleClassLoader.create(new URL[0], getClass().getClassLoader())) {
+            assertThatThrownBy(() -> loader.loadClass("fixture.MistypedMain"))
+                    .isInstanceOf(ClassNotFoundException.class)
+                    .hasMessageContaining("If this class belongs to another server plugin");
         }
     }
 

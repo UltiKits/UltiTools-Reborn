@@ -50,8 +50,9 @@ final class ModuleBootstraps {
                 failures.put(module.getKey(), cause);
                 // Early output stays English; translated discovery diagnostics follow during enable.
                 logFailure(logger, String.format("[UltiTools] Module '%s' failed in its bootstrap phase (%s): "
-                        + "%s: %s -- the module is not loaded at this start. Fix or remove the module and restart the server.",
-                        module.getKey().getFileName(), bootstrapper, cause.getClass().getName(), safeMessage(cause)), cause);
+                        + "%s -- the module is not loaded at this start. Update rollback is checked during enable; "
+                        + "check the enable log before changing any module JARs.",
+                        module.getKey().getFileName(), bootstrapper, describe(cause)), cause);
             }
         }
         return new Run(failures, attempted);
@@ -86,9 +87,23 @@ final class ModuleBootstraps {
         }
     }
 
+    private static String describe(Throwable failure) {
+        String description = failure.getClass().getName() + ": " + safeMessage(failure);
+        try {
+            Throwable cause = failure.getCause();
+            return cause == null ? description : description + "; caused by "
+                    + cause.getClass().getName() + ": " + safeMessage(cause);
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (Throwable unavailable) { // NOPMD - a module's diagnostic method must not abort bootstrap
+            return description + "; cause unavailable";
+        }
+    }
+
     private static String safeMessage(Throwable failure) {
         try {
-            return failure.getMessage();
+            String message = failure.getMessage();
+            return message == null ? "(no message)" : message;
         } catch (VirtualMachineError fatal) {
             throw fatal;
         } catch (Throwable unavailable) { // NOPMD - a module's diagnostic method must not abort bootstrap

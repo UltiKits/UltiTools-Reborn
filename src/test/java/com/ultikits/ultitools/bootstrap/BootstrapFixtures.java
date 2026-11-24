@@ -72,6 +72,14 @@ public final class BootstrapFixtures {
     }
 
     public static byte[] hook(String name, String failureType) {
+        return hook(name, failureType, false);
+    }
+
+    public static byte[] initializerFailureHook(String name) {
+        return hook(name, null, true);
+    }
+
+    private static byte[] hook(String name, String failureType, boolean initializerFailure) {
         String owner = name.replace('.', '/');
         String context = "Lcom/ultikits/ultitools/bootstrap/ModuleBootstrapContext;";
         ClassWriter writer = new ClassWriter(0);
@@ -104,6 +112,17 @@ public final class BootstrapFixtures {
         }
         hook.visitMaxs(3, 2);
         hook.visitEnd();
+        if (initializerFailure) {
+            MethodVisitor initializer = writer.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null);
+            initializer.visitCode();
+            initializer.visitTypeInsn(Opcodes.NEW, "java/lang/IllegalStateException");
+            initializer.visitInsn(Opcodes.DUP);
+            initializer.visitLdcInsn("initialization cause");
+            initializer.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/IllegalStateException", "<init>", "(Ljava/lang/String;)V", false);
+            initializer.visitInsn(Opcodes.ATHROW);
+            initializer.visitMaxs(3, 0);
+            initializer.visitEnd();
+        }
         writer.visitEnd();
         return writer.toByteArray();
     }

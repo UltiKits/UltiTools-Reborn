@@ -9,8 +9,10 @@ import org.jetbrains.annotations.ApiStatus;
  *
  * <p>No Bukkit server, plugin instances, IoC services or worlds are available here. Use only the
  * module's own classes, the framework and the server API; do not reference other plugins' classes.
- * A thrown exception or error prevents only this module from loading at this start. Fix or remove
- * it and restart; an updated module is subject to the ordinary post-load rollback observation.
+ * A thrown exception or error prevents only this module from loading at this start, except that
+ * virtual machine failures may propagate. Enable observes updated modules and may restore an old
+ * copy; check that phase's log before changing module JARs. An overall framework preparation failure
+ * is retained and reported during enable, which disables the framework.
  * No order is promised between different modules' bootstrappers.
  *
  * @since 7.0.0
