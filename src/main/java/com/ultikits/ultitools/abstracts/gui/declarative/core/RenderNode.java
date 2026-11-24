@@ -3,30 +3,28 @@ package com.ultikits.ultitools.abstracts.gui.declarative.core;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer;
 import lombok.Getter;
 import lombok.Setter;
-import mc.obliviate.inventory.Icon;
-import org.bukkit.event.inventory.InventoryClickEvent;
+import com.ultikits.ultitools.ui.GridItem;
+import com.ultikits.ultitools.ui.SlotBinding;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.Consumer;
 
 /**
  * RenderNode is a node in the virtual render tree, representing one slot to be rendered.
  * <p>
  * RenderNode is a framework-internal object used to:
  * <ul>
- *   <li>describe what each slot should display (Icon)</li>
- *   <li>record the slot's position (slotIndex)</li>
- *   <li>support stable identification (slotKey) for diffing</li>
+ *   <li>describe a slot's immutable item and action, or a container binding</li>
+ *   <li>record the slot's grid position (slotIndex)</li>
+ *   <li>retain stable node identification (slotKey)</li>
  *   <li>organize into a tree structure to support layout calculation</li>
  * </ul>
  * <p>
- * <b>Note:</b> RenderNode never touches the Bukkit Inventory directly;
- * it is only a virtual representation, translated into actual Inventory operations by
- * {@link GuiRenderer}.
+ * <b>Note:</b> RenderNode never touches a Bukkit Inventory directly;
+ * {@link GuiRenderer} collects its contents into an immutable grid snapshot for the UI service.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -35,7 +33,7 @@ import java.util.function.Consumer;
 public class RenderNode {
 
     /**
-     * The slot's unique identifier, used by the diff algorithm to recognize the same node.
+     * The slot's unique identifier, used to recognize the same logical node.
      * If null, slotIndex is used for identification instead.
      */
     @Nullable
@@ -56,18 +54,13 @@ public class RenderNode {
     @Getter
     private int slotIndex;
 
-    /**
-     * The Icon to display in this slot.
-     * If null, this slot should be empty.
-     */
+    /** The immutable icon and action, mutually exclusive with a container binding. */
     @Nullable
-    private Icon icon;
+    private GridItem item;
 
-    /**
-     * The click event handler.
-     */
+    /** The container binding, mutually exclusive with an icon. */
     @Nullable
-    private Consumer<InventoryClickEvent> clickHandler;
+    private SlotBinding binding;
 
     /**
      * The parent node.
@@ -105,11 +98,11 @@ public class RenderNode {
      *
      * @param key       the slot identifier
      * @param slotIndex the slot index
-     * @param icon      the icon
+     * @param item      the icon and optional action
      */
-    public RenderNode(@Nullable SlotKey key, int slotIndex, @Nullable Icon icon) {
+    public RenderNode(@Nullable SlotKey key, int slotIndex, @Nullable GridItem item) {
         this(key, slotIndex);
-        this.icon = icon;
+        this.item = item;
     }
 
     // Getters and Setters
@@ -124,42 +117,34 @@ public class RenderNode {
         return key;
     }
 
-    /**
-     * Gets the icon.
-     *
-     * @return the Icon, may be null
-     */
+    /** @return the icon and action, or null */
     @Nullable
-    public Icon getIcon() {
-        return icon;
+    public GridItem getItem() {
+        return item;
     }
 
     /**
-     * Sets the icon.
-     *
-     * @param icon the icon
+     * Sets an icon (or empty content) and clears any binding.
+     * @param item the icon, or null
      */
-    public void setIcon(@Nullable Icon icon) {
-        this.icon = icon;
+    public void setItem(@Nullable GridItem item) {
+        this.item = item;
+        this.binding = null;
     }
 
-    /**
-     * Gets the click handler.
-     *
-     * @return the click handler, may be null
-     */
+    /** @return the container binding, or null */
     @Nullable
-    public Consumer<InventoryClickEvent> getClickHandler() {
-        return clickHandler;
+    public SlotBinding getBinding() {
+        return binding;
     }
 
     /**
-     * Sets the click handler.
-     *
-     * @param clickHandler the click handler
+     * Sets a binding (or empty content) and clears any icon.
+     * @param binding the binding, or null
      */
-    public void setClickHandler(@Nullable Consumer<InventoryClickEvent> clickHandler) {
-        this.clickHandler = clickHandler;
+    public void setBinding(@Nullable SlotBinding binding) {
+        this.binding = binding;
+        this.item = null;
     }
 
     /**
@@ -293,7 +278,7 @@ public class RenderNode {
      */
     public int calculateSlotCount() {
         if (isLeaf()) {
-            return icon != null ? 1 : 0;
+            return item != null || binding != null ? 1 : 0;
         }
         int count = 0;
         for (RenderNode child : children) {
@@ -310,15 +295,15 @@ public class RenderNode {
     @NotNull
     public RenderNode copy() {
         RenderNode copy = new RenderNode(key, slotIndex);
-        copy.icon = icon;
-        copy.clickHandler = clickHandler;
+        copy.item = item;
+        copy.binding = binding;
         copy.metadata.putAll(metadata);
         return copy;
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
+        if (this == o) return true; // NOPMD - equals must accept the identical node before value comparison
         if (!(o instanceof RenderNode)) return false;
         RenderNode that = (RenderNode) o;
         // Prefer comparing by key; fall back to slotIndex when there is no key.
@@ -336,7 +321,7 @@ public class RenderNode {
     @Override
     public String toString() {
         String keyStr = key != null ? key.getValue() : "null";
-        String iconStr = icon != null ? "Icon" : "null";
-        return "RenderNode(key=" + keyStr + ", slot=" + slotIndex + ", icon=" + iconStr + ")";
+        return "RenderNode(key=" + keyStr + ", slot=" + slotIndex + ", item=" + item
+                + ", binding=" + binding + ")";
     }
 }

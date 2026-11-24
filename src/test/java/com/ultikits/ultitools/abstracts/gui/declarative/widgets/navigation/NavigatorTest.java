@@ -7,7 +7,7 @@ import com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.ItemDisplay;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
+import com.ultikits.ultitools.item.ItemSpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -41,7 +41,7 @@ public class NavigatorTest {
     @Test
     void testNavigatorInitialRoute() {
         Map<String, RouteBuilder> routes = new HashMap<>();
-        routes.put("/", context -> ItemDisplay.builder(new ItemStack(Material.STONE)).build());
+        routes.put("/", context -> ItemDisplay.builder(ItemSpec.builder(Material.STONE).build()).build());
 
         Navigator navigator = new Navigator("/", routes);
         StatefulElement element = (StatefulElement) navigator.createElement();
@@ -59,8 +59,8 @@ public class NavigatorTest {
     @Test
     void testNavigatorPushAndPop() {
         Map<String, RouteBuilder> routes = new HashMap<>();
-        routes.put("/", context -> ItemDisplay.builder(new ItemStack(Material.STONE)).build());
-        routes.put("/detail", context -> ItemDisplay.builder(new ItemStack(Material.DIAMOND)).build());
+        routes.put("/", context -> ItemDisplay.builder(ItemSpec.builder(Material.STONE).build()).build());
+        routes.put("/detail", context -> ItemDisplay.builder(ItemSpec.builder(Material.DIAMOND).build()).build());
 
         Navigator navigator = new Navigator("/", routes);
         StatefulElement element = (StatefulElement) navigator.createElement();
@@ -72,16 +72,16 @@ public class NavigatorTest {
         
         // Initial
         assertTrue(state.build(context) instanceof ItemDisplay);
-        assertEquals(Material.STONE, ((ItemDisplay)state.build(context)).getItemStack().getType());
+        assertEquals(Material.STONE.getKey(), ((ItemDisplay)state.build(context)).getIcon().itemType());
 
         // Push
         state.push("/detail");
-        assertEquals(Material.DIAMOND, ((ItemDisplay)state.build(context)).getItemStack().getType());
+        assertEquals(Material.DIAMOND.getKey(), ((ItemDisplay)state.build(context)).getIcon().itemType());
         assertTrue(state.canPop());
 
         // Pop
         state.pop();
-        assertEquals(Material.STONE, ((ItemDisplay)state.build(context)).getItemStack().getType());
+        assertEquals(Material.STONE.getKey(), ((ItemDisplay)state.build(context)).getIcon().itemType());
         assertFalse(state.canPop());
     }
 

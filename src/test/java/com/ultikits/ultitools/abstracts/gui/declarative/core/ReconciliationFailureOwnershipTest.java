@@ -9,14 +9,11 @@ import com.ultikits.ultitools.abstracts.gui.declarative.widgets.TextButton;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
-import mc.obliviate.inventory.Gui;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness.SnapshotProbe;
+import com.ultikits.ultitools.text.Text;
 
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.event.inventory.InventoryCloseEvent;
-import org.bukkit.event.inventory.InventoryOpenEvent;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,7 +36,6 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
@@ -62,7 +58,7 @@ import static org.mockito.Mockito.when;
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class ReconciliationFailureOwnershipTest {
 
-    private ServerMock server;
+    private GuiTestHarness harness;
     private Plugin mockPlugin;
     private Player player;
     private FrameErrorCounter frameErrors;
@@ -70,9 +66,11 @@ class ReconciliationFailureOwnershipTest {
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         mockPlugin = MockBukkit.createMockPlugin();
         player = server.addPlayer();
+        harness = new GuiTestHarness();
+        TestHelper.mockUltiToolsInstance(instance -> when(instance.getLogger()).thenReturn(mockPlugin.getLogger()));
         frameErrors = new FrameErrorCounter();
         mockPlugin.getLogger().addHandler(frameErrors);
     }
@@ -80,6 +78,7 @@ class ReconciliationFailureOwnershipTest {
     @AfterEach
     void tearDown() {
         mockPlugin.getLogger().removeHandler(frameErrors);
+        harness.close();
         MockBukkitHelper.safeUnmock();
     }
 
@@ -99,6 +98,7 @@ class ReconciliationFailureOwnershipTest {
 
         frame.set(2);
         renderer.scheduleBuild();
+        harness.tick();
         int failingFrameErrors = frameErrors.count();
         renderer.dispose();
 
@@ -149,6 +149,7 @@ class ReconciliationFailureOwnershipTest {
 
         frame.set(2);
         renderer.scheduleBuild();
+        harness.tick();
         String afterFrame = "frameErrors=" + frameErrors.count()
                 + " d=" + life.disposeCounts("d") + " listeners=" + source.listenerCount();
         renderer.dispose();
@@ -192,6 +193,7 @@ class ReconciliationFailureOwnershipTest {
 
         frame.set(2);
         renderer.scheduleBuild();
+        harness.tick();
         String afterFrame = "frameErrors=" + frameErrors.count()
                 + " " + life.disposeCounts("g1", "g2") + " listeners=" + source.listenerCount();
         renderer.dispose();
@@ -215,6 +217,7 @@ class ReconciliationFailureOwnershipTest {
 
         frame.set(2);
         renderer.scheduleBuild();
+        harness.tick();
         String afterFrame = "frameErrors=" + frameErrors.count() + " " + life.disposeCounts("a", "a2");
         renderer.dispose();
         String afterClose = life.disposeCounts("a", "a2", "b", "c");
@@ -247,6 +250,7 @@ class ReconciliationFailureOwnershipTest {
 
         frame.set(2);
         renderer.scheduleBuild();
+        harness.tick();
         String afterFrame = "frameErrors=" + frameErrors.count() + " " + life.disposeCounts("x", "y");
         renderer.dispose();
 
@@ -287,7 +291,7 @@ class ReconciliationFailureOwnershipTest {
     void gridViewReplacementBeforeFailingSiblingIsOwnedAndDisposedOnceOnClose() {
         Lifecycle life = new Lifecycle();
         AtomicInteger frame = new AtomicInteger(1);
-        TestGui gui = newGui();
+        SnapshotProbe gui = newGui();
         GuiRenderer renderer = newRenderer(gui);
         renderer.initialize(() -> GridView.builder()
                 .startSlot(0)
@@ -297,9 +301,11 @@ class ReconciliationFailureOwnershipTest {
 
         frame.set(2);
         renderer.scheduleBuild();
+        harness.tick();
         int failingFrameErrors = frameErrors.count();
         frame.set(3);
         renderer.scheduleBuild();
+        harness.tick();
         int recoveryFrameErrors = frameErrors.count() - failingFrameErrors;
         String slots = displayNameAt(gui, 0) + "|" + displayNameAt(gui, 1) + "|" + displayNameAt(gui, 2);
         renderer.dispose();
@@ -335,6 +341,7 @@ class ReconciliationFailureOwnershipTest {
 
         frame.set(2);
         renderer.scheduleBuild();
+        harness.tick();
         String afterFrame = "frameErrors=" + frameErrors.count()
                 + " children=" + describe(owner.getChildren(), before);
         renderer.dispose();
@@ -352,15 +359,17 @@ class ReconciliationFailureOwnershipTest {
     void frameAfterFailureReusesOwnedChildrenWithoutRecreatingState() {
         Lifecycle life = new Lifecycle();
         AtomicInteger frame = new AtomicInteger(1);
-        TestGui gui = newGui();
+        SnapshotProbe gui = newGui();
         GuiRenderer renderer = newRenderer(gui);
         renderer.initialize(() -> Container.builder().children(shapeFor(frame.get(), life)).build(), rootContext());
 
         frame.set(2);
         renderer.scheduleBuild();
+        harness.tick();
         int failingFrameErrors = frameErrors.count();
         frame.set(3);
         renderer.scheduleBuild();
+        harness.tick();
         int recoveryFrameErrors = frameErrors.count() - failingFrameErrors;
         String observed = "frameErrors[failing=" + failingFrameErrors + ", recovery=" + recoveryFrameErrors
                 + "] created[a2=" + life.createCount("a2") + ", b=" + life.createCount("b")
@@ -383,15 +392,14 @@ class ReconciliationFailureOwnershipTest {
             TestHelper.mockUltiToolsInstance(ultiTools -> when(ultiTools.getLogger()).thenReturn(pageLogger));
             Lifecycle life = new Lifecycle();
             ValueSource source = new ValueSource();
-            OwnershipPage page = new OwnershipPage(player, life, source);
-            page.setInventory(Bukkit.createInventory(page, 9));
+            OwnershipPage page = new OwnershipPage(harness, player, life, source);
 
-            page.onOpen(mock(InventoryOpenEvent.class));
+            harness.open(page);
             drain();
             page.switchToFailingShape();
             drain();
             int failedFrames = pageErrors.count();
-            page.onClose(mock(InventoryCloseEvent.class));
+            harness.close(page);
 
             assertEquals("frameErrors=1 disposed{a=[1], a2=[1], b=[1], c=[1]} listeners=0",
                     "frameErrors=" + failedFrames + " disposed" + life.disposeCounts("a", "a2", "b", "c")
@@ -462,22 +470,21 @@ class ReconciliationFailureOwnershipTest {
     // ------------------------------------------------------------------
 
     private void drain() {
-        server.getScheduler().performTicks(25);
+        harness.fixture().advanceTicks(25);
     }
 
     private BuildContext rootContext() {
         return BuildContext.root(player, "reconciliation-ownership-gui", 1);
     }
 
-    private TestGui newGui() {
-        TestGui gui = new TestGui(player, "reconciliation-ownership-gui", "Test", 1);
-        gui.setInventory(Bukkit.createInventory(gui, 9));
+    private SnapshotProbe newGui() {
+        SnapshotProbe gui = new SnapshotProbe();
         return gui;
     }
 
     /** Zero interval: every scheduleBuild on the test (main) thread runs its frame inline. */
-    private GuiRenderer newRenderer(Gui gui) {
-        return new GuiRenderer(gui, player, new GuiScheduler(mockPlugin, 0L));
+    private GuiRenderer newRenderer(SnapshotProbe gui) {
+        return new GuiRenderer(Text.plain("Test"), 1, new GuiScheduler(harness.scheduler(), player), gui);
     }
 
     /** Mounts a layout widget directly as a root element, as ElementReconciliationTest does. */
@@ -522,17 +529,10 @@ class ReconciliationFailureOwnershipTest {
         return widget instanceof LifecycleWidget ? ((LifecycleWidget) widget).spec.id : widget.toString();
     }
 
-    private static String displayNameAt(Gui gui, int slot) {
-        ItemStack stack = gui.getInventory().getItem(slot);
-        if (stack == null) {
-            return "-";
-        }
-        ItemMeta meta = stack.getItemMeta();
-        return meta == null ? "?" : meta.getDisplayName();
-    }
+    private static String displayNameAt(SnapshotProbe gui, int slot) { return gui.label(slot); }
 
     /**
-     * A DeclarativeGui page (production default scheduler) showing the reported shape, with
+     * A DeclarativeGui page using the entity scheduler, showing the reported shape, with
      * every State subscribed to one value source; {@link #switchToFailingShape()} requests the
      * failing frame.
      */
@@ -541,8 +541,8 @@ class ReconciliationFailureOwnershipTest {
         private final ValueSource source;
         private boolean failing;
 
-        OwnershipPage(Player player, Lifecycle life, ValueSource source) {
-            super(player, "reconciliation-ownership-page", "Test", 1);
+        OwnershipPage(GuiTestHarness harness, Player player, Lifecycle life, ValueSource source) {
+            super(harness.ui(), harness.scheduler(), player, "reconciliation-ownership-page", Text.plain("Test"), 1);
             this.life = life;
             this.source = source;
         }
@@ -560,12 +560,6 @@ class ReconciliationFailureOwnershipTest {
         }
     }
 
-    /** Minimal concrete {@link Gui}; {@code Gui} is abstract only to force subclassing. */
-    private static final class TestGui extends Gui {
-        TestGui(Player player, String id, String title, int rows) {
-            super(player, id, title, rows);
-        }
-    }
 
     /** Counts frame failures GuiScheduler.executeFrame logs through the plugin logger. */
     private static final class FrameErrorCounter extends Handler {
@@ -806,7 +800,7 @@ class ReconciliationFailureOwnershipTest {
         @Override
         public Widget build(BuildContext context) {
             element = context.getParentElement();
-            return TextButton.builder().text(id).slot(getWidget().spec.slot).build();
+            return TextButton.builder().text(Text.plain(id)).slot(getWidget().spec.slot).build();
         }
 
         @Override
