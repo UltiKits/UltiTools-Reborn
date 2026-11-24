@@ -20,7 +20,7 @@ import org.jetbrains.annotations.Nullable;
 public final class DialogTicket {
     private final UUID viewerId;
     private final Logger logger;
-    private final AtomicBoolean showing = new AtomicBoolean(true);
+    private final AtomicBoolean showing = new AtomicBoolean();
     private final AtomicReference<BiConsumer<ButtonRole, @Nullable DialogResponseView>> handler;
 
     /**
@@ -50,7 +50,17 @@ public final class DialogTicket {
         }
     }
 
-    /** Accepts an action from Paper without running module code directly. */
+    /** Marks the screen visible only after the presenter returns successfully on the entity lane. */
+    void shown() {
+        showing.set(true);
+    }
+
+    /**
+     * Accepts an action from Paper without running module code directly.
+     * Paper dispatches clicks on the server main thread, which also runs entity-lane close operations.
+     * This serialization prevents invalidation between consuming the handler and clearing showing below;
+     * the two atomic operations alone do not make that transition safe for concurrent callback dispatch.
+     */
     public void accept(ButtonRole role, @Nullable DialogResponseView response, Audience audience) {
         BiConsumer<ButtonRole, @Nullable DialogResponseView> current = handler.get();
         if (current == null) {

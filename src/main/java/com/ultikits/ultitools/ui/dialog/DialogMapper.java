@@ -46,6 +46,7 @@ public final class DialogMapper {
             case Form form -> form(form, viewer, escapeCloses);
             case Choice<?> choice -> choice(choice, viewer, escapeCloses);
             case Grid ignored -> throw new IllegalArgumentException("Dialogs do not support grids");
+            default -> throw new IllegalArgumentException("Unsupported dialog intent");
         };
     }
 
@@ -65,8 +66,11 @@ public final class DialogMapper {
         DialogModel.Button submit = button(form.submit(), null, new ButtonRole.Submit(), viewer);
         List<DialogModel.Button> buttons = escapeCloses ? List.of(submit) : List.of(submit, cancel(viewer));
         DialogModel.Kind kind = escapeCloses ? DialogModel.Kind.NOTICE : DialogModel.Kind.CONFIRMATION;
-        return model(form, viewer, form.body(), form.inputs().stream().map(input -> input(input, viewer)).toList(),
-                buttons, kind, escapeCloses);
+        List<DialogModel.Input> inputs = new ArrayList<>();
+        for (int index = 0; index < form.inputs().size(); index++) {
+            inputs.add(input(form.inputs().get(index), DialogModel.inputKey(index), viewer));
+        }
+        return model(form, viewer, form.body(), inputs, buttons, kind, escapeCloses);
     }
 
     private DialogModel.Button cancel(Player viewer) {
@@ -88,24 +92,26 @@ public final class DialogMapper {
                 escapeCloses ? null : cancel(viewer));
     }
 
-    private DialogModel.Input input(FormInput<?> input, Player viewer) {
+    private DialogModel.Input input(FormInput<?> input, String wireKey, Player viewer) {
         Component label = messages.render(input.label(), viewer);
         return switch (input) {
-            case TextInput text -> new DialogModel.Text(text.key(), label, text.initial(), text.maxLength(), text.maxLines());
-            case ToggleInput toggle -> new DialogModel.Toggle(toggle.key(), label, toggle.initial());
-            case ChoiceInput<?> single -> single(single, label, viewer);
-            case SliderInput range -> new DialogModel.Range(range.key(), label, (float) range.min(), (float) range.max(),
+            case TextInput text -> new DialogModel.Text(wireKey, label, text.initial(), text.maxLength(), text.maxLines());
+            case ToggleInput toggle -> new DialogModel.Toggle(wireKey, label, toggle.initial());
+            case ChoiceInput<?> single -> single(single, wireKey, label, viewer);
+            case SliderInput range -> new DialogModel.Range(wireKey, label, (float) range.min(), (float) range.max(),
                     (float) range.step(), (float) range.initial());
+            default -> throw new IllegalArgumentException("Unsupported dialog input");
         };
     }
 
-    private DialogModel.Single single(ChoiceInput<?> input, Component label, Player viewer) {
+    /** Paper option entries have no tooltip field; form option tooltips are not displayed. */
+    private DialogModel.Single single(ChoiceInput<?> input, String wireKey, Component label, Player viewer) {
         List<DialogModel.Option> options = new ArrayList<>();
         for (int index = 0; index < input.options().size(); index++) {
             ChoiceOption<?> option = input.options().get(index);
             options.add(new DialogModel.Option(Integer.toString(index), messages.render(option.label(), viewer),
                     option.value().equals(input.initial())));
         }
-        return new DialogModel.Single(input.key(), label, options);
+        return new DialogModel.Single(wireKey, label, options);
     }
 }

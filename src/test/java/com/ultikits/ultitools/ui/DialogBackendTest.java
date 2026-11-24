@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -41,7 +42,6 @@ class DialogBackendTest {
     private PlayerMock viewer;
     private RecordingPresenter presenter;
     private DialogBackend backend;
-    private Logger logger;
 
     @BeforeEach
     void setUp() {
@@ -50,7 +50,7 @@ class DialogBackendTest {
         fixture = new RuntimeFixture();
         service = fixture.service("DialogModule");
         presenter = new RecordingPresenter();
-        logger = mock(Logger.class);
+        Logger logger = mock(Logger.class);
         Messages messages = mock(Messages.class);
         when(messages.render(any(Text.class), any(Audience.class))).thenAnswer(invocation -> {
             Text text = invocation.getArgument(0);
@@ -96,7 +96,7 @@ class DialogBackendTest {
         UiSession<FormResponse> form = service.show(viewer, Form.builder(Text.plain("t")).input(input).build());
         fixture.advanceTicks(1);
         DialogResponseView response = mock(DialogResponseView.class);
-        when(response.getText("name")).thenReturn("answer");
+        when(response.getText("i0")).thenReturn("answer");
         presenter.last().accept(new ButtonRole.Submit(), response, viewer);
         assertThat(((FormResponse) result(form).value()).get(input)).isEqualTo("answer");
         UiSession<String> choice = service.show(viewer, Choice.<String>builder(Text.plain("t")).option("chosen", Text.plain("Pick")).build());
@@ -113,13 +113,34 @@ class DialogBackendTest {
         AtomicInteger completed = new AtomicInteger();
         session.result().thenAccept(ignored -> completed.incrementAndGet());
         CloseReason reason = switch (ending) {
-            case "no" -> { presenter.last().accept(new ButtonRole.No(), null, viewer); yield null; }
-            case "cancel" -> { presenter.last().accept(new ButtonRole.Cancel(), null, viewer); yield CloseReason.PLAYER; }
-            case "timeout" -> { fixture.advanceTicks(12_001); yield CloseReason.TIMED_OUT; }
-            case "replace" -> { service.show(viewer, Notice.builder(Text.plain("next")).build()); yield CloseReason.REPLACED; }
-            case "quit" -> { fixture.disconnect(viewer); yield CloseReason.DISCONNECTED; }
-            case "unload" -> { fixture.unload("DialogModule"); yield CloseReason.OWNER_UNLOADED; }
-            default -> { session.close(); yield CloseReason.CLOSED_BY_CODE; }
+            case "no" -> {
+                presenter.last().accept(new ButtonRole.No(), null, viewer);
+                yield null;
+            }
+            case "cancel" -> {
+                presenter.last().accept(new ButtonRole.Cancel(), null, viewer);
+                yield CloseReason.PLAYER;
+            }
+            case "timeout" -> {
+                fixture.advanceTicks(12_001);
+                yield CloseReason.TIMED_OUT;
+            }
+            case "replace" -> {
+                service.show(viewer, Notice.builder(Text.plain("next")).build());
+                yield CloseReason.REPLACED;
+            }
+            case "quit" -> {
+                fixture.disconnect(viewer);
+                yield CloseReason.DISCONNECTED;
+            }
+            case "unload" -> {
+                fixture.unload("DialogModule");
+                yield CloseReason.OWNER_UNLOADED;
+            }
+            default -> {
+                session.close();
+                yield CloseReason.CLOSED_BY_CODE;
+            }
         };
         UiResult<?> outcome = result(session);
         assertThat(outcome).isNotEqualTo(new UiResult.Completed<>(true));
@@ -231,10 +252,51 @@ class DialogBackendTest {
         UiSession<FormResponse> session = service.show(viewer, Form.builder(Text.plain("Form")).input(input).build());
         fixture.advanceTicks(1);
         DialogResponseView response = mock(DialogResponseView.class);
-        when(response.getText("name")).thenReturn("too long");
+        when(response.getText("i0")).thenReturn("too long");
         presenter.last().accept(new ButtonRole.Submit(), response, viewer);
         assertThat(result(session)).isEqualTo(new UiResult.Closed<>(CloseReason.PLAYER));
         assertThat(presenter.dismissed).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "1000000, 1000001, 0.01, false",
+            "-1000001, -1000000, 0.01, false",
+            "0, 30000000, 1, false",
+            "0, 10, 0.1, true",
+            "0, 10, 0.01, true",
+            "-10, -1, 0.1, true",
+            "-10, -1, 0.01, true",
+            "-10, 10, 0.01, true",
+            "1048576, 1048577, 0.25, true",
+            "1048576, 1048577, 0.125, false"
+    })
+    void supports_checksInteriorFloatResolution(double min, double max, double step, boolean supported) {
+        SliderInput slider = SliderInput.builder("range", Text.plain("Range"), min, max).step(step).build();
+        assertThat(backend.supports(Form.builder(Text.plain("Form")).input(slider).build(), viewer)).isEqualTo(supported);
+    }
+
+    @Test
+    void showFailure_closesOnceWithoutDismissAndInvalidatesTheTicket() throws Exception {
+        presenter.failOnShow = true;
+        UiSession<Boolean> session = service.show(viewer, Confirm.builder(Text.plain("Confirm")).build());
+        AtomicInteger completed = new AtomicInteger();
+        session.result().thenAccept(ignored -> completed.incrementAndGet());
+        assertThat(result(session)).isEqualTo(new UiResult.Closed<>(CloseReason.UNSUPPORTED));
+        assertThat(session.isOpen()).isFalse();
+        assertThat(completed).hasValue(1);
+        assertThat(presenter.dismissed).isEmpty();
+        presenter.last().accept(new ButtonRole.Yes(), null, viewer);
+        backend.close(session);
+        session.close();
+        fixture.advanceTicks(2);
+        assertThat(completed).hasValue(1);
+        assertThat(presenter.dismissed).isEmpty();
+        presenter.failOnShow = false;
+        UiSession<Boolean> next = confirm();
+        presenter.last().accept(new ButtonRole.No(), null, viewer);
+        assertThat(result(next)).isEqualTo(new UiResult.Completed<>(false));
+        assertThat(presenter.models).hasSize(2);
     }
 
     @Test
@@ -250,9 +312,13 @@ class DialogBackendTest {
         private final List<DialogModel> models = new ArrayList<>();
         private final List<DialogTicket> tickets = new ArrayList<>();
         private final List<Player> dismissed = new ArrayList<>();
+        private boolean failOnShow;
         @Override public void show(Player player, DialogModel model, DialogTicket ticket) {
             models.add(model);
             tickets.add(ticket);
+            if (failOnShow) {
+                throw new IllegalStateException("Dialog show failed");
+            }
         }
         @Override public void dismiss(Player player) { dismissed.add(player); }
         DialogTicket last() { return tickets.getLast(); }

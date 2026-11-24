@@ -44,10 +44,10 @@ class DialogAnswersTest {
     private final Form form = Form.builder(Text.plain("Form")).input(name).input(flag).input(mode).input(level).build();
 
     private void validResponse() {
-        when(response.getText("name")).thenReturn("hi");
-        when(response.getBoolean("flag")).thenReturn(true);
-        when(response.getText("mode")).thenReturn("1");
-        when(response.getFloat("level")).thenReturn(7.5f);
+        when(response.getText("i0")).thenReturn("hi");
+        when(response.getBoolean("i1")).thenReturn(true);
+        when(response.getText("i2")).thenReturn("1");
+        when(response.getFloat("i3")).thenReturn(7.5f);
     }
 
     @Test
@@ -64,12 +64,23 @@ class DialogAnswersTest {
     }
 
     @Test
+    void form_reservedBusinessKeyReadsOnlyThePositionalWireKey() {
+        TextInput id = TextInput.builder("id", Text.plain("ID")).build();
+        Form reserved = Form.builder(Text.plain("Form")).input(id).build();
+        when(response.getText("i0")).thenReturn("answer");
+        UiResult<?> result = answers.read(reserved, new ButtonRole.Submit(), response, "Shop");
+        assertThat(result).isInstanceOf(UiResult.Completed.class);
+        assertThat(((FormResponse) result.value()).get(id)).isEqualTo("answer");
+        verifyNoInteractions(logger);
+    }
+
+    @Test
     void form_letsTheContractSnapFloatValuesOnce() {
         validResponse();
-        when(response.getFloat("level")).thenReturn(7.500001f);
+        when(response.getFloat("i3")).thenReturn(7.500001f);
         UiResult<?> result = answers.read(form, new ButtonRole.Submit(), response, "Shop");
         assertThat(((FormResponse) result.value()).get(level)).isEqualTo(7.5);
-        when(response.getFloat("level")).thenReturn(10.25f);
+        when(response.getFloat("i3")).thenReturn(10.25f);
         assertThat(((FormResponse) answers.read(form, new ButtonRole.Submit(), response, "Shop").value()).get(level)).isEqualTo(10.0);
         verifyNoInteractions(logger);
     }
@@ -79,17 +90,17 @@ class DialogAnswersTest {
     @ValueSource(strings = {"too long", "a\nb\nc"})
     void form_missingOrInvalidTextClosesAndWarns(String text) {
         validResponse();
-        when(response.getText("name")).thenReturn(text);
+        when(response.getText("i0")).thenReturn(text);
         assertRejected();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"name", "flag", "mode", "level"})
+    @ValueSource(strings = {"i0", "i1", "i2", "i3"})
     void form_eachMissingControlClosesAndWarns(String key) {
         validResponse();
         switch (key) {
-            case "flag" -> when(response.getBoolean(key)).thenReturn(null);
-            case "level" -> when(response.getFloat(key)).thenReturn(null);
+            case "i1" -> when(response.getBoolean(key)).thenReturn(null);
+            case "i3" -> when(response.getFloat(key)).thenReturn(null);
             default -> when(response.getText(key)).thenReturn(null);
         }
         assertRejected();
@@ -99,7 +110,7 @@ class DialogAnswersTest {
     @ValueSource(strings = {"-1", "2", "nonsense", "+1", "01", "99999999999999"})
     void form_unknownOptionIdClosesAndWarns(String id) {
         validResponse();
-        when(response.getText("mode")).thenReturn(id);
+        when(response.getText("i2")).thenReturn(id);
         assertRejected();
     }
 
@@ -107,7 +118,7 @@ class DialogAnswersTest {
     @ValueSource(floats = {-0.26f, 10.26f, Float.NaN, Float.POSITIVE_INFINITY})
     void form_invalidSliderClosesAndWarns(float value) {
         validResponse();
-        when(response.getFloat("level")).thenReturn(value);
+        when(response.getFloat("i3")).thenReturn(value);
         assertRejected();
     }
 

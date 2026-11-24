@@ -79,12 +79,15 @@ public final class DialogAnswers {
 
     private static FormResponse form(Form form, DialogResponseView response) {
         Map<FormInput<?>, Object> values = new IdentityHashMap<>();
-        for (FormInput<?> input : form.inputs()) {
+        for (int index = 0; index < form.inputs().size(); index++) {
+            FormInput<?> input = form.inputs().get(index);
+            String wireKey = DialogModel.inputKey(index);
             Object value = switch (input) {
-                case TextInput text -> response.getText(text.key());
-                case ToggleInput toggle -> response.getBoolean(toggle.key());
-                case ChoiceInput<?> choice -> option(choice, response.getText(choice.key()));
-                case SliderInput slider -> number(response, slider.key());
+                case TextInput ignored -> response.getText(wireKey);
+                case ToggleInput ignored -> response.getBoolean(wireKey);
+                case ChoiceInput<?> choice -> option(choice, response.getText(wireKey));
+                case SliderInput ignored -> number(response, wireKey);
+                default -> throw new IllegalArgumentException("Unsupported form input");
             };
             if (value == null) {
                 throw new IllegalArgumentException("Missing value for " + input.key());

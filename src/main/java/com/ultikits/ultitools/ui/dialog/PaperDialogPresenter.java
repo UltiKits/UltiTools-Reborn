@@ -16,7 +16,11 @@ import net.kyori.adventure.text.event.ClickCallback;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 
-/** The only adapter that constructs server-owned Paper dialog registry objects. */
+/**
+ * The only adapter that constructs server-owned Paper dialog registry objects.
+ * Button callbacks expire after 12 hours of real elapsed time, whereas session timeouts use scheduler ticks.
+ * Under severe server lag the buttons can therefore expire before the session timeout is processed.
+ */
 @ApiStatus.Internal
 public final class PaperDialogPresenter implements DialogPresenter {
     @Override
@@ -33,6 +37,7 @@ public final class PaperDialogPresenter implements DialogPresenter {
             case NOTICE -> DialogType.notice(buttons.getFirst());
             case CONFIRMATION -> DialogType.confirmation(buttons.get(0), buttons.get(1));
             case MULTI_ACTION -> multiAction(model, buttons, ticket);
+            default -> throw new IllegalArgumentException("Unsupported dialog kind");
         };
         viewer.showDialog(Dialog.create(builder -> builder.empty().base(base).type(type)));
     }
@@ -64,6 +69,7 @@ public final class PaperDialogPresenter implements DialogPresenter {
                     .map(option -> SingleOptionDialogInput.OptionEntry.create(option.id(), option.display(), option.initial())).toList()).build();
             case DialogModel.Range range -> DialogInput.numberRange(range.key(), range.label(), range.start(), range.end())
                     .step(range.step()).initial(range.initial()).build();
+            default -> throw new IllegalArgumentException("Unsupported dialog input");
         };
     }
 

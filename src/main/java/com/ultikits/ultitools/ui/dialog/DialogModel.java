@@ -25,6 +25,11 @@ public record DialogModel(Component title, List<Component> body, List<Input> inp
         buttons = List.copyOf(buttons);
     }
 
+    /** Position-only wire key, independent of module keys and Paper's reserved callback id. */
+    static String inputKey(int index) {
+        return "i" + index;
+    }
+
     /** Paper-independent action layout. */
     @ApiStatus.Internal
     public enum Kind { NOTICE, CONFIRMATION, MULTI_ACTION }
@@ -38,10 +43,10 @@ public record DialogModel(Component title, List<Component> body, List<Input> inp
     @ApiStatus.Internal
     public record Button(Component label, @Nullable Component tooltip, ButtonRole role) {}
 
-    /** A form control; keys match the source form's handles. */
+    /** A form control; positional wire keys are mapped back to the original handles on submission. */
     @ApiStatus.Internal
     public sealed interface Input permits Text, Toggle, Single, Range {
-        /** Stable form input key. */
+        /** Positional wire key, not the module's form input key. */
         String key();
         /** Already-localized control label. */
         Component label();

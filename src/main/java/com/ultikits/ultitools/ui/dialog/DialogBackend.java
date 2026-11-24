@@ -54,14 +54,24 @@ public final class DialogBackend implements UiBackend {
             case Form form -> form.inputs().stream().filter(SliderInput.class::isInstance)
                     .map(SliderInput.class::cast).allMatch(DialogBackend::representable);
             case Grid ignored -> false;
+            default -> false;
         };
     }
 
+    /**
+     * Bounds the float spacing at the largest absolute endpoint, including negative and zero-crossing ranges.
+     * Requiring ULP <= step / 2 bounds nearest-float rounding error by step / 4, leaving a margin before
+     * the contract's half-step snap boundary. Equality is accepted; a larger ULP rejects the whole range
+     * even when its endpoints and initial value happen to be exactly representable. Endpoint and initial
+     * casts are also checked explicitly, and a non-finite or zero float step remains unsupported.
+     */
     private static boolean representable(SliderInput slider) {
         float step = (float) slider.step();
         double tolerance = slider.step() / 4;
-        return Float.isFinite(step) && step > 0 && representable(slider.min(), tolerance)
-                && representable(slider.max(), tolerance) && representable(slider.initial(), tolerance);
+        float magnitude = (float) Math.max(Math.abs(slider.min()), Math.abs(slider.max()));
+        return Float.isFinite(step) && step > 0 && Math.ulp(magnitude) <= slider.step() / 2
+                && representable(slider.min(), tolerance) && representable(slider.max(), tolerance)
+                && representable(slider.initial(), tolerance);
     }
 
     private static boolean representable(double value, double tolerance) {
@@ -75,12 +85,17 @@ public final class DialogBackend implements UiBackend {
         DialogTicket ticket = new DialogTicket(session, callbacks, answers, logger);
         tickets.put(session, ticket);
         presenter.show(session.viewer(), model, ticket);
+        ticket.shown();
     }
 
     @Override public void update(GridSession session, Grid previous, Grid next) {
         throw new IllegalStateException("Dialogs do not support grids");
     }
 
+    /**
+     * Dismisses only a successfully shown, unanswered screen. Paper provides no dialog replacement signal:
+     * if another plugin has since shown its own dialog, our later timeout dismissal also closes that dialog.
+     */
     @Override
     public void close(UiSession<?> session) {
         DialogTicket ticket = tickets.remove(session);
