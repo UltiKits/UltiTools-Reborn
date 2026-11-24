@@ -60,6 +60,7 @@ class PanelResponderIsolationTracerTest {
     private static final long BOUND_SECONDS = 10L;
 
     private ServerMock server;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     private Thread primaryThread;
     private EventBus eventBus;
     private PanelResponderRegistry registry;
@@ -76,6 +77,7 @@ class PanelResponderIsolationTracerTest {
         PluginInitiationUtils.startAcceptingPanelMessages();
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         primaryThread = Thread.currentThread();
 
         aStarted = new CountDownLatch(1);
@@ -119,13 +121,20 @@ class PanelResponderIsolationTracerTest {
     @AfterEach
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears UltiTools' instance field, as other tests do
     void tearDown() throws Exception {
-        aRelease.countDown();
-        registry.shutdown();
-        eventBus.shutdown();
-        Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-        instanceField.setAccessible(true);
-        instanceField.set(null, null);
-        MockBukkitHelper.safeUnmock();
+        try {
+            if (aRelease != null) { aRelease.countDown(); }
+            if (registry != null) { registry.shutdown(); }
+            if (eventBus != null) { eventBus.shutdown(); }
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+        } finally {
+            try {
+                if (frameworkScheduler != null) { frameworkScheduler.close(); }
+            } finally {
+                MockBukkitHelper.safeUnmock();
+            }
+        }
     }
 
     /** Whether {@code thread} is the very thread that ran {@link #setUp}, the server's primary thread. */

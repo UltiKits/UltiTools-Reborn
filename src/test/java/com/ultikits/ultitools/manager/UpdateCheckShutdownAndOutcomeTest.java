@@ -25,11 +25,12 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
-import org.bukkit.Server;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.bukkit.scheduler.BukkitTask;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -213,21 +214,24 @@ class UpdateCheckShutdownAndOutcomeTest {
         @DisplayName("stop() cancels the scheduled check task")
         void stopCancelsTheScheduledTask() {
             Plugin plugin = mock(Plugin.class);
-            Server bukkitServer = mock(Server.class);
-            BukkitScheduler scheduler = mock(BukkitScheduler.class);
-            BukkitTask task = mock(BukkitTask.class);
-            when(plugin.getServer()).thenReturn(bukkitServer);
-            when(bukkitServer.getScheduler()).thenReturn(scheduler);
-            when(scheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class))).thenReturn(task);
+            Scheduler scheduler = mock(Scheduler.class);
+            TaskContext async = mock(TaskContext.class);
+            TaskHandle task = mock(TaskHandle.class);
+            when(scheduler.async()).thenReturn(async);
+            when(async.run(any(Runnable.class))).thenReturn(task);
+            FrameworkScheduling.install(scheduler);
+            try {
+                updateManager.start(plugin);
+                verify(async).run(any(Runnable.class));
+                verify(task, never()).cancel();
 
-            updateManager.start(plugin);
-            verify(scheduler).runTaskAsynchronously(any(Plugin.class), any(Runnable.class));
-            verify(task, never()).cancel();
+                updateManager.stop();
 
-            updateManager.stop();
-
-            verify(task).cancel();
-            assertThat(updateManager.isStopped()).isTrue();
+                verify(task).cancel();
+                assertThat(updateManager.isStopped()).isTrue();
+            } finally {
+                FrameworkScheduling.uninstall(scheduler);
+            }
         }
 
         @Test

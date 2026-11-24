@@ -140,7 +140,9 @@ final class TaskRecord implements TaskHandle {
             state.compareAndSet(TaskState.RUNNING, TaskState.SCHEDULED);
         } else {
             state.set(TaskState.FAILED);
-            if (supplyFuture != null && !supplyFuture.completeExceptionally(failure) && supplyFuture.isCancelled()) {
+            if (supplyFuture == null) {
+                warn(failure);
+            } else if (!supplyFuture.completeExceptionally(failure) && supplyFuture.isCancelled()) {
                 warn(failure);
             }
             finish(failure);

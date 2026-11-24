@@ -21,7 +21,7 @@ import com.google.gson.JsonObject;
  * synchronous dispatch before the result is settled.
  * <p>
  * Handlers run on the main server thread — the publish site wraps {@link EventBus#publish} in
- * {@code Bukkit.getScheduler().runTask(...)} — so a handler may use Bukkit API freely. That same
+ * the framework's global scheduler context — so a handler may use Bukkit API freely. That same
  * hop means a slow handler occupies a server tick; the publish site logs one warning per slow
  * publish naming the elapsed time.
  * <p>

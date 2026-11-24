@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+
 import java.io.IOException;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -311,7 +313,7 @@ public class CloudAuthManager {
     }
 
     /**
-     * Stops the captured session synchronously, then revokes and deletes its credential on a Bukkit
+     * Stops the captured session synchronously, then revokes and deletes its credential on a framework
      * asynchronous task. The callback runs on that task, or inline when no credential is held.
      * A local storage failure is reported as {@link LogoutOutcome#LOCAL_DELETE_FAILED}, never as deletion.
      *
@@ -343,7 +345,7 @@ public class CloudAuthManager {
         } else {
             final CloudSession owner = tornDown;
             final ServerCredential credential = retiring;
-            Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+            FrameworkScheduling.scheduler().async().run(() -> {
                 CloudHttp.Response response = CloudHttp.postJson("/v1/agent/credential/revoke", null,
                         credential.bearerValue());
                 if (!deleteLocally(owner, credential)) {

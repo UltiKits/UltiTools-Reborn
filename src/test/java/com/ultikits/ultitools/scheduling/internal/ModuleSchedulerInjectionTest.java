@@ -58,6 +58,32 @@ class ModuleSchedulerInjectionTest {
         @Autowired Scheduler scheduler;
     }
 
+    public static class PrivateConsumerBean {
+        @Autowired private Scheduler scheduler;
+    }
+
+    @Test
+    void privateSchedulerFieldIsAutowiredFromTheModuleContainer() {
+        Scheduler framework = mock(Scheduler.class);
+        Scheduler module = mock(Scheduler.class);
+        SimpleContainer parent = new SimpleContainer();
+        SimpleContainer child = new SimpleContainer();
+        try {
+            parent.registerType(Scheduler.class, framework);
+            child.setParent(parent);
+            child.registerType(Scheduler.class, module);
+            PrivateConsumerBean bean = new PrivateConsumerBean();
+            child.registerSingleton("privateConsumer", bean);
+            assertThat(bean.scheduler).isSameAs(module).isNotSameAs(framework);
+        } finally {
+            try {
+                child.close();
+            } finally {
+                parent.close();
+            }
+        }
+    }
+
     @UltiToolsModule(scanBasePackages = "com.ultikits.schedulerfixture.empty")
     public abstract static class Module extends UltiToolsPlugin {
         @Autowired Scheduler scheduler;

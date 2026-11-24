@@ -21,9 +21,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import org.bukkit.Bukkit;
-import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitScheduler;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -637,20 +638,24 @@ class CloudAuthManagerTest {
     class LogoutTests {
 
         /**
-         * Runs {@link CloudAuthManager#logout()} with Bukkit's scheduler replaced: the asynchronous
+         * Runs {@link CloudAuthManager#logout()} with the framework scheduler replaced: the asynchronous
          * revoke-and-delete it schedules is captured in {@code revoke} instead of run, so a test decides
          * when it runs. Running it with the empty base URL of {@code resetStaticState()} makes the revoke
          * fail fast without a network ({@code DELETED_LOCALLY_REVOKE_FAILED}); the local delete still runs.
          */
         private boolean logoutCapturingRevoke(AtomicReference<Runnable> revoke) throws Exception {
-            BukkitScheduler scheduler = mock(BukkitScheduler.class);
-            when(scheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
-                revoke.set(invocation.getArgument(1));
-                return null;
+            Scheduler scheduler = mock(Scheduler.class);
+            TaskContext async = mock(TaskContext.class);
+            when(scheduler.async()).thenReturn(async);
+            when(async.run(any(Runnable.class))).thenAnswer(invocation -> {
+                revoke.set(invocation.getArgument(0));
+                return mock(TaskHandle.class);
             });
-            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            FrameworkScheduling.install(scheduler);
+            try {
                 return CloudAuthManager.logout();
+            } finally {
+                FrameworkScheduling.uninstall(scheduler);
             }
         }
 

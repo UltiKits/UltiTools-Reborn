@@ -33,6 +33,10 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 
 /**
  * 云连接重连状态机的行为：全局预算、logout 的终止语义、以及成功日志的位置——现在全部驱动在
@@ -395,18 +399,18 @@ class CloudReconnectStateMachineTest {
             CloudSession old = CloudSession.current();
             AgentRuntime.Attempt attempt = runtime.last();
             attempt.accept();
-            org.bukkit.scheduler.BukkitScheduler scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class);
+            Scheduler scheduler = mock(Scheduler.class);
+            TaskContext async = mock(TaskContext.class);
+            Mockito.when(scheduler.async()).thenReturn(async);
             List<Runnable> deferred = new ArrayList<>();
-            Mockito.when(scheduler.runTaskAsynchronously(Mockito.any(org.bukkit.plugin.Plugin.class),
-                    Mockito.any(Runnable.class))).thenAnswer(call -> {
-                deferred.add(call.getArgument(1));
-                return null;
+            Mockito.when(async.run(Mockito.any(Runnable.class))).thenAnswer(call -> {
+                deferred.add(call.getArgument(0));
+                return mock(TaskHandle.class);
             });
+            FrameworkScheduling.install(scheduler);
             CloudHttp.Response response = mock(CloudHttp.Response.class);
             Mockito.when(response.outcome()).thenReturn(CloudHttp.Outcome.IO_ERROR);
-            try (org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class);
-                    org.mockito.MockedStatic<CloudHttp> http = Mockito.mockStatic(CloudHttp.class)) {
-                bukkit.when(org.bukkit.Bukkit::getScheduler).thenReturn(scheduler);
+            try (org.mockito.MockedStatic<CloudHttp> http = Mockito.mockStatic(CloudHttp.class)) {
                 http.when(() -> CloudHttp.postJson("/v1/agent/credential/revoke", null, "ucs_OLD"))
                         .thenReturn(response);
                 CloudAuthManager.logout();
@@ -423,6 +427,8 @@ class CloudReconnectStateMachineTest {
                 assertThat(old.getCredential()).isNull();
                 runtime.advance(60000);
                 assertThat(runtime.attempts).hasSize(1);
+            } finally {
+                FrameworkScheduling.uninstall(scheduler);
             }
         }
 

@@ -59,6 +59,7 @@ class AgentRestConformanceTest {
     Path tempDir;
 
     private HttpServer cloud;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     private final List<Recorded> requests = new CopyOnWriteArrayList<>();
     private final AtomicReference<Reply> reply = new AtomicReference<>();
     private final List<String> logLines = new CopyOnWriteArrayList<>();
@@ -136,12 +137,24 @@ class AgentRestConformanceTest {
     @AfterEach
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the repository's test idiom for the plugin singleton
     void tearDown() throws Exception {
-        cloud.stop(0);
-        CloudTestAccess.reset();
-        MockBukkitHelper.safeUnmock();
-        Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-        instanceField.setAccessible(true);
-        instanceField.set(null, null);
+        try {
+            if (cloud != null) { cloud.stop(0); }
+            CloudTestAccess.reset();
+        } finally {
+            try {
+                if (frameworkScheduler != null) {
+                    frameworkScheduler.close();
+                }
+            } finally {
+                try {
+                    MockBukkitHelper.safeUnmock();
+                } finally {
+                    Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+                    instanceField.setAccessible(true);
+                    instanceField.set(null, null);
+                }
+            }
+        }
     }
 
     private static byte[] readBody(HttpExchange exchange) throws IOException {
@@ -353,6 +366,7 @@ class AgentRestConformanceTest {
     @DisplayName("every valid revoke answer counts as revoked; the revoke request has no body")
     void revokeAnswerOutcome(Fixture fixture) throws InterruptedException {
         org.mockbukkit.mockbukkit.ServerMock server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         reply.set(new Reply(statusOf(fixture), fixture.body().toString(), null));
         CloudTestAccess.storeLinkedCredential("Survival", HandshakeEndToEndTest.SERVER_ID);
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
