@@ -39,8 +39,6 @@ public final class DialogAnswers {
             return checked(intent, role, response);
         } catch (IllegalArgumentException invalid) {
             return rejected(owner, invalid);
-        } catch (NullPointerException missing) {
-            return rejected(owner, missing);
         }
     }
 
@@ -65,7 +63,10 @@ public final class DialogAnswers {
             }
         }
         if (intent instanceof Form form && role instanceof ButtonRole.Submit) {
-            return new UiResult.Completed<>(form(form, Objects.requireNonNull(response, "response")));
+            if (response == null) {
+                throw new IllegalArgumentException("Missing form response");
+            }
+            return new UiResult.Completed<>(form(form, response));
         }
         if (intent instanceof Choice<?> choice && role instanceof ButtonRole.Pick pick) {
             if (pick.index() < 0 || pick.index() >= choice.options().size()) {
@@ -85,13 +86,19 @@ public final class DialogAnswers {
                 case ChoiceInput<?> choice -> option(choice, response.getText(choice.key()));
                 case SliderInput slider -> number(response, slider.key());
             };
-            values.put(input, Objects.requireNonNull(value, "Missing value for " + input.key()));
+            if (value == null) {
+                throw new IllegalArgumentException("Missing value for " + input.key());
+            }
+            values.put(input, value);
         }
         return FormResponse.of(form, values);
     }
 
     private static Object option(ChoiceInput<?> input, @Nullable String id) {
-        int index = Integer.parseInt(Objects.requireNonNull(id, "option id"));
+        if (id == null) {
+            throw new IllegalArgumentException("Missing option id for " + input.key());
+        }
+        int index = Integer.parseInt(id);
         if (index < 0 || index >= input.options().size() || !Integer.toString(index).equals(id)) {
             throw new IllegalArgumentException("Unknown option id for " + input.key());
         }
@@ -99,7 +106,10 @@ public final class DialogAnswers {
     }
 
     private static double number(DialogResponseView response, String key) {
-        Float value = Objects.requireNonNull(response.getFloat(key), "Missing slider value for " + key);
+        Float value = response.getFloat(key);
+        if (value == null) {
+            throw new IllegalArgumentException("Missing slider value for " + key);
+        }
         return value.doubleValue();
     }
 }

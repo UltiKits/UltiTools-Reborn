@@ -20,7 +20,10 @@ public sealed interface ButtonRole {
     /** Ends without an answer. */
     @ApiStatus.Internal
     record Cancel() implements ButtonRole {}
-    /** Selects an option by display position. @param index zero-based option position */
+    /**
+     * Selects an option by display position.
+     * @param index zero-based option position
+     */
     @ApiStatus.Internal
     record Pick(int index) implements ButtonRole {}
 }

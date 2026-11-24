@@ -23,6 +23,10 @@ public final class DialogTicket {
     private final AtomicBoolean showing = new AtomicBoolean(true);
     private final AtomicReference<BiConsumer<ButtonRole, @Nullable DialogResponseView>> handler;
 
+    /**
+     * Retains the typed callbacks only until the first answer or invalidation.
+     * @param <R> the intent's answer type
+     */
     <R> DialogTicket(UiSession<R> session, BackendCallbacks<R> callbacks, DialogAnswers answers, Logger logger) {
         viewerId = session.viewer().getUniqueId();
         this.logger = logger;
@@ -30,6 +34,10 @@ public final class DialogTicket {
         handler = new AtomicReference<>((role, response) -> report(intent, callbacks, answers, role, response));
     }
 
+    /**
+     * Forwards only the value type validated against this same intent.
+     * @param <R> the intent's answer type
+     */
     private static <R> void report(UiIntent<R> intent, BackendCallbacks<R> callbacks, DialogAnswers answers,
                                    ButtonRole role, @Nullable DialogResponseView response) {
         // The current session seam deliberately exposes no owner; never infer it from a title or viewer.
